@@ -29,6 +29,13 @@ spec:
               value: https://layerx-human.layerx-testnet.svc:9443
             - name: LAYERX_HUMAN_WEB_ORIGIN
               value: https://human.testnet.layerx.network
+            - name: LAYERX_EXPLORER_PROGRAM_API_ORIGIN
+              value: http://127.0.0.1:9458
+            - name: LAYERX_EXPLORER_PROGRAM_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: layerx-explorer-index
+                  key: program-token
             - name: NODE_EXTRA_CA_CERTS
               value: /run/layerx/trust/ca.crt
           ports:
@@ -67,6 +74,40 @@ spec:
               mountPath: /app/.next/cache
             - name: temporary
               mountPath: /tmp
+        - name: explorer-relay
+          image: ghcr.io/sidiora-labs/layerx-human-web:0.1.0
+          imagePullPolicy: Always
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              : "${LAYERX_EXPLORER_INDEX_URL:?explorer index endpoint is required}"
+              : "${LAYERX_EXPLORER_PROGRAM_RELAY_PORT:?explorer relay port is required}"
+              target=${LAYERX_EXPLORER_INDEX_URL#https://}
+              host=${target%%:*}
+              port=${target##*:}
+              [ "$host" != "$target" ] && [ "$port" != "$target" ] || exit 64
+              exec socat -T 120 "TCP4-LISTEN:${LAYERX_EXPLORER_PROGRAM_RELAY_PORT},bind=127.0.0.1,reuseaddr,fork" \
+                "OPENSSL:${host}:${port},cafile=/run/layerx/trust/ca.crt,verify=1,commonname=${host}"
+          env:
+            - {name: LAYERX_EXPLORER_INDEX_URL, value: "https://layerx-explorer-index.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_EXPLORER_PROGRAM_RELAY_PORT, value: "9458"}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: trust
+              mountPath: /run/layerx/trust
+              readOnly: true
         - name: web-boundary
           image: ghcr.io/sidiora-labs/layerx-human-web:0.1.0
           imagePullPolicy: Always
@@ -172,6 +213,13 @@ spec:
     ports:
     - protocol: TCP
       port: 9447
+  - to:
+    - podSelector:
+        matchLabels:
+          app: layerx-program-registry
+    ports:
+    - protocol: TCP
+      port: 9443
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

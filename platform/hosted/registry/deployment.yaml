@@ -19,10 +19,11 @@ spec:
         - name: journal-directory
           image: ghcr.io/sidiora-labs/layerx-program-registry:0.1.0
           imagePullPolicy: Always
-          command: [/bin/sh, -euc, 'umask 077 && mkdir -p /run/layerx/journal-volume/journal && chmod 0700 /run/layerx/journal-volume/journal']
+          command: [/bin/sh, -euc, 'umask 077 && mkdir -p /run/layerx/journal-volume/journal && chmod 0700 /run/layerx/journal-volume/journal && mkdir -p /run/layerx/state-volume/verified && chmod 0700 /run/layerx/state-volume/verified']
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
           volumeMounts:
             - {name: journal, mountPath: /run/layerx/journal-volume}
+            - {name: state, mountPath: /run/layerx/state-volume}
         - name: trust-history
           image: ghcr.io/sidiora-labs/layerx-program-registry:0.1.0
           imagePullPolicy: Always
@@ -102,6 +103,69 @@ spec:
             - {name: builder, mountPath: /opt/layerx-builder, readOnly: true}
             - {name: host-cgroup, mountPath: /run/layerx/host-cgroup, readOnly: false}
             - {name: quota, mountPath: /run/layerx/quota}
+        - name: explorer-index
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          imagePullPolicy: Always
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              : "${LAYERX_EXPLORER_DEPLOYMENT_JOURNAL:?deployment journal is required}"
+              : "${LAYERX_EXPLORER_OBSERVATION_DIR:?protocol observation directory is required}"
+              until [ -s "$LAYERX_EXPLORER_DEPLOYMENT_JOURNAL/head" ] \
+                  && ls "$LAYERX_EXPLORER_DEPLOYMENT_JOURNAL"/*.admission > /dev/null 2>&1 \
+                  && [ -s "$LAYERX_EXPLORER_OBSERVATION_DIR/probe-program" ] \
+                  && [ -s "$LAYERX_EXPLORER_OBSERVATION_DIR/observed-sealed-batch" ] \
+                  && [ -s "$LAYERX_EXPLORER_OBSERVATION_DIR/finalised-checkpoint" ]; do
+                  sleep 5
+              done
+              LAYERX_EXPLORER_PROGRAM_PROBE_ID=$(tr -d '\r\n' < "$LAYERX_EXPLORER_OBSERVATION_DIR/probe-program")
+              LAYERX_EXPLORER_OBSERVED_SEALED_BATCH=$(tr -d '\r\n' < "$LAYERX_EXPLORER_OBSERVATION_DIR/observed-sealed-batch")
+              LAYERX_EXPLORER_FINALISED_CHECKPOINT=$(tr -d '\r\n' < "$LAYERX_EXPLORER_OBSERVATION_DIR/finalised-checkpoint")
+              export LAYERX_EXPLORER_PROGRAM_PROBE_ID LAYERX_EXPLORER_OBSERVED_SEALED_BATCH LAYERX_EXPLORER_FINALISED_CHECKPOINT
+              exec /usr/local/bin/layerx-runtime-clock --runtime-dir /run/layerx/explorer-clock -- /usr/local/bin/layerx-explorer-index
+          env:
+            - {name: LAYERX_EXPLORER_OBSERVATION_DIR, value: /run/layerx/explorer-observation}
+            - {name: LAYERX_EXPLORER_PROGRAM_LISTEN, value: "127.0.0.1:9457"}
+            - {name: LAYERX_EXPLORER_PROGRAM_BEARER_TOKEN, valueFrom: {secretKeyRef: {name: layerx-explorer-index, key: program-token}}}
+            - {name: LAYERX_EXPLORER_PROGRAM_MAX_STALENESS_MS, value: "300000"}
+            - {name: LAYERX_EXPLORER_NODE_ENDPOINT, value: "https://layerx-agent-boundary.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_EXPLORER_NODE_BEARER_TOKEN, valueFrom: {secretKeyRef: {name: layerx-program-registry-node-client, key: token}}}
+            - {name: LAYERX_EXPLORER_AUTHORITY_ENDPOINT, value: "https://layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_EXPLORER_AUTHORITY_BEARER_TOKEN, valueFrom: {secretKeyRef: {name: layerx-program-registry-authority-client, key: token}}}
+            - {name: LAYERX_EXPLORER_AUTHORITY_CA_DER, value: /run/layerx/client-ca/ca.crt.der}
+            - {name: LAYERX_EXPLORER_AUTHORITY_REPLICA_ID, valueFrom: {configMapKeyRef: {name: layerx-receipt-authority, key: replica-id}}}
+            - {name: LAYERX_EXPLORER_SEQUENCER_TRUST_HISTORY, value: /run/layerx/trust/history}
+            - {name: LAYERX_EXPLORER_DEPLOYMENT_JOURNAL, value: /var/lib/layerx-registry-journal}
+            - {name: LAYERX_EXPLORER_VERIFIED_SOURCE_STORE, value: /var/lib/layerx-registry-verified}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+          securityContext: {runAsUser: 4030, runAsGroup: 4030, runAsNonRoot: true, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+          volumeMounts:
+            - {name: journal, mountPath: /var/lib/layerx-registry-journal, subPath: journal, readOnly: true}
+            - {name: state, mountPath: /var/lib/layerx-registry-verified, subPath: verified, readOnly: true}
+            - {name: client-ca, mountPath: /run/layerx/client-ca, readOnly: true}
+            - {name: trust, mountPath: /run/layerx/trust, readOnly: true}
+            - {name: explorer-observation, mountPath: /run/layerx/explorer-observation, readOnly: true}
+            - {name: explorer-clock, mountPath: /run/layerx/explorer-clock}
+        - name: explorer-boundary
+          image: ghcr.io/sidiora-labs/layerx-node:0.1.0
+          imagePullPolicy: Always
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              : "${LAYERX_EXPLORER_BOUNDARY_PORT:?explorer boundary port is required}"
+              : "${LAYERX_EXPLORER_PROGRAM_PORT:?explorer program port is required}"
+              while ! socat -T 2 /dev/null "TCP:127.0.0.1:${LAYERX_EXPLORER_PROGRAM_PORT}" > /dev/null 2>&1; do sleep 5; done
+              exec socat -T 30 \
+                "OPENSSL-LISTEN:${LAYERX_EXPLORER_BOUNDARY_PORT},bind=0.0.0.0,reuseaddr,fork,cert=/run/layerx/explorer-tls/tls.crt,key=/run/layerx/explorer-tls/tls.key,verify=0" \
+                "TCP:127.0.0.1:${LAYERX_EXPLORER_PROGRAM_PORT}"
+          env:
+            - {name: LAYERX_EXPLORER_BOUNDARY_PORT, value: "9443"}
+            - {name: LAYERX_EXPLORER_PROGRAM_PORT, value: "9457"}
+          ports: [{name: explorer-tls, containerPort: 9443}]
+          resources: {requests: {cpu: 50m, memory: 32Mi}, limits: {cpu: 500m, memory: 128Mi}}
+          securityContext: {runAsUser: 4030, runAsGroup: 4030, runAsNonRoot: true, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+          volumeMounts:
+            - {name: explorer-tls, mountPath: /run/layerx/explorer-tls, readOnly: true}
       volumes:
         - {name: journal, persistentVolumeClaim: {claimName: layerx-registry-journal}}
         - {name: events, secret: {secretName: layerx-registry-event-producer, defaultMode: 0440}}
@@ -114,6 +178,9 @@ spec:
         - {name: builder, persistentVolumeClaim: {claimName: layerx-program-builder-release}}
         - {name: host-cgroup, hostPath: {path: /sys/fs/cgroup/kubelet.slice, type: Directory}}
         - {name: quota, hostPath: {path: /var/lib/layerx-program-registry-builds, type: Directory}}
+        - {name: explorer-tls, secret: {secretName: layerx-explorer-index-tls, defaultMode: 0440}}
+        - {name: explorer-observation, configMap: {name: layerx-explorer-index, optional: true, defaultMode: 0444}}
+        - {name: explorer-clock, emptyDir: {medium: Memory, sizeLimit: 1Mi}}
   volumeClaimTemplates:
     - metadata: {name: state}
       spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 100Gi}}}
@@ -139,6 +206,21 @@ spec:
       ports: [{protocol: TCP, port: 9443}, {protocol: TCP, port: 9445}, {protocol: TCP, port: 9446}]
     - to: [{namespaceSelector: {}}]
       ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-explorer-index, namespace: layerx-testnet}
+spec: {selector: {app: layerx-program-registry}, ports: [{name: explorer, port: 9443, targetPort: explorer-tls}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-explorer-index, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-program-registry}}
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: layerx-human-web}}}]
+      ports: [{protocol: TCP, port: 9443}]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

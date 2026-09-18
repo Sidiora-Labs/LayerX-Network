@@ -231,6 +231,7 @@ STATUS_PUBLISH_URL=${LAYERX_BETA_STATUS_PUBLISH_URL:-}
 STATUS_PUBLISHER_REPORTED=0
 IDENTITY_PORT=19451
 INTEROP_PORT=19458
+EXPLORER_INDEX_PORT=19460
 RAMP_VALUE_INPUTS=(LAYERX_BETA_RAMP_OPERATOR_PRINCIPAL_ID LAYERX_BETA_RAMP_OPERATOR_DID
     LAYERX_BETA_RAMP_OPERATOR_SIGNER_KEY_HANDLE LAYERX_BETA_RAMP_PROVIDER_ENDPOINT
     LAYERX_BETA_RAMP_PROVIDER_CALLBACK_PUBLIC_KEY LAYERX_BETA_RAMP_COMPLIANCE_ENDPOINT
@@ -609,6 +610,8 @@ ca_generate() {
         "DNS:layerx-human.$svc,DNS:layerx-human.$TESTNET_NAMESPACE.svc,DNS:layerx-human,DNS:human.testnet.layerx.network,DNS:localhost,IP:127.0.0.1"
     issue_cert human-web layerx-human-web serverAuth \
         "DNS:layerx-human-web.$svc,DNS:layerx-human-web.$TESTNET_NAMESPACE.svc,DNS:layerx-human-web,DNS:human.testnet.layerx.network,DNS:localhost,IP:127.0.0.1"
+    issue_cert explorer-index layerx-explorer-index serverAuth \
+        "DNS:layerx-explorer-index.$svc,DNS:layerx-explorer-index.$TESTNET_NAMESPACE.svc,DNS:layerx-explorer-index,DNS:localhost,IP:127.0.0.1"
     issue_cert faucet layerx-faucet serverAuth \
         "DNS:layerx-faucet-public.$svc,DNS:layerx-faucet-public,DNS:$FAUCET_HOST,DNS:localhost,IP:127.0.0.1"
     issue_cert registry layerx-program-registry serverAuth \
@@ -918,6 +921,7 @@ secrets_generate() {
     write_token "$d/registry-publication.token"
     write_token "$d/registry-authority.token"
     write_token "$d/registry-identity.token"
+    write_token "$d/explorer-program.token"
     local producer
     for producer in gateway registry human; do
         write_token "$d/$producer-event-producer.token"
@@ -1212,6 +1216,8 @@ secrets_apply() {
         --from-file=server.key.der="$c/human/key.der" --from-file=ca.crt="$c/ca.crt"
     apply_secret "$ns" layerx-internal-ca --from-file=ca.crt.der="$c/ca.der" --from-file=ca.crt="$c/ca.crt"
     apply_secret "$ns" layerx-human-web-tls --from-file=tls.crt="$c/human-web/cert.pem" --from-file=tls.key="$c/human-web/key.pem"
+    apply_secret "$ns" layerx-explorer-index --from-file=program-token="$s/explorer-program.token"
+    apply_secret "$ns" layerx-explorer-index-tls --from-file=tls.crt="$c/explorer-index/cert.pem" --from-file=tls.key="$c/explorer-index/key.pem"
     apply_secret "$ns" layerx-testnet-control-tls --from-file=server.crt.der="$c/testnet-control/cert.der" \
         --from-file=server.key.der="$c/testnet-control/key.der" --from-file=ca.crt.der="$c/ca.der" --from-file=ca.crt="$c/ca.crt"
     apply_secret "$ns" layerx-testnet-backend-admin --from-file=token="$s/backend-admin.token"
@@ -2774,12 +2780,51 @@ interop_gateway_ready() {
     done
 }
 
+explorer_observation_publish() {
+    local probe batch checkpoint info="$WORK_DIR/explorer-node-info.json" status
+    probe=${LAYERX_BETA_EXPLORER_PROBE_PROGRAM:-}
+    if [ -z "$probe" ] && [ -d "$WORK_DIR/registry-journal" ]; then
+        probe=$(python3 - "$WORK_DIR/registry-journal" <<'PYPROBE'
+import sys
+from pathlib import Path
+domain = b'LayerX/programs/registry/deployment/v1\0'
+records = sorted(Path(sys.argv[1]).glob('*.deployment'))
+if not records:
+    raise SystemExit('registry journal holds no deployment record')
+data = records[0].read_bytes()
+if not data.startswith(domain):
+    raise SystemExit('deployment record is not canonically encoded')
+print(data[len(domain):len(domain) + 32].hex())
+PYPROBE
+        ) || probe=
+    fi
+    if [[ ! $probe =~ ^[0-9a-f]{64}$ ]]; then
+        MISSING_INPUTS+=("LAYERX_BETA_EXPLORER_PROBE_PROGRAM: layerx-explorer-index probes one registered program before it serves, and no deployment record under $WORK_DIR/registry-journal supplied one; set it to the thirty-two byte program id the explorer should probe")
+        return 0
+    fi
+    status=$(curl --silent --show-error --max-time 10 --cacert "$CA_DIR/ca.crt" \
+        --output "$info" --write-out '%{http_code}' "$NODE_URL/v1/node-info" 2>/dev/null) || status=unreachable
+    if [ "$status" != 200 ]; then
+        MISSING_INPUTS+=("LAYERX_EXPLORER_OBSERVED_SEALED_BATCH: the node public read $NODE_URL/v1/node-info answered $status, so the sealed batch and finalised checkpoint the explorer index reports could not be observed")
+        return 0
+    fi
+    batch=$(jq -r '.latest_sealed_batch // empty' "$info")
+    checkpoint=$(jq -r '.latest_finalised_checkpoint // empty' "$info")
+    [[ $batch =~ ^[0-9]+$ ]] || fail "node-info reported a non-numeric latest sealed batch: $batch"
+    [[ $checkpoint =~ ^[0-9a-f]{64}$ ]] || fail "node-info reported an invalid finalised checkpoint: $checkpoint"
+    apply_configmap "$TESTNET_NAMESPACE" layerx-explorer-index \
+        --from-literal=probe-program="$probe" \
+        --from-literal=observed-sealed-batch="$batch" \
+        --from-literal=finalised-checkpoint="$checkpoint"
+    log "explorer program index observation published: program $probe sealed batch $batch"
+}
+
 readyz() {
     curl --silent --show-error --max-time 10 --cacert "$CA_DIR/ca.crt" "$1/readyz" 2>/dev/null
 }
 
 wait_ready() {
-    local deadline=$((SECONDS + READY_TIMEOUT)) body developer_ready internal_ready human_ready human_status human_web_status
+    local deadline=$((SECONDS + READY_TIMEOUT)) body developer_ready internal_ready human_ready human_status human_web_status explorer_status
     while :; do
         body=$(readyz "$TESTNET_URL") || body=""
         human_status=$(curl --silent --show-error --max-time 10 --cacert "$CA_DIR/ca.crt" \
@@ -2794,6 +2839,9 @@ wait_ready() {
                 --resolve "$HUMAN_WEB_HOST:$HUMAN_WEB_PORT:127.0.0.1" \
                 --output "$WORK_DIR/human-web-root.html" --write-out '%{http_code}' "$HUMAN_WEB_URL/" 2>/dev/null) || human_web_status=unreachable
         fi
+        explorer_status=$(curl --silent --show-error --max-time 10 --cacert "$CA_DIR/ca.crt" \
+            --header "Authorization: Bearer $(cat "$SECRETS_DIR/explorer-program.token")" \
+            --output "$WORK_DIR/explorer-healthz.json" --write-out '%{http_code}' "$EXPLORER_INDEX_URL/healthz" 2>/dev/null) || explorer_status=unreachable
         developer_ready=$(kube -n "$DEVELOPER_NAMESPACE" get deployments -o json 2>/dev/null \
             | jq -r '[.items[] | select((.status.readyReplicas // 0) < .spec.replicas) | .metadata.name] | join(",")') \
             || developer_ready="namespace $DEVELOPER_NAMESPACE unreadable"
@@ -2801,7 +2849,7 @@ wait_ready() {
             | jq -r '[.items[] | select((.status.readyReplicas // 0) < .spec.replicas) | .metadata.name] | join(",")') \
             || internal_ready="namespace $INTERNAL_NAMESPACE unreadable"
         if [ -n "$body" ] && jq -e '.state == "ready" and all(.journeys[]; .ready == true)' <<<"$body" > /dev/null 2>&1 \
-            && jq -e 'all(.dependencies[]; .ready == true) and (.journeys | length) == 4' <<<"$body" > /dev/null 2>&1 && [ -z "$developer_ready" ] && [ -z "$internal_ready" ] && [ "$human_ready" = true ] && { [ -z "$HUMAN_WEB_PORT" ] || [ "$human_web_status" = 200 ]; }; then
+            && jq -e 'all(.dependencies[]; .ready == true) and (.journeys | length) == 4' <<<"$body" > /dev/null 2>&1 && [ -z "$developer_ready" ] && [ -z "$internal_ready" ] && [ "$human_ready" = true ] && { [ -z "$HUMAN_WEB_PORT" ] || [ "$human_web_status" = 200 ]; } && [ "$explorer_status" = 200 ]; then
             printf '%s' "$body" > "$WORK_DIR/readyz.json"
             return 0
         fi
@@ -2817,6 +2865,7 @@ wait_ready() {
                 fi
                 printf 'beta-cluster: Human /readyz HTTP status: %s\n' "$human_status"
                 printf 'beta-cluster: Human web application HTTP status at %s: %s\n' "$HUMAN_WEB_URL" "$human_web_status"
+                printf 'beta-cluster: explorer program index HTTP status at %s: %s\n' "$EXPLORER_INDEX_URL" "$explorer_status"
                 [ -z "$developer_ready" ] || printf 'beta-cluster: developer plane deployments not ready: %s\n' "$developer_ready"
                 [ -z "$internal_ready" ] || printf 'beta-cluster: internal workloads not ready: %s\n' "$internal_ready"
                 kube -n "$INTERNAL_NAMESPACE" get pods -o wide 2>/dev/null || true
@@ -2880,6 +2929,7 @@ env_write() {
         printf 'export LAYERX_PAXEER_CHECKPOINT_REGISTRY=%s\n' "$CHECKPOINT_REGISTRY"
         printf 'export LAYERX_PAXEER_DEPLOYMENT_RECORD=%s\n' "$WORK_DIR/paxeer/deployment.json"
         printf 'export LAYERX_HUMAN_WEB_URL=%s\n' "$HUMAN_WEB_URL"
+        printf 'export LAYERX_EXPLORER_INDEX_URL=%s\n' "$EXPLORER_INDEX_URL"
         printf 'export KUBECONFIG=%s\n' "$KUBECONFIG_FILE"
     } >> "$ENV_FILE"
     [ -s "$WORK_DIR/human-owner.env" ] || fail "human-owner.env missing after native owner production"
@@ -3401,6 +3451,7 @@ beta_cluster_up() {
     HUMAN_URL="https://localhost:19453"
     HUMAN_WEB_URL="https://$HUMAN_WEB_HOST"
     RAMP_URL="https://localhost:$RAMP_PORT"
+    EXPLORER_INDEX_URL="https://localhost:$EXPLORER_INDEX_PORT"
     wait_for_node_genesis
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ]; then
         apply_configmap "$TESTNET_NAMESPACE" layerx-node-settlement --from-file=settlement.env="$WORK_DIR/paxeer/settlement.env"
@@ -3463,7 +3514,9 @@ beta_cluster_up() {
         [ "$HUMAN_WEB_PORT" = 443 ] || fail "LAYERX_BETA_HUMAN_WEB_PORT must be 443 or empty because the browser origin $HUMAN_WEB_URL carries no port"
         port_forward human-web "$TESTNET_NAMESPACE" layerx-human-web "$HUMAN_WEB_PORT" 443
     fi
+    port_forward explorer-index "$TESTNET_NAMESPACE" layerx-explorer-index "$EXPLORER_INDEX_PORT" 9443
     module_registry_verify
+    explorer_observation_publish
     interop_gateway_apply
     ramp_apply
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then material_save; fi
@@ -3473,6 +3526,7 @@ beta_cluster_up() {
     log "every journey ready: $(jq -r '[.journeys[] | .journey] | join(",")' "$WORK_DIR/readyz.json")"
     log "environment exported to $ENV_FILE"
     log "human web application: add '127.0.0.1 $HUMAN_WEB_HOST' to /etc/hosts, trust the beta internal CA at $CA_DIR/ca.crt, then open $HUMAN_WEB_URL"
+    log "explorer program index: $EXPLORER_INDEX_URL (bearer $SECRETS_DIR/explorer-program.token)"
     if [ "$run_boundary_checks" = 1 ]; then boundary_checks; fi
 }
 

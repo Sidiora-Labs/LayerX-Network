@@ -1114,9 +1114,52 @@ mod tests {
         assert!(
             pod.contains("runAsNonRoot: true, runAsUser: 4030, runAsGroup: 4030, fsGroup: 4030")
         );
-        assert!(registry.contains("securityContext: {runAsUser: 0, runAsGroup: 0, runAsNonRoot: false, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL], add: [CHOWN, SETUID, SETGID]}, seccompProfile: {type: RuntimeDefault}}"));
-        assert_eq!(registry.matches("securityContext:").count(), 1);
-        assert_eq!(registry.matches("capabilities:").count(), 1);
+        const REGISTRY_SECURITY_CONTEXT: &str = "securityContext: {runAsUser: 0, runAsGroup: 0, runAsNonRoot: false, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL], add: [CHOWN, SETUID, SETGID]}, seccompProfile: {type: RuntimeDefault}}";
+        assert!(registry.contains(REGISTRY_SECURITY_CONTEXT));
+        let containers = registry
+            .split_once("\n      volumes:")
+            .map(|(section, _)| section)
+            .ok_or("missing volumes after the containers section")
+            .unwrap_or_else(|e| panic!("{e}"));
+        let names: Vec<&str> = containers
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("- name: "))
+            .collect();
+        assert_eq!(names, ["registry", "explorer-index", "explorer-boundary"]);
+        let contexts: Vec<&str> = containers
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("securityContext:"))
+            .collect();
+        assert_eq!(contexts.len(), names.len());
+        let privileged: Vec<&str> = contexts
+            .iter()
+            .copied()
+            .filter(|line| line.contains("runAsUser: 0"))
+            .collect();
+        assert_eq!(privileged, [REGISTRY_SECURITY_CONTEXT]);
+        let elevating: Vec<&str> = contexts
+            .iter()
+            .copied()
+            .filter(|line| line.contains("capabilities:") && line.contains("add:"))
+            .collect();
+        assert_eq!(elevating, [REGISTRY_SECURITY_CONTEXT]);
+        for line in contexts
+            .iter()
+            .copied()
+            .filter(|line| *line != REGISTRY_SECURITY_CONTEXT)
+        {
+            for required in [
+                "runAsNonRoot: true",
+                "allowPrivilegeEscalation: false",
+                "readOnlyRootFilesystem: true",
+                "capabilities: {drop: [ALL]}",
+                "seccompProfile: {type: RuntimeDefault}",
+            ] {
+                assert!(line.contains(required), "{line} is missing {required}");
+            }
+            assert!(!line.contains("add:"), "{line} adds capabilities");
+        }
         let source = MAIN_SOURCE.split("#[cfg(test)]").next().unwrap_or_default();
         for required in [
             "geteuid().is_root()",
