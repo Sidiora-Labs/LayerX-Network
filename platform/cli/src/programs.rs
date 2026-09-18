@@ -986,6 +986,7 @@ pub struct CallRequest<'a> {
     pub sequencer_public_key: &'a str,
 }
 
+#[derive(Debug)]
 struct VerifiedCallHead {
     sequencer_public_key: [u8; 32],
     state_root: [u8; 32],
@@ -1724,7 +1725,17 @@ fn discover_call_head(
 ) -> Result<VerifiedCallHead, String> {
     let response = read_program_registry(client, request.program_id, false)?;
     let document = program_registry_document(&response)?;
-    let result = &document;
+    verify_call_head(&document, request)
+}
+
+/// Binds program id, version, code hash, ABI, observed sequence, freshness and
+/// state root under one sequencer signature before a call or simulation is
+/// rendered against that head.
+fn verify_call_head(
+    document: &Value,
+    request: &CallRequest<'_>,
+) -> Result<VerifiedCallHead, String> {
+    let result = document;
     if result
         .get("program_id")
         .and_then(Value::as_str)
@@ -2210,15 +2221,16 @@ fn discover_artifact(project: &Path) -> Result<PathBuf, String> {
 mod call_tests {
     use super::{
         build_call, classify_outcome, render_call_result, signed_call_with_signer,
-        validate_signed_call, CallRequest, VerifiedCallHead,
+        validate_signed_call, verify_call_head, CallRequest, VerifiedCallHead,
     };
     use crate::encoding::hex_encode;
-    use ed25519_dalek::SigningKey;
+    use ed25519_dalek::{Signer as _, SigningKey};
     use layerx_types::amount::Amount;
     use layerx_types::intent::{
         CallBudget, Calldata, CapabilityRequest, ProgramCall, ProgramId, RequestedCapabilities,
     };
     use serde_json::json;
+    use sha2::{Digest as _, Sha256};
 
     const GOLDEN_PAYLOAD_HEX: &str = "4c61796572582f70726f6772616d732f63616c6c2f763100111111111111111111111111111111111111111111111111111111111111111100000000000003e8000000000000000000000000000000fa0002010300000002aabb";
 
@@ -2257,6 +2269,153 @@ mod call_tests {
             panic!("unique capabilities rejected");
         };
         ProgramCall::new(program, calldata, budget, capabilities)
+    }
+
+    fn signed_discovery_document(
+        signer: &SigningKey,
+        version: u32,
+        observed_at: u64,
+        valid_through: u64,
+    ) -> serde_json::Value {
+        let mut proof = b"LayerX/program-discovery-proof/v1\0".to_vec();
+        proof.extend_from_slice(&[0x11; 32]);
+        proof.push(1);
+        proof.extend_from_slice(&version.to_be_bytes());
+        proof.extend_from_slice(&[0x22; 32]);
+        proof.extend_from_slice(&2_u16.to_be_bytes());
+        proof.extend_from_slice(&77_u64.to_be_bytes());
+        proof.extend_from_slice(&observed_at.to_be_bytes());
+        proof.extend_from_slice(&valid_through.to_be_bytes());
+        proof.extend_from_slice(&[0x33; 32]);
+        let digest: [u8; 32] = Sha256::digest(&proof).into();
+        let signature = signer.sign(&digest).to_bytes();
+        json!({
+            "program_id": hex_encode(&[0x11; 32]),
+            "lifecycle": "active",
+            "version": version,
+            "code_hash": hex_encode(&[0x22; 32]),
+            "abi_version": 2,
+            "receipt_digest": hex_encode(&digest),
+            "deployment_receipt_digest": hex_encode(&[0x44; 32]),
+            "discovery_public_key": hex_encode(&signer.verifying_key().to_bytes()),
+            "discovery_signature": hex_encode(&signature),
+            "state_root": hex_encode(&[0x33; 32]),
+            "observed_sequence": "77",
+            "observed_at": observed_at.to_string(),
+            "valid_through": valid_through.to_string(),
+            "verification": "registry-receipt-and-current-head-verified",
+        })
+    }
+
+    #[test]
+    fn signed_discovery_fixture_verifies_and_binds_every_head_field() -> Result<(), String> {
+        let signer = SigningKey::from_bytes(&[7; 32]);
+        let key_hex = hex_encode(&signer.verifying_key().to_bytes());
+        let request = CallRequest {
+            sequencer_public_key: key_hex.as_str(),
+            ..golden_request()
+        };
+        let document = signed_discovery_document(&signer, 3, 1_699_999_999_000, 1_700_000_300_000);
+        let head = verify_call_head(&document, &request)?;
+        assert_eq!(head.sequencer_public_key, signer.verifying_key().to_bytes());
+        assert_eq!(head.state_root, [0x33; 32]);
+        assert_eq!(head.abi_version, 2);
+        assert_eq!(head.version, 3);
+        assert_eq!(head.code_hash, [0x22; 32]);
+        assert_eq!(head.observed_sequence, 77);
+        assert_eq!(head.observed_at, 1_699_999_999_000);
+        Ok(())
+    }
+
+    #[test]
+    fn discovery_signed_by_another_key_or_tampered_is_refused() {
+        let signer = SigningKey::from_bytes(&[7; 32]);
+        let key_hex = hex_encode(&signer.verifying_key().to_bytes());
+        let request = CallRequest {
+            sequencer_public_key: key_hex.as_str(),
+            ..golden_request()
+        };
+        let document = signed_discovery_document(&signer, 3, 1_699_999_999_000, 1_700_000_300_000);
+
+        let impostor = SigningKey::from_bytes(&[9; 32]);
+        let forged = signed_discovery_document(&impostor, 3, 1_699_999_999_000, 1_700_000_300_000);
+        assert_eq!(
+            verify_call_head(&forged, &request).unwrap_err(),
+            "program discovery authority differs from configured trust anchor"
+        );
+        let other_hex = hex_encode(&impostor.verifying_key().to_bytes());
+        let other_anchor = CallRequest {
+            sequencer_public_key: other_hex.as_str(),
+            ..golden_request()
+        };
+        assert_eq!(
+            verify_call_head(&document, &other_anchor).unwrap_err(),
+            "program discovery authority differs from configured trust anchor"
+        );
+
+        for (field, tampered, expected) in [
+            (
+                "version",
+                json!(4),
+                "program discovery receipt digest is invalid",
+            ),
+            (
+                "observed_sequence",
+                json!("78"),
+                "program discovery receipt digest is invalid",
+            ),
+            (
+                "state_root",
+                json!(hex_encode(&[0x34; 32])),
+                "program discovery receipt digest is invalid",
+            ),
+            (
+                "code_hash",
+                json!(hex_encode(&[0x23; 32])),
+                "program discovery receipt digest is invalid",
+            ),
+            (
+                "abi_version",
+                json!(1),
+                "program discovery receipt digest is invalid",
+            ),
+            (
+                "receipt_digest",
+                json!(hex_encode(&[0x44; 32])),
+                "program discovery receipt digest is invalid",
+            ),
+            (
+                "discovery_signature",
+                json!(hex_encode(&[0x55; 64])),
+                "program discovery signature is invalid",
+            ),
+            (
+                "lifecycle",
+                json!("deprecated"),
+                "program discovery identity or lifecycle is invalid",
+            ),
+        ] {
+            let mut altered = document.clone();
+            altered[field] = tampered;
+            assert_eq!(
+                verify_call_head(&altered, &request).unwrap_err(),
+                expected,
+                "{field}"
+            );
+        }
+        let mut unsigned = document.clone();
+        unsigned
+            .as_object_mut()
+            .map(|object| object.remove("discovery_signature"));
+        assert_eq!(
+            verify_call_head(&unsigned, &request).unwrap_err(),
+            "program discovery omitted signature"
+        );
+        let stale = signed_discovery_document(&signer, 3, 1_700_000_000_001, 1_700_000_300_000);
+        assert_eq!(
+            verify_call_head(&stale, &request).unwrap_err(),
+            "program discovery is outside its signed freshness interval"
+        );
     }
 
     #[test]

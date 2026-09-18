@@ -162,18 +162,22 @@ program_id = "bytes32"
 
 [type.VerifiedProgramDiscovery]
 required = ["program_id","lifecycle","version","code_hash","abi_version","receipt_digest","state_root","observed_sequence","observed_at","valid_through","verification"]
+optional = ["deployment_receipt_digest","discovery_public_key","discovery_signature"]
 proof = "receipt_verified_registry_read"
 lifecycle = ["active","deprecated","tombstoned"]
 program_id = "bytes32"
 version = "nonzero_u32"
 code_hash = "bytes32"
 abi_version = "u16_inclusive_1_2"
-receipt_digest = "bytes32"
+receipt_digest = "sha256_of_LayerX/program-discovery-proof/v1_domain_program_id32_0x01_version_u32be_code_hash32_abi_version_u16be_observed_sequence_u64be_observed_at_u64be_valid_through_u64be_state_root32"
+deployment_receipt_digest = "bytes32"
+discovery_public_key = "bytes32_sequencer_public_key_pinned_by_the_client"
+discovery_signature = "ed25519_64_bytes_over_receipt_digest_by_discovery_public_key"
 state_root = "bytes32"
 observed_sequence = "u64_decimal"
 observed_at = "u64_decimal_milliseconds"
 valid_through = "u64_decimal_milliseconds"
-verification = "server_side_receipt_verification_only_at_sdk_boundary"
+verification = "server_side_receipt_verification_only_at_sdk_boundary_sequencer_signed_when_discovery_signature_verifies"
 
 [type.VerifiedProgramInterface]
 required = ["program_id","version","code_hash","abi_version","interface","interface_digest","receipt_digest","state_root","observed_sequence","observed_at","valid_through","source","verification"]
