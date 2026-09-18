@@ -23,7 +23,7 @@ const ALL_AVAILABILITY_CLASSES: u8 = 0x1f;
 
 const WITHDRAWAL_DOMAIN: &[u8] = b"LX:WITHDRAWAL:v1";
 const MERKLE_LEAF_DOMAIN: &[u8] = b"LXP/v1/merkle-leaf\0";
-const MERKLE_NODE_DOMAIN: &[u8] = b"LXP/v1/merkle-node\0";
+const MERKLE_NODE_DOMAIN: &[u8] = b"LXP/v1/merkle-internal\0";
 
 const SELECTOR_QUEUE_CLAIM: [u8; 4] = [0x0d, 0x79, 0x92, 0xc8];
 const SELECTOR_FINALISE_CLAIM: [u8; 4] = [0x38, 0x51, 0xa8, 0x61];
