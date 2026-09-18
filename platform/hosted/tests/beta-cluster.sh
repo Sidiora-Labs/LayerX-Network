@@ -18,10 +18,16 @@
 #   LAYERX_BETA_CLUSTER_NAME            kind cluster name (default layerx-beta)
 #   LAYERX_BETA_IMAGE_REGISTRY          registry prefix images are pushed to for an owner cluster; unset loads
 #                                       the locally built images into the kind nodes
-#   LAYERX_BETA_BUILDER_ENVIRONMENT_DIR required by up (unless LAYERX_BETA_RETAIN_MATERIAL=1 reuses the digests of a
-#                                       previous run): owner hermetic builder root filesystem (regular files and
-#                                       directories only, entrypoint bin/layerx-build) published into the
-#                                       layerx-program-builder-release volume the program registry mounts
+#   LAYERX_BETA_BUILDER_ENVIRONMENT_DIR optional hermetic builder root filesystem (regular files and directories
+#                                       only, entrypoint bin/layerx-build) published into the
+#                                       layerx-program-builder-release volume the program registry mounts. Unset,
+#                                       up constructs that root filesystem itself from the committed recipe with
+#                                       platform/hosted/registry/builder-environment/build-env.sh and uses the
+#                                       rootfs of the constructed entry, which needs docker and an uncommitted
+#                                       change free programs/vendor and recipe tree
+#   LAYERX_BETA_BUILDER_ENVIRONMENT_CACHE_DIR  directory the constructed builder environments live in, one entry
+#                                       per committed recipe tree, reused by a later up and not deleted by down
+#                                       (default build/builder-environment)
 #   LAYERX_BETA_SEQUENCER_KEY_FILE      PEM ed25519 private key of the beta sequencer; generated when unset. Its
 #                                       32-byte seed is the node's sequencer key, so the node, the receipt
 #                                       authority, the gateway and the registry share one sequencer identity
@@ -242,6 +248,8 @@ source "$REPO_ROOT/platform/hosted/human/provision.sh"
 TRUSTED_BOUNDARY_SERVICES=(layerx-pending-core layerx-pending-core-admin paxeer-boundary layerx-identity layerx-receipt-authority layerx-agent-boundary)
 INTERNAL_NAMESPACE=layerx-internal
 FOUNDRY_BIN=${LAYERX_BETA_FOUNDRY_BIN:-/root/.foundry/bin}
+BUILDER_ENVIRONMENT_RECIPE=platform/hosted/registry/builder-environment
+BUILDER_ENVIRONMENT_CACHE_DIR=${LAYERX_BETA_BUILDER_ENVIRONMENT_CACHE_DIR:-$REPO_ROOT/build/builder-environment}
 CUSTODY_PROFILE=${LAYERX_BETA_CUSTODY_PROFILE:-}
 STATUS_PUBLISH_URL=${LAYERX_BETA_STATUS_PUBLISH_URL:-}
 STATUS_PUBLISHER_REPORTED=0
@@ -3132,11 +3140,68 @@ require_foundry() {
     [ -x "$FOUNDRY_BIN/forge" ] && [ -x "$FOUNDRY_BIN/cast" ] || fail "pinned forge and cast are not installed at $FOUNDRY_BIN (LAYERX_BETA_FOUNDRY_BIN); deploy-contracts.sh needs them"
 }
 
+builder_environment_key() {
+    local vendor recipe
+    vendor=$(git -C "$REPO_ROOT" rev-parse --verify "HEAD:programs/vendor") \
+        || fail "programs/vendor is not committed at HEAD; $BUILDER_ENVIRONMENT_RECIPE/build-env.sh constructs the builder environment from the committed revision only"
+    recipe=$(git -C "$REPO_ROOT" rev-parse --verify "HEAD:$BUILDER_ENVIRONMENT_RECIPE") \
+        || fail "$BUILDER_ENVIRONMENT_RECIPE is not committed at HEAD; its build-env.sh constructs the builder environment from the committed revision only"
+    printf 'LayerX/beta-cluster/builder-environment/v1\n%s\n%s\n' "$vendor" "$recipe" | sha256sum | cut -d ' ' -f 1
+}
+
+builder_environment_stage_discard() {
+    case "$1" in
+        "$BUILDER_ENVIRONMENT_CACHE_DIR"/.staging-*) ;;
+        *) fail "refusing to remove '$1': not a builder environment staging directory under $BUILDER_ENVIRONMENT_CACHE_DIR" ;;
+    esac
+    chmod -R u+rwX -- "$1" || fail "could not reset the permissions of the builder environment staging directory $1"
+    rm -rf -- "$1" || fail "could not remove the builder environment staging directory $1"
+}
+
+builder_environment_construct() {
+    local key out stage logfile status recorded observed
+    require_tool docker git tar python3 sha256sum
+    [ -f "$REPO_ROOT/$BUILDER_ENVIRONMENT_RECIPE/build-env.sh" ] \
+        || fail "$BUILDER_ENVIRONMENT_RECIPE/build-env.sh is missing; it constructs the hermetic builder root filesystem LAYERX_BETA_BUILDER_ENVIRONMENT_DIR otherwise names"
+    git -C "$REPO_ROOT" diff --quiet HEAD -- programs/vendor "$BUILDER_ENVIRONMENT_RECIPE" \
+        || fail "programs/vendor or $BUILDER_ENVIRONMENT_RECIPE carries uncommitted changes; build-env.sh binds the builder environment to the committed revision, so commit them or point LAYERX_BETA_BUILDER_ENVIRONMENT_DIR at an already constructed root filesystem"
+    key=$(builder_environment_key)
+    out="$BUILDER_ENVIRONMENT_CACHE_DIR/$key"
+    logfile="$LOG_DIR/builder-environment.log"
+    mkdir -p "$BUILDER_ENVIRONMENT_CACHE_DIR" "$LOG_DIR"
+    if [ -f "$out/rootfs/bin/layerx-build" ] && [ -s "$out/environment-tree-digest" ] && [ -s "$out/source-revision" ]; then
+        recorded=$(cat "$out/environment-tree-digest")
+        observed=$(environment_digest "$out/rootfs") || fail "digest of the constructed builder environment $out/rootfs failed"
+        [ "$recorded" = "$observed" ] \
+            || fail "constructed builder environment $out no longer digests to its recorded environment-tree-digest ($recorded, observed $observed); remove that directory so up constructs it again"
+        log "reusing the builder environment constructed at $out from revision $(cat "$out/source-revision") (recipe $key)"
+    else
+        [ ! -e "$out" ] \
+            || fail "$out exists without a complete builder environment (rootfs/bin/layerx-build, environment-tree-digest and source-revision); remove that directory so up constructs it again"
+        preflight_disk "$MIN_FREE_GIB" LAYERX_BETA_MIN_FREE_GIB "construct the hermetic builder environment of the committed recipe"
+        log "constructing the builder environment of the committed recipe into $out (docker build, log $logfile)"
+        stage=$(mktemp -d "$BUILDER_ENVIRONMENT_CACHE_DIR/.staging-XXXXXXXX") \
+            || fail "could not create a builder environment staging directory under $BUILDER_ENVIRONMENT_CACHE_DIR"
+        status=0
+        bash "$REPO_ROOT/$BUILDER_ENVIRONMENT_RECIPE/build-env.sh" "$stage/environment" >> "$logfile" 2>&1 || status=$?
+        if [ "$status" -ne 0 ]; then
+            builder_environment_stage_discard "$stage"
+            fail "bash $BUILDER_ENVIRONMENT_RECIPE/build-env.sh exited $status; it needs a reachable docker daemon and the committed programs/vendor and recipe trees (log $logfile)"
+        fi
+        mv -T -- "$stage/environment" "$out" \
+            || { builder_environment_stage_discard "$stage"; fail "could not move the constructed builder environment into $out"; }
+        rmdir -- "$stage"
+        log "constructed the builder environment at $out (tree digest $(cat "$out/environment-tree-digest"))"
+    fi
+    LAYERX_BETA_BUILDER_ENVIRONMENT_DIR="$out/rootfs"
+}
+
 require_builder_environment() {
-    [ -n "${LAYERX_BETA_BUILDER_ENVIRONMENT_DIR:-}" ] \
-        || fail "LAYERX_BETA_BUILDER_ENVIRONMENT_DIR is unset; it must name the owner hermetic builder root filesystem (regular files and directories only, entrypoint bin/layerx-build) that is published into the layerx-program-builder-release ConfigMap and volume platform/hosted/registry/deployment.yaml mounts, so the program registry cannot schedule without it (docs/site/docs/operators/beta-cluster.md, LAYERX_BETA_BUILDER_ENVIRONMENT_DIR)"
+    if [ -z "${LAYERX_BETA_BUILDER_ENVIRONMENT_DIR:-}" ]; then
+        builder_environment_construct
+    fi
     [ -d "$LAYERX_BETA_BUILDER_ENVIRONMENT_DIR" ] || fail "LAYERX_BETA_BUILDER_ENVIRONMENT_DIR=$LAYERX_BETA_BUILDER_ENVIRONMENT_DIR is not a directory"
-    [ -f "$LAYERX_BETA_BUILDER_ENVIRONMENT_DIR/bin/layerx-build" ] || fail "LAYERX_BETA_BUILDER_ENVIRONMENT_DIR lacks the bin/layerx-build entrypoint"
+    [ -f "$LAYERX_BETA_BUILDER_ENVIRONMENT_DIR/bin/layerx-build" ] || fail "LAYERX_BETA_BUILDER_ENVIRONMENT_DIR=$LAYERX_BETA_BUILDER_ENVIRONMENT_DIR lacks the bin/layerx-build entrypoint"
 }
 
 custody_latest_checkpoint() {
