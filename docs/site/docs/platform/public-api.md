@@ -52,7 +52,7 @@ and subscription are part of the same method contract
 | `lx_sendActivity` | `[canonical_hex, "executed"|"batched"|"finalised"]` | Verified outcome at exactly the requested commitment |
 | `lx_subscribe` | `["receipts"]`, `["checkpoints"]`, or `["account", account_id]`, each optionally followed by a resume `cursor` string | WebSocket subscription id string |
 | `lx_unsubscribe` | `[subscription]` | `true` once that WebSocket subscription stops |
-| `lx_listAssets` | `[]` or no `params` | Complete Asset registry snapshot |
+| `lx_listAssets` | `[]`, `[cursor]`, or `[cursor, limit]`, where `cursor` is `null` or a 64-hex asset id and `limit` is 1..256 | One page of the Asset registry ordered by ascending `asset_id`, with `next_cursor` |
 | `lx_getAsset` | `[asset_id]` | One Asset metadata record |
 | `lx_estimateFee` | `[canonical_hex]` | Committed-schedule estimate; it does not reserve a fee or prove execution |
 
@@ -390,12 +390,19 @@ Response:
         "total_units": "12500"
       }
     ],
+    "next_cursor": null,
     "observed_head_sequence": "14",
     "state_root": "b4eaf62e31759276951799516d83dac6c34eb6b506d2ba6bbbc07b72ed05e264",
     "verification": "authenticated_committed_snapshot"
   }
 }
 ```
+
+`params` may carry `[cursor]` or `[cursor, limit]` to resume after an
+`asset_id` and bound the page: `limit` defaults to 64 and may not
+exceed 256, the page is ordered by ascending `asset_id`, and
+`next_cursor` is the last `asset_id` of a truncated page or `null` once
+the page is the last one. A malformed cursor or limit returns `-32602`.
 
 ## Read asset metadata
 

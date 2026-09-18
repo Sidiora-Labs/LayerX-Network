@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { decodeAssetListSnapshot, decodeAssetSnapshot, decodeIdentitySequenceSnapshot, decodeJsonRpcResponse, JsonRpcClient, JsonRpcError, walletAccount } from "../src/rpc.js";
+import { once } from "node:events";
+import * as http from "node:http";
+import { decodeAssetListSnapshot, decodeAssetSnapshot, decodeIdentitySequenceSnapshot, decodeJsonRpcResponse, JsonRpcClient, JsonRpcError, listAssetsParams, walletAccount, LIST_ASSETS_DEFAULT_PAGE, LIST_ASSETS_MAX_PAGE } from "../src/rpc.js";
 
 assert.throws(() => new JsonRpcClient("http://example.com"));
 assert.throws(() => new JsonRpcClient("https://user:secret@example.com"));
@@ -32,7 +34,77 @@ assert.throws(() => feeClient.getAsset("AB".repeat(32)));
 
 const asset = {asset_id:"11".repeat(32),symbol:"USD",name:"Test Dollar",decimals:6,custody_kind:0,custody_reference:"",paused:false,supply_cap:"1000000",issuer_did:"22".repeat(32),issuer_kind:1,total_units:"100",salt:"33".repeat(32)};
 assert.deepEqual(decodeAssetSnapshot({asset,observed_head_sequence:"9",state_root:"44".repeat(32),verification:"authenticated_committed_snapshot"}),{asset:{assetId:"11".repeat(32),symbol:"USD",name:"Test Dollar",decimals:6,custodyKind:0,custodyReference:"",paused:false,supplyCap:1000000n,issuerDid:"22".repeat(32),issuerKind:1,totalUnits:100n,salt:"33".repeat(32)},observedHeadSequence:9n,stateRoot:"44".repeat(32)});
-assert.throws(()=>decodeAssetListSnapshot({assets:[{...asset,asset_id:"22".repeat(32)},asset],observed_head_sequence:"9",state_root:"44".repeat(32),verification:"authenticated_committed_snapshot"}));
+assert.throws(()=>decodeAssetListSnapshot({assets:[{...asset,asset_id:"22".repeat(32)},asset],next_cursor:null,observed_head_sequence:"9",state_root:"44".repeat(32),verification:"authenticated_committed_snapshot"}));
+
+const first = "11".repeat(32);
+const second = "22".repeat(32);
+const later = {...asset, asset_id:second};
+const assetPage = (assets: readonly unknown[], nextCursor: unknown) =>
+  ({assets, next_cursor:nextCursor, observed_head_sequence:"9", state_root:"44".repeat(32), verification:"authenticated_committed_snapshot"});
+assert.deepEqual(listAssetsParams(), []);
+assert.deepEqual(listAssetsParams(first), [first]);
+assert.deepEqual(listAssetsParams(first, 1), [first, 1]);
+assert.deepEqual(listAssetsParams(first, LIST_ASSETS_MAX_PAGE), [first, 256]);
+assert.deepEqual(listAssetsParams(undefined, LIST_ASSETS_DEFAULT_PAGE), [null, 64]);
+assert.throws(() => listAssetsParams("00".repeat(32)));
+assert.throws(() => listAssetsParams("ab"));
+assert.throws(() => listAssetsParams("AB".repeat(32)));
+assert.throws(() => listAssetsParams(first, 0));
+assert.throws(() => listAssetsParams(first, LIST_ASSETS_MAX_PAGE + 1));
+assert.throws(() => listAssetsParams(first, -1));
+assert.throws(() => listAssetsParams(first, 1.5));
+assert.throws(() => feeClient.listAssetsPage("00".repeat(32)));
+assert.throws(() => feeClient.listAssetsPage(undefined, 0));
+assert.throws(() => feeClient.listAssetsPage(undefined, LIST_ASSETS_MAX_PAGE + 1));
+
+const truncated = decodeAssetListSnapshot(assetPage([asset, later], second));
+assert.deepEqual(truncated.assets.map(record => record.assetId), [first, second]);
+assert.equal(truncated.nextCursor, second);
+const lastPage = decodeAssetListSnapshot(assetPage([asset], null));
+assert.equal(lastPage.assets.length, 1);
+assert.equal(lastPage.nextCursor, null);
+for (const refused of [
+  assetPage([asset, later], first),
+  assetPage([later, asset], null),
+  assetPage([], first),
+  assetPage([asset], "2".repeat(63)),
+  assetPage([asset], "AB".repeat(32)),
+  assetPage(new Array<unknown>(LIST_ASSETS_MAX_PAGE + 1).fill(asset), null),
+  {assets:[asset], observed_head_sequence:"9", state_root:"44".repeat(32), verification:"authenticated_committed_snapshot"},
+]) assert.throws(() => decodeAssetListSnapshot(refused));
+
+const observed: unknown[] = [];
+const assetServer = http.createServer((request, response) => {
+  const chunks: Buffer[] = [];
+  request.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+  request.on("end", () => {
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {id: string; method: string; params: unknown};
+    assert.equal(request.url, "/rpc");
+    assert.equal(body.method, "lx_listAssets");
+    observed.push(body.params);
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({jsonrpc:"2.0", id:body.id, result:assetPage([asset, later], second)}));
+  });
+});
+assetServer.listen(0, "127.0.0.1");
+await once(assetServer, "listening");
+const assetAddress = assetServer.address();
+assert(assetAddress !== null && typeof assetAddress === "object", "asset listener missing");
+try {
+  const assetClient = new JsonRpcClient(`http://127.0.0.1:${assetAddress.port}`);
+  const page = await assetClient.listAssets();
+  assert.equal(page.nextCursor, second);
+  assert.deepEqual(page.assets.map(record => record.assetId), [first, second]);
+  assert.equal((await assetClient.listAssetsPage(first)).nextCursor, second);
+  assert.equal((await assetClient.listAssetsPage(first, LIST_ASSETS_MAX_PAGE)).assets.length, 2);
+  assert.equal((await assetClient.listAssetsPage(undefined, 2)).assets.length, 2);
+  await assert.rejects(assetClient.listAssetsPage(undefined, 1));
+  assert.deepEqual(observed, [[], [first], [first, 256], [null, 2], [null, 1]]);
+} finally {
+  assetServer.close();
+  await once(assetServer, "close");
+}
+
 assert.deepEqual(decodeIdentitySequenceSnapshot({did:"did:layerx:alice",next_sequence:"7",observed_head_sequence:"11",state_root:"44".repeat(32),verification:"authenticated_node_snapshot"}),{did:"did:layerx:alice",nextSequence:7n,observedHeadSequence:11n,stateRoot:"44".repeat(32)});
 assert.throws(()=>decodeIdentitySequenceSnapshot({did:"did:layerx:alice",next_sequence:"07",observed_head_sequence:"11",state_root:"44".repeat(32),verification:"authenticated_node_snapshot"}));
 

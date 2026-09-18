@@ -206,8 +206,8 @@ storage units fails closed.
 The LNI minor-5 read contract provides:
 
 - `AssetReadRequest` version 1: kind `1` lists the complete Asset registry;
-  kind `2` gets one nonzero Asset id. The list is bounded to 64 records and is
-  sorted by Asset id.
+  kind `2` gets one nonzero Asset id. The list is bounded to the 1024-record
+  registry capacity and is sorted by Asset id.
 - `AssetReadResponse` version 1: observed sequence, committed state root, count,
   and length-prefixed version-3 records.
 - DID account enumeration: the complete bounded account list at the committed
@@ -217,7 +217,12 @@ The LNI minor-5 read contract provides:
   state root, parameter version, decimal fee, and the canonical schedule.
 
 The gateway exposes these through `lx_listAssets`, `lx_getAsset`,
-`lx_getBalances`, and `lx_estimateFee`. Their
+`lx_getBalances`, and `lx_estimateFee`. `lx_listAssets` is paginated: it takes
+an optional `cursor` (the exclusive Asset id to resume after, or `null`) and an
+optional `limit` (1 to 256, default 64), and returns one page ordered by
+ascending `asset_id` together with `next_cursor`, which is the last `asset_id`
+of a truncated page and `null` once the page is the last one. A malformed
+cursor or limit returns `-32602`. Their
 `verification=authenticated_committed_snapshot` label means an authenticated
 same-process committed snapshot; it is not an independent Merkle proof or a
 finality claim.
