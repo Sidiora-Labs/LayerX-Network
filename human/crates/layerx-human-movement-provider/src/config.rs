@@ -192,14 +192,14 @@ fn required(suffix: &str) -> Result<String, Error> {
         .filter(|value| !value.is_empty())
         .ok_or(Error::Configuration)
 }
-fn path(suffix: &str) -> Result<PathBuf, Error> {
+pub(crate) fn path(suffix: &str) -> Result<PathBuf, Error> {
     let value = PathBuf::from(required(suffix)?);
     if !value.is_absolute() {
         return Err(Error::Configuration);
     }
     Ok(value)
 }
-fn bounded(suffix: &str, min: u64, max: u64) -> Result<u64, Error> {
+pub(crate) fn bounded(suffix: &str, min: u64, max: u64) -> Result<u64, Error> {
     let value = required(suffix)?
         .parse()
         .map_err(|_| Error::Configuration)?;

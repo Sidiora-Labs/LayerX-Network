@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod probe;
 mod provision_head;
 
 use std::io::{self, Read, Write};
@@ -84,6 +85,7 @@ fn run() -> io::Result<()> {
             command.as_deref(),
             None | Some(
                 "serve"
+                    | "probe"
                     | "bind-device"
                     | "provision-owner"
                     | "provision-account"
@@ -104,6 +106,9 @@ fn run() -> io::Result<()> {
     } else {
         None
     };
+    if command.as_deref() == Some("probe") {
+        return probe::run();
+    }
     if command.as_deref() == Some("validate-account-head") {
         return provision_head::run();
     }
