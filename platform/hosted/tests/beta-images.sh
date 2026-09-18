@@ -2,7 +2,8 @@
 
 IMAGE_NAMES=(layerx-testnet-control layerx-gateway layerx-faucet layerx-program-registry layerx-webhooks layerx-dashboard layerx-dashboard-web
     layerx-internal layerx-human layerx-human-web layerx-node layerx-core-boundary layerx-receipt-authority layerx-agent-boundary layerx-identity layerx-paxeer-boundary
-    layerx-mirror layerx-relay-archive layerx-interop-gateway paxd-node paxd)
+    layerx-mirror layerx-relay-archive layerx-interop-gateway layerx-reference-ramp
+    paxd-node paxd)
 
 image_source() {
     case "$1" in
@@ -25,6 +26,7 @@ image_source() {
         layerx-mirror) printf 'ghcr.io/sidiora-labs/layerx-mirror:0.1.0 interop/deploy/mirror/Dockerfile' ;;
         layerx-relay-archive) printf 'ghcr.io/sidiora-labs/layerx-relay-archive:0.1.0 platform/relay_archive/Dockerfile' ;;
         layerx-interop-gateway) printf 'ghcr.io/sidiora-labs/layerx-interop-gateway:0.1.0 interop/deploy/gateway/Dockerfile' ;;
+        layerx-reference-ramp) printf 'ghcr.io/sidiora-labs/layerx-reference-ramp:0.1.0 platform/ramps/Dockerfile' ;;
         paxd-node) printf 'ghcr.io/sidiora-labs/paxd-node:0.1.0 platform/hosted/paxeer/Dockerfile.paxd-node' ;;
         paxd) printf 'ghcr.io/sidiora-labs/paxd:0.1.0 platform/hosted/paxeer/Dockerfile.paxd' ;;
         *) fail "unknown image $1" ;;

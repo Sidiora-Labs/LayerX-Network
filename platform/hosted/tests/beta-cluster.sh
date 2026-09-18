@@ -80,6 +80,27 @@
 #                                       human/apps/web/e2e/run-production-browser.sh serves that same origin from
 #                                       its own authbind listener, which leaves the forward and its readiness
 #                                       gate out; any other value is refused
+#   LAYERX_BETA_RAMP_PORT               host port of the reference ramp port-forward (default 19459)
+#   LAYERX_BETA_RAMP_WORKER_ID          reference ramp worker identity (default layerx-beta-ramp-1)
+#   LAYERX_BETA_RAMP_FEE_LIMIT          LayerX activity fee limit of the ramp operator (default 1000)
+#   The reference fiat ramp is optional: when no LAYERX_BETA_RAMP_* variable is set the bring-up records
+#   one missing owner input naming every ramp input and leaves the ramp image, workload, port-forward and
+#   sandbox journey out; when some are set it refuses to start and names each one still missing; when all
+#   are set it brings the ramp up. Values:
+#   LAYERX_BETA_RAMP_OPERATOR_PRINCIPAL_ID, LAYERX_BETA_RAMP_OPERATOR_DID,
+#   LAYERX_BETA_RAMP_OPERATOR_SIGNER_KEY_HANDLE, LAYERX_BETA_RAMP_PROVIDER_ENDPOINT,
+#   LAYERX_BETA_RAMP_PROVIDER_CALLBACK_PUBLIC_KEY, LAYERX_BETA_RAMP_COMPLIANCE_ENDPOINT,
+#   LAYERX_BETA_RAMP_COMPLIANCE_PUBLIC_KEY, LAYERX_BETA_RAMP_SIGNER_ENDPOINT,
+#   LAYERX_BETA_RAMP_SIGNER_PUBLIC_KEY, LAYERX_BETA_RAMP_PAXEER_WALLET_ADDRESS,
+#   LAYERX_BETA_RAMP_PAXEER_VAULT_ID, LAYERX_BETA_RAMP_PAXEER_SIGNER_KEY_HANDLE. Readable private files:
+#   LAYERX_BETA_RAMP_OUTBOUND_CA_PEM_FILE, LAYERX_BETA_RAMP_OUTBOUND_IDENTITY_PKCS12_FILE,
+#   LAYERX_BETA_RAMP_OUTBOUND_IDENTITY_PASSWORD_FILE, LAYERX_BETA_RAMP_PROVIDER_TOKEN_FILE,
+#   LAYERX_BETA_RAMP_COMPLIANCE_TOKEN_FILE, LAYERX_BETA_RAMP_SIGNER_TOKEN_FILE,
+#   LAYERX_BETA_RAMP_GATEWAY_KEY_FILE, LAYERX_BETA_RAMP_PAXEER_CUSTODY_TOKEN_FILE,
+#   LAYERX_BETA_RAMP_QUOTES_FILE. The sandbox journey inputs LAYERX_BETA_RAMP_CUSTOMER_TOKEN,
+#   LAYERX_BETA_RAMP_OFF_GRANT_JSON, LAYERX_BETA_RAMP_ON_ACCOUNT_SEQUENCE and
+#   LAYERX_BETA_RAMP_OFF_RECEIVER_SEQUENCE are recorded as missing inputs when unset; setting any of them,
+#   or LAYERX_BETA_RAMP_ON_QUOTE_ID or LAYERX_BETA_RAMP_OFF_QUOTE_ID, also asks for the ramp
 #   LAYERX_BETA_TEST_AUTH_TOKEN_FILE    identity session token for the smoke source; when unset the bring-up
 #                                       provisions a principal for the source DID in the identity service with
 #                                       a generated ed25519 signer key and mints its session
@@ -176,6 +197,11 @@ TESTNET_PORT=${LAYERX_BETA_TESTNET_PORT:-19443}
 GATEWAY_PORT=${LAYERX_BETA_GATEWAY_PORT:-19444}
 FAUCET_PORT=${LAYERX_BETA_FAUCET_PORT:-19445}
 HUMAN_WEB_PORT=${LAYERX_BETA_HUMAN_WEB_PORT-443}
+RAMP_PORT=${LAYERX_BETA_RAMP_PORT:-19459}
+RAMP_HOST=ramp.testnet.layerx.network
+RAMP_WORKER_ID=${LAYERX_BETA_RAMP_WORKER_ID:-layerx-beta-ramp-1}
+RAMP_FEE_LIMIT=${LAYERX_BETA_RAMP_FEE_LIMIT:-1000}
+RAMP_ENABLED=1
 TESTNET_NAMESPACE=layerx-testnet
 DEVELOPER_NAMESPACE=layerx-developer
 IMAGE_LABEL=io.layerx.beta-cluster
@@ -191,6 +217,20 @@ STATUS_PUBLISH_URL=${LAYERX_BETA_STATUS_PUBLISH_URL:-}
 STATUS_PUBLISHER_REPORTED=0
 IDENTITY_PORT=19451
 INTEROP_PORT=19458
+RAMP_VALUE_INPUTS=(LAYERX_BETA_RAMP_OPERATOR_PRINCIPAL_ID LAYERX_BETA_RAMP_OPERATOR_DID
+    LAYERX_BETA_RAMP_OPERATOR_SIGNER_KEY_HANDLE LAYERX_BETA_RAMP_PROVIDER_ENDPOINT
+    LAYERX_BETA_RAMP_PROVIDER_CALLBACK_PUBLIC_KEY LAYERX_BETA_RAMP_COMPLIANCE_ENDPOINT
+    LAYERX_BETA_RAMP_COMPLIANCE_PUBLIC_KEY LAYERX_BETA_RAMP_SIGNER_ENDPOINT LAYERX_BETA_RAMP_SIGNER_PUBLIC_KEY
+    LAYERX_BETA_RAMP_PAXEER_WALLET_ADDRESS LAYERX_BETA_RAMP_PAXEER_VAULT_ID
+    LAYERX_BETA_RAMP_PAXEER_SIGNER_KEY_HANDLE)
+RAMP_FILE_INPUTS=(LAYERX_BETA_RAMP_OUTBOUND_CA_PEM_FILE LAYERX_BETA_RAMP_OUTBOUND_IDENTITY_PKCS12_FILE
+    LAYERX_BETA_RAMP_OUTBOUND_IDENTITY_PASSWORD_FILE LAYERX_BETA_RAMP_PROVIDER_TOKEN_FILE
+    LAYERX_BETA_RAMP_COMPLIANCE_TOKEN_FILE LAYERX_BETA_RAMP_SIGNER_TOKEN_FILE LAYERX_BETA_RAMP_GATEWAY_KEY_FILE
+    LAYERX_BETA_RAMP_PAXEER_CUSTODY_TOKEN_FILE LAYERX_BETA_RAMP_QUOTES_FILE)
+RAMP_OPTIONAL_INPUTS=(LAYERX_BETA_RAMP_PORT LAYERX_BETA_RAMP_WORKER_ID LAYERX_BETA_RAMP_FEE_LIMIT
+    LAYERX_BETA_RAMP_ON_QUOTE_ID LAYERX_BETA_RAMP_OFF_QUOTE_ID LAYERX_BETA_RAMP_CUSTOMER_TOKEN
+    LAYERX_BETA_RAMP_OFF_GRANT_JSON LAYERX_BETA_RAMP_ON_ACCOUNT_SEQUENCE
+    LAYERX_BETA_RAMP_OFF_RECEIVER_SEQUENCE)
 PAXEER_CHAIN_ID=125
 MIRROR_SIGNER_SOCKET=/run/mirror-signer/signer.sock
 MIRROR_ETHEREUM_KEY_HANDLE=mirror/ethereum/beta
@@ -318,6 +358,14 @@ build_context() {
         | tar --null --files-from - -cf "$WORK_DIR/context.tar")
 }
 
+image_selected() {
+    # image_selected NAME: an image whose workload this bring-up leaves out is not built or pulled
+    case "$1" in
+        layerx-reference-ramp) [ "$RAMP_ENABLED" = 1 ] ;;
+        *) return 0 ;;
+    esac
+}
+
 build_images() {
     local name canonical dockerfile ref id
     local -a build_args
@@ -325,6 +373,7 @@ build_images() {
     : > "$WORK_DIR/images"
     build_context
     for name in "${IMAGE_NAMES[@]}"; do
+        image_selected "$name" || continue
         read -r canonical dockerfile <<<"$(image_source "$name")"
         ref=$(image_ref "$name")
         read -r -a build_args <<<"$(image_build_args "$name")"
@@ -349,6 +398,7 @@ pull_images() {
     mkdir -p "$LOG_DIR"
     : > "$WORK_DIR/images"
     for name in "${IMAGE_NAMES[@]}"; do
+        image_selected "$name" || continue
         read -r canonical dockerfile <<<"$(image_source "$name")"
         remote="ghcr.io/sidiora-labs/$name"
         digest=$(registry_image_digest "$remote:$REVISION")
@@ -515,6 +565,15 @@ issue_client_identity() {
         -name "$cn" -passout "file:$dir/password" -out "$dir/client.p12")
 }
 
+issue_server_identity() {
+    local name=$1 cn=$2 subject_alt=$3 dir
+    dir="$CA_DIR/$name"
+    issue_cert "$name" "$cn" serverAuth "$subject_alt"
+    write_token "$dir/password"
+    (umask 077; openssl pkcs12 -export -inkey "$dir/key.pem" -in "$dir/cert.pem" -certfile "$CA_DIR/ca.crt" \
+        -name "$cn" -passout "file:$dir/password" -out "$dir/server.p12")
+}
+
 ca_generate() {
     rm -rf "$CA_DIR" "$SECRETS_DIR"
     mkdir -p "$CA_DIR" "$SECRETS_DIR"
@@ -572,6 +631,8 @@ ca_generate() {
     issue_client_identity developer-client layerx-developer
     issue_client_identity registry-event-client layerx-registry-events
     issue_client_identity human-event-client layerx-human-events
+    issue_server_identity ramp layerx-reference-ramp \
+        "DNS:layerx-reference-ramp.$svc,DNS:layerx-reference-ramp.$TESTNET_NAMESPACE.svc,DNS:layerx-reference-ramp,DNS:layerx-reference-ramp-operator.$svc,DNS:layerx-reference-ramp-operator,DNS:$RAMP_HOST,DNS:localhost,IP:127.0.0.1"
     if [ -n "${LAYERX_BETA_SEQUENCER_KEY_FILE:-}" ]; then
         [ -r "$LAYERX_BETA_SEQUENCER_KEY_FILE" ] || fail "LAYERX_BETA_SEQUENCER_KEY_FILE=$LAYERX_BETA_SEQUENCER_KEY_FILE is not readable"
         (umask 077; cp "$LAYERX_BETA_SEQUENCER_KEY_FILE" "$CA_DIR/sequencer.key")
@@ -825,6 +886,8 @@ secrets_generate() {
     genesis_metadata_generate
     write_token "$d/node-program.token"
     write_token "$d/node-replica.token"
+    write_token "$d/ramp-authority.token"
+    write_token "$d/ramp-operator-control.token"
     mkdir -p "$d/identity-tokens"
     chmod 0700 "$d/identity-tokens"
     cp "$d/gateway-identity.token" "$d/identity-tokens/gateway"
@@ -1611,6 +1674,9 @@ PYREG
     sed -i "s|relay\.layerx\.example|$RELAY_HOST|g" "$MANIFESTS_DIR/relay-archive.yaml"
     grep -Fq "host: $RELAY_HOST" "$MANIFESTS_DIR/relay-archive.yaml" \
         || fail "the relay/archive manifest host could not be bound to $RELAY_HOST"
+    if [ "$RAMP_ENABLED" = 1 ]; then
+        render_manifest "$REPO_ROOT/platform/ramps/deployment.yaml" "$MANIFESTS_DIR/ramp.yaml"
+    fi
     python3 "$SCRIPT_DIR/sequencer-pins.py" --manifests "$MANIFESTS_DIR"
     cat >> "$MANIFESTS_DIR/testnet.yaml" <<EOF
 ---
@@ -2697,6 +2763,7 @@ env_write() {
         "beta_driver.py --human-service-url: layerx-human HTTPS API; /readyz verifies all production components"
     qualification_url LAYERX_QUALIFICATION_PAXEER_URL LAYERX_BETA_QUALIFICATION_PAXEER_URL "$PAXEER_URL" \
         "beta_driver.py --paxeer-testnet-url: the Paxeer boundary Service paxeer-boundary (JSON-RPC relay to the chain $PAXEER_CHAIN_ID node)"
+    ramp_env_write
 }
 
 identity_write() {
@@ -2890,6 +2957,256 @@ human_custody_evidence_publish() {
     log "owner custody deposit proof and credit material delivered to the movement provider for $transaction"
 }
 
+ramp_inputs_require() {
+    local variable path
+    local -a missing=() supplied=()
+    for variable in "${RAMP_VALUE_INPUTS[@]}" "${RAMP_FILE_INPUTS[@]}" "${RAMP_OPTIONAL_INPUTS[@]}"; do
+        if [ -n "${!variable:-}" ]; then supplied+=("$variable"); fi
+    done
+    if [ "${#supplied[@]}" -eq 0 ]; then
+        RAMP_ENABLED=0
+        MISSING_INPUTS+=("${RAMP_VALUE_INPUTS[*]} ${RAMP_FILE_INPUTS[*]}: the reference fiat ramp; the repository does not invent provider, compliance or custody-owner coordinates, so the ramp image, workload, port-forward and sandbox journey are left out until the owner supplies all of them")
+        log "the reference fiat ramp is unconfigured: no LAYERX_BETA_RAMP_* input is set, so its image, workload and port-forward are left out of this bring-up"
+        return 0
+    fi
+    RAMP_ENABLED=1
+    for variable in "${RAMP_VALUE_INPUTS[@]}" "${RAMP_FILE_INPUTS[@]}"; do
+        [ -n "${!variable:-}" ] || missing+=("$variable")
+    done
+    if [ "${#missing[@]}" -ne 0 ]; then
+        fail "the reference ramp needs owner coordinates it cannot derive from the cluster; set ${missing[*]}, or unset every LAYERX_BETA_RAMP_* variable to bring the cluster up without the ramp"
+    fi
+    for variable in "${RAMP_FILE_INPUTS[@]}"; do
+        path=${!variable}
+        [ -f "$path" ] && [ ! -L "$path" ] && [ -r "$path" ] \
+            || fail "$variable=$path must name a readable regular file, not a symlink"
+        [ -s "$path" ] || fail "$variable=$path is empty"
+    done
+}
+
+ramp_config_render() {
+    # ramp_config_render OUTPUT
+    python3 - "$1" "$TESTNET_NAMESPACE" "$NODE_NETWORK_ID" "$NODE_ASSET_ID" "$PAXEER_CHAIN_ID" \
+        "$SECRETS_DIR/sequencer-id" "$SECRETS_DIR/sequencer-public-key" \
+        "$SECRETS_DIR/sequencer-first-batch" "$SECRETS_DIR/sequencer-last-batch" \
+        "$RAMP_WORKER_ID" "$RAMP_FEE_LIMIT" <<'PYRAMPCONFIG'
+import json, os, sys
+
+output, namespace, network_id, asset_hex, chain_id = sys.argv[1:6]
+sequencer_id, sequencer_key, sequencer_first, sequencer_last = [
+    open(path, encoding='ascii').read().strip() for path in sys.argv[6:10]
+]
+worker_id, fee_limit = sys.argv[10], int(sys.argv[11])
+
+def refuse(message):
+    raise SystemExit('beta-cluster: error: %s' % message)
+
+def value(name):
+    present = os.environ.get(name, '')
+    if not present:
+        refuse('%s is required to render the reference ramp configuration' % name)
+    return present
+
+def hex32(name):
+    present = value(name)
+    if len(present) != 64 or any(digit not in '0123456789abcdef' for digit in present):
+        refuse('%s must be 64 lowercase hexadecimal characters' % name)
+    return present
+
+def endpoint(name):
+    present = value(name)
+    if not present.startswith('https://') or present == 'https://':
+        refuse('%s must be a canonical https:// endpoint' % name)
+    return present
+
+def internal(service, port):
+    return 'https://%s.%s.svc.cluster.local:%d' % (service, namespace, port)
+
+asset = list(bytes.fromhex(asset_hex))
+with open(value('LAYERX_BETA_RAMP_QUOTES_FILE'), encoding='utf-8') as handle:
+    quotes = json.load(handle)
+if not isinstance(quotes, list) or not quotes:
+    refuse('LAYERX_BETA_RAMP_QUOTES_FILE must hold a non-empty JSON array of operator quotes')
+for quote in quotes:
+    if not isinstance(quote, dict):
+        refuse('every entry of LAYERX_BETA_RAMP_QUOTES_FILE must be a quote object')
+    if quote.get('layerx_asset') != asset:
+        refuse('quote %r must name the beta node asset %s' % (quote.get('quote_id'), asset_hex))
+
+actor_did = value('LAYERX_BETA_RAMP_OPERATOR_DID')
+account = 'agent:%s:main' % actor_did
+config = {
+    'listen': '0.0.0.0:8443',
+    'journal_path': '/var/lib/layerx-ramp/journal.jsonl',
+    'worker_id': worker_id,
+    'lease_seconds': 60,
+    'reconcile_seconds': 5,
+    'operator': {
+        'principal_id': value('LAYERX_BETA_RAMP_OPERATOR_PRINCIPAL_ID'),
+        'account': account,
+        'signer_key_handle': value('LAYERX_BETA_RAMP_OPERATOR_SIGNER_KEY_HANDLE'),
+    },
+    'quotes': quotes,
+    'server_identity_pkcs12': '/run/secrets/server-identity.p12',
+    'server_identity_password_file': '/run/secrets/server-identity-password',
+    'client_tls': {
+        'ca_pem': '/run/secrets/outbound-ca.pem',
+        'identity_pkcs12': '/run/secrets/outbound-identity.p12',
+        'identity_password_file': '/run/secrets/outbound-identity-password',
+        'timeout_seconds': 8,
+    },
+    'identity': {
+        'endpoint': internal('layerx-identity', 9443),
+        'service_token_file': '/run/secrets/identity-token',
+        'audience': 'layerx-ramp',
+    },
+    'compliance': {
+        'endpoint': endpoint('LAYERX_BETA_RAMP_COMPLIANCE_ENDPOINT'),
+        'service_token_file': '/run/secrets/compliance-token',
+        'public_key': hex32('LAYERX_BETA_RAMP_COMPLIANCE_PUBLIC_KEY'),
+    },
+    'provider': {
+        'endpoint': endpoint('LAYERX_BETA_RAMP_PROVIDER_ENDPOINT'),
+        'credential_file': '/run/secrets/provider-token',
+        'settlement_path': '/layerx-ramp-v1/settlements',
+        'status_path': '/layerx-ramp-v1/settlements',
+    },
+    'layerx': {
+        'gateway_endpoint': internal('layerx-gateway', 443),
+        'receipt_authority_endpoint': internal('layerx-receipt-authority', 9443),
+        'signer_endpoint': endpoint('LAYERX_BETA_RAMP_SIGNER_ENDPOINT'),
+        'gateway_key_file': '/run/secrets/gateway-key',
+        'authority_token_file': '/run/secrets/receipt-authority-token',
+        'signer_token_file': '/run/secrets/kms-token',
+        'actor_did': actor_did,
+        'protocol_version': 2,
+        'network_id': int(network_id),
+        'fee_limit': fee_limit,
+        'signer_public_key': hex32('LAYERX_BETA_RAMP_SIGNER_PUBLIC_KEY'),
+        'sequencer_id': sequencer_id,
+        'sequencer_public_key': sequencer_key,
+        'sequencer_first_batch': sequencer_first,
+        'sequencer_last_batch': sequencer_last,
+    },
+    'paxeer': {
+        'custody_endpoint': internal('paxeer-boundary', 9443),
+        'custody_credential_file': '/run/secrets/paxeer-custody-token',
+        'broadcast_path': '/layerx-paxeer-v1/rebalances',
+        'status_path': '/layerx-paxeer-v1/rebalances',
+        'operator_account': account,
+        'wallet_address': value('LAYERX_BETA_RAMP_PAXEER_WALLET_ADDRESS'),
+        'vault_id': value('LAYERX_BETA_RAMP_PAXEER_VAULT_ID'),
+        'signer_key_handle': value('LAYERX_BETA_RAMP_PAXEER_SIGNER_KEY_HANDLE'),
+        'rpc_endpoints': [internal('paxeer-boundary', 9443), internal('paxeer-observer-boundary', 9443)],
+        'rpc_trust_anchor_der': '/run/secrets/paxeer-rpc-ca.der',
+        'rpc_chain_id': int(chain_id),
+        'rpc_minimum_agreement': 2,
+        'required_confirmations': 12,
+        'poll_cadence_seconds': 5,
+        'delayed_after_polls': 12,
+    },
+    'provider_callback_public_key': hex32('LAYERX_BETA_RAMP_PROVIDER_CALLBACK_PUBLIC_KEY'),
+    'operator_control_token_file': '/run/secrets/operator-control-token',
+}
+descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(descriptor, 'w', encoding='utf-8') as handle:
+    os.fchmod(handle.fileno(), 0o600)
+    json.dump(config, handle, indent=2)
+    handle.write('\n')
+PYRAMPCONFIG
+}
+
+ramp_secrets_apply() {
+    local c="$CA_DIR" s="$SECRETS_DIR" ns="$TESTNET_NAMESPACE" dir="$WORK_DIR/ramp"
+    mkdir -p "$dir"
+    chmod 0700 "$dir"
+    (umask 077; cat "$c/ca.crt" "$LAYERX_BETA_RAMP_OUTBOUND_CA_PEM_FILE" > "$dir/outbound-ca.pem")
+    ramp_config_render "$dir/config.json"
+    apply_secret "$ns" layerx-reference-ramp-config --from-file=config.json="$dir/config.json"
+    apply_secret "$ns" layerx-reference-ramp-server-tls \
+        --from-file=server-identity.p12="$c/ramp/server.p12" --from-file=server-identity-password="$c/ramp/password"
+    apply_secret "$ns" layerx-reference-ramp-client-tls \
+        --from-file=outbound-ca.pem="$dir/outbound-ca.pem" \
+        --from-file=outbound-identity.p12="$LAYERX_BETA_RAMP_OUTBOUND_IDENTITY_PKCS12_FILE" \
+        --from-file=outbound-identity-password="$LAYERX_BETA_RAMP_OUTBOUND_IDENTITY_PASSWORD_FILE"
+    apply_secret "$ns" layerx-reference-ramp-identity --from-file=identity-token="$s/identity-tokens/ramp"
+    apply_secret "$ns" layerx-reference-ramp-compliance --from-file=compliance-token="$LAYERX_BETA_RAMP_COMPLIANCE_TOKEN_FILE"
+    apply_secret "$ns" layerx-reference-ramp-provider --from-file=provider-token="$LAYERX_BETA_RAMP_PROVIDER_TOKEN_FILE"
+    apply_secret "$ns" layerx-reference-ramp-layerx \
+        --from-file=gateway-key="$LAYERX_BETA_RAMP_GATEWAY_KEY_FILE" \
+        --from-file=receipt-authority-token="$s/ramp-authority.token" \
+        --from-file=kms-token="$LAYERX_BETA_RAMP_SIGNER_TOKEN_FILE"
+    apply_secret "$ns" layerx-reference-ramp-paxeer \
+        --from-file=paxeer-custody-token="$LAYERX_BETA_RAMP_PAXEER_CUSTODY_TOKEN_FILE" \
+        --from-file=paxeer-rpc-ca.der="$c/ca.der"
+    apply_secret "$ns" layerx-reference-ramp-operator --from-file=operator-control-token="$s/ramp-operator-control.token"
+    apply_tls_secret "$ns" layerx-reference-ramp-ingress-tls ramp
+}
+
+ramp_wait_ready() {
+    local deadline=$((SECONDS + READY_TIMEOUT)) status
+    while :; do
+        status=$(curl --silent --show-error --max-time 10 --cacert "$CA_DIR/ca.crt" \
+            --output "$WORK_DIR/ramp/readyz.json" --write-out '%{http_code}' "$RAMP_URL/readyz" 2>/dev/null) || status=unreachable
+        if [ "$status" = 200 ] && jq -e '.ready == true and .external_custody == true' "$WORK_DIR/ramp/readyz.json" > /dev/null 2>&1; then
+            log "reference ramp ready at $RAMP_URL: $(jq -c '{provider_contract, compliance_contract, paxeer_contract}' "$WORK_DIR/ramp/readyz.json")"
+            return 0
+        fi
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            kube -n "$TESTNET_NAMESPACE" logs layerx-reference-ramp-0 -c ramp --tail 40 >&2 || true
+            fail "the reference ramp did not report ready at $RAMP_URL/readyz within ${READY_TIMEOUT}s (last HTTP status $status)"
+        fi
+        sleep 5
+    done
+}
+
+ramp_apply() {
+    ramp_inputs_require
+    [ "$RAMP_ENABLED" = 1 ] || return 0
+    ramp_secrets_apply
+    kube apply -f "$MANIFESTS_DIR/ramp.yaml" > /dev/null
+    wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-reference-ramp 600
+    port_forward ramp "$TESTNET_NAMESPACE" layerx-reference-ramp "$RAMP_PORT" 443
+    ramp_wait_ready
+}
+
+ramp_journey_input() {
+    # ramp_journey_input VARIABLE OVERRIDE VALUE SURFACE
+    local variable=$1 override=$2 value=$3 surface=$4
+    value=${!override:-$value}
+    if [ -z "$value" ]; then
+        printf '# %s: %s\nunset %s\n' "$variable" "$surface" "$variable" >> "$ENV_FILE"
+        MISSING_INPUTS+=("$override: $surface")
+        return 0
+    fi
+    printf '# %s: %s\nexport %s=%s\n' "$variable" "$surface" "$variable" "$value" >> "$ENV_FILE"
+}
+
+ramp_env_write() {
+    local on_quote off_quote
+    [ "$RAMP_ENABLED" = 1 ] || return 0
+    on_quote=$(jq -r 'map(select(.direction == "on_ramp")) | .[0].quote_id // empty' "$LAYERX_BETA_RAMP_QUOTES_FILE")
+    off_quote=$(jq -r 'map(select(.direction == "off_ramp")) | .[0].quote_id // empty' "$LAYERX_BETA_RAMP_QUOTES_FILE")
+    {
+        printf 'export LAYERX_RAMP_URL=%s\n' "$RAMP_URL"
+        printf 'export LAYERX_RAMP_OPERATOR_URL=%s\n' "$RAMP_URL"
+        printf 'export LAYERX_RAMP_CA_PEM=%s\n' "$CA_DIR/ca.crt"
+        printf 'export LAYERX_RAMP_OPERATOR_TOKEN=%s\n' "$(cat "$SECRETS_DIR/ramp-operator-control.token")"
+    } >> "$ENV_FILE"
+    ramp_journey_input LAYERX_RAMP_ON_QUOTE_ID LAYERX_BETA_RAMP_ON_QUOTE_ID "$on_quote" \
+        "platform/ramps/sandbox-journey.sh: the on_ramp quote id of the operator quote catalog"
+    ramp_journey_input LAYERX_RAMP_OFF_QUOTE_ID LAYERX_BETA_RAMP_OFF_QUOTE_ID "$off_quote" \
+        "platform/ramps/sandbox-journey.sh: the off_ramp quote id of the operator quote catalog"
+    ramp_journey_input LAYERX_RAMP_CUSTOMER_TOKEN LAYERX_BETA_RAMP_CUSTOMER_TOKEN "" \
+        "platform/ramps/sandbox-journey.sh: an identity session token of the ramp customer principal"
+    ramp_journey_input LAYERX_RAMP_OFF_GRANT_JSON LAYERX_BETA_RAMP_OFF_GRANT_JSON "" \
+        "platform/ramps/sandbox-journey.sh: the 32-byte payer grant of the off-ramp order"
+    ramp_journey_input LAYERX_RAMP_ON_ACCOUNT_SEQUENCE LAYERX_BETA_RAMP_ON_ACCOUNT_SEQUENCE "" \
+        "platform/ramps/sandbox-journey.sh: the operator debit sequence for the on-ramp direct send"
+    ramp_journey_input LAYERX_RAMP_OFF_RECEIVER_SEQUENCE LAYERX_BETA_RAMP_OFF_RECEIVER_SEQUENCE "" \
+        "platform/ramps/sandbox-journey.sh: the operator receiver sequence for the off-ramp payer-grant draw"
+}
+
 beta_cluster_up() {
     local run_boundary_checks=$1
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ]; then
@@ -2901,6 +3218,7 @@ beta_cluster_up() {
     [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ] || require_builder_environment
     custody_profile_validate
     interop_inputs_require
+    ramp_inputs_require
     MISSING_INPUTS=()
     REVISION=$(revision)
     mkdir -p "$WORK_DIR" "$LOG_DIR"
@@ -2953,6 +3271,7 @@ beta_cluster_up() {
     INTEROP_URL="https://localhost:$INTEROP_PORT"
     HUMAN_URL="https://localhost:19453"
     HUMAN_WEB_URL="https://$HUMAN_WEB_HOST"
+    RAMP_URL="https://localhost:$RAMP_PORT"
     wait_for_node_genesis
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ]; then
         apply_configmap "$TESTNET_NAMESPACE" layerx-node-settlement --from-file=settlement.env="$WORK_DIR/paxeer/settlement.env"
@@ -3017,6 +3336,7 @@ beta_cluster_up() {
     fi
     module_registry_verify
     interop_gateway_apply
+    ramp_apply
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then material_save; fi
     env_write
     identity_write

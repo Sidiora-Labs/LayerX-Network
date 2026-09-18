@@ -1,11 +1,11 @@
 apiVersion: v1
 kind: ServiceAccount
-metadata: {name: layerx-reference-ramp, namespace: layerx-ramps}
+metadata: {name: layerx-reference-ramp, namespace: layerx-testnet}
 automountServiceAccountToken: false
 ---
 apiVersion: apps/v1
 kind: StatefulSet
-metadata: {name: layerx-reference-ramp, namespace: layerx-ramps}
+metadata: {name: layerx-reference-ramp, namespace: layerx-testnet}
 spec:
   serviceName: layerx-reference-ramp
   replicas: 1
@@ -70,17 +70,17 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: layerx-reference-ramp, namespace: layerx-ramps}
+metadata: {name: layerx-reference-ramp, namespace: layerx-testnet}
 spec: {selector: {app: layerx-reference-ramp}, ports: [{name: https, port: 443, targetPort: https}]}
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: layerx-reference-ramp-operator, namespace: layerx-ramps}
+metadata: {name: layerx-reference-ramp-operator, namespace: layerx-testnet}
 spec: {type: ClusterIP, selector: {app: layerx-reference-ramp}, ports: [{name: https, port: 443, targetPort: https}]}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
-metadata: {name: layerx-reference-ramp, namespace: layerx-ramps}
+metadata: {name: layerx-reference-ramp, namespace: layerx-testnet}
 spec:
   podSelector: {matchLabels: {app: layerx-reference-ramp}}
   policyTypes: [Ingress, Egress]
@@ -96,18 +96,16 @@ spec:
       ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
     - to: [{podSelector: {matchLabels: {layerx-plane: trusted-boundary}}}]
       ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 9443}]
-    - to:
-        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-platform}}
-          podSelector: {matchLabels: {layerx-plane: trusted-boundary}}
-      ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 9443}]
-    - to: [{podSelector: {matchLabels: {app: paxeer-rpc}}}]
-      ports: [{protocol: TCP, port: 8545}]
+    - to: [{podSelector: {matchLabels: {app: layerx-gateway}}}]
+      ports: [{protocol: TCP, port: 443}]
+    - to: [{podSelector: {matchLabels: {app: paxeer}}}]
+      ports: [{protocol: TCP, port: 9443}]
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: layerx-reference-ramp
-  namespace: layerx-ramps
+  namespace: layerx-testnet
   annotations:
     nginx.ingress.kubernetes.io/backend-protocol: HTTPS
     nginx.ingress.kubernetes.io/proxy-body-size: 1m
@@ -123,3 +121,13 @@ spec:
           - {path: /v1/provider-callbacks, pathType: Exact, backend: {service: {name: layerx-reference-ramp, port: {name: https}}}}
           - {path: /livez, pathType: Exact, backend: {service: {name: layerx-reference-ramp, port: {name: https}}}}
           - {path: /readyz, pathType: Exact, backend: {service: {name: layerx-reference-ramp, port: {name: https}}}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-reference-ramp-upstream, namespace: layerx-testnet}
+spec:
+  podSelector: {matchExpressions: [{key: app, operator: In, values: [layerx-identity, layerx-node, layerx-gateway, paxeer]}]}
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: layerx-reference-ramp}}}]
+      ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 9443}, {protocol: TCP, port: 9445}]
