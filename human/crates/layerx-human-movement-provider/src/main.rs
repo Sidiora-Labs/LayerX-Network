@@ -38,7 +38,7 @@ fn run() -> Result<(), Error> {
     let mut service = EvidenceService::new(&config, journal)?;
     let listener = Listener::bind(config.listener)?;
     eprintln!(
-        "movement provider serving; readiness requires complete on-chain witness publication"
+        "movement provider serving; readiness requires a readable journal, a protected evidence root, a movement execution authority and agreeing paxeer origins"
     );
     loop {
         listener.serve_next(&mut service)?;
