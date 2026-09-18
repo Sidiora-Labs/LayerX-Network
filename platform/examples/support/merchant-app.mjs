@@ -351,6 +351,13 @@ export async function runMerchantApplication(moduleUrl, application) {
       scheme: config.scheme,
       network: config.network,
       maxTimeoutSeconds: 60,
+      extra: {
+        layerx: {
+          commitment: "executed",
+          account: requiredEnvironment(config.accountEnvironment),
+          currency: requiredEnvironment(config.currencyEnvironment),
+        },
+      },
     }),
     orders,
     sellers: { create: (paymentRequired) => new SellerMiddleware({ paymentRequired, authority, fulfillments }) },

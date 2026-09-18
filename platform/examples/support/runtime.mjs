@@ -148,9 +148,18 @@ function receiptActivityId(receipt) {
   if (!(receipt instanceof Uint8Array) || receipt.length < 42) {
     throw new LayerXApplicationStateError("refused", "invalid_canonical_receipt");
   }
-  const header = [0x00, 0x01, 0x52, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x20];
-  for (let index = 0; index < header.length; index += 1) {
-    if (receipt[index] !== header[index]) throw new LayerXApplicationStateError("refused", "invalid_canonical_receipt");
+  const view = new DataView(receipt.buffer, receipt.byteOffset, receipt.byteLength);
+  const envelopeVersion = view.getUint16(0);
+  const structureTag = view.getUint16(2);
+  const protocolVersion = view.getUint16(4);
+  const activityIdLength = view.getUint32(6);
+  if (
+    envelopeVersion < 1 || envelopeVersion > 3
+    || (structureTag !== 0x5201 && structureTag !== 0x5202)
+    || protocolVersion !== envelopeVersion
+    || activityIdLength !== 32
+  ) {
+    throw new LayerXApplicationStateError("refused", "invalid_canonical_receipt");
   }
   return Buffer.from(receipt.subarray(10, 42)).toString("hex");
 }

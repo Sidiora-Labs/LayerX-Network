@@ -1,5 +1,7 @@
 import {
+  paymentAccount,
   paymentCommitment,
+  paymentCurrency,
   paymentPayer,
   paymentPurpose,
   verifyPaymentCommitment,
@@ -597,6 +599,8 @@ function parseRequirements(value: unknown): PaymentRequirements {
     paymentCommitment(extra);
     paymentPayer(extra, scheme !== "exact");
     paymentPurpose(extra, scheme !== "exact");
+    paymentAccount(extra);
+    paymentCurrency(extra);
   } catch (error) {
     if (error instanceof PlatformSdkError) throw new MiddlewareError("invalid-payment-required");
     throw error;

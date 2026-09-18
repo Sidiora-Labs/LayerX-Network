@@ -279,7 +279,10 @@ async function deriveEmulatorInputs(emulator) {
     LAYERX_EMULATOR_ASSET: seeded.asset,
     LAYERX_EMULATOR_SOURCE: source,
     LAYERX_EMULATOR_SELLER: accountIdentifier(accounts, sellerAccount),
+    LAYERX_EMULATOR_SELLER_ACCOUNT: sellerAccount,
     LAYERX_EMULATOR_MERCHANT: accountIdentifier(accounts, merchantAccount),
+    LAYERX_EMULATOR_MERCHANT_ACCOUNT: merchantAccount,
+    LAYERX_EMULATOR_CURRENCY: seeded.currency,
     LAYERX_EMULATOR_PRICE: price,
     LAYERX_EMULATOR_PAYMENT_KEY: randomBytes(16).toString("hex"),
     LAYERX_EMULATOR_MERCHANT_CHECKOUT_KEY: randomBytes(16).toString("hex"),
@@ -336,7 +339,11 @@ async function seedEmulatorTransfer(endpoint, token, source, destination) {
   );
   const receipt = await readEmulatorJson(endpoint, reference.replace(/^\//u, ""), token);
   const authority = exactObject(receipt.authority);
-  return { asset: requiredHex32(authority.asset, "emulator_receipt_omitted_asset"), receiptDigest };
+  return {
+    asset: requiredHex32(authority.asset, "emulator_receipt_omitted_asset"),
+    currency: requiredText(exactObject(quote.money).currency, "emulator_move_quote_omitted_currency"),
+    receiptDigest,
+  };
 }
 
 async function readEmulatorAccounts(endpoint, token) {

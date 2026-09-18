@@ -136,6 +136,13 @@ const middleware = new SellerMiddleware({
       asset: requiredEnvironment(config.assetEnvironment),
       payTo: requiredEnvironment(config.payToEnvironment),
       maxTimeoutSeconds: 60,
+      extra: {
+        layerx: {
+          commitment: "executed",
+          account: requiredEnvironment(config.accountEnvironment),
+          currency: requiredEnvironment(config.currencyEnvironment),
+        },
+      },
     }],
   },
   authority: new StatePreservingReceiptAuthority(resolver),

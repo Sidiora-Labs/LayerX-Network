@@ -32,6 +32,8 @@ Every `LAYERX_EMULATOR_*` input is then derived from that run instead of being h
 | `LAYERX_EMULATOR_ASSET` | the `authority.asset` of a real seeding transfer receipt read back from `GET /v1/receipts/{id}` |
 | `LAYERX_EMULATOR_SOURCE` | `agent:<did>:main` for the key `layerx key create reference-buyer` produced |
 | `LAYERX_EMULATOR_SELLER`, `LAYERX_EMULATOR_MERCHANT` | the canonical account identifiers `GET /v1/state` reports for those DIDs |
+| `LAYERX_EMULATOR_SELLER_ACCOUNT`, `LAYERX_EMULATOR_MERCHANT_ACCOUNT` | `agent:<did>:main` for the seller and merchant keys, the human-API `destination` the offer advertises in `extra.layerx.account` |
+| `LAYERX_EMULATOR_CURRENCY` | the `money.currency` the seeding quote echoed, advertised in `extra.layerx.currency` |
 | `LAYERX_EMULATOR_MARKETPLACE_RECEIPT_DIGEST` | the receipt digest of the same seeding transfer |
 | `LAYERX_EMULATOR_MARKETPLACE_PROGRAM_ID`, `LAYERX_EMULATOR_MARKETPLACE_LISTING_ID` | one value per run, reused across the deploy, list, and buy steps |
 | `LAYERX_EMULATOR_TOKEN`, `LAYERX_EMULATOR_PAYMENT_KEY`, `LAYERX_EMULATOR_MERCHANT_CHECKOUT_KEY`, `LAYERX_EMULATOR_MARKETPLACE_KEY` | operating-system randomness, fresh for every run |

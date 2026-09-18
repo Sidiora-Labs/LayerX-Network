@@ -1370,6 +1370,118 @@ fn move_receipt(
     Ok(decoded)
 }
 
+fn move_evidence(setup: &MoveSetup, payment: &MoveCommit) -> Result<(), String> {
+    let address = &setup.address;
+    let committed_result = &payment.committed_result;
+    let receipt_path = committed_result
+        .pointer("/evidence/0/source_ref")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("move journey omitted receipt source_ref")?;
+    let receipt_reply = request(address, "GET", receipt_path, "", &[])?;
+    assert_eq!(receipt_reply.status, 200);
+    let receipt_hex = response_result(&receipt_reply)?
+        .get("receipt")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("receipt lookup omitted canonical bytes")?
+        .to_owned();
+    let receipt_bytes = hex_decode(&receipt_hex)?;
+    let evidence_id = committed_result
+        .pointer("/evidence/0/evidence_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("move journey omitted evidence_id")?;
+    let evidence_reply = request(
+        address,
+        "GET",
+        &format!("/v1/evidence/{evidence_id}"),
+        "",
+        &[],
+    )?;
+    assert_eq!(
+        evidence_reply.status,
+        200,
+        "evidence read failed: {}",
+        evidence_reply.text()
+    );
+    let material = response_result(&evidence_reply)?;
+    assert_eq!(
+        material
+            .get("evidence_id")
+            .and_then(serde_json::Value::as_str),
+        Some(evidence_id)
+    );
+    assert_eq!(
+        material.get("class").and_then(serde_json::Value::as_str),
+        Some("layerx-receipt")
+    );
+    assert_eq!(
+        material
+            .get("verification")
+            .and_then(serde_json::Value::as_str),
+        Some("receipt-verified")
+    );
+    assert_eq!(
+        material
+            .get("content_type")
+            .and_then(serde_json::Value::as_str),
+        Some("application/vnd.layerx.receipt")
+    );
+    assert_eq!(
+        material
+            .get("bytes_base64")
+            .and_then(serde_json::Value::as_str),
+        Some(base64_encode(&receipt_bytes).as_str())
+    );
+    let journey_id = committed_result
+        .get("journey_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("move journey omitted journey_id")?;
+    let journey_reply = request(
+        address,
+        "GET",
+        &format!("/v1/journeys/{journey_id}"),
+        "",
+        &[],
+    )?;
+    assert_eq!(
+        journey_reply.status,
+        200,
+        "journey read failed: {}",
+        journey_reply.text()
+    );
+    assert_eq!(&response_result(&journey_reply)?, committed_result);
+    let absent_evidence = request(
+        address,
+        "GET",
+        &format!("/v1/evidence/evd_{}", "00".repeat(32)),
+        "",
+        &[],
+    )?;
+    assert_eq!(absent_evidence.status, 404);
+    assert_eq!(error_code(&absent_evidence).as_deref(), Some("not_found"));
+    let absent_journey = request(
+        address,
+        "GET",
+        &format!("/v1/journeys/jrn_{}", "00".repeat(32)),
+        "",
+        &[],
+    )?;
+    assert_eq!(absent_journey.status, 404);
+    assert_eq!(error_code(&absent_journey).as_deref(), Some("not_found"));
+    let malformed_evidence = request(address, "GET", "/v1/evidence/evd_not-a-digest", "", &[])?;
+    assert_eq!(malformed_evidence.status, 400);
+    assert_eq!(
+        error_code(&malformed_evidence).as_deref(),
+        Some("invalid_evidence_id")
+    );
+    let malformed_journey = request(address, "GET", "/v1/journeys/receipt", "", &[])?;
+    assert_eq!(malformed_journey.status, 400);
+    assert_eq!(
+        error_code(&malformed_journey).as_deref(),
+        Some("invalid_journey_id")
+    );
+    Ok(())
+}
+
 fn move_replay(
     setup: &MoveSetup,
     payment: &MoveCommit,
@@ -1856,6 +1968,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
     let setup = move_setup()?;
     let payment = move_commit(&setup)?;
     let decoded = move_receipt(&setup, &payment)?;
+    move_evidence(&setup, &payment)?;
     let protocol = decoded
         .protocol()
         .ok_or("move receipt was not protocol receipt")?;

@@ -2782,6 +2782,114 @@ fn receipt_read(emulator: &Emulator, activity_id: &str, receipt_hex: &str, trace
     )
 }
 
+fn evidence_read(emulator: &Emulator, evidence_id: &str, trace: u64) -> Response {
+    let Some(digest) = evidence_id
+        .strip_prefix("evd_")
+        .filter(|hex| hex.len() == 64)
+        .and_then(|hex| hex_decode(hex).ok())
+    else {
+        return refusal(
+            trace,
+            400,
+            "invalid_evidence_id",
+            "evidence id must be evd_ followed by a 64-character hex digest",
+        );
+    };
+    let sequencer_public_key = emulator.signing_key.verifying_key().to_bytes();
+    for receipt_hex in emulator.receipts.values() {
+        let Ok(bytes) = hex_decode(receipt_hex) else {
+            continue;
+        };
+        let Ok(receipt) = verify_sequencer_signature(&bytes, sequencer_public_key) else {
+            continue;
+        };
+        let Ok(unsigned) = layerx_wire::receipt::encode_unsigned(&receipt) else {
+            continue;
+        };
+        if layerx_wire::hash::receipt_digest(&unsigned).is_ok_and(|value| value[..] == digest[..]) {
+            return success(
+                trace,
+                &serde_json::json!({
+                    "evidence_id": evidence_id,
+                    "class": "layerx-receipt",
+                    "verification": "receipt-verified",
+                    "content_type": "application/vnd.layerx.receipt",
+                    "bytes_base64": base64_encode(&bytes),
+                })
+                .to_string(),
+            );
+        }
+    }
+    refusal(
+        trace,
+        404,
+        "not_found",
+        "evidence is not present in this emulator process",
+    )
+}
+
+fn journey_read(emulator: &Emulator, journey_id: &str, trace: u64) -> Response {
+    let Some(digest) = journey_id
+        .strip_prefix("jrn_")
+        .filter(|hex| hex.len() == 64)
+        .and_then(|hex| hex_decode(hex).ok())
+    else {
+        return refusal(
+            trace,
+            400,
+            "invalid_journey_id",
+            "journey id must be jrn_ followed by a 64-character hex digest",
+        );
+    };
+    for (idempotency, operation) in &emulator.move_operations {
+        if operation.status != 200
+            || hash_bytes(MOVE_JOURNEY_DOMAIN, idempotency.as_bytes())[..] != digest[..]
+        {
+            continue;
+        }
+        let Some(journey) = serde_json::from_str::<serde_json::Value>(&operation.body)
+            .ok()
+            .and_then(|body| body.get("result").cloned())
+        else {
+            continue;
+        };
+        return success(trace, &journey.to_string());
+    }
+    refusal(
+        trace,
+        404,
+        "not_found",
+        "journey is not present in this emulator process",
+    )
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+        encoded.push(char::from(ALPHABET[usize::from(first >> 2)]));
+        encoded.push(char::from(
+            ALPHABET[usize::from(((first & 0x03) << 4) | (second >> 4))],
+        ));
+        if chunk.len() > 1 {
+            encoded.push(char::from(
+                ALPHABET[usize::from(((second & 0x0f) << 2) | (third >> 6))],
+            ));
+        } else {
+            encoded.push('=');
+        }
+        if chunk.len() > 2 {
+            encoded.push(char::from(ALPHABET[usize::from(third & 0x3f)]));
+        } else {
+            encoded.push('=');
+        }
+    }
+    encoded
+}
+
 fn route(emulator: &mut Emulator, request: &Request) -> Response {
     let program_request = programs_request_path(&request.method, &request.path);
     let Some(trace) = advance_trace(&mut emulator.trace) else {
@@ -2835,6 +2943,12 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
         ("POST", "/__emulator/faults") => inject_fault(emulator, request, trace),
         ("GET", "/__emulator/snapshot") => export_snapshot(emulator, trace),
         ("PUT", "/__emulator/snapshot") => import_snapshot(emulator, &request.body, trace),
+        ("GET", path) if path.starts_with("/v1/evidence/") => {
+            evidence_read(emulator, &path[13..], trace)
+        }
+        ("GET", path) if path.starts_with("/v1/journeys/") => {
+            journey_read(emulator, &path[13..], trace)
+        }
         ("GET", path) if path.starts_with("/v1/receipts/") => {
             let id = &path[13..];
             match emulator.receipts.get(id) {

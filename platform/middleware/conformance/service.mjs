@@ -62,6 +62,8 @@ export async function runServiceScenarios(suite) {
     LAYERX_PRICE: amount.toString(),
     LAYERX_ASSET: toHex(asset),
     LAYERX_PAY_TO: toHex(payTo),
+    LAYERX_ACCOUNT: "agent:did:layerx:conformance-seller:main",
+    LAYERX_CURRENCY: "LXP",
     LAYERX_PAYMENT_TIMEOUT_SECONDS: "120",
     LAYERX_AUTHORIZED_BATCH_JSON: JSON.stringify({
       batchId: toHex(receipt.authorizedBatch.batchId),
@@ -77,6 +79,7 @@ export async function runServiceScenarios(suite) {
     port, resourceFile, fulfillmentDirectory: join(workDir, "fulfillments"),
     resourceUrl: environment.LAYERX_RESOURCE_URL, scheme: "exact", network: "layerx:testnet",
     priceEnvironment: "LAYERX_PRICE", assetEnvironment: "LAYERX_ASSET", payToEnvironment: "LAYERX_PAY_TO",
+    accountEnvironment: "LAYERX_ACCOUNT", currencyEnvironment: "LAYERX_CURRENCY",
     authorizedBatchEnvironment: "LAYERX_AUTHORIZED_BATCH_JSON",
   } } }));
   environment.LAYERX_EXAMPLE_CONFIG = configFile;
@@ -228,10 +231,12 @@ async function runMerchantServiceScenarios(suite, receipt, resolver, amount, ass
     receiptAuthorityUrl: settlement.url, stateDirectory: workDir, scheme: "exact", network: "layerx:testnet",
     tokenEnvironment: "LAYERX_SETTLEMENT_TOKEN", priceEnvironment: "LAYERX_PRICE",
     assetEnvironment: "LAYERX_ASSET", payToEnvironment: "LAYERX_PAY_TO",
+    accountEnvironment: "LAYERX_ACCOUNT", currencyEnvironment: "LAYERX_CURRENCY",
     webhookKeysEnvironment: "LAYERX_WEBHOOK_KEYS",
   } } }));
   Object.assign(environment, { LAYERX_EXAMPLE_CONFIG: configFile, LAYERX_PRICE: amount.toString(),
     LAYERX_ASSET: toHex(asset), LAYERX_PAY_TO: toHex(payTo),
+    LAYERX_ACCOUNT: "agent:did:layerx:conformance-merchant:main", LAYERX_CURRENCY: "LXP",
     LAYERX_WEBHOOK_KEYS: JSON.stringify({ conformance: toHex(receipt.authorizedBatch.sequencerPublicKey) }) });
   let child;
   try {
