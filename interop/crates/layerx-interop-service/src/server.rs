@@ -2095,7 +2095,12 @@ impl Execution<'_> {
             return Err("hosted gateway response lacks receipt evidence".to_owned());
         }
         let receipt = decode_hex(&response.result.receipt, MAX_BODY)?;
-        let authority = authority(self.config, &response.result.activity_id, self.trace)?;
+        let authority = authority(
+            self.config,
+            &response.result.activity_id,
+            &receipt,
+            self.trace,
+        )?;
         let authorized = AuthorizedBatch::new(
             authority.batch_id,
             authority.asset,
@@ -2181,13 +2186,20 @@ struct HostedResult {
 #[serde(deny_unknown_fields)]
 struct AuthorityResponse {
     activity_id: String,
+    receipt: String,
     batch_id: String,
     asset: String,
     previous_state_root: String,
     resulting_state_root: String,
     sequencer_public_key: String,
     network_id: String,
+    protocol_network_id: u32,
     wire_version: String,
+    #[serde(
+        default,
+        deserialize_with = "layerx_platform_gateway::authority_evidence::present_maintained"
+    )]
+    batch_evidence: Option<layerx_platform_gateway::authority_evidence::MaintainedBatchDocument>,
 }
 
 struct AuthorizedFacts {
@@ -2201,6 +2213,7 @@ struct AuthorizedFacts {
 fn authority(
     config: &Config,
     activity_id: &str,
+    receipt: &[u8],
     trace: &TraceId,
 ) -> Result<AuthorizedFacts, String> {
     let authorization = format!("Bearer {}", config.receipt_authority_token.as_str());
@@ -2223,16 +2236,35 @@ fn authority(
         .map_err(|_| "receipt authority response is invalid".to_owned())?;
     if !facts.activity_id.eq_ignore_ascii_case(activity_id)
         || facts.network_id != config.network_id
+        || facts.protocol_network_id != config.protocol_network_id
         || facts.wire_version != config.wire_version
     {
         return Err("receipt authority scope mismatch".to_owned());
     }
+    let authority_receipt = decode_hex(&facts.receipt, MAX_BODY)?;
+    if authority_receipt.len() != receipt.len() || authority_receipt.ct_eq(receipt).unwrap_u8() != 1
+    {
+        return Err("receipt authority scope mismatch".to_owned());
+    }
+    let authorized = AuthorizedBatch::new(
+        parse_hex32(&facts.batch_id)?,
+        parse_hex32(&facts.asset)?,
+        parse_hex32(&facts.previous_state_root)?,
+        parse_hex32(&facts.resulting_state_root)?,
+        parse_hex32(&facts.sequencer_public_key)?,
+    );
+    let authorized = match facts.batch_evidence {
+        None => authorized,
+        Some(maintained) => maintained
+            .authorize(receipt, &authorized, &config.sequencer_authorization)
+            .map_err(|_| "receipt authority maintained evidence is invalid".to_owned())?,
+    };
     Ok(AuthorizedFacts {
-        batch_id: parse_hex32(&facts.batch_id)?,
-        asset: parse_hex32(&facts.asset)?,
-        previous_state_root: parse_hex32(&facts.previous_state_root)?,
-        resulting_state_root: parse_hex32(&facts.resulting_state_root)?,
-        sequencer_public_key: parse_hex32(&facts.sequencer_public_key)?,
+        batch_id: authorized.batch_id(),
+        asset: authorized.asset(),
+        previous_state_root: authorized.previous_state_root(),
+        resulting_state_root: authorized.resulting_state_root(),
+        sequencer_public_key: authorized.sequencer_public_key(),
     })
 }
 
@@ -2861,6 +2893,65 @@ mod tests {
                 .as_object_mut()
                 .unwrap_or_else(|| panic!("AP2 request is an object"))
                 .remove(field);
+        }
+    }
+}
+
+#[cfg(test)]
+mod receipt_authority_shape_tests {
+    use super::{AuthorityResponse, MAX_BODY};
+    use crate::config::decode_hex;
+
+    fn captured_authority_document() -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../platform/hosted/gateway/tests/fixtures/maintained-authority.json");
+        let bytes = std::fs::read(path).unwrap_or_else(|error| panic!("{error}"));
+        let capture: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("{error}"));
+        let mut document = capture["authority"].clone();
+        document["receipt"] = capture["receipt_hex"].clone();
+        let header = decode_hex(
+            capture["authority"]["batch_evidence"]["header_hex"]
+                .as_str()
+                .unwrap_or_else(|| panic!("captured maintained header")),
+            MAX_BODY,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        document["protocol_network_id"] =
+            serde_json::json!(layerx_wire::receipt::decode_batch_header(&header)
+                .unwrap_or_else(|error| panic!("{error:?}"))
+                .network_id());
+        document
+    }
+
+    fn decodes(document: &serde_json::Value) -> bool {
+        let bytes = serde_json::to_vec(document).unwrap_or_else(|error| panic!("{error}"));
+        serde_json::from_slice::<AuthorityResponse>(&bytes).is_ok()
+    }
+
+    #[test]
+    fn real_receipt_authority_response_decodes_with_its_receipt_scope_and_attachment() {
+        let document = captured_authority_document();
+        assert!(decodes(&document));
+        let mut historical = document.clone();
+        historical
+            .as_object_mut()
+            .unwrap_or_else(|| panic!("authority response is an object"))
+            .remove("batch_evidence");
+        assert!(decodes(&historical));
+        let mut null = document.clone();
+        null["batch_evidence"] = serde_json::Value::Null;
+        assert!(!decodes(&null));
+        let mut unknown = document.clone();
+        unknown["unexpected"] = serde_json::json!(true);
+        assert!(!decodes(&unknown));
+        for field in ["receipt", "protocol_network_id", "batch_id", "network_id"] {
+            let mut missing = document.clone();
+            missing
+                .as_object_mut()
+                .unwrap_or_else(|| panic!("authority response is an object"))
+                .remove(field);
+            assert!(!decodes(&missing));
         }
     }
 }
