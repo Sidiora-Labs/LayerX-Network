@@ -1,5 +1,6 @@
 //! Verified, byte-preserving receipt storage and protocol-code classification.
 
+use layerx_proof::merkle::{decode_proof, encode_proof};
 use layerx_proof::receipt::{
     verify_native_owner_outcome, NativeOwnerOutcomeContext, NativeOwnerOutcomeFailure,
     VerifiedReceipt,
@@ -9,9 +10,33 @@ use layerx_types::result::{KnownResult, ResultCode, ResultDomain, Retriability};
 use layerx_types::verify::VerificationLevel;
 use sha2::{Digest, Sha256};
 
+use crate::protocol_evidence::RawReceiptEvidence;
 use crate::store::{ObjectKind, Store, StoreError, TenantId, TenantKey};
 
 const METADATA_MAGIC: &[u8; 4] = b"LXRM";
+const EVIDENCE_MAGIC: &[u8; 4] = b"LXRE";
+const EVIDENCE_VERSION: u8 = 1;
+const EVIDENCE_PREFIX: &[u8] = b"receipt-evidence:";
+const IDEMPOTENCY_INDEX_PREFIX: &[u8] = b"receipt:idempotency:";
+
+/// Raw proof material persisted next to one served receipt so a restart can
+/// re-verify the spend it evidences without a node round trip.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReceiptEvidenceRecord {
+    pub idempotency_key: [u8; 32],
+    pub activity_id: [u8; 32],
+    pub global_sequence: u64,
+    pub evidence: RawReceiptEvidence,
+}
+
+/// Every served receipt of one tenant split by whether raw evidence was
+/// persisted for it. A receipt without evidence is an older store record that
+/// recovery must hold rather than skip.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ReceiptEvidenceInventory {
+    pub with_evidence: Vec<ReceiptEvidenceRecord>,
+    pub without_evidence: Vec<ReceiptMetadata>,
+}
 
 /// One of the three durable receipt indexes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -310,6 +335,192 @@ pub(crate) fn raise_verification_level(
         durable.put_local(metadata_key(tenant, digest)?, encode_metadata(metadata))?;
     }
     Ok(metadata)
+}
+
+/// Persists the raw receipt evidence for a receipt already served under
+/// `idempotency_key`, exactly once. Re-persisting identical evidence is a no-op.
+///
+/// # Errors
+///
+/// Returns `Missing` when no receipt is served under the key, `Corrupt` when
+/// the evidence does not carry the served receipt bytes or a differing
+/// evidence record already exists, and the store failure otherwise.
+pub fn persist_evidence(
+    durable: &mut Store,
+    tenant: TenantId,
+    idempotency_key: [u8; 32],
+    evidence: &RawReceiptEvidence,
+) -> Result<ReceiptEvidenceRecord, ReceiptStoreError> {
+    let served = serve(
+        durable,
+        tenant.clone(),
+        ReceiptLookupKey::Idempotency(idempotency_key),
+    )?;
+    if served.canonical_bytes != evidence.canonical_receipt()
+        || served.metadata.idempotency_key != idempotency_key
+    {
+        return Err(ReceiptStoreError::Corrupt);
+    }
+    let record = ReceiptEvidenceRecord {
+        idempotency_key,
+        activity_id: served.metadata.activity_id,
+        global_sequence: served.metadata.global_sequence,
+        evidence: evidence.clone(),
+    };
+    let key = evidence_key(tenant, idempotency_key)?;
+    if let Some(existing) = durable.get(&key) {
+        if decode_evidence(existing.bytes())? == record {
+            return Ok(record);
+        }
+        return Err(ReceiptStoreError::Corrupt);
+    }
+    durable.put_local(key, encode_evidence(&record)?)?;
+    Ok(record)
+}
+
+/// Serves the persisted raw evidence for the receipt under `idempotency_key`,
+/// or `None` when the receipt predates evidence persistence.
+///
+/// # Errors
+///
+/// Returns `Missing` when no receipt is served under the key and `Corrupt`
+/// when the evidence record does not decode or disagrees with the served
+/// receipt.
+pub fn serve_evidence(
+    durable: &Store,
+    tenant: TenantId,
+    idempotency_key: [u8; 32],
+) -> Result<Option<ReceiptEvidenceRecord>, ReceiptStoreError> {
+    let served = serve(
+        durable,
+        tenant.clone(),
+        ReceiptLookupKey::Idempotency(idempotency_key),
+    )?;
+    let Some(value) = durable.get(&evidence_key(tenant, idempotency_key)?) else {
+        return Ok(None);
+    };
+    let record = decode_evidence(value.bytes())?;
+    if record.idempotency_key != idempotency_key
+        || record.activity_id != served.metadata.activity_id
+        || record.global_sequence != served.metadata.global_sequence
+        || record.evidence.canonical_receipt() != served.canonical_bytes.as_slice()
+    {
+        return Err(ReceiptStoreError::Corrupt);
+    }
+    Ok(Some(record))
+}
+
+/// Lists every served receipt of `tenant` with or without persisted evidence,
+/// ordered by idempotency key.
+///
+/// # Errors
+///
+/// Returns `Corrupt` when an idempotency index or evidence record does not
+/// decode, and the store failure otherwise.
+pub fn evidence_inventory(
+    durable: &Store,
+    tenant: TenantId,
+) -> Result<ReceiptEvidenceInventory, ReceiptStoreError> {
+    let mut inventory = ReceiptEvidenceInventory::default();
+    for object_id in durable.list_object_ids(&tenant, ObjectKind::Receipt) {
+        let Some(suffix) = object_id.strip_prefix(IDEMPOTENCY_INDEX_PREFIX) else {
+            continue;
+        };
+        let idempotency_key: [u8; 32] =
+            suffix.try_into().map_err(|_| ReceiptStoreError::Corrupt)?;
+        match serve_evidence(durable, tenant.clone(), idempotency_key)? {
+            Some(record) => inventory.with_evidence.push(record),
+            None => {
+                let served = serve(
+                    durable,
+                    tenant.clone(),
+                    ReceiptLookupKey::Idempotency(idempotency_key),
+                )?;
+                inventory.without_evidence.push(served.metadata);
+            }
+        }
+    }
+    inventory
+        .with_evidence
+        .sort_by(|left, right| left.idempotency_key.cmp(&right.idempotency_key));
+    inventory
+        .without_evidence
+        .sort_by(|left, right| left.idempotency_key.cmp(&right.idempotency_key));
+    Ok(inventory)
+}
+
+fn evidence_key(tenant: TenantId, idempotency_key: [u8; 32]) -> Result<TenantKey, StoreError> {
+    let mut object_id = EVIDENCE_PREFIX.to_vec();
+    object_id.extend_from_slice(&idempotency_key);
+    TenantKey::new(tenant, ObjectKind::Configuration, object_id)
+}
+
+fn encode_evidence(record: &ReceiptEvidenceRecord) -> Result<Vec<u8>, ReceiptStoreError> {
+    let receipt = record.evidence.canonical_receipt();
+    let proof = encode_proof(record.evidence.proof());
+    let header = record.evidence.canonical_header();
+    let mut bytes = Vec::with_capacity(
+        4 + 1 + 32 + 32 + 8 + 12 + receipt.len() + proof.len() + header.len() + 64,
+    );
+    bytes.extend_from_slice(EVIDENCE_MAGIC);
+    bytes.push(EVIDENCE_VERSION);
+    bytes.extend_from_slice(&record.idempotency_key);
+    bytes.extend_from_slice(&record.activity_id);
+    bytes.extend_from_slice(&record.global_sequence.to_be_bytes());
+    for section in [receipt, proof.as_slice(), header] {
+        let length = u32::try_from(section.len()).map_err(|_| ReceiptStoreError::Corrupt)?;
+        bytes.extend_from_slice(&length.to_be_bytes());
+        bytes.extend_from_slice(section);
+    }
+    bytes.extend_from_slice(&record.evidence.header_signature());
+    Ok(bytes)
+}
+
+fn decode_evidence(bytes: &[u8]) -> Result<ReceiptEvidenceRecord, ReceiptStoreError> {
+    let corrupt = ReceiptStoreError::Corrupt;
+    if bytes.len() < 4 + 1 + 32 + 32 + 8
+        || &bytes[..4] != EVIDENCE_MAGIC
+        || bytes[4] != EVIDENCE_VERSION
+    {
+        return Err(corrupt);
+    }
+    let mut offset = 5;
+    let mut idempotency_key = [0_u8; 32];
+    idempotency_key.copy_from_slice(&bytes[offset..offset + 32]);
+    offset += 32;
+    let mut activity_id = [0_u8; 32];
+    activity_id.copy_from_slice(&bytes[offset..offset + 32]);
+    offset += 32;
+    let mut sequence = [0_u8; 8];
+    sequence.copy_from_slice(&bytes[offset..offset + 8]);
+    offset += 8;
+    let section = |offset: &mut usize| -> Result<Vec<u8>, ReceiptStoreError> {
+        let end = offset.checked_add(4).ok_or(ReceiptStoreError::Corrupt)?;
+        let length_bytes = bytes.get(*offset..end).ok_or(ReceiptStoreError::Corrupt)?;
+        let mut length = [0_u8; 4];
+        length.copy_from_slice(length_bytes);
+        let length =
+            usize::try_from(u32::from_be_bytes(length)).map_err(|_| ReceiptStoreError::Corrupt)?;
+        let body_end = end.checked_add(length).ok_or(ReceiptStoreError::Corrupt)?;
+        let body = bytes.get(end..body_end).ok_or(ReceiptStoreError::Corrupt)?;
+        *offset = body_end;
+        Ok(body.to_vec())
+    };
+    let receipt = section(&mut offset)?;
+    let proof = section(&mut offset)?;
+    let header = section(&mut offset)?;
+    if bytes.len() != offset + 64 {
+        return Err(ReceiptStoreError::Corrupt);
+    }
+    let mut signature = [0_u8; 64];
+    signature.copy_from_slice(&bytes[offset..]);
+    let proof = decode_proof(&proof).map_err(|_| ReceiptStoreError::Corrupt)?;
+    Ok(ReceiptEvidenceRecord {
+        idempotency_key,
+        activity_id,
+        global_sequence: u64::from_be_bytes(sequence),
+        evidence: RawReceiptEvidence::new(receipt, proof, header, signature),
+    })
 }
 
 fn lookup_key(tenant: TenantId, lookup: ReceiptLookupKey) -> Result<TenantKey, StoreError> {

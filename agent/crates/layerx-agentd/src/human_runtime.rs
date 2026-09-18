@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
-use layerx_client::evidence::{CheckpointSelector, EvidenceError, ProofBundleSelector};
+use layerx_client::evidence::{
+    CheckpointSelector, EvidenceError, ProofBundleSelector, RootSelector,
+};
 use layerx_client::receipt::{Lookup, ReceiptSelector};
 use layerx_client::submit::Submission;
 use layerx_client::Client;
@@ -25,7 +27,10 @@ use crate::approval::{
     ApprovalDecision, ApprovalExpiry, ApprovalOutcome, ApprovalRecord, ApprovalService,
     ApprovalSubmissionQueue, DecisionKey, DecisionRequest,
 };
-use crate::budget::{BudgetLimiter, LimitConfig};
+use crate::budget::{
+    budget_state_key, BudgetLimiter, LimitConfig, PersistedReceipt, ProtocolBudgetRecord,
+    ProtocolBudgetState, RestartAccounting, BUDGET_MODULE_ID,
+};
 use crate::capability::{
     assert_narrowing, Capability, CapabilityDimensions, CapabilityId, RateCeiling,
 };
@@ -36,13 +41,17 @@ use crate::human::{
 };
 use crate::identity::{self, CoreIdentity, IdentityError, IdentityResolver, ProtocolAuthority};
 use crate::managed_agent::{self, ManagedAgent};
-use crate::outbox::{Outbox, SubmissionState, SubmissionStatus};
+use crate::outbox::{
+    Outbox, RecoveredOutbox, RecoveryError, RecoveryInputs, SubmissionState, SubmissionStatus,
+};
 use crate::policy::approval::{ApprovalRegistry, ApprovalState, ApproverId};
 use crate::prepare::PreparationLifecycle;
 use crate::prepare::{
     prepare_activity_for_protocol, CoreStateError, PreparationDefaults, PrepareRequest, Prepared,
     ProductionCorePreparationBoundary,
 };
+use crate::protocol_evidence::{EvidenceAuthority, RawStateEvidence};
+use crate::receipt::{ReceiptEvidenceRecord, ReceiptMetadata};
 use crate::session::{self, OpenRequest, SessionId, SessionRegistry};
 use crate::session_control::SessionControl;
 use crate::session_keys::SessionKeyRegistry;
@@ -708,6 +717,147 @@ pub struct ProductionHumanOperations<A> {
     timestamp_span: u64,
     last_verified_receipt: Option<([u8; 32], i32, u64)>,
     unified_owner_active: bool,
+    write_admission: BTreeMap<String, Result<(), RecoveryRefusal>>,
+}
+
+/// Why one tenant stays read-only after startup recovery.
+#[derive(Debug)]
+pub enum RecoveryRefusal {
+    /// The tenant's peers could not be resolved or the store refused.
+    Store(HumanOperationError),
+    /// The protocol budget record could not be read or verified.
+    BudgetState { budget_id: [u8; 32], reason: String },
+    /// Served receipts predate evidence persistence and cannot be re-verified.
+    EvidenceMissing { budget_id: [u8; 32], count: usize },
+    /// Durable recovery itself failed.
+    Recovery { budget_id: [u8; 32], reason: String },
+    /// Recovery completed but spend accounting is not reconciled.
+    WritesBlocked {
+        budget_id: [u8; 32],
+        accounting: RestartAccounting,
+    },
+}
+
+/// One tenant budget's startup recovery outcome: the recovered durable state
+/// together with the write-admission decision derived from it.
+pub struct TenantBudgetRecovery {
+    pub recovered: RecoveredOutbox,
+    pub admission: Result<(), RecoveryRefusal>,
+}
+
+/// Inputs for recovering one tenant budget from the durable store.
+pub struct BudgetRecoveryRequest<'a> {
+    pub budget_id: [u8; 32],
+    pub protocol_budget: ProtocolBudgetState,
+    pub verifier: EvidenceAuthority,
+    pub receipts_with_evidence: &'a [ReceiptEvidenceRecord],
+    pub receipts_without_evidence: &'a [ReceiptMetadata],
+    pub ceiling_maximum: u128,
+    pub current_sequence: u64,
+}
+
+/// Recovers one tenant budget: verifies the protocol budget state, replays the
+/// persisted receipt evidence that falls in its period, restores every durable
+/// submission and unknown reservation, and decides write admission.
+///
+/// Receipts without persisted evidence are held, never skipped: recovery still
+/// completes so operators can inspect it, but admission is refused naming the
+/// budget and the count.
+///
+/// # Errors
+///
+/// Returns the refusal when the budget state does not verify or decode, or
+/// when durable recovery fails.
+pub fn recover_tenant_budget(
+    store: &mut Store,
+    tenant: &TenantId,
+    request: &BudgetRecoveryRequest<'_>,
+) -> Result<TenantBudgetRecovery, RecoveryRefusal> {
+    let budget_id = request.budget_id;
+    let verified = request
+        .verifier
+        .verify_state(&request.protocol_budget.evidence)
+        .map_err(|error| RecoveryRefusal::BudgetState {
+            budget_id,
+            reason: format!("{error:?}"),
+        })?;
+    let record = ProtocolBudgetRecord::decode(verified.canonical_state()).map_err(|error| {
+        RecoveryRefusal::BudgetState {
+            budget_id,
+            reason: format!("{error:?}"),
+        }
+    })?;
+    if record.budget_id != budget_id {
+        return Err(RecoveryRefusal::BudgetState {
+            budget_id,
+            reason: "protocol budget record names another budget".to_owned(),
+        });
+    }
+    let window = record.period_start..record.window_end_sequence();
+    let budget_receipts: Vec<PersistedReceipt> = request
+        .receipts_with_evidence
+        .iter()
+        .filter(|receipt| window.contains(&receipt.global_sequence))
+        .map(|receipt| PersistedReceipt {
+            expected_activity_id: receipt.activity_id,
+            evidence: receipt.evidence.clone(),
+        })
+        .collect();
+    let evidence_missing = request
+        .receipts_without_evidence
+        .iter()
+        .filter(|receipt| window.contains(&receipt.global_sequence))
+        .count();
+    let mut unknown_budget_ids = Vec::new();
+    for object_id in store.list_object_ids(tenant, ObjectKind::Budget) {
+        let Some(id) = object_id.strip_prefix(b"unknown-budget:".as_slice()) else {
+            continue;
+        };
+        let id: [u8; 32] = id.try_into().map_err(|_| RecoveryRefusal::Recovery {
+            budget_id,
+            reason: "unknown reservation identifier is not 32 bytes".to_owned(),
+        })?;
+        unknown_budget_ids.push(id);
+    }
+    let inputs = RecoveryInputs {
+        verifier: request.verifier.clone(),
+        unknown_budget_ids: &unknown_budget_ids,
+        budget_receipts: &budget_receipts,
+        protocol_budget: request.protocol_budget.clone(),
+        ceiling_maximum: request.ceiling_maximum,
+        ceiling_receipts: &[],
+        unknown_ceiling_reservations: &[],
+        current_sequence: request.current_sequence,
+    };
+    let recovered = crate::outbox::recover(store, tenant, &inputs).map_err(|error| {
+        RecoveryRefusal::Recovery {
+            budget_id,
+            reason: format!("{error:?}"),
+        }
+    })?;
+    let admission = if evidence_missing > 0 {
+        Err(RecoveryRefusal::EvidenceMissing {
+            budget_id,
+            count: evidence_missing,
+        })
+    } else {
+        recovered
+            .require_write_ready()
+            .map_err(|error| match error {
+                RecoveryError::WritesBlocked => RecoveryRefusal::WritesBlocked {
+                    budget_id,
+                    accounting: recovered.budget_accounting,
+                },
+                other => RecoveryRefusal::Recovery {
+                    budget_id,
+                    reason: format!("{other:?}"),
+                },
+            })
+    };
+    Ok(TenantBudgetRecovery {
+        recovered,
+        admission,
+    })
 }
 
 #[derive(Clone)]
@@ -746,6 +896,11 @@ impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
         if verified_limits.is_empty() {
             return Err(HumanOperationError::Refused);
         }
+        let ceiling_maximum = verified_limits
+            .iter()
+            .map(|limit| limit.ceiling)
+            .min()
+            .ok_or(HumanOperationError::Refused)?;
         let approvals = Arc::new(ApprovalRegistry::with_store(Arc::clone(&shared_store)));
         let budgets = Arc::new(
             BudgetLimiter::new(verified_limits).map_err(|_| HumanOperationError::Refused)?,
@@ -758,12 +913,12 @@ impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
                 .map_err(|_| HumanOperationError::Unavailable)?;
             subject::restore_peers(&store, peers)?
         };
-        for peer in restore_peers {
+        for peer in &restore_peers {
             let tenant = &peer.tenant;
             if replayed.insert(tenant.clone()) {
                 let tenant_id =
                     TenantId::new(tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
-                let registry = operations.authority.registry(&peer).map_err(map_core)?;
+                let registry = operations.authority.registry(peer).map_err(map_core)?;
                 let released = approvals
                     .replay_released(&tenant_id, &budgets, &registry)
                     .map_err(|_| HumanOperationError::Refused)?;
@@ -795,6 +950,7 @@ impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
                 return Err(HumanOperationError::Refused);
             }
         }
+        operations.recover_tenants(&restore_peers, ceiling_maximum)?;
         operations.unified_owner_active = true;
         {
             let store = shared_store
@@ -2463,6 +2619,7 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
         signer: [u8; 32],
         correlation: u64,
     ) -> Result<HumanResponse, HumanOperationError> {
+        self.require_write_admission(&peer.tenant)?;
         let mut store = self
             .store
             .lock()
@@ -2820,6 +2977,19 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
                         checkpoint.as_ref(),
                     )
                     .map_err(|_| HumanOperationError::Refused)?;
+                    let raw = raw_receipt_evidence(&receipt_evidence)?;
+                    crate::receipt::persist_evidence(
+                        &mut store,
+                        tenant.clone(),
+                        idempotency_key,
+                        &raw,
+                    )
+                    .map_err(|error| match error {
+                        crate::receipt::ReceiptStoreError::Store(_) => {
+                            HumanOperationError::Unavailable
+                        }
+                        _ => HumanOperationError::Refused,
+                    })?;
                     served = crate::receipt::serve(
                         &store,
                         tenant,
@@ -2920,7 +3090,226 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
             timestamp_span,
             last_verified_receipt: None,
             unified_owner_active: false,
+            write_admission: BTreeMap::new(),
         })
+    }
+
+    /// Returns the startup write-admission decision for `tenant`.
+    #[must_use]
+    pub fn write_admission(&self, tenant: &str) -> Option<&Result<(), RecoveryRefusal>> {
+        self.write_admission.get(tenant)
+    }
+
+    fn require_write_admission(&self, tenant: &str) -> Result<(), HumanOperationError> {
+        match self.write_admission.get(tenant) {
+            Some(Ok(())) => Ok(()),
+            Some(Err(_)) | None => Err(HumanOperationError::Refused),
+        }
+    }
+
+    /// Runs startup recovery once per tenant budget and records write admission
+    /// per tenant. A tenant whose recovery fails stays read-only with the reason
+    /// logged; other tenants proceed independently.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Unavailable` only when the shared store lock is poisoned.
+    pub fn recover_tenants(
+        &mut self,
+        peers: &[HumanPeer],
+        ceiling_maximum: u128,
+    ) -> Result<(), HumanOperationError> {
+        let mut first_peer_by_tenant = BTreeMap::<String, HumanPeer>::new();
+        for peer in peers {
+            first_peer_by_tenant
+                .entry(peer.tenant.clone())
+                .or_insert_with(|| peer.clone());
+        }
+        for (tenant, peer) in first_peer_by_tenant {
+            let admission = self.recover_tenant(&peer, ceiling_maximum);
+            match &admission {
+                Ok(()) => eprintln!("layerx-agentd: recovery tenant={tenant} writes admitted"),
+                Err(refusal) => {
+                    eprintln!("layerx-agentd: recovery tenant={tenant} read-only: {refusal:?}");
+                }
+            }
+            self.write_admission.insert(tenant, admission);
+        }
+        Ok(())
+    }
+
+    fn recover_tenant(
+        &mut self,
+        peer: &HumanPeer,
+        ceiling_maximum: u128,
+    ) -> Result<(), RecoveryRefusal> {
+        let tenant_id = TenantId::new(peer.tenant.clone())
+            .map_err(|_| RecoveryRefusal::Store(HumanOperationError::Refused))?;
+        let owners = {
+            let store = self
+                .store
+                .lock()
+                .map_err(|_| RecoveryRefusal::Store(HumanOperationError::Unavailable))?;
+            managed_agent::budget_owners(&store, &tenant_id).map_err(RecoveryRefusal::Store)?
+        };
+        if owners.is_empty() {
+            eprintln!(
+                "layerx-agentd: recovery tenant={} no protocol budget to recover",
+                peer.tenant
+            );
+            return Ok(());
+        }
+        let inventory = {
+            let store = self
+                .store
+                .lock()
+                .map_err(|_| RecoveryRefusal::Store(HumanOperationError::Unavailable))?;
+            crate::receipt::evidence_inventory(&store, tenant_id.clone()).map_err(|error| {
+                RecoveryRefusal::Store(match error {
+                    crate::receipt::ReceiptStoreError::Store(_) => HumanOperationError::Unavailable,
+                    _ => HumanOperationError::Refused,
+                })
+            })?
+        };
+        let registry = self
+            .authority
+            .registry(peer)
+            .map_err(|error| RecoveryRefusal::Store(map_core(error)))?;
+        let (_, _, _, _, _, _, authorization) = self
+            .authority
+            .balance_context(peer)
+            .map_err(RecoveryRefusal::Store)?;
+        let node = self.node.handshake().node().clone();
+        let verifier = EvidenceAuthority::pinned_to_handshake(
+            node.protocol_version,
+            node.network_id,
+            node.authorised_sequencer_key,
+        )
+        .map_err(|error| {
+            eprintln!("layerx-agentd: recovery handshake pin refused: {error:?}");
+            RecoveryRefusal::Store(HumanOperationError::Refused)
+        })?;
+        let current_sequence = self.node.head().chain_sequence;
+        let mut admission = Ok(());
+        for owner in owners {
+            let budget_id = owner.active_budget_id;
+            let (with_evidence, without_evidence) = self.attribute_receipts(
+                &peer.tenant,
+                &registry,
+                owner.agent_did.as_bytes(),
+                &inventory,
+            );
+            let correlation = boundary_correlation(peer, &budget_id, b"budget-recovery");
+            let key = budget_state_key(budget_id);
+            let outcome = match self.node.module_state(
+                BUDGET_MODULE_ID,
+                &key,
+                VerificationLevel::STATE_PROVEN,
+                correlation,
+                authorization,
+            ) {
+                Ok(value) => {
+                    let evidence = RawStateEvidence::module_witness(
+                        value.canonical_bytes().to_vec(),
+                        BUDGET_MODULE_ID,
+                        key,
+                        value.proof_material().to_vec(),
+                        RootSelector::Latest,
+                        node.authorised_sequencer_key,
+                    );
+                    let request = BudgetRecoveryRequest {
+                        budget_id,
+                        protocol_budget: ProtocolBudgetState { evidence },
+                        verifier: verifier.clone(),
+                        receipts_with_evidence: &with_evidence,
+                        receipts_without_evidence: &without_evidence,
+                        ceiling_maximum,
+                        current_sequence,
+                    };
+                    let mut store = self
+                        .store
+                        .lock()
+                        .map_err(|_| RecoveryRefusal::Store(HumanOperationError::Unavailable))?;
+                    recover_tenant_budget(&mut store, &tenant_id, &request)
+                }
+                Err(error) => Err(RecoveryRefusal::BudgetState {
+                    budget_id,
+                    reason: format!("{error:?}"),
+                }),
+            };
+            match outcome {
+                Ok(recovery) => {
+                    let accounting = recovery.recovered.budget_accounting;
+                    eprintln!(
+                        "layerx-agentd: recovery tenant={} agent={} budget={} queued={} awaiting={} receipts_with_evidence={} receipts_without_evidence={} protocol_consumed={:?} receipt_consumed={} held_unresolved={} unresolved_count={} reconciled={}",
+                        peer.tenant,
+                        owner.agent_id,
+                        hex(&budget_id),
+                        recovery.recovered.queued_for_transmission.len(),
+                        recovery.recovered.awaiting_receipt_resolution.len(),
+                        with_evidence.len(),
+                        without_evidence.len(),
+                        accounting.protocol_consumed,
+                        accounting.receipt_consumed,
+                        accounting.held_unresolved,
+                        accounting.unresolved_count,
+                        accounting.reconciled,
+                    );
+                    self.outboxes
+                        .insert(peer.tenant.clone(), recovery.recovered.outbox);
+                    if admission.is_ok() {
+                        admission = recovery.admission;
+                    }
+                }
+                Err(refusal) => {
+                    eprintln!(
+                        "layerx-agentd: recovery tenant={} agent={} budget={} failed: {refusal:?}",
+                        peer.tenant,
+                        owner.agent_id,
+                        hex(&budget_id),
+                    );
+                    if admission.is_ok() {
+                        admission = Err(refusal);
+                    }
+                }
+            }
+        }
+        admission
+    }
+
+    /// Splits a tenant's receipt inventory into the receipts whose signed
+    /// activity names `agent_did` as actor. Receipts that cannot be attributed
+    /// to the agent are not that agent's budget spend.
+    fn attribute_receipts(
+        &self,
+        tenant: &str,
+        registry: &ModuleRegistry,
+        agent_did: &[u8],
+        inventory: &crate::receipt::ReceiptEvidenceInventory,
+    ) -> (Vec<ReceiptEvidenceRecord>, Vec<ReceiptMetadata>) {
+        let Some(outbox) = self.outboxes.get(tenant) else {
+            return (Vec::new(), Vec::new());
+        };
+        let attributed = |idempotency_key: [u8; 32]| {
+            outbox
+                .exact_signed_bytes(idempotency_key)
+                .ok()
+                .and_then(|bytes| layerx_wire::activity::decode_signed(bytes, registry).ok())
+                .is_some_and(|activity| activity.actor_did() == agent_did)
+        };
+        let with_evidence = inventory
+            .with_evidence
+            .iter()
+            .filter(|record| attributed(record.idempotency_key))
+            .cloned()
+            .collect();
+        let without_evidence = inventory
+            .without_evidence
+            .iter()
+            .filter(|metadata| attributed(metadata.idempotency_key))
+            .copied()
+            .collect();
+        (with_evidence, without_evidence)
     }
 
     fn registry_response(registry: &ModuleRegistry) -> Result<HumanResponse, HumanOperationError> {
@@ -3164,6 +3553,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
         if !self.unified_owner_active {
             return Err(HumanOperationError::Unavailable);
         }
+        self.require_write_admission(&peer.tenant)?;
         if prepare_digest(&request.operation) != request.body_digest {
             return Err(HumanOperationError::Refused);
         }
@@ -3721,6 +4111,26 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
     ) -> Result<HumanResponse, HumanOperationError> {
         Err(HumanOperationError::Unavailable)
     }
+}
+
+fn raw_receipt_evidence(
+    bundle: &layerx_client::evidence::VerifiedProofBundle,
+) -> Result<crate::protocol_evidence::RawReceiptEvidence, HumanOperationError> {
+    let layerx_client::evidence::VerifiedProofBundle::Receipt {
+        canonical_bytes,
+        proof,
+        signed_header,
+        ..
+    } = bundle
+    else {
+        return Err(HumanOperationError::Refused);
+    };
+    Ok(crate::protocol_evidence::RawReceiptEvidence::new(
+        canonical_bytes.clone(),
+        proof.clone(),
+        signed_header.canonical_bytes.clone(),
+        signed_header.signature,
+    ))
 }
 
 fn evidence_unavailable(error: &EvidenceError) -> bool {

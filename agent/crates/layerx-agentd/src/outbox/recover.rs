@@ -7,6 +7,9 @@ use crate::store::{ObjectKind, Store, StoreError, TenantId};
 
 use super::{Outbox, OutboxError, SubmissionState};
 
+/// Approval release journal entries share the outbox object kind but are not submissions.
+const APPROVAL_RELEASE_PREFIX: &[u8] = b"approval-released-v1:";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UnknownCeilingReservation {
     pub id: [u8; 32],
@@ -123,6 +126,9 @@ pub fn recover(
     let mut awaiting_receipt_resolution = Vec::new();
     let identifiers = store.list_object_ids(tenant, ObjectKind::Outbox);
     for identifier in identifiers {
+        if identifier.starts_with(APPROVAL_RELEASE_PREFIX) {
+            continue;
+        }
         let submission_id: [u8; 32] = identifier
             .as_slice()
             .try_into()

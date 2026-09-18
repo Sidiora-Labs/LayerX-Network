@@ -2,6 +2,10 @@
 
 use std::collections::BTreeSet;
 
+use layerx_client::evidence::{
+    verify_module_evidence, AccountEvidencePolicy, EvidenceError as ModuleEvidenceError,
+    RootSelector,
+};
 use layerx_programs::hex;
 use layerx_proof::inclusion::{
     verify_receipt as verify_receipt_inclusion, verify_state, InclusionError, InclusionEvidence,
@@ -14,6 +18,7 @@ use layerx_proof::receipt::{
 };
 use layerx_types::ids::Did;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
+use layerx_types::verify::VerificationLevel;
 use layerx_wire::activity::decode_signed;
 use layerx_wire::hash::{activity_id, receipt_execution_batch_id};
 use layerx_wire::receipt::{decode, decode_batch_header, BatchHeader};
@@ -102,6 +107,7 @@ pub(crate) struct ProtocolEvidenceVerifier {
     expected_protocol_version: u16,
     expected_network_id: u32,
     sequencers: Vec<TrustedSequencer>,
+    handshake_pin: Option<[u8; 32]>,
 }
 
 impl ProtocolEvidenceVerifier {
@@ -141,6 +147,29 @@ impl ProtocolEvidenceVerifier {
             expected_protocol_version,
             expected_network_id,
             sequencers,
+            handshake_pin: None,
+        })
+    }
+
+    /// Builds a verifier whose only trust anchor is the sequencer key the node
+    /// handshake authenticated. Every signed header is admitted for its exact
+    /// batch under that key, mirroring the client's pinned-key authorisation.
+    fn pinned(
+        expected_protocol_version: u16,
+        expected_network_id: u32,
+        handshake_sequencer_key: [u8; 32],
+    ) -> Result<Self, VerifierPolicyError> {
+        if expected_protocol_version == 0 || expected_network_id == 0 {
+            return Err(VerifierPolicyError::EmptyPolicy);
+        }
+        if handshake_sequencer_key == [0; 32] {
+            return Err(VerifierPolicyError::InvalidAuthorization);
+        }
+        Ok(Self {
+            expected_protocol_version,
+            expected_network_id,
+            sequencers: Vec::new(),
+            handshake_pin: Some(handshake_sequencer_key),
         })
     }
 
@@ -231,6 +260,9 @@ impl ProtocolEvidenceVerifier {
     }
 
     pub(crate) fn accepts_handshake_key(&self, batch: u64, public_key: [u8; 32]) -> bool {
+        if self.handshake_pin == Some(public_key) {
+            return true;
+        }
         self.sequencers.iter().any(|entry| {
             entry.public_key == public_key
                 && batch >= entry.first_batch_number
@@ -252,6 +284,13 @@ impl ProtocolEvidenceVerifier {
         }
         if header.network_id() != self.expected_network_id {
             return Err(VerifierPolicyError::Network);
+        }
+        if self.sequencers.is_empty() {
+            let pinned = self.handshake_pin.ok_or(VerifierPolicyError::EmptyPolicy)?;
+            let batch = header.batch_number();
+            let authorization =
+                SequencerAuthorization::new(header.sequencer_id(), pinned, batch, batch);
+            return Ok((header, authorization));
         }
         let mut saw_identity = false;
         let mut saw_epoch = false;
@@ -418,34 +457,84 @@ impl ProtocolEvidenceVerifier {
         ))
     }
 
-    /// Verifies a raw state leaf and issues an opaque state token.
+    /// Verifies raw state evidence and issues an opaque state token.
+    ///
+    /// A state leaf is verified as a Merkle path under the header's resulting
+    /// state root. A module witness is verified through the client's module
+    /// evidence verifier under the pinned handshake key, and that key must be
+    /// one this policy accepts for the signed batch.
     ///
     /// # Errors
     ///
-    /// Refuses policy identity, canonical header, signature, state-root, and Merkle
-    /// failures before issuing evidence.
+    /// Refuses policy identity, canonical header, signature, state-root, Merkle
+    /// and module-witness failures before issuing evidence.
     fn verify_state(
         &self,
         raw: &RawStateEvidence,
     ) -> Result<VerifiedStateEvidence, StateEvidenceError> {
-        let (_, authorization) = self
-            .authorization_for(&raw.canonical_header)
-            .map_err(StateEvidenceError::Policy)?;
-        let inclusion = verify_state(
-            &raw.canonical_state,
-            &raw.proof,
-            &raw.resulting_state_root,
-            &raw.canonical_header,
-            &raw.header_signature,
-            &authorization,
-        )
-        .map_err(StateEvidenceError::Inclusion)?;
-        let observed_head_sequence = inclusion.header().header().last_sequence();
-        Ok(VerifiedStateEvidence {
-            canonical_state: raw.canonical_state.clone(),
-            inclusion,
-            observed_head_sequence,
-        })
+        match &raw.shape {
+            StateEvidenceShape::Leaf {
+                proof,
+                resulting_state_root,
+                canonical_header,
+                header_signature,
+            } => {
+                let (_, authorization) = self
+                    .authorization_for(canonical_header)
+                    .map_err(StateEvidenceError::Policy)?;
+                let inclusion = verify_state(
+                    &raw.canonical_state,
+                    proof,
+                    resulting_state_root,
+                    canonical_header,
+                    header_signature,
+                    &authorization,
+                )
+                .map_err(StateEvidenceError::Inclusion)?;
+                let observed_head_sequence = inclusion.header().header().last_sequence();
+                Ok(VerifiedStateEvidence {
+                    canonical_state: raw.canonical_state.clone(),
+                    level: inclusion.level(),
+                    observed_head_sequence,
+                })
+            }
+            StateEvidenceShape::ModuleWitness {
+                module_id,
+                key,
+                proof_material,
+                root_selector,
+                handshake_sequencer_key,
+            } => {
+                let verified = verify_module_evidence(
+                    &raw.canonical_state,
+                    proof_material,
+                    *module_id,
+                    key,
+                    AccountEvidencePolicy {
+                        expected_protocol_version: self.expected_protocol_version,
+                        expected_network_id: self.expected_network_id,
+                        handshake_sequencer_key: *handshake_sequencer_key,
+                        root_selector: *root_selector,
+                    },
+                )
+                .map_err(StateEvidenceError::Module)?;
+                let (header, authorization) = self
+                    .authorization_for(&verified.signed_header().canonical_bytes)
+                    .map_err(StateEvidenceError::Policy)?;
+                if authorization.public_key() != *handshake_sequencer_key
+                    || !self.accepts_handshake_key(header.batch_number(), *handshake_sequencer_key)
+                {
+                    return Err(StateEvidenceError::Policy(
+                        VerifierPolicyError::HandshakeKey,
+                    ));
+                }
+                Ok(VerifiedStateEvidence {
+                    canonical_state: raw.canonical_state.clone(),
+                    level: verified.level(),
+                    observed_head_sequence: header.last_sequence(),
+                })
+            }
+        }
     }
 }
 
@@ -483,6 +572,25 @@ impl EvidenceAuthority {
 
     pub(crate) const fn verifier(&self) -> &ProtocolEvidenceVerifier {
         &self.verifier
+    }
+
+    /// Builds the authority a daemon holds when its only sequencer trust anchor
+    /// is the key authenticated by the node handshake.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a zero protocol version, network identity or key.
+    pub fn pinned_to_handshake(
+        expected_protocol_version: u16,
+        expected_network_id: u32,
+        handshake_sequencer_key: [u8; 32],
+    ) -> Result<Self, VerifierPolicyError> {
+        ProtocolEvidenceVerifier::pinned(
+            expected_protocol_version,
+            expected_network_id,
+            handshake_sequencer_key,
+        )
+        .map(Self::new)
     }
 
     /// Verifies raw receipt ingress under the daemon's accepted startup authority.
@@ -1091,14 +1199,31 @@ impl VerifiedReceiptEvidence {
     }
 }
 
-/// Raw state leaf and signed inclusion material returned by a core boundary.
+/// Raw state and signed inclusion material returned by a core boundary.
+///
+/// Either an exact state leaf with its Merkle path under a signed batch header,
+/// or the module-state witness material a node point read returns.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RawStateEvidence {
     canonical_state: Vec<u8>,
-    proof: Proof,
-    resulting_state_root: [u8; 32],
-    canonical_header: Vec<u8>,
-    header_signature: [u8; 64],
+    shape: StateEvidenceShape,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum StateEvidenceShape {
+    Leaf {
+        proof: Proof,
+        resulting_state_root: [u8; 32],
+        canonical_header: Vec<u8>,
+        header_signature: [u8; 64],
+    },
+    ModuleWitness {
+        module_id: u16,
+        key: Vec<u8>,
+        proof_material: Vec<u8>,
+        root_selector: RootSelector,
+        handshake_sequencer_key: [u8; 32],
+    },
 }
 
 impl RawStateEvidence {
@@ -1112,10 +1237,35 @@ impl RawStateEvidence {
     ) -> Self {
         Self {
             canonical_state,
-            proof,
-            resulting_state_root,
-            canonical_header,
-            header_signature,
+            shape: StateEvidenceShape::Leaf {
+                proof,
+                resulting_state_root,
+                canonical_header,
+                header_signature,
+            },
+        }
+    }
+
+    /// Wraps exact module-state bytes with the witness material the node
+    /// returned for them and the handshake key that material must verify under.
+    #[must_use]
+    pub fn module_witness(
+        canonical_state: Vec<u8>,
+        module_id: u16,
+        key: Vec<u8>,
+        proof_material: Vec<u8>,
+        root_selector: RootSelector,
+        handshake_sequencer_key: [u8; 32],
+    ) -> Self {
+        Self {
+            canonical_state,
+            shape: StateEvidenceShape::ModuleWitness {
+                module_id,
+                key,
+                proof_material,
+                root_selector,
+                handshake_sequencer_key,
+            },
         }
     }
 
@@ -1124,24 +1274,56 @@ impl RawStateEvidence {
         &self.canonical_state
     }
 
+    /// Returns the Merkle path of state-leaf evidence; module witnesses carry none.
     #[must_use]
-    pub const fn proof(&self) -> &Proof {
-        &self.proof
+    pub const fn proof(&self) -> Option<&Proof> {
+        match &self.shape {
+            StateEvidenceShape::Leaf { proof, .. } => Some(proof),
+            StateEvidenceShape::ModuleWitness { .. } => None,
+        }
     }
 
+    /// Returns the named resulting state root of state-leaf evidence.
     #[must_use]
-    pub const fn resulting_state_root(&self) -> [u8; 32] {
-        self.resulting_state_root
+    pub const fn resulting_state_root(&self) -> Option<[u8; 32]> {
+        match &self.shape {
+            StateEvidenceShape::Leaf {
+                resulting_state_root,
+                ..
+            } => Some(*resulting_state_root),
+            StateEvidenceShape::ModuleWitness { .. } => None,
+        }
     }
 
+    /// Returns the canonical signed header of state-leaf evidence.
     #[must_use]
-    pub fn canonical_header(&self) -> &[u8] {
-        &self.canonical_header
+    pub fn canonical_header(&self) -> Option<&[u8]> {
+        match &self.shape {
+            StateEvidenceShape::Leaf {
+                canonical_header, ..
+            } => Some(canonical_header),
+            StateEvidenceShape::ModuleWitness { .. } => None,
+        }
     }
 
+    /// Returns the header signature of state-leaf evidence.
     #[must_use]
-    pub const fn header_signature(&self) -> [u8; 64] {
-        self.header_signature
+    pub const fn header_signature(&self) -> Option<[u8; 64]> {
+        match &self.shape {
+            StateEvidenceShape::Leaf {
+                header_signature, ..
+            } => Some(*header_signature),
+            StateEvidenceShape::ModuleWitness { .. } => None,
+        }
+    }
+
+    /// Returns the exact module-state proof material of module-witness evidence.
+    #[must_use]
+    pub fn proof_material(&self) -> Option<&[u8]> {
+        match &self.shape {
+            StateEvidenceShape::ModuleWitness { proof_material, .. } => Some(proof_material),
+            StateEvidenceShape::Leaf { .. } => None,
+        }
     }
 }
 
@@ -1150,13 +1332,14 @@ impl RawStateEvidence {
 pub enum StateEvidenceError {
     Policy(VerifierPolicyError),
     Inclusion(InclusionError),
+    Module(ModuleEvidenceError),
 }
 
 /// State bytes available only after configured policy and canonical proof verification.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedStateEvidence {
     canonical_state: Vec<u8>,
-    inclusion: InclusionEvidence,
+    level: VerificationLevel,
     observed_head_sequence: u64,
 }
 
@@ -1167,8 +1350,8 @@ impl VerifiedStateEvidence {
     }
 
     #[must_use]
-    pub const fn level(&self) -> layerx_types::verify::VerificationLevel {
-        self.inclusion.level()
+    pub const fn level(&self) -> VerificationLevel {
+        self.level
     }
 
     #[must_use]
