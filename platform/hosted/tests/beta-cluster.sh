@@ -51,6 +51,10 @@
 #   LAYERX_BETA_QUALIFICATION_HUMAN_URL
 #   LAYERX_BETA_QUALIFICATION_PAXEER_URL
 #   LAYERX_BETA_FORBIDDEN_CHAIN_ID      refuse contract transactions on this chain id, including disposable clusters
+#   LAYERX_BETA_STATUS_PUBLISH_URL      https endpoint of the separately operated status publisher that the
+#                                       layerx-testnet-status-publisher CronJob PUTs the testnet status to;
+#                                       unset drops that CronJob from the applied manifests and reports the
+#                                       variable as a missing owner input
 #   LAYERX_BETA_KEEP_TOOLS              set to 1 to keep the pinned kind/kubectl downloads on teardown
 #
 # The trusted-boundary services (node with core boundary, receipt authority and agent boundary; identity;
@@ -108,6 +112,8 @@ TRUSTED_BOUNDARY_SERVICES=(layerx-pending-core layerx-pending-core-admin paxeer-
 INTERNAL_NAMESPACE=layerx-internal
 FOUNDRY_BIN=${LAYERX_BETA_FOUNDRY_BIN:-/root/.foundry/bin}
 CUSTODY_PROFILE=${LAYERX_BETA_CUSTODY_PROFILE:-}
+STATUS_PUBLISH_URL=${LAYERX_BETA_STATUS_PUBLISH_URL:-}
+STATUS_PUBLISHER_REPORTED=0
 IDENTITY_PORT=19451
 PAXEER_CHAIN_ID=125
 NODE_MANIFEST="$REPO_ROOT/platform/hosted/node/deployment.yaml"
@@ -1121,7 +1127,57 @@ paxeer_origins_write() {
     local comet_chain_id
     comet_chain_id=$(kube -n "$TESTNET_NAMESPACE" exec paxeer-0 -c paxd -- jq -er .chain_id /var/lib/paxeer/config/genesis.json)
     python3 "$SCRIPT_DIR/paxeer-identity.py" "$WORK_DIR/paxeer/rpc-origins.json" "$comet_chain_id"
+    python3 "$SCRIPT_DIR/custody-identity.py" "$WORK_DIR/paxeer/rpc-origins.json"
     log "Paxeer origins: $PAXEER_URL $PAXEER_OBSERVER_URL; CA bundle: $CA_DIR/ca.pem; inputs: $WORK_DIR/paxeer/rpc-origins.json"
+}
+
+status_publisher_render() {
+    local pattern='^https://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
+    if [ -n "$STATUS_PUBLISH_URL" ]; then
+        [[ $STATUS_PUBLISH_URL =~ $pattern ]] \
+            || fail "LAYERX_BETA_STATUS_PUBLISH_URL must be the https URL of the owner status publisher"
+    elif [ "$STATUS_PUBLISHER_REPORTED" = 0 ]; then
+        MISSING_INPUTS+=("LAYERX_BETA_STATUS_PUBLISH_URL (https endpoint of the separately operated status publisher; the layerx-testnet-status-publisher CronJob is not applied without it)")
+        STATUS_PUBLISHER_REPORTED=1
+    fi
+    python3 - "$MANIFESTS_DIR/testnet.yaml" "$STATUS_PUBLISH_URL" <<'PYSTATUS'
+import sys
+import yaml
+path, url = sys.argv[1], sys.argv[2]
+name = 'layerx-testnet-status-publisher'
+with open(path) as source:
+    documents = list(yaml.safe_load_all(source))
+publisher = [document for document in documents
+             if document.get('kind') == 'CronJob' and document['metadata']['name'] == name]
+if len(publisher) != 1:
+    raise SystemExit('the testnet manifest must declare exactly one ' + name + ' CronJob')
+if url:
+    container, = publisher[0]['spec']['jobTemplate']['spec']['template']['spec']['containers']
+    variable, = [entry for entry in container['env'] if entry['name'] == 'LAYERX_STATUS_PUBLISH_URL']
+    variable['value'] = url
+else:
+    documents.remove(publisher[0])
+    for document in documents:
+        if document.get('kind') != 'NetworkPolicy' or document['spec'].get('ingress') is None:
+            continue
+        kept = []
+        for rule in document['spec']['ingress']:
+            if not rule.get('from'):
+                kept.append(rule)
+                continue
+            peers = [peer for peer in rule['from']
+                     if peer.get('podSelector', {}).get('matchLabels', {}).get('app') != name]
+            if peers:
+                kept.append({**rule, 'from': peers})
+        document['spec']['ingress'] = kept
+with open(path, 'w') as output:
+    yaml.safe_dump_all(documents, output, sort_keys=False)
+PYSTATUS
+    if [ -z "$STATUS_PUBLISH_URL" ]; then
+        log "status publisher: LAYERX_BETA_STATUS_PUBLISH_URL is unset; the layerx-testnet-status-publisher CronJob is left out of $MANIFESTS_DIR/testnet.yaml"
+    else
+        log "status publisher: the layerx-testnet-status-publisher CronJob publishes to $STATUS_PUBLISH_URL"
+    fi
 }
 
 manifests_render() {
@@ -1180,6 +1236,7 @@ PYREG
     render_manifest "$REPO_ROOT/platform/hosted/paxeer/deployment.yaml" "$MANIFESTS_DIR/paxeer.yaml"
     paxeer_observer_render
     render_manifest "$REPO_ROOT/platform/hosted/testnet/deployment.yaml" "$MANIFESTS_DIR/testnet.yaml"
+    status_publisher_render
     render_manifest "$REPO_ROOT/platform/hosted/gateway/deployment.yaml" "$MANIFESTS_DIR/gateway.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/registry/journal-pvc.yaml" "$MANIFESTS_DIR/registry-journal.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/registry/deployment.yaml" "$MANIFESTS_DIR/registry.yaml"
