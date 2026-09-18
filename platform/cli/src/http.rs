@@ -136,6 +136,35 @@ impl Client {
         decode(response, "POST", path)
     }
 
+    /// Posts one operator publication carrying the caller's publication key,
+    /// which the component resolves at the identity authority.
+    ///
+    /// # Errors
+    /// Refuses invalid request inputs, transport failures, or malformed responses.
+    pub fn post_publication(
+        &self,
+        path: &str,
+        body: &Value,
+        publication_key: &str,
+    ) -> Result<Value, String> {
+        if publication_key.is_empty()
+            || publication_key.len() > 4096
+            || !publication_key.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err("publication key must be 1-4096 printable ASCII characters".into());
+        }
+        let url = self.url(path)?;
+        let mut request = self.agent.post(&url).header("LayerX-Key", publication_key);
+        let authorization = self.authorization_header();
+        if let Some(value) = &authorization {
+            request = request.header("Authorization", value.as_str());
+        }
+        let response = request
+            .send_json(body)
+            .map_err(|error| format!("POST {path} failed: {error}"))?;
+        decode(response, "POST", path)
+    }
+
     /// # Errors
     /// Refuses invalid request inputs, transport failures, or malformed responses.
     pub fn post_stateful(

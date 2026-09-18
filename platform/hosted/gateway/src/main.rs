@@ -660,8 +660,10 @@ fn programs_request_path(method: &str, path: &str) -> bool {
             | ProductionRoute::ProgramWindDown
             | ProductionRoute::ProgramSimulation
             | ProductionRoute::ProgramRead
+            | ProductionRoute::ProgramCatalog
             | ProductionRoute::ProgramRegistry(_)
             | ProductionRoute::ProgramInterface(_)
+            | ProductionRoute::ProgramSource(_)
             | ProductionRoute::ProgramReceiptByIdempotency(_)
             | ProductionRoute::ProgramActivity(_))
     )
@@ -1114,11 +1116,13 @@ fn permits(record: &KeyRecord, route: &ProductionRoute<'_>) -> bool {
         ProductionRoute::ProgramCall
         | ProductionRoute::ProgramDeploy
         | ProductionRoute::ProgramUpgrade
-        | ProductionRoute::ProgramWindDown => "program:call",
+        | ProductionRoute::ProgramWindDown
+        | ProductionRoute::ProgramSource(_) => "program:call",
         ProductionRoute::ProgramSimulation => "program:simulate",
         ProductionRoute::State => "state:read",
         ProductionRoute::Receipt(_) => "receipt:read",
-        ProductionRoute::ProgramRegistry(_)
+        ProductionRoute::ProgramCatalog
+        | ProductionRoute::ProgramRegistry(_)
         | ProductionRoute::ProgramRead
         | ProductionRoute::ProgramInterface(_)
         | ProductionRoute::ProgramActivity(_)
@@ -2775,6 +2779,7 @@ fn read_route(
         ProductionRoute::Receipt(activity_id) => {
             read_receipt(config, record, activity_id, trace_id)
         }
+        ProductionRoute::ProgramCatalog => read_program_catalog(config, trace_id),
         ProductionRoute::ProgramRegistry(program) => {
             read_program_registry(config, program, trace_id)
         }
@@ -2797,6 +2802,7 @@ fn read_route(
         | ProductionRoute::ProgramUpgrade
         | ProductionRoute::ProgramWindDown
         | ProductionRoute::ProgramSimulation
+        | ProductionRoute::ProgramSource(_)
         | ProductionRoute::ProgramRead => response(404, "not_found", None),
     }
 }
@@ -2962,6 +2968,9 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
         }
         ProductionRoute::ProgramSimulation | ProductionRoute::ProgramRead => {
             program_simulation(config, request, &record, &trace_id)
+        }
+        ProductionRoute::ProgramSource(program) => {
+            publish_program_source(config, request, &record, program, &trace_id)
         }
         read => read_route(config, request, &record, &read, &trace_id),
     };
@@ -3512,6 +3521,174 @@ fn read_program_registry(config: &Config, program: &str, trace_id: &str) -> Outg
     )
 }
 
+fn read_program_catalog(config: &Config, trace_id: &str) -> OutgoingResponse {
+    let Ok(upstream) = config.client.request(
+        &config.registry,
+        config.registry_token.as_str(),
+        &http::OutboundRequest {
+            method: "GET",
+            path: "/v1/programs/registry",
+            idempotency: None,
+            content_type: "application/json",
+            body: &[],
+        },
+    ) else {
+        return response(503, "program_registry_unavailable", Some(5));
+    };
+    if upstream.status != 200 || upstream.content_type != "application/json" {
+        return response(503, "program_registry_invalid", Some(5));
+    }
+    let Ok(document): Result<serde_json::Value, _> = serde_json::from_slice(&upstream.body) else {
+        return response(503, "program_registry_invalid", Some(5));
+    };
+    let Some(program_ids) = document["program_ids"].as_array() else {
+        return response(503, "program_registry_invalid", Some(5));
+    };
+    if program_ids
+        .iter()
+        .any(|value| value.as_str().is_none_or(|id| parse_hex32(id).is_err()))
+    {
+        return response(503, "program_registry_invalid", Some(5));
+    }
+    let (Some(state_root), Some(observed_sequence), Some(observed_at), Some(valid_through)) = (
+        document["state_root"]
+            .as_str()
+            .and_then(|value| parse_hex32(value).ok()),
+        canonical_u64(&document["observed_sequence"]),
+        canonical_u64(&document["observed_at"]),
+        canonical_u64(&document["valid_through"]),
+    ) else {
+        return response(503, "program_registry_unverified", Some(5));
+    };
+    json_response(
+        200,
+        &serde_json::json!({
+            "ok": true,
+            "result": {
+                "program_ids": program_ids,
+                "state_root": hex(&state_root),
+                "observed_sequence": observed_sequence.to_string(),
+                "observed_at": observed_at.to_string(),
+                "valid_through": valid_through.to_string(),
+                "verification": "registry-receipt-and-current-head-verified",
+            },
+            "trace": trace_id,
+        }),
+    )
+}
+
+fn program_source_publication(body: &[u8]) -> Result<(String, String), OutgoingResponse> {
+    let document: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|_| response(400, "invalid_source_publication", None))?;
+    let source_uri = document["source_uri"]
+        .as_str()
+        .filter(|value| {
+            !value.is_empty() && value.len() <= 1024 && value.bytes().all(|b| b.is_ascii_graphic())
+        })
+        .ok_or_else(|| response(400, "invalid_source_publication", None))?;
+    let source_digest = document["source_digest"]
+        .as_str()
+        .filter(|value| parse_hex32(value).is_ok())
+        .ok_or_else(|| response(400, "invalid_source_publication", None))?;
+    Ok((source_uri.to_owned(), source_digest.to_ascii_lowercase()))
+}
+
+fn publish_program_source(
+    config: &Config,
+    request: &IncomingRequest,
+    record: &KeyRecord,
+    program: &str,
+    trace_id: &str,
+) -> OutgoingResponse {
+    let Some(publication_key) = request
+        .headers
+        .get("authorization")
+        .and_then(|value| value.strip_prefix("LayerX-Key "))
+        .filter(|value| {
+            !value.is_empty() && value.len() <= 4096 && value.bytes().all(|b| b.is_ascii_graphic())
+        })
+    else {
+        return response(401, "api_key_required", None);
+    };
+    let Some(idempotency) = request
+        .headers
+        .get("idempotency-key")
+        .filter(|key| key.len() >= 16 && valid_identifier(key, 128))
+    else {
+        return response(400, "idempotency_key_required", None);
+    };
+    let (source_uri, source_digest) = match program_source_publication(&request.body) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    match config.store.consume_read(
+        record,
+        now().unwrap_or(0),
+        &audit_event(
+            &record.principal_digest,
+            "program_source_publish",
+            &record.key_id,
+            "attempted",
+        ),
+    ) {
+        Ok(None) => {}
+        Ok(Some(retry)) => return response(429, "quota_exceeded", Some(retry)),
+        Err(_) => return response(503, "persistence_unavailable", Some(5)),
+    }
+    let body = serde_json::json!({
+        "source_uri": source_uri,
+        "source_digest": source_digest,
+    })
+    .to_string()
+    .into_bytes();
+    let Ok(upstream) = config.client.request_with_publication_key(
+        &config.registry,
+        config.registry_token.as_str(),
+        &http::OutboundRequest {
+            method: "POST",
+            path: &format!("/v1/programs/registry/{program}/source"),
+            idempotency: Some(idempotency),
+            content_type: "application/json",
+            body: &body,
+        },
+        None,
+        publication_key,
+    ) else {
+        return response(503, "program_registry_unavailable", Some(5));
+    };
+    if upstream.content_type != "application/json" {
+        return response(503, "program_registry_invalid", Some(5));
+    }
+    match upstream.status {
+        200 => {
+            let Ok(document): Result<serde_json::Value, _> = serde_json::from_slice(&upstream.body)
+            else {
+                return response(503, "program_registry_invalid", Some(5));
+            };
+            if document["program_id"]
+                .as_str()
+                .is_none_or(|value| !value.eq_ignore_ascii_case(program))
+                || document["source_digest"]
+                    .as_str()
+                    .is_none_or(|value| !value.eq_ignore_ascii_case(&source_digest))
+            {
+                return response(503, "program_registry_unverified", Some(5));
+            }
+            json_response(
+                200,
+                &serde_json::json!({ "ok": true, "result": document, "trace": trace_id }),
+            )
+        }
+        400 => response(400, "invalid_source_publication", None),
+        403 => response(403, "publication_authorization_refused", None),
+        404 => response(404, "program_source_absent", None),
+        409 => response(409, "idempotency_conflict", None),
+        422 => response(422, "program_source_unverified", None),
+        503 => response(503, "program_registry_unavailable", Some(5)),
+        _ => response(503, "program_registry_invalid", Some(5)),
+    }
+}
+
 fn read_program_interface(config: &Config, program: &str, trace_id: &str) -> OutgoingResponse {
     let Ok(expected) = parse_hex32(program) else {
         return response(400, "invalid_program_id", None);
@@ -4014,7 +4191,7 @@ mod programs_wire_tests {
     use super::{
         agent_error_class, agent_response, json_response, now_millis, pending_program_response,
         program_activity_selector, program_head_is_current, program_receipt_selector,
-        program_selector, programs_request_path, response,
+        program_selector, program_source_publication, programs_request_path, response,
     };
     use layerx_platform_gateway::http::IncomingRequest;
     use layerx_platform_gateway::store::OperationRecord;
@@ -4191,8 +4368,10 @@ mod programs_wire_tests {
         for (method, path) in [
             ("POST", "/v1/programs/call".to_owned()),
             ("POST", "/v1/programs/simulate".to_owned()),
+            ("GET", "/v1/programs/registry".to_owned()),
             ("GET", format!("/v1/programs/registry/{id}")),
             ("GET", format!("/v1/programs/registry/{id}/interface")),
+            ("POST", format!("/v1/programs/registry/{id}/source")),
             ("GET", format!("/v1/programs/receipts/by-idempotency/{id}")),
             ("GET", format!("/v1/programs/activities/{id}")),
         ] {
@@ -4202,10 +4381,45 @@ mod programs_wire_tests {
             "GET",
             &format!("/v1/programs/registry/{id}/source")
         ));
+        assert!(!programs_request_path("POST", "/v1/programs/registry"));
+        assert!(!programs_request_path(
+            "POST",
+            &format!("/v1/programs/registry/{id}")
+        ));
         assert!(!programs_request_path(
             "GET",
             &format!("/v1/programs/activities/{}", "A".repeat(64))
         ));
+    }
+
+    #[test]
+    fn program_source_publication_accepts_only_the_registry_contract() {
+        let digest = "ab".repeat(32);
+        let (uri, parsed) = program_source_publication(
+            serde_json::json!({
+                "source_uri": "https://sources.example/program.tar.zst",
+                "source_digest": digest.to_ascii_uppercase(),
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap_or_else(|_| panic!("canonical publication body must parse"));
+        assert_eq!(uri, "https://sources.example/program.tar.zst");
+        assert_eq!(parsed, digest);
+        for body in [
+            serde_json::json!({"source_digest": digest}),
+            serde_json::json!({"source_uri": "https://sources.example/a"}),
+            serde_json::json!({"source_uri": "", "source_digest": digest}),
+            serde_json::json!({"source_uri": "https://a", "source_digest": "ab"}),
+            serde_json::json!({"source_uri": "https://a b", "source_digest": digest}),
+            serde_json::json!({"source_uri": "x".repeat(1025), "source_digest": digest}),
+        ] {
+            assert!(
+                program_source_publication(body.to_string().as_bytes()).is_err(),
+                "{body}"
+            );
+        }
+        assert!(program_source_publication(b"not-json").is_err());
     }
 
     #[test]

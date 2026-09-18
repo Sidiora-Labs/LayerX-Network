@@ -279,9 +279,14 @@ impl Registrar {
                 }
                 self.ingest_source(&request.body, deadline)
             }
+            ("GET", "/v1/programs/registry") => self.list(now),
             (
                 _,
-                "/healthz" | "/__registry/deployments" | "/__registry/head" | "/__registry/sources",
+                "/healthz"
+                | "/__registry/deployments"
+                | "/__registry/head"
+                | "/__registry/sources"
+                | "/v1/programs/registry",
             ) => refusal(
                 405,
                 "method_not_allowed",
@@ -425,6 +430,50 @@ impl Registrar {
                 "method is not supported for this route",
             ),
             Some(_) => refusal(404, "not_found", "route does not exist"),
+        }
+    }
+
+    fn list(&mut self, now: u64) -> Response {
+        if let Err(error) = self.synchronize_protocol_state(None, now) {
+            return refusal(503, "protocol_state_unavailable", &error);
+        }
+        if let Err(error) = JournalReadAuthority::new(&self.journal, now, self.staleness_ms) {
+            return refusal(503, "read_unverifiable", &error.to_string());
+        }
+        let Some(head) = self.current_head else {
+            return refusal(
+                503,
+                "protocol_head_unavailable",
+                "a current independently verified protocol head is not available",
+            );
+        };
+        let Some(valid_through) = head.freshness.observed_at.checked_add(self.staleness_ms) else {
+            return refusal(503, "stale_read", "protocol head freshness overflowed");
+        };
+        if now > valid_through {
+            return refusal(
+                503,
+                "stale_read",
+                "protocol head is outside its freshness bound",
+            );
+        }
+        let program_ids: Vec<String> = self
+            .registry
+            .program_ids()
+            .iter()
+            .map(|program| hex::encode(&program.bytes()))
+            .collect();
+        Response {
+            status: 200,
+            body: json!({
+                "program_ids": program_ids,
+                "state_root": hex::encode(&head.state_root),
+                "observed_sequence": head.freshness.observed_sequence,
+                "observed_at": head.freshness.observed_at,
+                "valid_through": valid_through,
+                "verification": "registry-receipt-and-current-head-verified",
+            })
+            .to_string(),
         }
     }
 
