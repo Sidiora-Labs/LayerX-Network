@@ -23,11 +23,21 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    eprintln!(
-        "layerx-mirror-signer: listening on {} for {} (secp256k1) and {} (ed25519)",
-        listener.socket().display(),
-        options.ethereum_key_handle,
-        options.solana_key_handle
-    );
+    if listener.service().serves_solana() {
+        eprintln!(
+            "layerx-mirror-signer: listening on {} for {} (secp256k1) and {} (ed25519)",
+            listener.socket().display(),
+            options.ethereum_key_handle,
+            options.solana_key_handle
+        );
+    } else {
+        eprintln!(
+            "layerx-mirror-signer: listening on {} for {} (secp256k1); no Solana publisher key at {}, so {} is not served",
+            listener.socket().display(),
+            options.ethereum_key_handle,
+            options.solana_keypair_file.display(),
+            options.solana_key_handle
+        );
+    }
     listener.serve()
 }
