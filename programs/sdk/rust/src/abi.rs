@@ -200,21 +200,21 @@ pub const V3_HOST_FUNCTIONS: [HostFunction; 1] = [HostFunction {
     signature: "(i32,i32,i32,i32)->i32",
 }];
 
-/// Compatibility spelling for the newest namespace.
-pub const CANDIDATE_ABI_MODULE: &str = V3_ABI_MODULE;
+/// Compatibility spelling for the frozen ABI-v2 response namespace.
+pub const CANDIDATE_ABI_MODULE: &str = V2_ABI_MODULE;
 /// Compatibility spelling retained for one release.
 pub const CANDIDATE_REFUSAL_SENTINEL: i32 = V2_REFUSAL_SENTINEL;
-/// Compatibility spelling for the newest namespace.
-pub const CANDIDATE_ABI_MANIFEST: &str = V3_ABI_MANIFEST;
-/// Compatibility spelling for the newest namespace.
-pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 1] = V3_HOST_FUNCTIONS;
+/// Compatibility spelling for the frozen ABI-v2 response namespace.
+pub const CANDIDATE_ABI_MANIFEST: &str = V2_ABI_MANIFEST;
+/// Compatibility spelling for the frozen ABI-v2 response namespace.
+pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 19] = V2_HOST_FUNCTIONS;
 
 #[cfg(test)]
 mod tests {
     use super::V2_HOST_FUNCTIONS;
 
     #[test]
-    fn compatibility_constants_target_v3_over_frozen_v2_bytes() {
+    fn compatibility_constants_alias_the_frozen_v2_surface() {
         assert_eq!(super::V2_ABI_MODULE, "layerx_v2");
         assert_eq!(super::V2_ABI_MANIFEST, "layerx_v1\0storage_read(i32,i32,i32,i32)->i32\0storage_write(i32,i32,i32,i32)->i32\0storage_delete(i32,i32)->i32\0event_emit(i32,i32,i32,i32)->i32\0program_call(i32,i32,i32,i32,i32,i32)->i32\0transfer_402(i64,i64,i32,i32,i32,i32)->i32\0receipt_read(i32,i32,i32,i32)->i32\0layerx_v2\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0transfer_program_402(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0fund_program_402(i64,i64,i32,i32,i32,i32,i32,i32)->i32\0context_read(i32,i32,i32)->i32\0balance_read(i32,i32,i32,i32,i32,i32)->i32\0hash(i32,i32,i32,i32)->i32\0signature_verify(i32,i32,i32,i32,i32,i32,i32)->i32\0signature_recover(i32,i32,i32,i32,i32,i32,i32)->i32\0bigint_mul_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_div_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_rem_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_modexp_256(i32,i32,i32,i32,i32,i32,i32,i32)->i32\0");
         assert!(!super::V2_ABI_MANIFEST.contains("oracle_read"));
@@ -231,14 +231,14 @@ mod tests {
             ),
             ("oracle_read", "(i32,i32,i32,i32)->i32")
         );
-        assert_eq!(super::CANDIDATE_ABI_MODULE, super::V3_ABI_MODULE);
-        assert_eq!(super::CANDIDATE_ABI_MANIFEST, super::V3_ABI_MANIFEST);
+        assert_eq!(super::CANDIDATE_ABI_MODULE, super::V2_ABI_MODULE);
+        assert_eq!(super::CANDIDATE_ABI_MANIFEST, super::V2_ABI_MANIFEST);
         assert_eq!(super::ABI_MANIFEST, super::V3_ABI_MANIFEST);
         assert_eq!(
             super::CANDIDATE_REFUSAL_SENTINEL,
             super::V2_REFUSAL_SENTINEL
         );
-        assert_eq!(super::CANDIDATE_HOST_FUNCTIONS, super::V3_HOST_FUNCTIONS);
+        assert_eq!(super::CANDIDATE_HOST_FUNCTIONS, V2_HOST_FUNCTIONS);
     }
 
     #[test]
