@@ -2,6 +2,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: layerx-mirror-publisher
+  namespace: layerx-testnet
+  labels: {app: layerx-mirror-publisher}
 spec:
   replicas: 1
   selector:
@@ -20,6 +22,7 @@ spec:
       containers:
         - name: publisher
           image: ghcr.io/sidiora-labs/layerx-mirror:0.1.0
+          imagePullPolicy: Always
           args: ["/etc/layerx-mirror/config.json"]
           securityContext:
             allowPrivilegeEscalation: false
@@ -65,6 +68,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: layerx-mirror-state
+  namespace: layerx-testnet
 spec:
   accessModes: ["ReadWriteOnce"]
   resources:
@@ -74,6 +78,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: layerx-mirror-publisher
+  namespace: layerx-testnet
 spec:
   podSelector:
     matchLabels: {app: layerx-mirror-publisher}
