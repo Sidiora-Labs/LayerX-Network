@@ -3440,18 +3440,41 @@ fn read_receipt(
     if !component.activity_id.eq_ignore_ascii_case(activity_id) {
         return response(503, "component_invalid", Some(5));
     }
-    let (_, receipt, _) = match verified_result(config, activity_id, &component.receipt, None) {
+    let prepared = match authority_request(config, activity_id, false)
+        .and_then(|upstream| authority_response(config, activity_id, &upstream))
+    {
         Ok(value) => value,
         Err(error) => return error,
     };
+    let facts = prepared.facts;
+    let (_, receipt, _) =
+        match verified_result(config, activity_id, &component.receipt, Some(Ok(prepared))) {
+            Ok(value) => value,
+            Err(error) => return error,
+        };
     json_response(
         200,
         &serde_json::json!({
             "ok": true,
-            "result": { "activity_id": activity_id.to_ascii_lowercase(), "receipt": hex(&receipt) },
+            "result": receipt_document(activity_id, &receipt, facts),
             "trace": trace_id
         }),
     )
+}
+
+fn receipt_document(activity_id: &str, receipt: &[u8], facts: AuthorityFacts) -> serde_json::Value {
+    let authorized = facts.authorized();
+    serde_json::json!({
+        "activity_id": activity_id.to_ascii_lowercase(),
+        "receipt": hex(receipt),
+        "authority": {
+            "batch_id": hex(&authorized.batch_id()),
+            "asset": hex(&authorized.asset()),
+            "previous_state_root": hex(&authorized.previous_state_root()),
+            "resulting_state_root": hex(&authorized.resulting_state_root()),
+            "sequencer_public_key": hex(&authorized.sequencer_public_key()),
+        }
+    })
 }
 
 fn read_program_registry(config: &Config, program: &str, trace_id: &str) -> OutgoingResponse {
@@ -4330,6 +4353,108 @@ mod authority_shape_tests {
         let mut unknown = document;
         unknown["unexpected"] = serde_json::json!(true);
         assert!(serde_json::from_value::<AuthorityResponse>(unknown).is_err());
+    }
+}
+
+#[cfg(test)]
+mod receipt_read_tests {
+    use super::*;
+
+    #[test]
+    fn receipt_reads_publish_the_authority_that_verifies_the_receipt() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../authority/tests/fixtures/real-program-deploy-receipt.json");
+        let bytes = std::fs::read(path).unwrap_or_else(|error| panic!("{error}"));
+        let fixture: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("{error}"));
+        let text = |name: &str| {
+            fixture[name]
+                .as_str()
+                .unwrap_or_else(|| panic!("fixture field {name}"))
+                .to_owned()
+        };
+        let receipt =
+            decode_hex(&text("receipt_hex"), 262_144).unwrap_or_else(|error| panic!("{error}"));
+        let header_bytes =
+            decode_hex(&text("header_hex"), 262_144).unwrap_or_else(|error| panic!("{error}"));
+        let header = layerx_wire::receipt::decode_batch_header(&header_bytes)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let decoded =
+            layerx_wire::receipt::decode(&receipt).unwrap_or_else(|error| panic!("{error:?}"));
+        let protocol = decoded
+            .protocol()
+            .unwrap_or_else(|| panic!("protocol receipt"));
+        let sequencer_public_key = parse_hex32(&text("sequencer_public_key_hex"))
+            .unwrap_or_else(|error| panic!("{error}"));
+        let facts = AuthorityFacts::new(
+            protocol.batch_id(),
+            protocol.asset(),
+            header.previous_state_root(),
+            header.resulting_state_root(),
+            sequencer_public_key,
+        );
+        let activity_id = hex(&protocol.activity_id());
+        let document = receipt_document(&activity_id.to_ascii_uppercase(), &receipt, facts);
+        assert_eq!(document["activity_id"], serde_json::json!(activity_id));
+        assert_eq!(document["receipt"], serde_json::json!(hex(&receipt)));
+        let authority = &document["authority"];
+        for (name, expected) in [
+            ("batch_id", hex(&protocol.batch_id())),
+            ("asset", hex(&protocol.asset())),
+            ("previous_state_root", hex(&header.previous_state_root())),
+            ("resulting_state_root", hex(&header.resulting_state_root())),
+            ("sequencer_public_key", hex(&sequencer_public_key)),
+        ] {
+            assert_eq!(authority[name], serde_json::json!(expected), "{name}");
+        }
+        let published = |name: &str| {
+            parse_hex32(
+                authority[name]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("authority field {name}")),
+            )
+            .unwrap_or_else(|error| panic!("{name}: {error}"))
+        };
+        let batch = layerx_proof::receipt::AuthorizedBatch::new(
+            published("batch_id"),
+            published("asset"),
+            published("previous_state_root"),
+            published("resulting_state_root"),
+            published("sequencer_public_key"),
+        );
+        layerx_proof::receipt::verify_program_state(&receipt, &batch)
+            .unwrap_or_else(|failure| panic!("{failure:?}"));
+        for name in [
+            "batch_id",
+            "previous_state_root",
+            "resulting_state_root",
+            "sequencer_public_key",
+        ] {
+            let mut changed = authority.clone();
+            changed[name] = serde_json::json!("aa".repeat(32));
+            let altered = |field: &str| {
+                parse_hex32(
+                    changed[field]
+                        .as_str()
+                        .unwrap_or_else(|| panic!("authority field {field}")),
+                )
+                .unwrap_or_else(|error| panic!("{field}: {error}"))
+            };
+            assert!(
+                layerx_proof::receipt::verify_program_state(
+                    &receipt,
+                    &layerx_proof::receipt::AuthorizedBatch::new(
+                        altered("batch_id"),
+                        altered("asset"),
+                        altered("previous_state_root"),
+                        altered("resulting_state_root"),
+                        altered("sequencer_public_key"),
+                    )
+                )
+                .is_err(),
+                "{name}"
+            );
+        }
     }
 }
 

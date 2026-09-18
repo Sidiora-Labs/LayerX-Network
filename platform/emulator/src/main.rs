@@ -19,7 +19,9 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_proof::program::{
     verify_program_execution, ProgramExecutionExpectation, VerifiedProgramExecution,
 };
-use layerx_proof::receipt::{verify as verify_receipt, AuthorizedBatch};
+use layerx_proof::receipt::{
+    verify as verify_receipt, verify_sequencer_signature, AuthorizedBatch,
+};
 use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
 use layerx_types::amount::Amount;
 use layerx_types::ids::{Did, IdempotencyKey};
@@ -2654,6 +2656,49 @@ fn program_activity(emulator: &Emulator, request: &Request, trace: u64) -> Respo
     }
 }
 
+fn receipt_read(emulator: &Emulator, activity_id: &str, receipt_hex: &str, trace: u64) -> Response {
+    let sequencer_public_key = emulator.signing_key.verifying_key().to_bytes();
+    let Ok(bytes) = hex_decode(receipt_hex) else {
+        return refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "the retained receipt is not hexadecimal",
+        );
+    };
+    let Ok(receipt) = verify_sequencer_signature(&bytes, sequencer_public_key) else {
+        return refusal(
+            trace,
+            503,
+            "receipt_verification_failed",
+            "the retained receipt does not verify under this emulator sequencer key",
+        );
+    };
+    let Some(protocol) = receipt.protocol() else {
+        return refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "the retained receipt carries no protocol body",
+        );
+    };
+    success(
+        trace,
+        &serde_json::json!({
+            "activity_id": activity_id,
+            "receipt": receipt_hex,
+            "authority": {
+                "batch_id": hex_encode(&protocol.batch_id()),
+                "asset": hex_encode(&protocol.asset()),
+                "previous_state_root": hex_encode(&protocol.previous_state_root()),
+                "resulting_state_root": hex_encode(&protocol.resulting_state_root()),
+                "sequencer_public_key": hex_encode(&sequencer_public_key),
+            },
+        })
+        .to_string(),
+    )
+}
+
 fn route(emulator: &mut Emulator, request: &Request) -> Response {
     let program_request = programs_request_path(&request.method, &request.path);
     let Some(trace) = advance_trace(&mut emulator.trace) else {
@@ -2709,14 +2754,7 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
         ("GET", path) if path.starts_with("/v1/receipts/") => {
             let id = &path[13..];
             match emulator.receipts.get(id) {
-                Some(receipt) => success(
-                    trace,
-                    &format!(
-                        "{{\"activity_id\":\"{}\",\"receipt\":\"{}\"}}",
-                        escape_json(id),
-                        receipt
-                    ),
-                ),
+                Some(receipt) => receipt_read(emulator, id, receipt, trace),
                 None => refusal(
                     trace,
                     404,

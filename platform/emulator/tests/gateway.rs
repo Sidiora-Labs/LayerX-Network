@@ -952,6 +952,96 @@ fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<()
     Ok(())
 }
 
+#[test]
+fn receipt_reads_publish_the_authority_that_verifies_the_retained_receipt() -> Result<(), String> {
+    let address = boot_protocol(3)?;
+    let public = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED)
+        .verifying_key()
+        .to_bytes();
+    let public_hex = hex_encode(&public)?;
+    let prefund = format!("{{\"did\":\"did:layerx:lifecycle\",\"public_key\":\"{public_hex}\",\"amount_lo\":100000000}}");
+    assert_eq!(
+        post_json(&address, "/__emulator/accounts/prefund", &prefund)?.status,
+        200
+    );
+    let (_, operations) = lifecycle_operations()?;
+    let (ordinal, path, payload) = operations
+        .into_iter()
+        .next()
+        .ok_or("lifecycle operations are empty")?;
+    let (bytes, key, expected_id) = lifecycle_signed_activity(ordinal, &payload, 0)?;
+    let submitted = request_with_idempotency(
+        &address,
+        "POST",
+        path,
+        "application/octet-stream",
+        &bytes,
+        Some(&key),
+    )?;
+    assert_eq!(submitted.status, 200, "{}", submitted.text());
+    let result = response_result(&submitted)?;
+    let receipt_hex = result["receipt"]
+        .as_str()
+        .ok_or("submission omitted the receipt")?
+        .to_owned();
+    let receipt = hex_decode(&receipt_hex)?;
+    let verified = layerx_proof::receipt::verify_sequencer_signature(&receipt, public)
+        .map_err(|error| format!("{error:?}"))?;
+    let protocol = verified.protocol().ok_or("protocol receipt missing")?;
+    let activity_id = hex_encode(&expected_id)?;
+
+    let read = request(
+        &address,
+        "GET",
+        &format!("/v1/receipts/{activity_id}"),
+        "",
+        &[],
+    )?;
+    assert_eq!(read.status, 200, "{}", read.text());
+    let document = response_result(&read)?;
+    assert_eq!(document["activity_id"].as_str(), Some(activity_id.as_str()));
+    assert_eq!(document["receipt"].as_str(), Some(receipt_hex.as_str()));
+    let authority = &document["authority"];
+    for (name, expected) in [
+        ("batch_id", hex_encode(&protocol.batch_id())?),
+        ("asset", hex_encode(&protocol.asset())?),
+        (
+            "previous_state_root",
+            hex_encode(&protocol.previous_state_root())?,
+        ),
+        (
+            "resulting_state_root",
+            hex_encode(&protocol.resulting_state_root())?,
+        ),
+        ("sequencer_public_key", public_hex.clone()),
+    ] {
+        assert_eq!(
+            authority[name].as_str(),
+            Some(expected.as_str()),
+            "{name}: {}",
+            read.text()
+        );
+    }
+    let published = |name: &str| -> Result<[u8; 32], String> {
+        let value = authority[name]
+            .as_str()
+            .ok_or_else(|| format!("authority omitted {name}"))?;
+        hex_decode(value)?
+            .try_into()
+            .map_err(|_| format!("authority field {name} is not 32 bytes"))
+    };
+    let batch = layerx_proof::receipt::AuthorizedBatch::new(
+        published("batch_id")?,
+        published("asset")?,
+        published("previous_state_root")?,
+        published("resulting_state_root")?,
+        published("sequencer_public_key")?,
+    );
+    layerx_proof::receipt::verify_program_state(&receipt, &batch)
+        .map_err(|error| format!("{error:?}"))?;
+    Ok(())
+}
+
 fn prefund_profiles(legacy: &String, native: &String) -> Result<(), String> {
     for address in [&legacy, &native] {
         let public = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED)
