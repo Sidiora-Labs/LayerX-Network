@@ -54,9 +54,9 @@ Redis credentials on the shared gateway keyspace, and the
 `layerx-interop-runtime` secret holding `config.json` and `registry.json`.
 
 `config.example.json` is the shape of the document `LAYERX_INTEROP_CONFIG`
-selects. Its derived fields, including the x402 and AP2 conformance suites, are
-the real ones this checkout renders; every remaining conformance digest, key,
-principal and account in it is an example. The `layerx-beta-*` identifiers mark
+selects. Its derived fields, including all eight conformance suites, are the
+real ones this checkout renders; every key, principal and account in it is an
+example. The `layerx-beta-*` identifiers mark
 the trust roots the bring-up generates for this testnet's own test clients: they
 are not authenticated external counterparties, and a deployment that faces real
 ones replaces them with the variables below.
@@ -79,6 +79,10 @@ is absent or malformed.
 | `http`, `mcp` and `a2a` binding version `2` and specification digests | `interop/specs/vendor/x402/transports/*.md`, the x402 v2 transport bindings vendored at the same pinned commit |
 | `x402` suite `layerx-x402-conformance-v1`, its vector count and digest | `interop/specs/conformance/x402`, the vector files `interop/crates/layerx-x402/tests/vectors.rs` runs through the production types |
 | `ap2` suite `layerx-ap2-conformance-v1`, its vector count and digest | `interop/specs/conformance/ap2`, the vector files `interop/crates/layerx-ap2/tests/mandates.rs` runs through `MandateVerifier` |
+| `ucp` suite `layerx-ucp-conformance-v1`, its vector count and digest | `interop/specs/conformance/ucp`, the vector files `interop/crates/layerx-ucp/tests/conformance_vectors.rs` runs through the production checkout types |
+| `visa-tap` suite `layerx-visa-tap-conformance-v1`, its vector count and digest | `interop/specs/conformance/visa-tap`, the vector files `interop/crates/layerx-visa-tap/tests/conformance.rs` runs through `TapRequest` and credential verification |
+| `fiat` suite `layerx-fiat-conformance-v1`, its vector count and digest | `interop/specs/conformance/fiat`, the vector files `interop/crates/layerx-fiat/tests/adapter.rs` runs through `TokenReference` and `FiatAdapter` |
+| `http`, `mcp` and `a2a` binding conformance digests | `interop/specs/conformance/transport-{http,mcp,a2a}`, the role-message vector files `interop/crates/layerx-x402/tests/transports.rs` runs through the production encoders and decoders |
 | every adapter's `evidence_policy` | the policy the service already requires per adapter |
 | `x402_supported` | this cluster's own facilitator declaration: the CAIP-2 form of the network the deployment serves, the `exact` scheme, and the generated sequencer identity as its signer |
 | `ucp_payment_handler` | the `layerx-ucp-handler` declaration of the vendored UCP revision |
@@ -86,11 +90,25 @@ is absent or malformed.
 A first-party suite is derived from the files the adapter's own tests read, so
 the pinned suite is the exercised suite: the identifier is
 `layerx-<adapter>-conformance-v1`, the count is the number of vector records
-under `interop/specs/conformance/<adapter>`, and the digest covers each file's
-path and bytes. Editing, adding or removing a vector changes both, and
-`--self-test` asserts every vector file is still `include_str!`-ed by the
-adapter's test. UCP, Visa TAP and the fiat provider callbacks have no vector
-files in this repository, so their suites stay deployment inputs.
+under `interop/specs/conformance/<adapter>` (a transport binding's suite lives
+under `transport-<binding>` and contributes its digest only), and the digest
+covers each file's path and bytes. Editing, adding or removing a vector changes
+both, and `--self-test` asserts every vector file is still `include_str!`-ed by
+the test that owns it.
+
+All eight suites are first party. A few cases cannot be expressed as data
+because they exercise a live signer or the protocol's own encoders, so they stay
+in Rust and are not counted in any suite: the fault-injected settlement cases in
+`interop/crates/layerx-x402/tests/transports.rs`, which drive a live sequencer
+signer and the canonical receipt encoder; the credential-binding case
+`binding_is_scoped_non_authoritative_and_success_requires_a_real_receipt` in
+`interop/crates/layerx-visa-tap/tests/conformance.rs`, which drives the binding
+store and a canonical receipt; and the Codify anchor and vendored-revision
+checks in `interop/crates/layerx-ucp/tests/conformance_vectors.rs`, which assert
+against constants compiled into the crate. Where a vector's own signature is a
+live signer's output — the Visa TAP presentations and the fiat settlement
+receipts — the case shape, keys and expected outcome are data and only the
+signing happens in Rust.
 
 `x402_supported` and `ucp_payment_handler` are in-cluster counterparties, so
 they default to the cluster's own material. `LAYERX_BETA_INTEROP_X402_SUPPORTED`
@@ -119,18 +137,10 @@ outside the cluster: they authenticate the testnet's own clients only.
 
 ### Deployment variables
 
-| Variable | Value | How to produce it |
-|---|---|---|
-Required — the bring-up refuses by name until each is declared:
-
-| Variable | Value | How to produce it |
-|---|---|---|
-| `LAYERX_BETA_INTEROP_CONFORMANCE_UCP` | `<suite-identifier>,<vector-count>,<suite-sha256>` | run the UCP conformance suite the deployment imported, then name it, count its vectors and take the SHA-256 of the suite content |
-| `LAYERX_BETA_INTEROP_CONFORMANCE_VISA_TAP` | same form | as above for Visa TAP |
-| `LAYERX_BETA_INTEROP_CONFORMANCE_FIAT` | same form | as above for the fiat provider-callback suite |
-| `LAYERX_BETA_INTEROP_CONFORMANCE_HTTP` | `<suite-sha256>` | SHA-256 of the imported HTTP transport conformance suite |
-| `LAYERX_BETA_INTEROP_CONFORMANCE_MCP` | `<suite-sha256>` | as above for MCP |
-| `LAYERX_BETA_INTEROP_CONFORMANCE_A2A` | `<suite-sha256>` | as above for A2A |
+No conformance variable is required. All eight suites are derived from this
+checkout, so a bring-up that imports no external suite declares none of them.
+The trust roots are still refused by name when the cluster can neither derive
+them nor was given generated beta material.
 
 Optional — each overrides a value this checkout or this cluster already
 produces:
@@ -139,6 +149,12 @@ produces:
 |---|---|---|
 | `LAYERX_BETA_INTEROP_CONFORMANCE_X402` | `<suite-identifier>,<vector-count>,<suite-sha256>` | overrides the first-party x402 suite with an imported one |
 | `LAYERX_BETA_INTEROP_CONFORMANCE_AP2` | same form | overrides the first-party AP2 suite with an imported one |
+| `LAYERX_BETA_INTEROP_CONFORMANCE_UCP` | same form | overrides the first-party UCP suite with an imported one |
+| `LAYERX_BETA_INTEROP_CONFORMANCE_VISA_TAP` | same form | overrides the first-party Visa TAP suite with an imported one |
+| `LAYERX_BETA_INTEROP_CONFORMANCE_FIAT` | same form | overrides the first-party fiat provider-callback suite with an imported one |
+| `LAYERX_BETA_INTEROP_CONFORMANCE_HTTP` | `<suite-sha256>` | overrides the first-party HTTP transport suite digest with the SHA-256 of an imported one |
+| `LAYERX_BETA_INTEROP_CONFORMANCE_MCP` | `<suite-sha256>` | as above for MCP |
+| `LAYERX_BETA_INTEROP_CONFORMANCE_A2A` | `<suite-sha256>` | as above for A2A |
 | `LAYERX_BETA_INTEROP_AP2_KEYS` | JSON array | the mandate issuer keys the AP2 credential provider publishes |
 | `LAYERX_BETA_INTEROP_AP2_ASSETS` | JSON array | one binding per principal and currency, from the merchant agreement and the asset the deployment settles in |
 | `LAYERX_BETA_INTEROP_VISA_AGENTS` | JSON array | the trusted-agent keys the Visa TAP registry publishes |
@@ -148,12 +164,14 @@ produces:
 | `LAYERX_BETA_INTEROP_UCP_PAYMENT_HANDLER` | JSON object | the declaration of a different UCP payment handler |
 | `LAYERX_BETA_INTEROP_MANIFEST_FILE` | path to a JSON document | overrides any rendered field, field by field |
 
-The UCP, Visa TAP and fiat suites are deployment inputs because no upstream
-publishes one and this repository holds no vector files for them:
-`interop/specs/vendor/CONFORMANCE.md` records the tree each protocol publishes
-at its pinned commit and what was found there, and the adapters' own tests
-build their cases in Rust rather than from vector files. The renderer refuses a
-suite with no vectors and a zero digest rather than inventing either, so
+No upstream publishes a conformance suite for UCP, Visa TAP, the fiat provider
+callbacks or the x402 transport bindings — `interop/specs/vendor/CONFORMANCE.md`
+records the tree each protocol publishes at its pinned commit and what was found
+there — so this repository carries its own vectors for each of them and derives
+the pin from the files the adapter's tests read. A declared variable still wins,
+and the checks that make a pin mean something are unchanged: the renderer
+refuses a suite with no vectors, a zero digest, a malformed pin and an
+out-of-charset identifier rather than inventing any of them, and
 `ConformanceSuite` keeps meaning a suite that actually ran. Declaring a trust
 root replaces the generated beta root with a real external counterparty; the
 render still refuses a root that is empty or malformed, and refuses by name
@@ -176,8 +194,11 @@ adapter, transport or field is refused rather than ignored.
 
 `python3 interop/deploy/gateway/render.py --self-test` exercises the render
 against the vendored documents and vectors in this checkout: the refusal list
-when nothing is declared, the derived digests against the provenance records,
-the first-party suites against the vector files and the tests that read them,
-the in-cluster defaults, the generated beta roots and the refusals for
-incomplete key material, the field-by-field override, and the refusals for an
-empty suite, a zero digest and an out-of-charset suite identifier.
+when nothing is declared, which names no conformance variable at all, the
+derived digests against the provenance records, each of the eight first-party
+suites against its vector files and the test that `include_str!`-s them
+(including that editing one byte of one vector changes the digest), the
+in-cluster defaults, the generated beta roots and the refusals for incomplete
+key material, the field-by-field override, the variable overrides for an adapter
+and a transport suite, and the refusals for an empty suite, a zero digest, a
+malformed pin and an out-of-charset suite identifier.

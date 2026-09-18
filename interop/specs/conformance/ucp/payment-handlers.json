@@ -1,0 +1,47 @@
+[
+  {
+    "name": "handler_a",
+    "id": "handler-a",
+    "version": "2026-04-08",
+    "spec": "https://example.com/spec-a",
+    "schema": "https://example.com/schema-a.json",
+    "valid": true,
+    "digest_group": "handler-a"
+  },
+  {
+    "name": "handler_a_declared_again",
+    "id": "handler-a",
+    "version": "2026-04-08",
+    "spec": "https://example.com/spec-a",
+    "schema": "https://example.com/schema-a.json",
+    "valid": true,
+    "digest_group": "handler-a"
+  },
+  {
+    "name": "handler_b_same_urls",
+    "id": "handler-b",
+    "version": "2026-04-08",
+    "spec": "https://example.com/spec-a",
+    "schema": "https://example.com/schema-a.json",
+    "valid": true,
+    "digest_group": "handler-b"
+  },
+  {
+    "name": "uppercase_id_refused",
+    "id": "Handler-A",
+    "version": "2026-04-08",
+    "spec": "https://example.com/spec-a",
+    "schema": "https://example.com/schema-a.json",
+    "valid": false,
+    "refusal": "InvalidProfile"
+  },
+  {
+    "name": "insecure_schema_url_refused",
+    "id": "handler-c",
+    "version": "2026-04-08",
+    "spec": "https://example.com/spec-c",
+    "schema": "http://example.com/schema-c.json",
+    "valid": false,
+    "refusal": "InvalidProfile"
+  }
+]

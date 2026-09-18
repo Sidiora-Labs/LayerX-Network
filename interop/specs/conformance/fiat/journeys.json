@@ -1,0 +1,548 @@
+[
+  {
+    "name": "authorised_hold_with_declared_hold_until",
+    "principal": "alice",
+    "trace": "02020202020202020202020202020202",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-1",
+      "settlement": "settle-001",
+      "rail": "card",
+      "evidence_class": "authorised",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": 1735000300,
+      "fault": null
+    },
+    "plane": {
+      "outcome": "pending"
+    },
+    "replay_at": null,
+    "expect": {
+      "state": "authorised-hold",
+      "until": 1735000300
+    }
+  },
+  {
+    "name": "authorised_stage_without_a_hold_refused",
+    "principal": "bob",
+    "trace": "02020202020202020202020202020202",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-1",
+      "settlement": "settle-001",
+      "rail": "card",
+      "evidence_class": "authorised",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": null,
+      "fault": null
+    },
+    "plane": {
+      "outcome": "pending"
+    },
+    "replay_at": null,
+    "expect": {
+      "refusal": "HoldRequired"
+    }
+  },
+  {
+    "name": "clearing_hold_with_declared_hold_until",
+    "principal": "alice",
+    "trace": "03030303030303030303030303030303",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-1",
+      "settlement": "settle-001",
+      "rail": "card",
+      "evidence_class": "clearing",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": 1735000600,
+      "fault": null
+    },
+    "plane": {
+      "outcome": "pending"
+    },
+    "replay_at": null,
+    "expect": {
+      "state": "clearing-hold",
+      "until": 1735000600
+    }
+  },
+  {
+    "name": "clearing_stage_without_a_hold_refused",
+    "principal": "charlie",
+    "trace": "03030303030303030303030303030303",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-1",
+      "settlement": "settle-001",
+      "rail": "card",
+      "evidence_class": "clearing",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": null,
+      "fault": null
+    },
+    "plane": {
+      "outcome": "pending"
+    },
+    "replay_at": null,
+    "expect": {
+      "refusal": "HoldRequired"
+    }
+  },
+  {
+    "name": "settled_credit_against_verified_receipt",
+    "principal": "alice",
+    "trace": "04040404040404040404040404040404",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-1",
+      "settlement": "settle-001",
+      "rail": "card",
+      "evidence_class": "settled",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": null,
+      "fault": null
+    },
+    "plane": {
+      "outcome": "executed",
+      "receipt": {
+        "signing_key_seed": "9999999999999999999999999999999999999999999999999999999999999999",
+        "sequence": 250,
+        "amount": 5000,
+        "from": "8888888888888888888888888888888888888888888888888888888888888888",
+        "to": "2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    },
+    "replay_at": null,
+    "expect": {
+      "state": "credited"
+    }
+  },
+  {
+    "name": "settled_credit_without_receipt_stays_pending",
+    "principal": "bob",
+    "trace": "04040404040404040404040404040404",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-1",
+      "settlement": "settle-001",
+      "rail": "card",
+      "evidence_class": "settled",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": null,
+      "fault": null
+    },
+    "plane": {
+      "outcome": "pending"
+    },
+    "replay_at": null,
+    "expect": {
+      "state": "credit-pending"
+    }
+  },
+  {
+    "name": "receipt_amount_below_provider_evidence_refused",
+    "principal": "alice",
+    "trace": "05050505050505050505050505050505",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-1",
+      "settlement": "settle-001",
+      "rail": "card",
+      "evidence_class": "settled",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": null,
+      "fault": null
+    },
+    "plane": {
+      "outcome": "executed",
+      "receipt": {
+        "signing_key_seed": "9999999999999999999999999999999999999999999999999999999999999999",
+        "sequence": 260,
+        "amount": 3000,
+        "from": "8888888888888888888888888888888888888888888888888888888888888888",
+        "to": "2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    },
+    "replay_at": null,
+    "expect": {
+      "refusal": "ReceiptMismatch"
+    }
+  },
+  {
+    "name": "reversal_against_verified_receipt",
+    "principal": "alice",
+    "trace": "06060606060606060606060606060606",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-1",
+      "settlement": "settle-001",
+      "rail": "card",
+      "evidence_class": "reversed",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": 1735001800,
+      "fault": null
+    },
+    "plane": {
+      "outcome": "executed",
+      "receipt": {
+        "signing_key_seed": "9999999999999999999999999999999999999999999999999999999999999999",
+        "sequence": 270,
+        "amount": 5000,
+        "from": "2222222222222222222222222222222222222222222222222222222222222222",
+        "to": "8888888888888888888888888888888888888888888888888888888888888888"
+      }
+    },
+    "replay_at": null,
+    "expect": {
+      "state": "reversed"
+    }
+  },
+  {
+    "name": "reversal_without_receipt_stays_pending",
+    "principal": "bob",
+    "trace": "06060606060606060606060606060606",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-1",
+      "settlement": "settle-001",
+      "rail": "card",
+      "evidence_class": "reversed",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": 1735001800,
+      "fault": null
+    },
+    "plane": {
+      "outcome": "pending"
+    },
+    "replay_at": null,
+    "expect": {
+      "state": "reversal-pending",
+      "hold_until": 1735001800
+    }
+  },
+  {
+    "name": "chargeback_against_verified_receipt",
+    "principal": "alice",
+    "trace": "07070707070707070707070707070707",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-1",
+      "settlement": "settle-001",
+      "rail": "card",
+      "evidence_class": "chargeback",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": 1735007200,
+      "fault": null
+    },
+    "plane": {
+      "outcome": "executed",
+      "receipt": {
+        "signing_key_seed": "9999999999999999999999999999999999999999999999999999999999999999",
+        "sequence": 280,
+        "amount": 5000,
+        "from": "2222222222222222222222222222222222222222222222222222222222222222",
+        "to": "8888888888888888888888888888888888888888888888888888888888888888"
+      }
+    },
+    "replay_at": null,
+    "expect": {
+      "state": "charged-back"
+    }
+  },
+  {
+    "name": "chargeback_without_receipt_stays_pending",
+    "principal": "carol",
+    "trace": "07070707070707070707070707070707",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-1",
+      "settlement": "settle-001",
+      "rail": "card",
+      "evidence_class": "chargeback",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": 1735007200,
+      "fault": null
+    },
+    "plane": {
+      "outcome": "pending"
+    },
+    "replay_at": null,
+    "expect": {
+      "state": "chargeback-pending",
+      "hold_until": 1735007200
+    }
+  },
+  {
+    "name": "invalid_provider_evidence_refused",
+    "principal": "alice",
+    "trace": "08080808080808080808080808080808",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-1",
+      "settlement": "settle-001",
+      "rail": "card",
+      "evidence_class": "settled",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": null,
+      "fault": "InvalidEvidence"
+    },
+    "plane": {
+      "outcome": "pending"
+    },
+    "replay_at": null,
+    "expect": {
+      "refusal": "InvalidEvidence"
+    }
+  },
+  {
+    "name": "provider_returning_card_data_refused",
+    "principal": "bob",
+    "trace": "08080808080808080808080808080808",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-1",
+      "settlement": "settle-001",
+      "rail": "card",
+      "evidence_class": "settled",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": null,
+      "fault": "CardDataRefused"
+    },
+    "plane": {
+      "outcome": "pending"
+    },
+    "replay_at": null,
+    "expect": {
+      "refusal": "CardDataRefused"
+    }
+  },
+  {
+    "name": "plane_refusal_surfaces_as_refused",
+    "principal": "alice",
+    "trace": "09090909090909090909090909090909",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-1",
+      "settlement": "settle-001",
+      "rail": "card",
+      "evidence_class": "settled",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": null,
+      "fault": null
+    },
+    "plane": {
+      "outcome": "refused"
+    },
+    "replay_at": null,
+    "expect": {
+      "state": "refused"
+    }
+  },
+  {
+    "name": "replayed_settlement_returns_one_outcome",
+    "principal": "alice",
+    "trace": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-1",
+      "settlement": "settle-001",
+      "rail": "card",
+      "evidence_class": "settled",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": null,
+      "fault": null
+    },
+    "plane": {
+      "outcome": "executed",
+      "receipt": {
+        "signing_key_seed": "9999999999999999999999999999999999999999999999999999999999999999",
+        "sequence": 290,
+        "amount": 5000,
+        "from": "8888888888888888888888888888888888888888888888888888888888888888",
+        "to": "2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    },
+    "replay_at": 1735000010,
+    "expect": {
+      "state": "credited"
+    }
+  },
+  {
+    "name": "bank_rail_credit",
+    "principal": "bob",
+    "trace": "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-bank",
+      "settlement": "settle-bank-001",
+      "rail": "bank",
+      "evidence_class": "settled",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": null,
+      "fault": null
+    },
+    "plane": {
+      "outcome": "executed",
+      "receipt": {
+        "signing_key_seed": "9999999999999999999999999999999999999999999999999999999999999999",
+        "sequence": 300,
+        "amount": 5000,
+        "from": "8888888888888888888888888888888888888888888888888888888888888888",
+        "to": "2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    },
+    "replay_at": null,
+    "expect": {
+      "state": "credited"
+    }
+  },
+  {
+    "name": "real_time_payment_rail_credit",
+    "principal": "carol",
+    "trace": "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-rtp",
+      "settlement": "settle-rtp-001",
+      "rail": "real-time-payment",
+      "evidence_class": "settled",
+      "amount": 5000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": null,
+      "fault": null
+    },
+    "plane": {
+      "outcome": "executed",
+      "receipt": {
+        "signing_key_seed": "9999999999999999999999999999999999999999999999999999999999999999",
+        "sequence": 310,
+        "amount": 5000,
+        "from": "8888888888888888888888888888888888888888888888888888888888888888",
+        "to": "2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    },
+    "replay_at": null,
+    "expect": {
+      "state": "credited"
+    }
+  },
+  {
+    "name": "bank_rail_verified_facts_carry_their_rail",
+    "principal": "dave",
+    "trace": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+    "token": "tok_sandbox_card_12345",
+    "evidence": "provider-signed-evidence-blob",
+    "now": 1735000000,
+    "provider_facts": {
+      "provider": "provider-bank",
+      "settlement": "settle-bank-002",
+      "rail": "bank",
+      "evidence_class": "settled",
+      "amount": 10000,
+      "asset": "2121212121212121212121212121212121212121212121212121212121212121",
+      "destination": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": 1735000000,
+      "hold_until": null,
+      "fault": null
+    },
+    "plane": {
+      "outcome": "executed",
+      "receipt": {
+        "signing_key_seed": "9999999999999999999999999999999999999999999999999999999999999999",
+        "sequence": 320,
+        "amount": 10000,
+        "from": "8888888888888888888888888888888888888888888888888888888888888888",
+        "to": "2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    },
+    "replay_at": null,
+    "expect": {
+      "state": "credited"
+    }
+  }
+]

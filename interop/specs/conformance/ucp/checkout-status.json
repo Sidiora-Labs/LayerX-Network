@@ -1,0 +1,32 @@
+[
+  {
+    "name": "incomplete",
+    "status": "incomplete",
+    "meaning": "checkout refused before submission"
+  },
+  {
+    "name": "requires_escalation",
+    "status": "requires_escalation",
+    "meaning": "checkout needs manual review"
+  },
+  {
+    "name": "ready_for_complete",
+    "status": "ready_for_complete",
+    "meaning": "checkout validated, awaiting completion"
+  },
+  {
+    "name": "complete_in_progress",
+    "status": "complete_in_progress",
+    "meaning": "checkout submitted, pending receipt"
+  },
+  {
+    "name": "completed",
+    "status": "completed",
+    "meaning": "checkout finalized with verified receipt"
+  },
+  {
+    "name": "canceled",
+    "status": "canceled",
+    "meaning": "checkout explicitly canceled"
+  }
+]

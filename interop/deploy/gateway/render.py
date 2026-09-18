@@ -7,11 +7,15 @@ and refused by name when it is absent, so the bring-up needs no hand-authored
 document. `LAYERX_BETA_INTEROP_MANIFEST_FILE` stays available as an optional
 override that wins field by field.
 
-No conformance suite is synthesised. Where this repository carries an
-adapter's own vectors, `interop/specs/conformance/<adapter>` is the suite: the
+No conformance suite is synthesised. Every adapter and every transport binding
+this gateway declares carries its own vectors in this repository, so all eight
+conformance pins are derived and no `LAYERX_BETA_INTEROP_CONFORMANCE_*` variable
+is required: `interop/specs/conformance/<adapter>` and
+`interop/specs/conformance/transport-<binding>` are the suites, and the
 identifier, the vector count and the SHA-256 are derived from the same files the
 adapter's tests read, so the pinned suite is the exercised suite and the variable
-only overrides it. Where it carries none, the suite stays a deployment input and
+only overrides it. An adapter or binding that carried no vectors here would stay
+a deployment input, refused by name until it is declared, and
 `interop/specs/vendor/CONFORMANCE.md` records which upstreams publish one.
 
 The trust roots whose counterparty is one of the testnet's own clients are the
@@ -83,6 +87,7 @@ EVIDENCE = {
 
 CONFORMANCE_DIRECTORY = "interop/specs/conformance"
 SUITE_NAME = "layerx-%s-conformance-v1"
+TRANSPORT_CONFORMANCE = {identifier: "transport-%s" % identifier for identifier in TRANSPORTS}
 IN_CLUSTER_SOURCE = "in-cluster default"
 BETA_SOURCE = "testnet-generated beta trust root"
 BETA_AP2_USE_CASES = ("checkout-mandate", "payment-mandate", "merchant-checkout")
@@ -213,10 +218,16 @@ def derived(root):
     transports = {}
     for identifier in TRANSPORTS:
         document = vendor / TRANSPORT_DOCUMENT[identifier]
+        directory = TRANSPORT_CONFORMANCE[identifier]
+        suite = first_party_suite(root, directory)
+        if suite is None:
+            conformance = (None, TRANSPORT_VARIABLE[identifier])
+        else:
+            conformance = (suite[2], "%s/%s" % (CONFORMANCE_DIRECTORY, directory))
         transports[identifier] = {
             "version": (TRANSPORT_VERSION, "vendored transport binding"),
             "specification_sha256": (document_digest(document), str(document.relative_to(root))),
-            "conformance_sha256": (None, TRANSPORT_VARIABLE[identifier]),
+            "conformance_sha256": conformance,
         }
     return adapters, transports
 
@@ -661,14 +672,26 @@ def self_test():
         for identifier in ADAPTERS
         if first_party_suite(root, identifier) is not None
     }
-    assert "x402" in first_party and "ap2" in first_party, sorted(first_party)
+    assert sorted(first_party) == sorted(ADAPTERS), sorted(first_party)
+    transport_first_party = {
+        identifier: first_party_suite(root, TRANSPORT_CONFORMANCE[identifier])
+        for identifier in TRANSPORTS
+        if first_party_suite(root, TRANSPORT_CONFORMANCE[identifier]) is not None
+    }
+    assert sorted(transport_first_party) == sorted(TRANSPORTS), sorted(transport_first_party)
     suites = {
         identifier: "%s-owner-vectors,%d,%s" % (identifier.replace("-", "_"), 8, "33" * 32)
         for identifier in ADAPTERS
         if identifier not in first_party
     }
     complete = {CONFORMANCE_VARIABLE[identifier]: value for identifier, value in suites.items()}
-    complete.update({TRANSPORT_VARIABLE[identifier]: "66" * 32 for identifier in TRANSPORTS})
+    complete.update(
+        {
+            TRANSPORT_VARIABLE[identifier]: "66" * 32
+            for identifier in TRANSPORTS
+            if identifier not in transport_first_party
+        }
+    )
     complete.update(
         {
             ROOT_VARIABLE["ap2_keys"]: json.dumps(
@@ -703,7 +726,11 @@ def self_test():
         assert named == (identifier not in first_party), identifier
     for identifier in TRANSPORTS:
         variable = TRANSPORT_VARIABLE[identifier]
-        assert any(reason.startswith(variable) for reason in reasons), variable
+        named = any(reason.startswith(variable) for reason in reasons)
+        assert named == (identifier not in transport_first_party), identifier
+    assert not any(
+        reason.startswith("LAYERX_BETA_INTEROP_CONFORMANCE_") for reason in reasons
+    ), reasons
     for root_name in EXTERNAL_ROOTS:
         variable = ROOT_VARIABLE[root_name]
         assert any(reason.startswith(variable) for reason in reasons), variable
@@ -737,37 +764,53 @@ def self_test():
     for identifier in ADAPTERS:
         assert adapters[identifier]["evidence_policy"] == EVIDENCE[identifier]
 
+    transport_tests = (root / "interop/crates/layerx-x402/tests/transports.rs").read_text()
     tests = {
         "x402": (root / "interop/crates/layerx-x402/tests/vectors.rs").read_text(),
         "ap2": (root / "interop/crates/layerx-ap2/tests/mandates.rs").read_text(),
+        "ucp": (root / "interop/crates/layerx-ucp/tests/conformance_vectors.rs").read_text(),
+        "visa-tap": (root / "interop/crates/layerx-visa-tap/tests/conformance.rs").read_text(),
+        "fiat": (root / "interop/crates/layerx-fiat/tests/adapter.rs").read_text(),
     }
-    for identifier, (name, count, digest) in first_party.items():
-        directory = root / CONFORMANCE_DIRECTORY / identifier
-        files = sorted(directory.rglob("*.json"))
-        assert name == SUITE_NAME % identifier and SUITE_PATTERN.match(name), name
-        assert adapters[identifier]["conformance_suite"] == name
-        assert adapters[identifier]["conformance_vectors"] == count
-        assert adapters[identifier]["conformance_sha256"] == digest
+    tests.update(
+        {TRANSPORT_CONFORMANCE[identifier]: transport_tests for identifier in TRANSPORTS}
+    )
+
+    def exercised(directory_name, declared, source_text):
+        """The vector files are the suite: every record counted, read and pinned."""
+        name, count, digest = declared
+        directory = root / CONFORMANCE_DIRECTORY / directory_name
+        assert name == SUITE_NAME % directory_name and SUITE_PATTERN.match(name), name
         vector_records = 0
-        for vector_file in files:
+        for vector_file in sorted(directory.rglob("*.json")):
             records = json.loads(vector_file.read_text())
             vector_records += len(records) if isinstance(records, list) else 1
             included = 'include_str!("../../../specs/conformance/%s/%s")' % (
-                identifier,
+                directory_name,
                 vector_file.relative_to(directory).as_posix(),
             )
-            assert included in tests[identifier], included
-        assert count == vector_records and count > 0, identifier
+            assert included in source_text, included
+        assert count == vector_records and count > 0, directory_name
         with tempfile.TemporaryDirectory() as directory_copy:
             copy_root = pathlib.Path(directory_copy)
-            copied = copy_root / CONFORMANCE_DIRECTORY / identifier
+            copied = copy_root / CONFORMANCE_DIRECTORY / directory_name
             shutil.copytree(directory, copied)
-            assert first_party_suite(copy_root, identifier) == (name, count, digest)
+            assert first_party_suite(copy_root, directory_name) == (name, count, digest)
             edited = sorted(copied.rglob("*.json"))[0]
             edited.write_bytes(edited.read_bytes() + b" ")
-            assert first_party_suite(copy_root, identifier)[2] != digest
+            assert first_party_suite(copy_root, directory_name)[2] != digest
+
+    for identifier, declared in first_party.items():
+        name, count, digest = declared
+        assert adapters[identifier]["conformance_suite"] == name
+        assert adapters[identifier]["conformance_vectors"] == count
+        assert adapters[identifier]["conformance_sha256"] == digest
+        exercised(identifier, declared, tests[identifier])
     assert adapters["x402"]["conformance_vectors"] == 18
     assert adapters["ap2"]["conformance_vectors"] == 6
+    assert adapters["ucp"]["conformance_vectors"] == 26
+    assert adapters["visa-tap"]["conformance_vectors"] == 23
+    assert adapters["fiat"]["conformance_vectors"] == 26
 
     overriding = dict(complete)
     overriding[CONFORMANCE_VARIABLE["x402"]] = "owner-x402-suite,4,%s" % ("77" * 32)
@@ -792,7 +835,30 @@ def self_test():
             row for row in x402_provenance.splitlines() if "transports/%s.md" % identifier in row
         ]
         assert line and entry["specification_sha256"] in line[0], identifier
-        assert entry["conformance_sha256"] == "66" * 32
+        declared = transport_first_party[identifier]
+        assert entry["conformance_sha256"] == declared[2]
+        exercised(
+            TRANSPORT_CONFORMANCE[identifier],
+            declared,
+            tests[TRANSPORT_CONFORMANCE[identifier]],
+        )
+    assert all(declared[1] == 8 for declared in transport_first_party.values())
+    transport_override = dict(complete)
+    transport_override[TRANSPORT_VARIABLE["a2a"]] = "99" * 32
+    overridden_transports = {
+        entry["id"]: entry
+        for entry in render(root, transport_override, network, key)["transports"]
+    }
+    assert overridden_transports["a2a"]["conformance_sha256"] == "99" * 32
+    assert overridden_transports["http"]["conformance_sha256"] == transport_first_party["http"][2]
+    for broken, expected in (
+        ("00" * 32, "zero digest is not a pin"),
+        ("nothex", "hexadecimal digest"),
+    ):
+        environ = dict(complete)
+        environ[TRANSPORT_VARIABLE["mcp"]] = broken
+        reasons = refusal(environ)
+        assert any(expected in reason for reason in reasons), (broken, reasons)
     supported = document["x402_supported"]
     assert supported["kinds"] == [
         {"x402Version": 2, "scheme": "exact", "network": "layerx:testnet"}
@@ -951,7 +1017,7 @@ def self_test():
         }
         transports = {entry["id"]: entry for entry in overridden["transports"]}
         assert transports["mcp"]["conformance_sha256"] == "77" * 32
-        assert transports["http"]["conformance_sha256"] == "66" * 32
+        assert transports["http"]["conformance_sha256"] == transport_first_party["http"][2]
         assert overridden["ucp_payment_handler"]["id"] == "owner-handler"
         assert overridden["x402_supported"] == document["x402_supported"]
 
@@ -962,18 +1028,23 @@ def self_test():
         manifest.write_text(json.dumps({"unexpected": 1}))
         assert any("unknown fields" in reason for reason in refusal(environ))
 
-    required = len(suites) + len(TRANSPORT_VARIABLE)
+    required = len(suites) + sum(
+        1 for identifier in TRANSPORTS if identifier not in transport_first_party
+    )
+    derived_suites = len(first_party) + len(transport_first_party)
     sys.stdout.write(
         "interop gateway render: %d adapters and %d transports derived from the vendored "
-        "specifications; %d first-party conformance suites derived from %s; %d deployment "
-        "variables refused by name when absent, %d optional overrides\n"
+        "specifications; %d first-party conformance suites derived from %s; %d conformance "
+        "variables refused by name when absent, %d optional conformance overrides and %d "
+        "optional trust-root overrides\n"
         % (
             len(ADAPTERS),
             len(TRANSPORTS),
-            len(first_party),
+            derived_suites,
             CONFORMANCE_DIRECTORY,
             required,
-            len(first_party) + len(ROOTS) + 1,
+            derived_suites,
+            len(ROOTS) + 1,
         )
     )
     return 0

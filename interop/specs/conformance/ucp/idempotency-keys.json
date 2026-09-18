@@ -1,0 +1,36 @@
+[
+  {
+    "name": "canonical_lowercase_uuid",
+    "key": "12345678-1234-5678-1234-567812345678",
+    "valid": true
+  },
+  {
+    "name": "canonical_uppercase_uuid",
+    "key": "ABCDEF01-2345-6789-ABCD-EF0123456789",
+    "valid": true
+  },
+  {
+    "name": "all_zero_uuid_refused",
+    "key": "00000000-0000-0000-0000-000000000000",
+    "valid": false,
+    "refusal": "InvalidIdempotencyKey"
+  },
+  {
+    "name": "missing_separators_refused",
+    "key": "123456781234567812345678123456",
+    "valid": false,
+    "refusal": "InvalidIdempotencyKey"
+  },
+  {
+    "name": "truncated_uuid_refused",
+    "key": "12345678-1234-5678-1234",
+    "valid": false,
+    "refusal": "InvalidIdempotencyKey"
+  },
+  {
+    "name": "non_hexadecimal_uuid_refused",
+    "key": "1234567g-1234-5678-1234-567812345678",
+    "valid": false,
+    "refusal": "InvalidIdempotencyKey"
+  }
+]

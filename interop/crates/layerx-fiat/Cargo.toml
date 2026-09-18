@@ -14,6 +14,7 @@ zeroize.workspace = true
 [dev-dependencies]
 ed25519-dalek.workspace = true
 layerx-types.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
