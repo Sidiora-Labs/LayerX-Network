@@ -1,5 +1,14 @@
+//! x402 v2 transport-binding conformance. The HTTP, MCP and A2A role messages
+//! are the first-party suites under `interop/specs/conformance/transport-*`,
+//! which the gateway deployment pins by digest; every record is a wire document
+//! that this harness runs through the production encode and decode paths. The
+//! fault-injected settlement cases below drive a live sequencer signer and a
+//! canonical receipt encoder, so they stay in Rust and are not vectors.
+
 use std::collections::BTreeMap;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_interop_gateway::adapter::{
     AdapterDescriptor, AdapterId, ConformanceSuite, PinnedSpec, SpecVersion,
@@ -18,8 +27,9 @@ use layerx_x402::facilitator::{
     SupportedResponse, VerifyResponse,
 };
 use layerx_x402::model::{
-    AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements, ResourceInfo,
-    SettlementResponse, X402Error, X402_VERSION,
+    AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements, SettlementResponse,
+    X402Error, PAYMENT_REQUIRED_HEADER, PAYMENT_RESPONSE_HEADER, PAYMENT_SIGNATURE_HEADER,
+    X402_VERSION,
 };
 use layerx_x402::seller::ExecutedPayment;
 use layerx_x402::transport::{
@@ -27,12 +37,29 @@ use layerx_x402::transport::{
     decode_payment_required, decode_settlement, decode_supported_response, decode_verify_response,
     encode_facilitator_request, encode_facilitator_settlement, encode_payment_payload,
     encode_payment_required, encode_settlement, encode_supported_response, encode_verify_response,
-    TransportKind, TRANSPORT_MATRIX,
+    TransportKind, TransportValue, TRANSPORT_MATRIX,
 };
 use serde_json::json;
 
 const TRANSPORTS: [TransportKind; 3] =
     [TransportKind::Http, TransportKind::Mcp, TransportKind::A2a];
+
+const HTTP_ROLE_SUITE: &str =
+    include_str!("../../../specs/conformance/transport-http/role-messages.json");
+const MCP_ROLE_SUITE: &str =
+    include_str!("../../../specs/conformance/transport-mcp/role-messages.json");
+const A2A_ROLE_SUITE: &str =
+    include_str!("../../../specs/conformance/transport-a2a/role-messages.json");
+
+const ROLES: [&str; 7] = [
+    "payment-required",
+    "payment-payload",
+    "settlement-response",
+    "facilitator-request",
+    "verify-response",
+    "facilitator-settlement",
+    "supported-response",
+];
 
 fn requirements() -> PaymentRequirements {
     PaymentRequirements {
@@ -43,23 +70,6 @@ fn requirements() -> PaymentRequirements {
         pay_to: "07".repeat(32),
         max_timeout_seconds: 60,
         extra: None,
-    }
-}
-
-fn required() -> PaymentRequired {
-    PaymentRequired {
-        x402_version: X402_VERSION,
-        error: None,
-        resource: ResourceInfo {
-            url: "https://merchant.example/resource".to_owned(),
-            description: Some("Paid resource".to_owned()),
-            mime_type: Some("application/json".to_owned()),
-            service_name: Some("Merchant".to_owned()),
-            tags: vec!["api".to_owned()],
-            icon_url: None,
-        },
-        accepts: vec![requirements()],
-        extensions: BTreeMap::new(),
     }
 }
 
@@ -81,83 +91,230 @@ fn facilitator_request() -> FacilitatorRequest {
     }
 }
 
+struct RoleVector {
+    name: String,
+    role: String,
+    accepted: bool,
+    literal: TransportValue,
+}
+
+fn suite(transport: TransportKind) -> (&'static str, &'static str, &'static str) {
+    match transport {
+        TransportKind::Http => (
+            HTTP_ROLE_SUITE,
+            "http",
+            "interop/specs/conformance/transport-http/role-messages.json",
+        ),
+        TransportKind::Mcp => (
+            MCP_ROLE_SUITE,
+            "mcp",
+            "interop/specs/conformance/transport-mcp/role-messages.json",
+        ),
+        TransportKind::A2a => (
+            A2A_ROLE_SUITE,
+            "a2a",
+            "interop/specs/conformance/transport-a2a/role-messages.json",
+        ),
+    }
+}
+
+fn payment_header(declared: &str, source: &str) -> &'static str {
+    match declared {
+        PAYMENT_REQUIRED_HEADER => PAYMENT_REQUIRED_HEADER,
+        PAYMENT_SIGNATURE_HEADER => PAYMENT_SIGNATURE_HEADER,
+        PAYMENT_RESPONSE_HEADER => PAYMENT_RESPONSE_HEADER,
+        other => panic!("{source}: {other} is not an x402 v2 payment header"),
+    }
+}
+
+fn role_vectors(transport: TransportKind) -> Vec<RoleVector> {
+    let (text, name, source) = suite(transport);
+    let records: Vec<serde_json::Value> =
+        serde_json::from_str(text).unwrap_or_else(|error| panic!("{source}: {error}"));
+    assert!(
+        !records.is_empty(),
+        "{source}: a suite that carries no vector is not a conformance suite"
+    );
+    records
+        .into_iter()
+        .map(|record| {
+            let vector = record["name"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{source}: every vector is named"))
+                .to_owned();
+            assert_eq!(
+                record["transport"].as_str(),
+                Some(name),
+                "{source}: {vector} declares another transport binding"
+            );
+            let role = record["role"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{source}: {vector} names no role message"))
+                .to_owned();
+            let accepted = record["accepted"].as_bool().unwrap_or_else(|| {
+                panic!("{source}: {vector} declares whether the transport accepts it")
+            });
+            let document = record
+                .get("document")
+                .cloned()
+                .unwrap_or_else(|| panic!("{source}: {vector} carries no wire document"));
+            let literal = match record["representation"].as_str() {
+                Some("http-header") => TransportValue::HttpHeader {
+                    name: payment_header(
+                        record["header"]
+                            .as_str()
+                            .unwrap_or_else(|| panic!("{source}: {vector} names no header")),
+                        source,
+                    ),
+                    value: STANDARD.encode(
+                        serde_json::to_vec(&document)
+                            .unwrap_or_else(|error| panic!("{source}: {vector}: {error}")),
+                    ),
+                },
+                Some("json") => TransportValue::Json(document),
+                other => panic!("{source}: {vector} declares the representation {other:?}"),
+            };
+            RoleVector {
+                name: vector,
+                role,
+                accepted,
+                literal,
+            }
+        })
+        .collect()
+}
+
+macro_rules! round_trip {
+    ($model:ty, $encode:path, $decode:path, $transport:expr, $vector:expr, $source:expr) => {{
+        let name = &$vector.name;
+        if !$vector.accepted {
+            assert!(
+                $decode($transport, &$vector.literal).is_err(),
+                "{}: {name}: this representation must be refused on this transport",
+                $source
+            );
+        } else {
+            let document = match &$vector.literal {
+                TransportValue::Json(value) => value.clone(),
+                TransportValue::HttpHeader { value, .. } => serde_json::from_slice(
+                    &STANDARD
+                        .decode(value.as_bytes())
+                        .unwrap_or_else(|error| panic!("{}: {name}: {error}", $source)),
+                )
+                .unwrap_or_else(|error| panic!("{}: {name}: {error}", $source)),
+            };
+            let parsed: $model = serde_json::from_value(document)
+                .unwrap_or_else(|error| panic!("{}: {name}: {error}", $source));
+            let encoded = $encode($transport, &parsed)
+                .unwrap_or_else(|error| panic!("{}: {name}: encode: {error}", $source));
+            match (&encoded, &$vector.literal) {
+                (
+                    TransportValue::HttpHeader { name: produced, .. },
+                    TransportValue::HttpHeader {
+                        name: declared,
+                        value: _,
+                    },
+                ) => assert_eq!(produced, declared, "{}: {name}: header name", $source),
+                (TransportValue::Json(_), TransportValue::Json(_)) => assert_eq!(
+                    &encoded, &$vector.literal,
+                    "{}: {name}: JSON representation",
+                    $source
+                ),
+                _ => panic!(
+                    "{}: {name}: the transport encoding is not the declared representation",
+                    $source
+                ),
+            }
+            assert_eq!(
+                $decode($transport, &encoded),
+                Ok(parsed.clone()),
+                "{}: {name}: produced representation",
+                $source
+            );
+            assert_eq!(
+                $decode($transport, &$vector.literal),
+                Ok(parsed),
+                "{}: {name}: declared representation",
+                $source
+            );
+        }
+    }};
+}
+
 #[test]
 fn every_role_round_trips_on_every_transport() {
-    let required = required();
-    let payload = payload();
-    let request = facilitator_request();
-    let verify = VerifyResponse {
-        is_valid: true,
-        invalid_reason: None,
-        payer: Some("did:layerx:payer".to_owned()),
-        extra: Some(json!({"scheme": "exact"})),
-    };
-    let settlement = SettlementResponse {
-        success: false,
-        error_reason: Some("settlement_pending".to_owned()),
-        payer: None,
-        transaction: "pending:provider-reference".to_owned(),
-        network: "layerx:testnet".to_owned(),
-        amount: None,
-        extensions: BTreeMap::new(),
-    };
-    let supported = SupportedResponse {
-        kinds: vec![FacilitatorKind {
-            x402_version: X402_VERSION,
-            scheme: "exact".to_owned(),
-            network: "layerx:testnet".to_owned(),
-            extra: None,
-        }],
-        extensions: Vec::new(),
-        signers: BTreeMap::from([(
-            "layerx:*".to_owned(),
-            vec!["did:layerx:facilitator".to_owned()],
-        )]),
-    };
-
     for transport in TRANSPORTS {
-        let encoded = encode_payment_required(transport, &required)
-            .unwrap_or_else(|error| panic!("required encode: {error}"));
-        assert_eq!(
-            decode_payment_required(transport, &encoded),
-            Ok(required.clone())
-        );
-        let encoded = encode_payment_payload(transport, &payload)
-            .unwrap_or_else(|error| panic!("payload encode: {error}"));
-        assert_eq!(
-            decode_payment_payload(transport, &encoded),
-            Ok(payload.clone())
-        );
-        let encoded = encode_settlement(transport, &settlement)
-            .unwrap_or_else(|error| panic!("settlement encode: {error}"));
-        assert_eq!(
-            decode_settlement(transport, &encoded),
-            Ok(settlement.clone())
-        );
-        let encoded = encode_facilitator_request(transport, &request)
-            .unwrap_or_else(|error| panic!("facilitator request encode: {error}"));
-        assert_eq!(
-            decode_facilitator_request(transport, &encoded),
-            Ok(request.clone())
-        );
-        let encoded = encode_verify_response(transport, &verify)
-            .unwrap_or_else(|error| panic!("verify encode: {error}"));
-        assert_eq!(
-            decode_verify_response(transport, &encoded),
-            Ok(verify.clone())
-        );
-        let encoded = encode_facilitator_settlement(transport, &settlement)
-            .unwrap_or_else(|error| panic!("facilitator settlement encode: {error}"));
-        assert_eq!(
-            decode_facilitator_settlement(transport, &encoded),
-            Ok(settlement.clone())
-        );
-        let encoded = encode_supported_response(transport, &supported)
-            .unwrap_or_else(|error| panic!("supported encode: {error}"));
-        assert_eq!(
-            decode_supported_response(transport, &encoded),
-            Ok(supported.clone())
-        );
+        let (_, _, source) = suite(transport);
+        let vectors = role_vectors(transport);
+        for role in ROLES {
+            assert!(
+                vectors
+                    .iter()
+                    .any(|vector| vector.role == role && vector.accepted),
+                "{source}: {role} is not covered"
+            );
+        }
+        for vector in &vectors {
+            match vector.role.as_str() {
+                "payment-required" => round_trip!(
+                    PaymentRequired,
+                    encode_payment_required,
+                    decode_payment_required,
+                    transport,
+                    vector,
+                    source
+                ),
+                "payment-payload" => round_trip!(
+                    PaymentPayload,
+                    encode_payment_payload,
+                    decode_payment_payload,
+                    transport,
+                    vector,
+                    source
+                ),
+                "settlement-response" => round_trip!(
+                    SettlementResponse,
+                    encode_settlement,
+                    decode_settlement,
+                    transport,
+                    vector,
+                    source
+                ),
+                "facilitator-request" => round_trip!(
+                    FacilitatorRequest,
+                    encode_facilitator_request,
+                    decode_facilitator_request,
+                    transport,
+                    vector,
+                    source
+                ),
+                "verify-response" => round_trip!(
+                    VerifyResponse,
+                    encode_verify_response,
+                    decode_verify_response,
+                    transport,
+                    vector,
+                    source
+                ),
+                "facilitator-settlement" => round_trip!(
+                    SettlementResponse,
+                    encode_facilitator_settlement,
+                    decode_facilitator_settlement,
+                    transport,
+                    vector,
+                    source
+                ),
+                "supported-response" => round_trip!(
+                    SupportedResponse,
+                    encode_supported_response,
+                    decode_supported_response,
+                    transport,
+                    vector,
+                    source
+                ),
+                other => panic!("{source}: {other} is not an x402 v2 role message"),
+            }
+        }
     }
     assert!(TRANSPORT_MATRIX
         .iter()

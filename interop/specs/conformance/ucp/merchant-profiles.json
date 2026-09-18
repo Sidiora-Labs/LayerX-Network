@@ -1,0 +1,54 @@
+[
+  {
+    "name": "https_rest_endpoint",
+    "rest_endpoint": "https://merchant.example/ucp",
+    "payment_handler": {
+      "id": "test-handler",
+      "version": "2026-04-08",
+      "spec": "https://example.com/spec",
+      "schema": "https://example.com/schema.json"
+    },
+    "valid": true,
+    "expected_version": "2026-04-08",
+    "expected_capabilities": [
+      "dev.ucp.shopping.checkout",
+      "dev.ucp.shopping.order"
+    ]
+  },
+  {
+    "name": "insecure_scheme_refused",
+    "rest_endpoint": "http://insecure.example/ucp",
+    "payment_handler": {
+      "id": "test-handler",
+      "version": "2026-04-08",
+      "spec": "https://example.com/spec",
+      "schema": "https://example.com/schema.json"
+    },
+    "valid": false,
+    "refusal": "InvalidProfile"
+  },
+  {
+    "name": "no_domain_refused",
+    "rest_endpoint": "https://",
+    "payment_handler": {
+      "id": "test-handler",
+      "version": "2026-04-08",
+      "spec": "https://example.com/spec",
+      "schema": "https://example.com/schema.json"
+    },
+    "valid": false,
+    "refusal": "InvalidProfile"
+  },
+  {
+    "name": "embedded_space_refused",
+    "rest_endpoint": "https://example .com/ucp",
+    "payment_handler": {
+      "id": "test-handler",
+      "version": "2026-04-08",
+      "spec": "https://example.com/spec",
+      "schema": "https://example.com/schema.json"
+    },
+    "valid": false,
+    "refusal": "InvalidProfile"
+  }
+]

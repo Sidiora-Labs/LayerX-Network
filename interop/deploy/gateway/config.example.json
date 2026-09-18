@@ -25,9 +25,9 @@
       "specification": "ucp-checkout",
       "version": "20260408",
       "specification_sha256": "a579df10ae589a63f8f0d01e7b4f8e3183ba227025c692bb0385d92362b894b3",
-      "conformance_suite": "ucp-checkout-vectors",
-      "conformance_vectors": 32,
-      "conformance_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "conformance_suite": "layerx-ucp-conformance-v1",
+      "conformance_vectors": 26,
+      "conformance_sha256": "950e2b79c54e4b31c124329b817e756a696d6f14d38752665248b7befb3b6272",
       "evidence_policy": "layerx-receipt"
     },
     {
@@ -35,9 +35,9 @@
       "specification": "visa-tap",
       "version": "1",
       "specification_sha256": "5f5fbaef32d575d1f83a0a2c8051338c37f7224cd6afd464d638b8f2863cada5",
-      "conformance_suite": "visa-tap-vectors",
-      "conformance_vectors": 24,
-      "conformance_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "conformance_suite": "layerx-visa-tap-conformance-v1",
+      "conformance_vectors": 23,
+      "conformance_sha256": "00e4bfeb2c0f897f1b3251e33ba5160a5c6f0cd802e6e79a52bfe1120e2b9fa9",
       "evidence_policy": "trusted-agent-credential"
     },
     {
@@ -45,9 +45,9 @@
       "specification": "layerx-fiat-settlement",
       "version": "1",
       "specification_sha256": "1ecabb073b1a2c5f96a91d5bb1f943a94a30b9e4b92f8642fb7c8ae1e757f9f2",
-      "conformance_suite": "layerx-fiat-vectors",
-      "conformance_vectors": 16,
-      "conformance_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "conformance_suite": "layerx-fiat-conformance-v1",
+      "conformance_vectors": 26,
+      "conformance_sha256": "546563891495362dd876cd777baac23be1fee4d2f09f2addff765a493a6878e9",
       "evidence_policy": "external-settlement+layerx-receipt"
     }
   ],
@@ -56,19 +56,19 @@
       "id": "http",
       "version": "2",
       "specification_sha256": "4f0298aaa23ac75de0eb49b1e96e6e67a5b910d7527b3a71c63e426b3bf5bdfb",
-      "conformance_sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+      "conformance_sha256": "d53db11962dceb3e9b7f57e42688534df2217395ce815e3b04bee56fb7e9783e"
     },
     {
       "id": "mcp",
       "version": "2",
       "specification_sha256": "4f1e0bb50c60e3fe384142f589cd6323b8a9ec4432335ef29053d1220f9e2146",
-      "conformance_sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+      "conformance_sha256": "18f4feefff6ed52cf8efc0b26ef549922204ee58f002ff034a301bb531bd7d5e"
     },
     {
       "id": "a2a",
       "version": "2",
       "specification_sha256": "bbf078363a2fc4eeeb8f6e9b66cf36033f5acfc3984c0e8f427143368979d878",
-      "conformance_sha256": "8888888888888888888888888888888888888888888888888888888888888888"
+      "conformance_sha256": "de13163d136e48db695242e66003a0fb554d9e0e1ec4b5fb0a6912c5c73747e9"
     }
   ],
   "x402_supported": {

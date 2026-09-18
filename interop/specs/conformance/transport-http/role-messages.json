@@ -1,0 +1,178 @@
+[
+  {
+    "name": "payment_required",
+    "transport": "http",
+    "role": "payment-required",
+    "accepted": true,
+    "representation": "http-header",
+    "header": "PAYMENT-REQUIRED",
+    "document": {
+      "x402Version": 2,
+      "resource": {
+        "url": "https://merchant.example/resource",
+        "description": "Paid resource",
+        "mimeType": "application/json",
+        "serviceName": "Merchant",
+        "tags": [
+          "api"
+        ]
+      },
+      "accepts": [
+        {
+          "scheme": "exact",
+          "network": "layerx:testnet",
+          "amount": "25",
+          "asset": "0505050505050505050505050505050505050505050505050505050505050505",
+          "payTo": "0707070707070707070707070707070707070707070707070707070707070707",
+          "maxTimeoutSeconds": 60
+        }
+      ]
+    }
+  },
+  {
+    "name": "payment_payload",
+    "transport": "http",
+    "role": "payment-payload",
+    "accepted": true,
+    "representation": "http-header",
+    "header": "PAYMENT-SIGNATURE",
+    "document": {
+      "x402Version": 2,
+      "payload": {
+        "authorization": "opaque-signed-payment"
+      },
+      "accepted": {
+        "scheme": "exact",
+        "network": "layerx:testnet",
+        "amount": "25",
+        "asset": "0505050505050505050505050505050505050505050505050505050505050505",
+        "payTo": "0707070707070707070707070707070707070707070707070707070707070707",
+        "maxTimeoutSeconds": 60
+      }
+    }
+  },
+  {
+    "name": "settlement_response",
+    "transport": "http",
+    "role": "settlement-response",
+    "accepted": true,
+    "representation": "http-header",
+    "header": "PAYMENT-RESPONSE",
+    "document": {
+      "success": false,
+      "errorReason": "settlement_pending",
+      "transaction": "pending:provider-reference",
+      "network": "layerx:testnet"
+    }
+  },
+  {
+    "name": "facilitator_request",
+    "transport": "http",
+    "role": "facilitator-request",
+    "accepted": true,
+    "representation": "json",
+    "document": {
+      "x402Version": 2,
+      "paymentPayload": {
+        "x402Version": 2,
+        "payload": {
+          "authorization": "opaque-signed-payment"
+        },
+        "accepted": {
+          "scheme": "exact",
+          "network": "layerx:testnet",
+          "amount": "25",
+          "asset": "0505050505050505050505050505050505050505050505050505050505050505",
+          "payTo": "0707070707070707070707070707070707070707070707070707070707070707",
+          "maxTimeoutSeconds": 60
+        }
+      },
+      "paymentRequirements": {
+        "scheme": "exact",
+        "network": "layerx:testnet",
+        "amount": "25",
+        "asset": "0505050505050505050505050505050505050505050505050505050505050505",
+        "payTo": "0707070707070707070707070707070707070707070707070707070707070707",
+        "maxTimeoutSeconds": 60
+      }
+    }
+  },
+  {
+    "name": "verify_response",
+    "transport": "http",
+    "role": "verify-response",
+    "accepted": true,
+    "representation": "json",
+    "document": {
+      "isValid": true,
+      "payer": "did:layerx:payer",
+      "extra": {
+        "scheme": "exact"
+      }
+    }
+  },
+  {
+    "name": "facilitator_settlement",
+    "transport": "http",
+    "role": "facilitator-settlement",
+    "accepted": true,
+    "representation": "json",
+    "document": {
+      "success": false,
+      "errorReason": "settlement_pending",
+      "transaction": "pending:provider-reference",
+      "network": "layerx:testnet"
+    }
+  },
+  {
+    "name": "supported_response",
+    "transport": "http",
+    "role": "supported-response",
+    "accepted": true,
+    "representation": "json",
+    "document": {
+      "kinds": [
+        {
+          "x402Version": 2,
+          "scheme": "exact",
+          "network": "layerx:testnet"
+        }
+      ],
+      "extensions": [],
+      "signers": {
+        "layerx:*": [
+          "did:layerx:facilitator"
+        ]
+      }
+    }
+  },
+  {
+    "name": "json_payment_required_is_not_an_http_representation",
+    "transport": "http",
+    "role": "payment-required",
+    "accepted": false,
+    "representation": "json",
+    "document": {
+      "x402Version": 2,
+      "resource": {
+        "url": "https://merchant.example/resource",
+        "description": "Paid resource",
+        "mimeType": "application/json",
+        "serviceName": "Merchant",
+        "tags": [
+          "api"
+        ]
+      },
+      "accepts": [
+        {
+          "scheme": "exact",
+          "network": "layerx:testnet",
+          "amount": "25",
+          "asset": "0505050505050505050505050505050505050505050505050505050505050505",
+          "payTo": "0707070707070707070707070707070707070707070707070707070707070707",
+          "maxTimeoutSeconds": 60
+        }
+      ]
+    }
+  }
+]

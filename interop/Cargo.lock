@@ -705,6 +705,7 @@ dependencies = [
  "layerx-interop-gateway",
  "layerx-proof",
  "layerx-types",
+ "serde_json",
  "sha2",
  "zeroize",
 ]
@@ -928,6 +929,7 @@ dependencies = [
  "ed25519-dalek",
  "layerx-interop-gateway",
  "layerx-proof",
+ "serde_json",
  "sha2",
 ]
 
@@ -940,6 +942,7 @@ dependencies = [
  "layerx-interop-gateway",
  "layerx-proof",
  "openssl",
+ "serde_json",
  "sha2",
 ]
 

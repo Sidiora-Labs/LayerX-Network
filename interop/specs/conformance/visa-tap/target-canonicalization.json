@@ -1,0 +1,64 @@
+[
+  {
+    "name": "canonical_authority_and_path_accepted",
+    "authority": "shop.example",
+    "path": "/checkout",
+    "signature_input": "sig2=(\"@authority\" \"@path\");created=1735689699;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"Ed25519\";expires=1735690179;nonce=\"unique-session-9\";tag=\"agent-payer-auth\"",
+    "signature": "sig2=:EREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREQ==:",
+    "accepted": true
+  },
+  {
+    "name": "uppercase_authority_refused",
+    "authority": "Shop.Example",
+    "path": "/checkout",
+    "signature_input": "sig2=(\"@authority\" \"@path\");created=1735689699;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"Ed25519\";expires=1735690179;nonce=\"unique-session-9\";tag=\"agent-payer-auth\"",
+    "signature": "sig2=:EREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREQ==:",
+    "accepted": false,
+    "refusal": "InvalidTarget"
+  },
+  {
+    "name": "zero_padded_port_refused",
+    "authority": "shop.example:0443",
+    "path": "/checkout",
+    "signature_input": "sig2=(\"@authority\" \"@path\");created=1735689699;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"Ed25519\";expires=1735690179;nonce=\"unique-session-9\";tag=\"agent-payer-auth\"",
+    "signature": "sig2=:EREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREQ==:",
+    "accepted": false,
+    "refusal": "InvalidTarget"
+  },
+  {
+    "name": "dot_segment_path_refused",
+    "authority": "shop.example",
+    "path": "/checkout/../pay",
+    "signature_input": "sig2=(\"@authority\" \"@path\");created=1735689699;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"Ed25519\";expires=1735690179;nonce=\"unique-session-9\";tag=\"agent-payer-auth\"",
+    "signature": "sig2=:EREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREQ==:",
+    "accepted": false,
+    "refusal": "InvalidTarget"
+  },
+  {
+    "name": "empty_path_segment_refused",
+    "authority": "shop.example",
+    "path": "/checkout//pay",
+    "signature_input": "sig2=(\"@authority\" \"@path\");created=1735689699;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"Ed25519\";expires=1735690179;nonce=\"unique-session-9\";tag=\"agent-payer-auth\"",
+    "signature": "sig2=:EREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREQ==:",
+    "accepted": false,
+    "refusal": "InvalidTarget"
+  },
+  {
+    "name": "signature_without_the_dictionary_delimiters_refused",
+    "authority": "shop.example",
+    "path": "/checkout",
+    "signature_input": "sig2=(\"@authority\" \"@path\");created=1735689699;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"Ed25519\";expires=1735690179;nonce=\"unique-session-9\";tag=\"agent-payer-auth\"",
+    "signature": "EREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREQ==",
+    "accepted": false,
+    "refusal": "MalformedSignature"
+  },
+  {
+    "name": "signature_input_without_the_covered_components_refused",
+    "authority": "shop.example",
+    "path": "/checkout",
+    "signature_input": "sig2=;created=1735689699;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"Ed25519\";expires=1735690179;nonce=\"unique-session-9\";tag=\"agent-payer-auth\"",
+    "signature": "sig2=:EREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREQ==:",
+    "accepted": false,
+    "refusal": "MissingCoveredComponent"
+  }
+]

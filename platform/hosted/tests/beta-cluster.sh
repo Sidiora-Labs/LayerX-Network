@@ -49,16 +49,19 @@
 #                                       set without creating a cluster or loading it into kind nodes; a job
 #                                       that only builds and publishes images sets its own bound here
 #                                       (default LAYERX_BETA_MIN_FREE_GIB)
-#   LAYERX_BETA_INTEROP_CONFORMANCE_UCP   the imported conformance suite of the interop adapters this
-#   LAYERX_BETA_INTEROP_CONFORMANCE_VISA_TAP  repository carries no vectors for, as
-#   LAYERX_BETA_INTEROP_CONFORMANCE_FIAT  '<suite-identifier>,<vector-count>,<suite-sha256>'; no upstream
-#                                       publishes one (interop/specs/vendor/CONFORMANCE.md)
-#   LAYERX_BETA_INTEROP_CONFORMANCE_HTTP  the digest of the imported conformance suite of each transport
-#   LAYERX_BETA_INTEROP_CONFORMANCE_MCP   binding; the binding version and specification digest are derived
-#   LAYERX_BETA_INTEROP_CONFORMANCE_A2A   from interop/specs/vendor/x402/transports
-#   LAYERX_BETA_INTEROP_CONFORMANCE_X402  optional overrides of the first-party suites derived from
-#   LAYERX_BETA_INTEROP_CONFORMANCE_AP2   interop/specs/conformance, whose identifier, vector count and
-#                                       SHA-256 come from the very vector files the adapter tests read
+#   LAYERX_BETA_INTEROP_CONFORMANCE_X402  optional overrides of the five first-party adapter conformance
+#   LAYERX_BETA_INTEROP_CONFORMANCE_AP2   suites derived from interop/specs/conformance, whose identifier,
+#   LAYERX_BETA_INTEROP_CONFORMANCE_UCP   vector count and SHA-256 come from the very vector files the
+#   LAYERX_BETA_INTEROP_CONFORMANCE_VISA_TAP  adapter tests read, as
+#   LAYERX_BETA_INTEROP_CONFORMANCE_FIAT  '<suite-identifier>,<vector-count>,<suite-sha256>'. No upstream
+#                                       publishes a suite for UCP, Visa TAP or the fiat provider callbacks
+#                                       (interop/specs/vendor/CONFORMANCE.md), so unset means derived from
+#                                       this checkout and a declared value pins an imported suite instead
+#   LAYERX_BETA_INTEROP_CONFORMANCE_HTTP  optional overrides of the three first-party transport binding
+#   LAYERX_BETA_INTEROP_CONFORMANCE_MCP   suites, as '<suite-sha256>'; unset derives the digest from
+#   LAYERX_BETA_INTEROP_CONFORMANCE_A2A   interop/specs/conformance/transport-<binding>, and the binding
+#                                       version and specification digest are derived from
+#                                       interop/specs/vendor/x402/transports
 #   LAYERX_BETA_INTEROP_AP2_KEYS        optional JSON counterparty trust roots that pin real external
 #   LAYERX_BETA_INTEROP_AP2_ASSETS      counterparties: the AP2 mandate issuer keys and asset bindings, the
 #   LAYERX_BETA_INTEROP_VISA_AGENTS     Visa TAP agent registry keys and merchant targets, and the fiat
