@@ -6,7 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY . .
 ARG LXP_REVISION=unknown
-RUN make LXP_REVISION="$LXP_REVISION" layerxd layerx-archive-codec \
+RUN rustup show active-toolchain \
+    && make LXP_REVISION="$LXP_REVISION" layerxd layerx-archive-codec \
     && test -x build/bin/layerxd \
     && test -x build/bin/layerx-archive-codec
 

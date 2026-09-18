@@ -1,0 +1,116 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: layerx-relay-archive, namespace: layerx-testnet}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: layerx-relay-archive, namespace: layerx-testnet}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: layerx-relay-archive}
+  strategy: {type: Recreate}
+  template:
+    metadata:
+      labels: {app: layerx-relay-archive}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {app: layerx-node}
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: relay-archive
+          image: ghcr.io/sidiora-labs/layerx-relay-archive:0.1.0
+          imagePullPolicy: Always
+          env:
+            - {name: LAYERX_RELAY_ARCHIVE_RUNTIME, value: /opt/layerx/relay_archive/runtime.py}
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          args: [--relay-archive, /etc/layerx/relay-archive.json]
+          ports: [{name: https, containerPort: 9443}]
+          readinessProbe:
+            httpGet: {scheme: HTTPS, path: /readyz, port: https}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet: {scheme: HTTPS, path: /healthz, port: https}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 3
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {cpu: "2", memory: 2Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: config, mountPath: /etc/layerx, readOnly: true}
+            - {name: tls, mountPath: /run/layerx/tls, readOnly: true}
+            - {name: data, mountPath: /var/lib/layerx/relay-archive}
+            - {name: node-source, mountPath: /var/lib/layerx/node-source, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          secret:
+            secretName: layerx-relay-archive-config
+            defaultMode: 0440
+            items: [{key: relay-archive.json, path: relay-archive.json}]
+        - {name: tls, secret: {secretName: layerx-relay-archive-tls, defaultMode: 0440}}
+        - {name: data, persistentVolumeClaim: {claimName: layerx-relay-archive}}
+        - {name: node-source, persistentVolumeClaim: {claimName: data-layerx-node-0, readOnly: true}}
+        - {name: tmp, emptyDir: {sizeLimit: 64Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-relay-archive, namespace: layerx-testnet}
+spec:
+  selector: {app: layerx-relay-archive}
+  ports: [{name: https, port: 443, targetPort: https}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: layerx-relay-archive
+  namespace: layerx-testnet
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+    nginx.ingress.kubernetes.io/proxy-body-size: 2m
+spec:
+  ingressClassName: nginx
+  tls: [{hosts: [relay.layerx.example], secretName: layerx-relay-archive-ingress-tls}]
+  rules:
+    - host: relay.layerx.example
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: {service: {name: layerx-relay-archive, port: {name: https}}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-relay-archive, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-relay-archive}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}]
+      ports: [{protocol: TCP, port: 9443}]
+  egress:
+    - to: [{namespaceSelector: {}}]
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - to: [{ipBlock: {cidr: 0.0.0.0/0, except: [10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16]}}]
+      ports: [{protocol: TCP, port: 443}]
+    - to: [{ipBlock: {cidr: "::/0", except: ["::1/128", "fc00::/7", "fe80::/10"]}}]
+      ports: [{protocol: TCP, port: 443}]
