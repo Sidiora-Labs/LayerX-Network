@@ -115,8 +115,11 @@ export type LayerXIntegrationErrorCode =
   | "receipt-not-backed";
 
 export class LayerXIntegrationError extends Error {
-  public constructor(public readonly code: LayerXIntegrationErrorCode) {
-    super(code);
+  public constructor(
+    public readonly code: LayerXIntegrationErrorCode,
+    public readonly key: DeclaredKey | undefined = undefined,
+  ) {
+    super(key === undefined ? code : `${code} ${key}`);
     this.name = "LayerXIntegrationError";
   }
 }
@@ -378,6 +381,52 @@ export function mountLayerX(options: LayerXMountOptions): LayerXNextMount {
   };
 }
 
+export interface LayerXDeferredMount {
+  readonly resource: LayerXResourceRoute;
+  readonly webhook: LayerXWebhookRoute;
+  destroy(): void;
+}
+
+export function mountLayerXOnRequest(options: () => LayerXMountOptions): LayerXDeferredMount {
+  let mount: LayerXNextMount | undefined;
+  const configured = (): LayerXNextMount => {
+    mount ??= mountLayerX(options());
+    return mount;
+  };
+  const onRequest = (select: (ready: LayerXNextMount) => RouteHandler): RouteHandler => {
+    return async (request: Request): Promise<Response> => {
+      let ready: LayerXNextMount;
+      try {
+        ready = configured();
+      } catch (error) {
+        return declaredConfigurationRefusal(error);
+      }
+      return select(ready)(request);
+    };
+  };
+  return {
+    resource: {
+      GET: onRequest((ready) => ready.resource.GET),
+      POST: onRequest((ready) => ready.resource.POST),
+    },
+    webhook: { POST: onRequest((ready) => ready.webhook.POST) },
+    destroy: () => {
+      mount?.destroy();
+      mount = undefined;
+    },
+  };
+}
+
+function declaredConfigurationRefusal(error: unknown): Response {
+  if (!(error instanceof LayerXIntegrationError)) {
+    throw error;
+  }
+  return jsonResponse(503, {
+    error: error.code,
+    ...(error.key === undefined ? {} : { key: error.key }),
+  });
+}
+
 export function createLayerXResourceRoute(options: LayerXMountOptions): LayerXResourceRoute {
   return mountLayerX(options).resource;
 }
@@ -558,7 +607,7 @@ function layerXEvidenceDigest(extensions: Readonly<Record<string, JsonValue>> | 
 function required(environment: Environment, key: DeclaredKey): string {
   const value = environment[key];
   if (value === undefined || value.length === 0) {
-    throw new LayerXIntegrationError("missing-declared-key");
+    throw new LayerXIntegrationError("missing-declared-key", key);
   }
   return value;
 }

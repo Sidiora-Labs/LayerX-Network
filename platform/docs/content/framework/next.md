@@ -8,22 +8,22 @@ Charge for a route handler in the App Router. Eight lines, plus a bundle scanner
 npm install @sidiora/layerx-next next react react-dom
 ```
 
-The declared configuration is the same as [Express](framework-express.html), read from the environment at module scope.
+The declared configuration is the same as [Express](framework-express.html), read from the environment on the first request rather than at module scope. `next build` collects your route modules, so a key read at module scope becomes a build input; reading it on the first request keeps `next build` runnable with no key present.
 
 ## The integration
 
 ```js sample=paid-route-next
-import { SingleProcessWebhookDeliveryStore, mountLayerX } from "@sidiora/layerx-next";
-export const layerx = mountLayerX({
+import { SingleProcessWebhookDeliveryStore, mountLayerXOnRequest } from "@sidiora/layerx-next";
+export const layerx = mountLayerXOnRequest(() => ({
   environment: process.env,
   resources: { release: async () => ({ contentType: "application/json", body: reportBody }) },
-  fulfillments: new FileFulfillmentRepository(fulfillmentDirectory),
+  fulfillments: new FileFulfillmentRepository(fulfillmentDirectory()),
   deliveries: new SingleProcessWebhookDeliveryStore(),
   events: { handle: async (event, deliveryId) => { settlements.push({ deliveryId, event }); } },
-});
+}));
 ```
 
-`mountLayerX` takes no router here. It returns route objects you export directly.
+`mountLayerXOnRequest` takes no router here. It returns route objects you export directly and calls your factory once, on the first request. A request that finds a declared variable missing is refused with `503` and a body naming it - `{"error":"missing-declared-key","key":"LAYERX_PRICE"}` - never served with a default or placeholder key. `mountLayerX` is still exported for a host that wants the configuration read and refused at startup.
 
 ## Wire the routes
 

@@ -2,13 +2,16 @@
   "name": "layerx-protocol",
   "private": true,
   "license": "Apache-2.0",
+  "scripts": {
+    "build": "node tools/build/npm-workspace-build.mjs"
+  },
   "workspaces": [
     "agent/sdk/typescript",
-    "platform/middleware/agent",
-    "platform/middleware/buyer",
-    "platform/middleware/conformance",
-    "platform/middleware/merchant",
     "platform/middleware/seller",
+    "platform/middleware/buyer",
+    "platform/middleware/merchant",
+    "platform/middleware/agent",
+    "platform/middleware/conformance",
     "platform/integrations/agents",
     "platform/integrations/express",
     "platform/integrations/next",
