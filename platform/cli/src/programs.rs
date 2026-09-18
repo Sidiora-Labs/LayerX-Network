@@ -555,7 +555,17 @@ fn refuse_transport_response(response: &Value) -> Result<(), String> {
 pub fn registry_get(client: &Client, program_id: &str) -> Result<Value, String> {
     validate_resource_id(program_id, "program id")?;
     let response = read_program_registry(client, program_id, false)?;
-    let response = response.get("result").unwrap_or(&response).clone();
+    registry_program_document(&response, program_id)
+}
+
+/// Validates the program registry read behind `program registry get` out of the
+/// wrapped agent response both services serve it in.
+///
+/// # Errors
+/// Refuses a response that is not the wrapped envelope, a document that renames
+/// the requested program, and balances without a current receipt proof.
+fn registry_program_document(response: &Value, program_id: &str) -> Result<Value, String> {
+    let response = program_registry_document(response)?;
     if response["program_id"]
         .as_str()
         .is_none_or(|value| !value.eq_ignore_ascii_case(program_id))
@@ -602,12 +612,12 @@ pub fn registry_get(client: &Client, program_id: &str) -> Result<Value, String> 
             if receipt_digest == [0; 32] || state_root == [0; 32] {
                 return Err("program balance proof contains a reserved zero root".to_owned());
             }
-            if receipt["observed_sequence"]
-                .as_u64()
+            if canonical_u64(receipt, "observed_sequence")
+                .ok()
                 .filter(|value| *value != 0)
                 .is_none()
-                || receipt["observed_at"]
-                    .as_u64()
+                || canonical_u64(receipt, "observed_at")
+                    .ok()
                     .filter(|value| *value != 0)
                     .is_none()
                 || receipt["verification"].as_str()
@@ -711,7 +721,18 @@ pub fn discover(client: &Client, program_id: &str) -> Result<Value, String> {
 pub fn interface_get(client: &Client, program_id: &str) -> Result<Value, String> {
     validate_resource_id(program_id, "program id")?;
     let response = read_program_registry(client, program_id, true)?;
-    let value = response.get("result").unwrap_or(&response).clone();
+    interface_program_document(&response)
+}
+
+/// Validates the published interface read behind `program interface get` out of
+/// the wrapped agent response both services serve it in.
+///
+/// # Errors
+/// Refuses a response that is not the wrapped envelope, interface bytes that
+/// disagree with their receipt-bound digest, and a read without current-state
+/// freshness.
+fn interface_program_document(response: &Value) -> Result<Value, String> {
+    let value = program_registry_document(response)?;
     let encoded = value["interface"]
         .as_str()
         .ok_or_else(|| "interface read omitted canonical bytes".to_owned())?;
@@ -731,7 +752,8 @@ pub fn interface_get(client: &Client, program_id: &str) -> Result<Value, String>
     if interface.digest().into_bytes() != expected || interface.code_hash() != code_hash {
         return Err("interface bytes disagree with their receipt-bound digest".to_owned());
     }
-    if value["observed_sequence"].as_u64().is_none() || value["state_root"].as_str().is_none() {
+    if canonical_u64(&value, "observed_sequence").is_err() || value["state_root"].as_str().is_none()
+    {
         return Err("interface read omitted current-state freshness".to_owned());
     }
     Ok(value)
@@ -2890,5 +2912,177 @@ mod registry_document_tests {
         let mut document = program_document();
         document["state_root"] = json!("84eb0ce9");
         assert!(program_registry_freshness(&document).is_err());
+    }
+}
+
+#[cfg(test)]
+mod registry_read_tests {
+    use super::{hex_encode, interface_program_document, registry_program_document};
+    use serde_json::json;
+    use sha2::{Digest as _, Sha256};
+
+    const PROGRAM_ID: &str = "4d98a932e30aed9f2129ab3d596aba7b5cc0903c6e7d28b5fdac30d90193628c";
+    const CODE_HASH: [u8; 32] = [0x5a; 32];
+
+    fn hex32(byte: u8) -> String {
+        hex_encode(&[byte; 32])
+    }
+
+    fn wrapped(value: serde_json::Value) -> serde_json::Value {
+        json!({
+            "request_id": "emu-000000000000000c",
+            "value": value,
+            "verification_status": {
+                "achieved": "Unverified",
+                "reason": "server_side_receipt_verification_only",
+                "requested": "SequencerSigned",
+                "state": "Unverified"
+            }
+        })
+    }
+
+    fn registry_document() -> serde_json::Value {
+        json!({
+            "program_id": PROGRAM_ID,
+            "lifecycle": "active",
+            "latest_version": 1,
+            "state_root": hex32(0x84),
+            "observed_sequence": "4",
+            "observed_at": "1789757814735",
+            "valid_through": "1789758114735",
+            "value_accounts": {
+                "status": "current",
+                "lifecycle": "active",
+                "accounts": [{
+                    "account_id": hex32(0x11),
+                    "asset_id": hex32(0x22),
+                    "balance": "125",
+                    "frozen": false
+                }],
+                "receipt": {
+                    "receipt_digest": hex32(0x33),
+                    "state_root": hex32(0x44),
+                    "observed_sequence": "7",
+                    "observed_at": "1789757814735",
+                    "verification": "account-primary-and-state-proof-verified"
+                }
+            },
+            "receipt": {
+                "deployment_receipt_digest": hex32(0x55),
+                "observed_sequence": "4",
+                "observed_at": "1789757814735",
+                "verification": "receipt-verified"
+            }
+        })
+    }
+
+    fn canonical_interface() -> Vec<u8> {
+        let mut bytes = b"LayerX/program-interface/v1\0".to_vec();
+        bytes.extend_from_slice(&CODE_HASH);
+        bytes.extend_from_slice(&2u16.to_be_bytes());
+        bytes.extend_from_slice(&1u16.to_be_bytes());
+        bytes.extend_from_slice(&4u16.to_be_bytes());
+        bytes.extend_from_slice(b"call");
+        bytes.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
+        bytes.push(0x02);
+        bytes.push(0x02);
+        bytes.extend_from_slice(&0u16.to_be_bytes());
+        bytes.extend_from_slice(&0u16.to_be_bytes());
+        bytes.extend_from_slice(&0u16.to_be_bytes());
+        bytes
+    }
+
+    fn interface_document() -> serde_json::Value {
+        let interface = canonical_interface();
+        let digest: [u8; 32] = Sha256::digest(&interface).into();
+        json!({
+            "program_id": PROGRAM_ID,
+            "version": 1,
+            "code_hash": hex_encode(&CODE_HASH),
+            "abi_version": 2,
+            "interface": hex_encode(&interface),
+            "interface_digest": hex_encode(&digest),
+            "receipt_digest": hex32(0x66),
+            "state_root": hex32(0x77),
+            "observed_sequence": "9",
+            "observed_at": "1789757814735",
+            "valid_through": "1789758114735",
+            "source": {"status": "unpublished"},
+            "verification": "deployment-interface-and-current-head-verified"
+        })
+    }
+
+    #[test]
+    fn registry_read_accepts_the_wrapped_document_the_services_serve() {
+        let Ok(document) = registry_program_document(&wrapped(registry_document()), PROGRAM_ID)
+        else {
+            panic!("the wrapped registry read was refused");
+        };
+        assert_eq!(document, registry_document());
+    }
+
+    #[test]
+    fn registry_read_refuses_the_bare_result_shape() {
+        assert_eq!(
+            registry_program_document(&json!({"result": registry_document()}), PROGRAM_ID),
+            Err("program read omitted its wrapped request identifier".to_owned())
+        );
+        assert_eq!(
+            registry_program_document(&registry_document(), PROGRAM_ID),
+            Err("program read omitted its wrapped request identifier".to_owned())
+        );
+    }
+
+    #[test]
+    fn registry_read_refuses_a_zero_balance_sequence() {
+        let mut document = registry_document();
+        document["value_accounts"]["receipt"]["observed_sequence"] = json!("0");
+        assert_eq!(
+            registry_program_document(&wrapped(document), PROGRAM_ID),
+            Err("program balance freshness is absent or unverifiable".to_owned())
+        );
+    }
+
+    #[test]
+    fn registry_read_refuses_a_non_canonical_balance_sequence() {
+        let mut document = registry_document();
+        document["value_accounts"]["receipt"]["observed_sequence"] = json!("07");
+        assert_eq!(
+            registry_program_document(&wrapped(document), PROGRAM_ID),
+            Err("program balance freshness is absent or unverifiable".to_owned())
+        );
+    }
+
+    #[test]
+    fn interface_read_accepts_the_wrapped_document_the_services_serve() {
+        let Ok(document) = interface_program_document(&wrapped(interface_document())) else {
+            panic!("the wrapped interface read was refused");
+        };
+        assert_eq!(document, interface_document());
+    }
+
+    #[test]
+    fn interface_read_refuses_the_bare_result_shape() {
+        assert_eq!(
+            interface_program_document(&json!({"result": interface_document()})),
+            Err("program read omitted its wrapped request identifier".to_owned())
+        );
+        assert_eq!(
+            interface_program_document(&interface_document()),
+            Err("program read omitted its wrapped request identifier".to_owned())
+        );
+    }
+
+    #[test]
+    fn interface_read_refuses_an_absent_freshness_sequence() {
+        let mut document = interface_document();
+        document
+            .as_object_mut()
+            .expect("object")
+            .remove("observed_sequence");
+        assert_eq!(
+            interface_program_document(&wrapped(document)),
+            Err("interface read omitted current-state freshness".to_owned())
+        );
     }
 }

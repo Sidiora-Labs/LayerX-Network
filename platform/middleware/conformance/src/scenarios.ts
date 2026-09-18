@@ -499,13 +499,14 @@ export async function runScenarios(): Promise<Suite> {
       }) },
       orders,
       sellers: {
-        create: (paymentRequired) => new SellerMiddleware({
+        create: (paymentRequired, protocolVersion) => new SellerMiddleware({
           paymentRequired,
-          protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
+          protocolVersion,
           authority: new ReceiptPayloadAuthority(resolver),
           fulfillments: new InMemoryFulfillmentRepository<MerchantOrder>(),
         }),
       },
+      protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
       resourceUrl: (checkoutKey) => `https://merchant.example/checkout/${checkoutKey}`,
     });
     const checkout = await merchant.checkout(
@@ -519,11 +520,12 @@ export async function runScenarios(): Promise<Suite> {
       publicKeys: { "seq-merchant": sequencer.publicKey },
       deliveries,
     });
-    const webhooks = new MerchantSettlementWebhooks(
-      consumer,
+    const webhooks = new MerchantSettlementWebhooks({
+      verifier: consumer,
       orders,
-      { resolve: async () => ({ canonicalReceipt: receipt.canonicalReceipt, authorizedBatch: receipt.authorizedBatch }) },
-    );
+      receipts: { resolve: async () => ({ canonicalReceipt: receipt.canonicalReceipt, authorizedBatch: receipt.authorizedBatch }) },
+      protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
+    });
     const event = {
       order_id: checkout.order.orderId,
       request_digest: checkout.order.requestDigest,
@@ -568,13 +570,14 @@ export async function runScenarios(): Promise<Suite> {
       }) },
       orders,
       sellers: {
-        create: (paymentRequired) => new SellerMiddleware({
+        create: (paymentRequired, protocolVersion) => new SellerMiddleware({
           paymentRequired,
-          protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
+          protocolVersion,
           authority: new ReceiptPayloadAuthority(resolver),
           fulfillments: new InMemoryFulfillmentRepository<MerchantOrder>(),
         }),
       },
+      protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
       resourceUrl: (checkoutKey) => `https://merchant.example/checkout/${checkoutKey}`,
     });
     const checkout = await merchant.checkout(
@@ -584,14 +587,15 @@ export async function runScenarios(): Promise<Suite> {
     );
     assert(checkout.kind === "payment-required", "mismatch checkout must start payment-required");
     const order = checkout.order;
-    const webhooks = new MerchantSettlementWebhooks(
-      new VerifiedWebhookConsumer({
+    const webhooks = new MerchantSettlementWebhooks({
+      verifier: new VerifiedWebhookConsumer({
         publicKeys: { "seq-merchant": sequencer.publicKey },
         deliveries: new InMemoryDeliveryStore(),
       }),
       orders,
-      { resolve: async () => ({ canonicalReceipt: receipt.canonicalReceipt, authorizedBatch: receipt.authorizedBatch }) },
-    );
+      receipts: { resolve: async () => ({ canonicalReceipt: receipt.canonicalReceipt, authorizedBatch: receipt.authorizedBatch }) },
+      protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
+    });
     const body = new TextEncoder().encode(JSON.stringify({
       order_id: order.orderId,
       request_digest: order.requestDigest,

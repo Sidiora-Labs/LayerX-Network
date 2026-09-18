@@ -3,6 +3,8 @@ import {
   SellerMiddleware,
   VerifiedWebhookConsumer,
   X402_VERSION,
+  protocolSelection,
+  requireProtocolVersion,
   verifyPaymentReceipt,
   type JsonValue,
   type PaymentRequired,
@@ -11,7 +13,7 @@ import {
   type WebhookConsumeResult,
   type WebhookRequestHeaders,
 } from "@sidiora/layerx-seller-middleware";
-import type { ReceiptVerification } from "@sidiora/layerx-sdk";
+import type { ProtocolSelection, ReceiptVerification, SelectableProtocolVersion } from "@sidiora/layerx-sdk";
 
 const MAX_U128 = 340282366920938463463374607431768211455n;
 const MAX_LINES = 256;
@@ -88,13 +90,17 @@ export interface MerchantOrderStore {
 }
 
 export interface MerchantSellerFactory {
-  create(paymentRequired: PaymentRequired): SellerMiddleware<MerchantOrder>;
+  create(
+    paymentRequired: PaymentRequired,
+    protocolVersion: SelectableProtocolVersion,
+  ): SellerMiddleware<MerchantOrder>;
 }
 
 export interface MerchantMiddlewareConfig {
   readonly catalog: CatalogProvider;
   readonly orders: MerchantOrderStore;
   readonly sellers: MerchantSellerFactory;
+  readonly protocolVersion: SelectableProtocolVersion;
   readonly resourceUrl: (checkoutKey: string) => string;
 }
 
@@ -113,13 +119,19 @@ export class MerchantMiddleware {
   readonly #catalog: CatalogProvider;
   readonly #orders: MerchantOrderStore;
   readonly #sellers: MerchantSellerFactory;
+  readonly #protocolVersion: SelectableProtocolVersion;
   readonly #resourceUrl: (checkoutKey: string) => string;
 
   public constructor(config: MerchantMiddlewareConfig) {
     this.#catalog = config.catalog;
     this.#orders = config.orders;
     this.#sellers = config.sellers;
+    this.#protocolVersion = requireProtocolVersion(config.protocolVersion);
     this.#resourceUrl = config.resourceUrl;
+  }
+
+  public get protocolVersion(): SelectableProtocolVersion {
+    return this.#protocolVersion;
   }
 
   public async quote(checkoutKey: string, lines: readonly CartLine[]): Promise<MerchantQuote> {
@@ -221,7 +233,10 @@ export class MerchantMiddleware {
     if (paymentHeader === undefined && opened.state === "refused") {
       return { kind: "refused", order: opened };
     }
-    const seller = this.#sellers.create(quote.paymentRequired);
+    const seller = this.#sellers.create(quote.paymentRequired, this.#protocolVersion);
+    if (seller.protocolVersion !== this.#protocolVersion) {
+      throw new MerchantError("protocol-version-mismatch");
+    }
     const decision = await seller.handle(
       principal,
       paymentHeader,
@@ -289,18 +304,39 @@ export interface MerchantReceiptResolver {
   resolve(receiptRef: string): Promise<MerchantReceiptEvidence>;
 }
 
+export interface MerchantSettlementWebhooksConfig {
+  readonly verifier: VerifiedWebhookConsumer;
+  readonly orders: MerchantOrderStore;
+  readonly receipts: MerchantReceiptResolver;
+  readonly protocolVersion: SelectableProtocolVersion;
+  readonly commitments?: PaymentCommitmentResolver;
+}
+
 export class MerchantSettlementWebhooks {
-  public constructor(
-    private readonly verifier: VerifiedWebhookConsumer,
-    private readonly orders: MerchantOrderStore,
-    private readonly receipts: MerchantReceiptResolver,
-    private readonly commitments?: PaymentCommitmentResolver,
-  ) {}
+  readonly #verifier: VerifiedWebhookConsumer;
+  readonly #orders: MerchantOrderStore;
+  readonly #receipts: MerchantReceiptResolver;
+  readonly #protocolVersion: SelectableProtocolVersion;
+  readonly #protocol: ProtocolSelection;
+  readonly #commitments: PaymentCommitmentResolver | undefined;
+
+  public constructor(config: MerchantSettlementWebhooksConfig) {
+    this.#verifier = config.verifier;
+    this.#orders = config.orders;
+    this.#receipts = config.receipts;
+    this.#protocolVersion = requireProtocolVersion(config.protocolVersion);
+    this.#protocol = protocolSelection(this.#protocolVersion);
+    this.#commitments = config.commitments;
+  }
+
+  public get protocolVersion(): SelectableProtocolVersion {
+    return this.#protocolVersion;
+  }
 
   public consume(rawBody: Uint8Array, headers: WebhookRequestHeaders): Promise<WebhookConsumeResult> {
-    return this.verifier.consume(rawBody, headers, async (value) => {
+    return this.#verifier.consume(rawBody, headers, async (value) => {
       const event = parseSettlementWebhook(value);
-      const current = await this.orders.get(event.order_id);
+      const current = await this.#orders.get(event.order_id);
       if (current === undefined || current.requestDigest !== event.request_digest) {
         throw new MerchantError("order-conflict");
       }
@@ -308,8 +344,13 @@ export class MerchantSettlementWebhooks {
       if (await digestQuote(current.quote) !== current.requestDigest) {
         throw new MerchantError("order-conflict");
       }
-      const evidence = await this.receipts.resolve(event.receipt_ref);
-      const verification = await verifyPaymentReceipt(evidence, current.quote.paymentRequired.accepts[0]!, this.commitments);
+      const evidence = await this.#receipts.resolve(event.receipt_ref);
+      const verification = await verifyPaymentReceipt(
+        evidence,
+        current.quote.paymentRequired.accepts[0]!,
+        this.#commitments,
+        this.#protocol,
+      );
       if (verificationRank(event.verification) > verificationRank(verification.level)) {
         throw new MerchantError("invalid-webhook");
       }
@@ -317,7 +358,7 @@ export class MerchantSettlementWebhooks {
       if (!constantTimeHex(receiptDigest, event.receipt_digest)) {
         throw new MerchantError("invalid-webhook");
       }
-      const paid = await this.orders.markPaid(
+      const paid = await this.#orders.markPaid(
         current.orderId,
         current.requestDigest,
         event.receipt_digest,
@@ -342,6 +383,7 @@ export type MerchantErrorCode =
   | "mixed-payment-facts"
   | "amount-overflow"
   | "order-conflict"
+  | "protocol-version-mismatch"
   | "invalid-webhook";
 
 export class MerchantError extends Error {
