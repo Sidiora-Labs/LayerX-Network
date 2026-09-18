@@ -283,15 +283,13 @@ fn startup_recovery_reconciles_evidenced_tenant_and_holds_tenant_without_evidenc
     assert!(accounting_a.reconciled);
     assert!(recovery_a.recovered.queued_for_transmission.is_empty());
     assert!(recovery_a.recovered.awaiting_receipt_resolution.is_empty());
-    assert!(matches!(
-        recovery_a.recovered.require_write_ready(),
-        Err(RecoveryError::WritesBlocked)
-    ));
-    assert!(matches!(
-        recovery_a.admission,
-        Err(RecoveryRefusal::WritesBlocked { budget_id, accounting })
-            if budget_id == BUDGET_ID && accounting == accounting_a
-    ));
+    assert!(recovery_a
+        .recovered
+        .ceiling
+        .snapshot()
+        .is_ok_and(|snapshot| snapshot.reconciled));
+    assert!(recovery_a.recovered.require_write_ready().is_ok());
+    assert!(recovery_a.admission.is_ok());
 
     let inventory_b = evidence_inventory(&reopened, tenant_b.clone())
         .unwrap_or_else(|error| panic!("inventory b: {error:?}"));
@@ -317,10 +315,53 @@ fn startup_recovery_reconciles_evidenced_tenant_and_holds_tenant_without_evidenc
     assert_eq!(accounting_b.held_unresolved, 300);
     assert_eq!(accounting_b.unresolved_count, 1);
     assert!(accounting_b.reconciled);
+    assert!(recovery_b
+        .recovered
+        .ceiling
+        .snapshot()
+        .is_ok_and(|snapshot| snapshot.reconciled));
     assert!(matches!(
         recovery_b.admission,
         Err(RecoveryRefusal::EvidenceMissing { budget_id, count })
             if budget_id == BUDGET_ID && count == 1
+    ));
+
+    let tenant_d = TenantId::new("tenant-d").unwrap_or_else(|error| panic!("tenant: {error}"));
+    let recovery_d = recover_tenant_budget(
+        &mut reopened,
+        &tenant_d,
+        &BudgetRecoveryRequest {
+            budget_id: BUDGET_ID,
+            protocol_budget: protocol.clone(),
+            verifier: verifier.clone(),
+            receipts_with_evidence: &[],
+            receipts_without_evidence: &[],
+            ceiling_maximum: 1_000,
+            current_sequence: 1,
+        },
+    )
+    .unwrap_or_else(|error| panic!("recover tenant d: {error:?}"));
+    let accounting_d = recovery_d.recovered.budget_accounting;
+    assert_eq!(accounting_d.protocol_consumed, Some(25));
+    assert_eq!(accounting_d.receipt_consumed, 0);
+    assert_eq!(accounting_d.held_unresolved, 0);
+    assert!(!accounting_d.reconciled);
+    assert_eq!(
+        recovery_d
+            .recovered
+            .ceiling
+            .snapshot()
+            .map(|snapshot| snapshot.reconciled),
+        Ok(false)
+    );
+    assert!(matches!(
+        recovery_d.recovered.require_write_ready(),
+        Err(RecoveryError::WritesBlocked)
+    ));
+    assert!(matches!(
+        recovery_d.admission,
+        Err(RecoveryRefusal::WritesBlocked { budget_id, accounting })
+            if budget_id == BUDGET_ID && accounting == accounting_d
     ));
 
     assert!(matches!(
@@ -475,9 +516,50 @@ fn startup_recovery_accepts_module_witness_budget_state() {
     assert_eq!(accounting.receipt_consumed, 0);
     assert_eq!(accounting.held_unresolved, 0);
     assert!(accounting.reconciled);
+    assert!(recovery
+        .recovered
+        .ceiling
+        .snapshot()
+        .is_ok_and(|snapshot| snapshot.reconciled));
+    assert!(recovery.recovered.require_write_ready().is_ok());
+    assert!(recovery.admission.is_ok());
+
+    let unreconciled = recover_tenant_budget(
+        &mut durable,
+        &tenant_c,
+        &BudgetRecoveryRequest {
+            budget_id: BUDGET_ID,
+            protocol_budget: ProtocolBudgetState {
+                evidence: module_witness_evidence(&core_budget_record(500, 25), pin),
+            },
+            verifier: EvidenceAuthority::pinned_to_handshake(3, 42, pin)
+                .unwrap_or_else(|error| panic!("pinned authority: {error:?}")),
+            receipts_with_evidence: &[],
+            receipts_without_evidence: &[],
+            ceiling_maximum: 1_000,
+            current_sequence: 1,
+        },
+    )
+    .unwrap_or_else(|error| panic!("recover unreconciled tenant c: {error:?}"));
+    let accounting = unreconciled.recovered.budget_accounting;
+    assert_eq!(accounting.protocol_consumed, Some(25));
+    assert!(!accounting.reconciled);
+    assert_eq!(
+        unreconciled
+            .recovered
+            .ceiling
+            .snapshot()
+            .map(|snapshot| snapshot.reconciled),
+        Ok(false)
+    );
     assert!(matches!(
-        recovery.admission,
-        Err(RecoveryRefusal::WritesBlocked { budget_id, .. }) if budget_id == BUDGET_ID
+        unreconciled.recovered.require_write_ready(),
+        Err(RecoveryError::WritesBlocked)
+    ));
+    assert!(matches!(
+        unreconciled.admission,
+        Err(RecoveryRefusal::WritesBlocked { budget_id, accounting: blocked })
+            if budget_id == BUDGET_ID && blocked == accounting
     ));
     let _ = std::fs::remove_dir_all(&root);
 }

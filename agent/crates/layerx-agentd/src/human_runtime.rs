@@ -3240,8 +3240,13 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
             match outcome {
                 Ok(recovery) => {
                     let accounting = recovery.recovered.budget_accounting;
+                    let ceiling_reconciled = recovery
+                        .recovered
+                        .ceiling
+                        .snapshot()
+                        .is_ok_and(|snapshot| snapshot.reconciled);
                     eprintln!(
-                        "layerx-agentd: recovery tenant={} agent={} budget={} queued={} awaiting={} receipts_with_evidence={} receipts_without_evidence={} protocol_consumed={:?} receipt_consumed={} held_unresolved={} unresolved_count={} reconciled={}",
+                        "layerx-agentd: recovery tenant={} agent={} budget={} queued={} awaiting={} receipts_with_evidence={} receipts_without_evidence={} protocol_consumed={:?} receipt_consumed={} held_unresolved={} unresolved_count={} reconciled={} ceiling_reconciled={ceiling_reconciled} admitted={}",
                         peer.tenant,
                         owner.agent_id,
                         hex(&budget_id),
@@ -3254,6 +3259,7 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
                         accounting.held_unresolved,
                         accounting.unresolved_count,
                         accounting.reconciled,
+                        recovery.admission.is_ok(),
                     );
                     self.outboxes
                         .insert(peer.tenant.clone(), recovery.recovered.outbox);

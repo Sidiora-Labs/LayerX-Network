@@ -202,6 +202,21 @@ impl Ceiling {
         Ok(before - state.reservations.len())
     }
 
+    /// Records the opaque protocol reconciliation result that admits reservations.
+    ///
+    /// `ReconciliationState` has no public constructor: a value exists only after
+    /// verified protocol budget state and receipt evidence reconciled, so this is
+    /// the sole path from an unreconciled ceiling to one that admits reservations.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Poisoned` when the state lock is poisoned.
+    pub fn reconcile(&self, reconciliation: ReconciliationState) -> Result<(), CeilingError> {
+        let mut state = self.state.lock().map_err(|_| CeilingError::Poisoned)?;
+        state.protocol_reconciliation = Some(reconciliation);
+        Ok(())
+    }
+
     /// Returns the ceiling totals observed under one lock acquisition.
     ///
     /// # Errors
