@@ -8,7 +8,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'tests/bridge'))
 from custody_credit import create_profile, attest, identity_rpcs, quantity, unhex, write_new
 from deploy_local_custody import calldata, deploy, govern, send, signer
-from provision import protected_json, require, write_json, h32
+from provision import protected_bytes, protected_json, require, write_json, h32
 
 
 def bootstrap(args):
@@ -42,6 +42,21 @@ def bootstrap(args):
                timelock=timelock, asset=args.asset, runtime_sha256=runtime, payer=account))
 
 
+def credit_material_name(transaction):
+    return 'credit-' + unhex(transaction, 32).hex() + '.bin'
+
+
+def publish_credit_material(root, transaction):
+    source = root / 'custody-credit.bin'
+    credit = protected_bytes(source, 427)
+    require(len(credit) == 427 and credit[:5] in (b'LXDC1', b'LXDC2'), source, 'attested custody credit layout')
+    if credit[:5] == b'LXDC1':
+        require(credit[327:359] == unhex(transaction, 32), source, 'custody credit transaction binding')
+    target = root / credit_material_name(transaction)
+    write_new(target, credit)
+    return target
+
+
 def deposit(args):
     root = Path(args.work_dir) / 'human-evidence-input'
     owner = protected_json(root / 'owner-admission.json')
@@ -72,6 +87,7 @@ def deposit(args):
         'transaction': result['transactionHash'], 'beneficiary': '0x' + owner['owner_account'],
         'beneficiary_key': '0x' + owner['public_key'], 'expected_amount': args.amount,
         'output': str(root / 'custody-credit.bin')}))
+    publish_credit_material(root, result['transactionHash'])
 
 
 if __name__ == '__main__':

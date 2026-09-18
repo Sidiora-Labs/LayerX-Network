@@ -11,7 +11,7 @@ from types import SimpleNamespace
 root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(root / 'platform/hosted/human'))
 from owner_native import GUARDIAN_ROLES, prepare_admission
-from owner_custody import bootstrap, deposit
+from owner_custody import bootstrap, credit_material_name, deposit
 from provision import write_json
 from custody_credit import Rpc, eth_hash
 from deploy_local_custody import command
@@ -82,6 +82,11 @@ with tempfile.TemporaryDirectory(prefix='owner-custody-') as directory:
             assert credit[139:171].hex() == owner['public_key']
             assert int.from_bytes(credit[191:207], 'big') == args.amount
             Ed25519PublicKey.from_public_bytes(profile[65:97]).verify(credit[363:], b'LX:CUSTODY:CREDIT:v1' + credit[:363])
+            transaction = json.loads((inputs / 'custody-deposit.json').read_text())['transactionHash']
+            published = inputs / ('credit-' + transaction[2:].lower() + '.bin')
+            assert published.name == credit_material_name(transaction)
+            assert published.read_bytes() == credit and credit[327:359].hex() == transaction[2:].lower()
+            assert published.lstat().st_mode & 0o777 == 0o600 and published.lstat().st_nlink == 1
             rpc = Rpc(args.rpc[0])
             before = rpc.call('eth_blockNumber', [])
             try:
