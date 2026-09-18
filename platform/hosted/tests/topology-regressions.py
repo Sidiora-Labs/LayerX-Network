@@ -32,6 +32,8 @@ RESOLVED_EDGES = (
     'Deployment layerx-testnet/layerx-gateway -> layerx-gateway-redis.layerx-testnet.svc.cluster.local:6379 [env LAYERX_GATEWAY_REDIS_URL]',
     'StatefulSet layerx-testnet/layerx-program-registry -> layerx-agent-boundary.layerx-testnet.svc.cluster.local:9443 [env LAYERX_REGISTRY_NODE_ENDPOINT]',
     'StatefulSet layerx-testnet/layerx-program-registry -> layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443 [env LAYERX_REGISTRY_RECEIPT_AUTHORITY_ENDPOINT]',
+    'StatefulSet layerx-testnet/layerx-program-registry -> layerx-agent-boundary.layerx-testnet.svc.cluster.local:9443 [env LAYERX_EXPLORER_NODE_ENDPOINT]',
+    'StatefulSet layerx-testnet/layerx-program-registry -> layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443 [env LAYERX_EXPLORER_AUTHORITY_ENDPOINT]',
     'Deployment layerx-internal/payments -> layerx-gateway.layerx-testnet.svc:443 [env LAYERX_EVENTS_UPSTREAM_URL]',
     'Deployment layerx-internal/programs -> layerx-gateway.layerx-testnet.svc:443 [env LAYERX_EVENTS_UPSTREAM_URL]',
     'Deployment layerx-developer/layerx-webhooks -> layerx-agent-boundary.layerx-testnet.svc:9443 [env LAYERX_WEBHOOKS_COMPONENT_URL]',
@@ -72,6 +74,7 @@ HUMAN_EDGES = (
 HUMAN_WEB_EDGES = (
     'Deployment layerx-testnet/layerx-human-web -> layerx-human.layerx-testnet.svc:9443 [env LAYERX_HUMAN_SERVICE_URL]',
     'Deployment layerx-testnet/layerx-human-web -> layerx-human.layerx-testnet.svc:9443 [env LAYERX_EXPLORER_API_ORIGIN]',
+    'Deployment layerx-testnet/layerx-human-web -> layerx-explorer-index.layerx-testnet.svc.cluster.local:9443 [env LAYERX_EXPLORER_INDEX_URL]',
 )
 
 SEPARATELY_OPERATED_EDGES = (

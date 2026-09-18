@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
     && rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN cargo build --locked --release --manifest-path platform/Cargo.toml -p layerx-runtime-clock
-RUN cargo build --locked --release --manifest-path human/Cargo.toml -p layerx-human-service -p layerx-human-kms --bins
+RUN cargo build --locked --release --manifest-path human/Cargo.toml -p layerx-human-service -p layerx-human-kms -p layerx-explorer-index --bins
 RUN cargo build --locked --release --manifest-path agent/Cargo.toml -p layerx-agentd --bin layerx-agentd
 RUN cargo build --locked --release --manifest-path cmd/layerxctl/Cargo.toml
 RUN cargo build --locked --release --manifest-path human/Cargo.toml -p layerx-human-identity-provider -p layerx-human-security-provider -p layerx-human-movement-provider --bins
@@ -19,6 +19,7 @@ COPY --from=build /src/human/target/release/layerx-human-service /usr/local/bin/
 COPY --from=build /src/human/target/release/layerx-human-components /usr/local/bin/layerx-human-components
 COPY --from=build /src/human/target/release/layerx-human-onboarding /usr/local/bin/layerx-human-onboarding
 COPY --from=build /src/human/target/release/layerx-human-kms /usr/local/bin/layerx-human-kms
+COPY --from=build /src/human/target/release/layerx-explorer-index /usr/local/bin/layerx-explorer-index
 COPY --from=build /src/agent/target/release/layerx-agentd /usr/local/bin/layerx-agentd
 COPY --from=build /src/human/target/release/layerx-human-identity-provider /usr/local/bin/layerx-human-identity-provider
 COPY --from=build /src/human/target/release/layerx-human-security-provider /usr/local/bin/layerx-human-security-provider
