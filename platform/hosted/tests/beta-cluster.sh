@@ -566,14 +566,19 @@ write_redis_acl() {
 
 genesis_metadata_generate() {
     # The node's LXGB v2 genesis metadata, produced by the in-repo encoder from the inputs this
-    # bring-up already fixed: the cluster asset of the node manifest, the treasury identity
-    # bootstrap.sh registers at genesis, and the withdrawal and module fees the node manifest
-    # makes bootstrap.sh apply. The salt is retained so the ConfigMap is reproducible.
-    local d="$SECRETS_DIR" bytes
+    # bring-up already fixed: the cluster asset of the node manifest, the symbol and decimals
+    # bootstrap.sh declares for it, the treasury identity bootstrap.sh registers at genesis, and
+    # the withdrawal and module fees the node manifest makes bootstrap.sh apply. The salt is
+    # retained so the ConfigMap is reproducible.
+    local d="$SECRETS_DIR" bootstrap="$REPO_ROOT/platform/hosted/node/bootstrap.sh" bytes symbol decimals
     [ -f "$d/node-treasury.key" ] && [ ! -L "$d/node-treasury.key" ] \
         || fail "the node treasury key must be generated before the genesis metadata: $d/node-treasury.key"
+    symbol=$(sed -n 's/^ASSET_SYMBOL=//p' "$bootstrap")
+    decimals=$(sed -n 's/^ASSET_DECIMALS=//p' "$bootstrap")
+    [ -n "$symbol" ] && [ -n "$decimals" ] \
+        || fail "bootstrap.sh does not declare the beta asset symbol and decimals: $bootstrap"
     bytes=$(python3 - "$REPO_ROOT" "$NODE_MANIFEST" "$NODE_ASSET_ID" "$d/node-treasury.key" \
-        "$d/node-genesis-salt" "$d/node-genesis-metadata.lxgb" <<'PYGENESISMETA'
+        "$d/node-genesis-salt" "$d/node-genesis-metadata.lxgb" "$symbol" "$decimals" <<'PYGENESISMETA'
 import importlib.util
 import os
 from pathlib import Path
@@ -585,6 +590,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 root, manifest, asset_id, treasury, salt_file, output = (
     Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]), Path(sys.argv[5]), Path(sys.argv[6]))
+symbol, decimals = sys.argv[7], int(sys.argv[8])
 
 # The node image ships genesis_fees.py and genesis-module-fees.json from these paths, so the fee
 # configuration read here is the one bootstrap.sh reads inside the pod.
@@ -645,7 +651,8 @@ else:
         handle.write(salt)
 
 asset = bytes.fromhex(asset_id)
-metadata = fees.module_metadata(lxgb.metadata(asset, issuer, salt), withdrawal_price, prices)
+record = lxgb.metadata(asset, issuer, salt, symbol, decimals)
+metadata = fees.module_metadata(record, withdrawal_price, prices)
 if fees.module_metadata(metadata, withdrawal_price, prices) != metadata:
     raise SystemExit('the genesis metadata is not canonical under the node fee configuration')
 with os.fdopen(os.open(output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'wb') as handle:
@@ -1684,6 +1691,7 @@ PYARG
         || fail "bootstrap.sh fee validation refused the generated genesis metadata"
     python3 - "$REPO_ROOT" "$NODE_MANIFEST" "$SCRIPT_DIR/beta-cluster.sh" "$NODE_NETWORK_ID" "$NODE_ASSET_ID" \
         "$SECRETS_DIR/node-genesis-metadata.lxgb" "$builder" "$directory/builder" <<'PYGENESISTEST'
+import hashlib
 import importlib.util
 import os
 from pathlib import Path
@@ -1720,9 +1728,34 @@ applied = 'apply_configmap "$ns" %s --from-file=%s=' % (CONFIGMAP, KEY)
 if applied not in script.read_text():
     raise SystemExit('beta-cluster.sh does not publish %s with key %s' % (CONFIGMAP, KEY))
 
-spec = importlib.util.spec_from_file_location('prepare_beta', root / 'platform/hosted/paxeer/prepare-beta.py')
-producer = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(producer)
+def load(name, relative):
+    spec = importlib.util.spec_from_file_location(name, root / relative)
+    loaded = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loaded)
+    return loaded
+
+
+lxgb = load('lxgb_metadata', 'tests/support/lxgb_metadata.py')
+vector = lxgb.check()
+if len(vector) != lxgb.VECTOR_LENGTH or hashlib.sha256(vector).hexdigest() != lxgb.VECTOR_SHA256:
+    raise SystemExit('the pinned lxgb metadata fixture vector changed')
+
+declared = dict(line.split('=', 1) for line in (root / 'platform/hosted/node/bootstrap.sh').read_text().splitlines()
+                if line.startswith(('ASSET_SYMBOL=', 'ASSET_DECIMALS=')))
+if int.from_bytes(metadata[:2], 'big') != 1:
+    raise SystemExit('the genesis metadata does not carry exactly one asset record')
+asset_record = metadata[4:4 + int.from_bytes(metadata[2:4], 'big')]
+symbol_length = asset_record[34]
+symbol = asset_record[35:35 + symbol_length].decode('ascii')
+decimals = asset_record[35 + symbol_length]
+if asset_record[2:34].hex() != asset_id:
+    raise SystemExit('the genesis metadata describes asset %s, not %s' % (asset_record[2:34].hex(), asset_id))
+if symbol != declared['ASSET_SYMBOL'] or decimals != int(declared['ASSET_DECIMALS']):
+    raise SystemExit('the genesis metadata describes %s with %d decimals, not the %s with %s decimals '
+                     'bootstrap.sh declares'
+                     % (symbol, decimals, declared['ASSET_SYMBOL'], declared['ASSET_DECIMALS']))
+
+producer = load('prepare_beta', 'platform/hosted/paxeer/prepare-beta.py')
 
 work.mkdir(mode=0o700)
 signer = work / 'signer'
@@ -1748,8 +1781,9 @@ for label, payload, accepted in (('accepted', request, True), ('truncated', requ
         raise SystemExit('%s: native builder exit %d' % (label, result.returncode))
     if (work / label / 'genesis.manifest').exists() != accepted:
         raise SystemExit('%s: signed genesis artifacts were %s' % (label, 'not written' if accepted else 'written'))
-print('beta-cluster: genesis metadata %d bytes accepted by the native builder; %s/%s matches the node manifest'
-      % (len(metadata), CONFIGMAP, KEY))
+print('beta-cluster: genesis metadata %d bytes describing %s with %d decimals accepted by the native builder; '
+      '%s/%s matches the node manifest and the pinned fixture vector %s is unchanged'
+      % (len(metadata), symbol, decimals, CONFIGMAP, KEY, lxgb.VECTOR_SHA256))
 PYGENESISTEST
     log "genesis metadata producer, fee validation and native builder acceptance passed"
 )
