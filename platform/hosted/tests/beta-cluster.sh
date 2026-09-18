@@ -564,6 +564,99 @@ write_redis_acl() {
     (umask 077; printf 'user default off\nuser %s on >%s ~* &* +@all\n' "$user" "$password" > "$acl")
 }
 
+genesis_metadata_generate() {
+    # The node's LXGB v2 genesis metadata, produced by the in-repo encoder from the inputs this
+    # bring-up already fixed: the cluster asset of the node manifest, the treasury identity
+    # bootstrap.sh registers at genesis, and the withdrawal and module fees the node manifest
+    # makes bootstrap.sh apply. The salt is retained so the ConfigMap is reproducible.
+    local d="$SECRETS_DIR" bytes
+    [ -f "$d/node-treasury.key" ] && [ ! -L "$d/node-treasury.key" ] \
+        || fail "the node treasury key must be generated before the genesis metadata: $d/node-treasury.key"
+    bytes=$(python3 - "$REPO_ROOT" "$NODE_MANIFEST" "$NODE_ASSET_ID" "$d/node-treasury.key" \
+        "$d/node-genesis-salt" "$d/node-genesis-metadata.lxgb" <<'PYGENESISMETA'
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+import yaml
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+root, manifest, asset_id, treasury, salt_file, output = (
+    Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]), Path(sys.argv[5]), Path(sys.argv[6]))
+
+# The node image ships genesis_fees.py and genesis-module-fees.json from these paths, so the fee
+# configuration read here is the one bootstrap.sh reads inside the pod.
+IMAGE_SOURCES = {'/opt/layerx/genesis-module-fees.json': 'platform/hosted/node/genesis-module-fees.json'}
+METADATA_MOUNT = '/run/layerx/genesis/metadata.lxgb'
+
+
+def module(name, relative):
+    spec = importlib.util.spec_from_file_location(name, root / relative)
+    loaded = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loaded)
+    return loaded
+
+
+lxgb = module('lxgb_metadata', 'tests/support/lxgb_metadata.py')
+fees = module('genesis_fees', 'platform/hosted/node/genesis_fees.py')
+lxgb.check()
+
+arguments = None
+for document in yaml.safe_load_all(manifest.read_text()):
+    if not document or document.get('kind') != 'StatefulSet':
+        continue
+    for container in document['spec']['template']['spec']['containers']:
+        if container['name'] == 'layerxd':
+            arguments = [str(value) for value in container['args']]
+if arguments is None:
+    raise SystemExit('the node manifest has no layerxd container')
+
+
+def argument(name):
+    if arguments.count(name) != 1 or arguments.index(name) + 1 == len(arguments):
+        raise SystemExit('the node manifest does not pass a single %s to bootstrap.sh' % name)
+    return arguments[arguments.index(name) + 1]
+
+
+if argument('--genesis-metadata') != METADATA_MOUNT:
+    raise SystemExit('the node manifest reads its genesis metadata from %s, not %s'
+                     % (argument('--genesis-metadata'), METADATA_MOUNT))
+withdrawal_price = int(argument('--withdrawal-fee'))
+module_fees = argument('--module-fees')
+if module_fees not in IMAGE_SOURCES:
+    raise SystemExit('the node manifest names an unpublished module fee file ' + module_fees)
+prices = fees.module_prices(root / IMAGE_SOURCES[module_fees])
+
+seed = treasury.read_bytes()
+if len(seed) != 32:
+    seed = bytes.fromhex(seed.decode().strip())
+issuer = ed25519.Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes(
+    Encoding.Raw, PublicFormat.Raw)
+
+if salt_file.exists():
+    salt = salt_file.read_bytes()
+    if len(salt) != 32:
+        raise SystemExit('the retained genesis salt must hold exactly 32 bytes: ' + str(salt_file))
+else:
+    salt = os.urandom(32)
+    with os.fdopen(os.open(salt_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as handle:
+        handle.write(salt)
+
+asset = bytes.fromhex(asset_id)
+metadata = fees.module_metadata(lxgb.metadata(asset, issuer, salt), withdrawal_price, prices)
+if fees.module_metadata(metadata, withdrawal_price, prices) != metadata:
+    raise SystemExit('the genesis metadata is not canonical under the node fee configuration')
+with os.fdopen(os.open(output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'wb') as handle:
+    handle.write(metadata)
+print(len(metadata))
+PYGENESISMETA
+    ) || fail "LXGB v2 genesis metadata generation failed"
+    [ "$bytes" -gt 219 ] || fail "the generated genesis metadata is shorter than the request bound: $bytes bytes"
+    log "genesis metadata written to $d/node-genesis-metadata.lxgb ($bytes bytes)"
+}
+
 secrets_generate() {
     local d="$SECRETS_DIR"
     mkdir -p "$d"
@@ -612,6 +705,7 @@ secrets_generate() {
     if [ -n "$CUSTODY_PROFILE" ]; then cp "$CUSTODY_PROFILE" "$d/custody.profile"; fi
     (umask 077; cp "$CA_DIR/sequencer.seed.hex" "$d/node-sequencer.key")
     (umask 077; random_hex 32 > "$d/node-treasury.key")
+    genesis_metadata_generate
     write_token "$d/node-program.token"
     write_token "$d/node-replica.token"
     mkdir -p "$d/identity-tokens"
@@ -889,6 +983,9 @@ secrets_apply() {
     apply_secret "$ns" layerx-sequencer-trust-history --from-file=history="$s/trust-history"
     apply_configmap "$ns" layerx-receipt-authority --from-file=replica-id="$s/receipt-authority-replica-id"
     apply_secret "$ns" layerx-node-keys --from-file=sequencer.key="$s/node-sequencer.key" --from-file=treasury.key="$s/node-treasury.key"
+    [ -f "$s/node-genesis-metadata.lxgb" ] && [ ! -L "$s/node-genesis-metadata.lxgb" ] \
+        || fail "the LXGB v2 genesis metadata the node mounts is missing: $s/node-genesis-metadata.lxgb"
+    apply_configmap "$ns" layerx-node-genesis-metadata --from-file=metadata.lxgb="$s/node-genesis-metadata.lxgb"
     publication_binding_publish
     if [ -n "$CUSTODY_PROFILE" ]; then
         apply_configmap "$ns" layerx-node-custody-profile --from-file=profile="$CUSTODY_PROFILE"
@@ -1549,6 +1646,112 @@ deposit_root_authority_test() (
         fi
     done
     log "deposit-root authority $key extracted from the guarantor checkpoint authority key with three refusals"
+)
+
+genesis_metadata_test() (
+    set -euo pipefail
+    local builder directory withdrawal_fee module_fees
+    builder="${LAYERX_TEST_NATIVE_BIN_DIR:-$REPO_ROOT/build/bin}/layerx-genesis-build"
+    [ -x "$builder" ] || fail "the native genesis builder is missing: $builder (run: make layerx-genesis-build)"
+    require_tool openssl python3
+    directory=$(mktemp -d)
+    trap 'rm -rf "$directory"' EXIT
+    umask 077
+    SECRETS_DIR="$directory/secrets"
+    mkdir -m 0700 "$SECRETS_DIR"
+    (umask 077; random_hex 32 > "$SECRETS_DIR/node-treasury.key")
+    genesis_metadata_generate
+    cp "$SECRETS_DIR/node-genesis-metadata.lxgb" "$directory/first.lxgb"
+    rm "$SECRETS_DIR/node-genesis-metadata.lxgb"
+    genesis_metadata_generate
+    cmp -s "$directory/first.lxgb" "$SECRETS_DIR/node-genesis-metadata.lxgb" \
+        || fail "the retained genesis salt did not reproduce the same metadata"
+    withdrawal_fee=$(python3 - "$NODE_MANIFEST" --withdrawal-fee <<'PYARG'
+import sys
+import yaml
+name = sys.argv[2]
+for document in yaml.safe_load_all(open(sys.argv[1]).read()):
+    if document and document.get('kind') == 'StatefulSet':
+        for container in document['spec']['template']['spec']['containers']:
+            if container['name'] == 'layerxd':
+                arguments = [str(value) for value in container['args']]
+                print(arguments[arguments.index(name) + 1])
+PYARG
+    )
+    module_fees="$REPO_ROOT/platform/hosted/node/genesis-module-fees.json"
+    python3 "$REPO_ROOT/platform/hosted/node/genesis_fees.py" "$SECRETS_DIR/node-genesis-metadata.lxgb" \
+        "$withdrawal_fee" --module-fees "$module_fees" --check \
+        || fail "bootstrap.sh fee validation refused the generated genesis metadata"
+    python3 - "$REPO_ROOT" "$NODE_MANIFEST" "$SCRIPT_DIR/beta-cluster.sh" "$NODE_NETWORK_ID" "$NODE_ASSET_ID" \
+        "$SECRETS_DIR/node-genesis-metadata.lxgb" "$builder" "$directory/builder" <<'PYGENESISTEST'
+import importlib.util
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+import yaml
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+root, manifest, script = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+network_id, asset_id = int(sys.argv[4]), sys.argv[5]
+metadata = Path(sys.argv[6]).read_bytes()
+builder, work = Path(sys.argv[7]), Path(sys.argv[8])
+
+CONFIGMAP = 'layerx-node-genesis-metadata'
+KEY = 'metadata.lxgb'
+MOUNT = '/run/layerx/genesis/metadata.lxgb'
+
+statefulset = next(document for document in yaml.safe_load_all(manifest.read_text())
+                   if document and document.get('kind') == 'StatefulSet')
+pod = statefulset['spec']['template']['spec']
+layerxd = next(container for container in pod['containers'] if container['name'] == 'layerxd')
+mount = next(entry for entry in layerxd['volumeMounts'] if entry['mountPath'] == MOUNT)
+if mount.get('subPath') != KEY:
+    raise SystemExit('the node manifest mounts %s from subPath %r, not %r' % (MOUNT, mount.get('subPath'), KEY))
+volume = next(entry for entry in pod['volumes'] if entry['name'] == mount['name'])
+source = volume['configMap']
+if source['name'] != CONFIGMAP or source.get('optional'):
+    raise SystemExit('the node manifest mounts ConfigMap %r, not a required %r' % (source['name'], CONFIGMAP))
+if [item['key'] for item in source['items']] != [KEY]:
+    raise SystemExit('the node manifest reads keys %r from %s' % (source['items'], CONFIGMAP))
+applied = 'apply_configmap "$ns" %s --from-file=%s=' % (CONFIGMAP, KEY)
+if applied not in script.read_text():
+    raise SystemExit('beta-cluster.sh does not publish %s with key %s' % (CONFIGMAP, KEY))
+
+spec = importlib.util.spec_from_file_location('prepare_beta', root / 'platform/hosted/paxeer/prepare-beta.py')
+producer = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(producer)
+
+work.mkdir(mode=0o700)
+signer = work / 'signer'
+with os.fdopen(os.open(signer, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as handle:
+    handle.write(ed25519.Ed25519PrivateKey.generate().private_bytes_raw())
+members = []
+for index in range(1, 4):
+    public = ec.generate_private_key(ec.SECP256K1()).public_key().public_bytes(
+        Encoding.X962, PublicFormat.CompressedPoint)
+    members.append({'guarantor_id': index.to_bytes(32, 'big').hex(), 'public_key': public.hex()})
+request = producer.genesis_request(members, network_id, asset_id, 1700000000000, metadata)
+if not request.endswith(metadata) or request[:5] != b'LXGB\x02':
+    raise SystemExit('the genesis request did not carry the generated metadata suffix')
+
+for label, payload, accepted in (('accepted', request, True), ('truncated', request[:-1], False),
+                                 ('trailing', request + b'\0', False),
+                                 ('stripped', request[:-len(metadata)], False)):
+    path = work / (label + '.lxgb')
+    path.write_bytes(payload)
+    result = subprocess.run([str(builder), str(path), str(signer), str(work / label)],
+                            cwd=root, capture_output=True)
+    if (result.returncode == 0) != accepted:
+        raise SystemExit('%s: native builder exit %d' % (label, result.returncode))
+    if (work / label / 'genesis.manifest').exists() != accepted:
+        raise SystemExit('%s: signed genesis artifacts were %s' % (label, 'not written' if accepted else 'written'))
+print('beta-cluster: genesis metadata %d bytes accepted by the native builder; %s/%s matches the node manifest'
+      % (len(metadata), CONFIGMAP, KEY))
+PYGENESISTEST
+    log "genesis metadata producer, fee validation and native builder acceptance passed"
 )
 
 paxeer_contracts_deploy() {
@@ -2284,6 +2487,7 @@ main() {
         test-retained-material) retained_material_test ;;
         test-guarantor-sequences) guarantor_sequence_test ;;
         test-deposit-root-authority) deposit_root_authority_test ;;
+        test-genesis-metadata) genesis_metadata_test ;;
         down) beta_cluster_down ;;
         render) beta_cluster_render ;;
         *) sed -n '2,55p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 64 ;;
