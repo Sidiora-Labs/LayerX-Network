@@ -1,6 +1,8 @@
 //! Authenticated bounded peer for the Human-plane agent runtime.
 
 use layerx_client::lni::transport::{FrameTransport, TransportError};
+
+use crate::admin::{OperatorCommand, ProtectedMutation};
 use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
@@ -48,6 +50,7 @@ const SESSION_FEE_STATE: u8 = 40;
 const SESSION_SEED_PREPARE: u8 = 41;
 const ACCOUNT_STATE: u8 = 42;
 const SUBJECT: u8 = 44;
+const OPERATOR: u8 = 45;
 const HEAD: u8 = 7;
 const EVIDENCE: u8 = 8;
 const MAX_TEXT: usize = 255;
@@ -391,6 +394,11 @@ pub enum HumanRequest {
         permitted_activity_types: Vec<u16>,
         scopes: Vec<String>,
     },
+    Operator {
+        operator_id: String,
+        request_id: [u8; 32],
+        command: OperatorCommand,
+    },
 }
 
 /// Response bytes are the canonical typed payload following the shared magic
@@ -724,6 +732,18 @@ pub trait HumanOperations {
     ) -> Result<HumanResponse, HumanOperationError> {
         Err(HumanOperationError::Refused)
     }
+    /// Routes one audited operator command through the daemon's admin surface.
+    ///
+    /// # Errors
+    /// Returns an error if the command is refused, cannot be audited, or its
+    /// daemon-local target is unavailable.
+    fn operator_command(
+        &mut self,
+        peer: &HumanPeer,
+        operator_id: &str,
+        request_id: [u8; 32],
+        command: OperatorCommand,
+    ) -> Result<HumanResponse, HumanOperationError>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1435,6 +1455,11 @@ fn dispatch_agent_request<O: HumanOperations>(
             permitted_activity_types,
             scopes,
         ),
+        HumanRequest::Operator {
+            operator_id,
+            request_id,
+            command,
+        } => operations.operator_command(peer, &operator_id, request_id, command),
         _ => Err(HumanOperationError::Refused),
     }
 }
@@ -1812,6 +1837,60 @@ fn decode_operation_4(
                 scopes: text_list(reader, 64)?,
             }
         }
+        OPERATOR => {
+            let operator_id = reader.text()?;
+            let request_id = reader.fixed()?;
+            let code = reader.u8()?;
+            let target: [u8; 32] = reader.fixed()?;
+            if operator_id.is_empty()
+                || operator_id.len() > 256
+                || operator_id.as_bytes().contains(&0)
+                || request_id == [0; 32]
+                || target == [0; 32]
+            {
+                return Err(HumanProtocolError::Malformed);
+            }
+            HumanRequest::Operator {
+                operator_id,
+                request_id,
+                command: operator_command(code, target)?,
+            }
+        }
+        _ => return Err(HumanProtocolError::Malformed),
+    })
+}
+
+fn operator_command(code: u8, target: [u8; 32]) -> Result<OperatorCommand, HumanProtocolError> {
+    Ok(match code {
+        1 => OperatorCommand::InspectUnknown(target),
+        2 => OperatorCommand::ResolveUnknown(target),
+        3 => OperatorCommand::InspectStalledSubscription(target),
+        4 => OperatorCommand::ResumeStalledSubscription(target),
+        5 => OperatorCommand::InspectBudgetDivergence(target),
+        6 => OperatorCommand::ReconcileBudgetDivergence(target),
+        7 => OperatorCommand::InspectVerificationBacklog(target),
+        8 => OperatorCommand::RetryVerification(target),
+        9 => OperatorCommand::SubmitActivity(target),
+        33 => OperatorCommand::AttemptProtectedMutation {
+            target,
+            mutation: ProtectedMutation::MarkUnknownExecuted,
+        },
+        34 => OperatorCommand::AttemptProtectedMutation {
+            target,
+            mutation: ProtectedMutation::ReplaceReceipt,
+        },
+        35 => OperatorCommand::AttemptProtectedMutation {
+            target,
+            mutation: ProtectedMutation::RaiseVerificationLevel,
+        },
+        36 => OperatorCommand::AttemptProtectedMutation {
+            target,
+            mutation: ProtectedMutation::RewriteAuditEntry,
+        },
+        37 => OperatorCommand::AttemptProtectedMutation {
+            target,
+            mutation: ProtectedMutation::ReplaceProtocolValue,
+        },
         _ => return Err(HumanProtocolError::Malformed),
     })
 }

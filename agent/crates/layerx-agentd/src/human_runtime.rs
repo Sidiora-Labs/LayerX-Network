@@ -1,6 +1,7 @@
 //! Production operation owner for the authenticated Human-to-agent boundary.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use layerx_client::evidence::{CheckpointSelector, EvidenceError, ProofBundleSelector};
@@ -19,6 +20,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 
+use crate::admin::{ActionPlan, AdminError, OperatorCommand, OperatorContext, Surface};
 use crate::approval::{
     ApprovalDecision, ApprovalExpiry, ApprovalOutcome, ApprovalRecord, ApprovalService,
     ApprovalSubmissionQueue, DecisionKey, DecisionRequest,
@@ -854,6 +856,16 @@ impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
 impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
     fn authorize_subject(&mut self, peer: &HumanPeer) -> Result<(), HumanOperationError> {
         self.lock_operations()?.authorize_subject(peer)
+    }
+    fn operator_command(
+        &mut self,
+        peer: &HumanPeer,
+        operator_id: &str,
+        request_id: [u8; 32],
+        command: OperatorCommand,
+    ) -> Result<HumanResponse, HumanOperationError> {
+        self.lock_operations()?
+            .operator_command(peer, operator_id, request_id, command)
     }
     fn account_state(
         &mut self,
@@ -3057,6 +3069,25 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
 }
 
 impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A> {
+    fn operator_command(
+        &mut self,
+        peer: &HumanPeer,
+        operator_id: &str,
+        request_id: [u8; 32],
+        command: OperatorCommand,
+    ) -> Result<HumanResponse, HumanOperationError> {
+        let tenant =
+            TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
+        let root = self
+            .store
+            .lock()
+            .map_err(|_| HumanOperationError::Unavailable)?
+            .root()
+            .to_path_buf();
+        let restored = Outbox::default();
+        let outbox = self.outboxes.get(&peer.tenant).unwrap_or(&restored);
+        route_operator_command(&root, &tenant, outbox, operator_id, request_id, command)
+    }
     fn authorize_subject(&mut self, peer: &HumanPeer) -> Result<(), HumanOperationError> {
         self.authority.authorize_subject(peer)?;
         let mut store = self
@@ -3968,6 +3999,75 @@ fn boundary_correlation(peer: &HumanPeer, actor: &[u8], purpose: &[u8]) -> u64 {
         value
     }
 }
+/// Audits one operator command through the admin surface and executes the
+/// daemon-local inspection it names against the tenant's restored outbox.
+///
+/// The response carries the selected action plan code, the inspected unknown
+/// submission when the command was `InspectUnknown`, and the audit entry count.
+///
+/// # Errors
+///
+/// Returns `Refused` for an invalid operator, a protected mutation, or a target
+/// that is not in the state the command requires, and `Unavailable` when the
+/// tenant audit log cannot be opened or appended.
+pub fn route_operator_command(
+    store_root: &Path,
+    tenant: &TenantId,
+    outbox: &Outbox,
+    operator_id: &str,
+    request_id: [u8; 32],
+    command: OperatorCommand,
+) -> Result<HumanResponse, HumanOperationError> {
+    let context = OperatorContext::new(operator_id, request_id).map_err(map_admin_error)?;
+    let mut surface = Surface::open(store_root, tenant).map_err(map_admin_error)?;
+    let mut out = Encoder::new();
+    match command {
+        OperatorCommand::InspectUnknown(submission_id) => {
+            let status = surface
+                .inspect_unknown(&context, outbox, submission_id)
+                .map_err(map_admin_error)?;
+            out.u8(plan_code(ActionPlan::InspectOnly));
+            out.fixed(&status.activity_id);
+            out.text(&hex(&status.submission_id))?;
+            out.u8(state_code(status.state));
+        }
+        other => {
+            let plan = surface.dispatch(&context, other).map_err(map_admin_error)?;
+            out.u8(plan_code(plan));
+        }
+    }
+    out.u64(surface.audit_entries());
+    out.finish()
+}
+
+const fn plan_code(plan: ActionPlan) -> u8 {
+    match plan {
+        ActionPlan::InspectOnly => 1,
+        ActionPlan::ReceiptLookupAndExactResend => 2,
+        ActionPlan::ResumeDaemonLocalSubscription => 3,
+        ActionPlan::ReconcileFromVerifiedCoreEvidence => 4,
+        ActionPlan::RetryEvidenceVerification => 5,
+        ActionPlan::OrdinaryClientWrite(_) => 6,
+    }
+}
+
+fn map_admin_error(error: AdminError) -> HumanOperationError {
+    match error {
+        AdminError::Audit(_) => HumanOperationError::Unavailable,
+        AdminError::InvalidOperator
+        | AdminError::ProtectedMutation(_)
+        | AdminError::NotUnknown
+        | AdminError::NotStalled
+        | AdminError::NotBacklogged
+        | AdminError::UnknownResolution(_)
+        | AdminError::Subscription(_)
+        | AdminError::BudgetReconciliation(_)
+        | AdminError::Verification(_)
+        | AdminError::RouteInvariant
+        | AdminError::Arithmetic => HumanOperationError::Refused,
+    }
+}
+
 fn state_code(state: SubmissionState) -> u8 {
     match state {
         SubmissionState::Prepared => 0,

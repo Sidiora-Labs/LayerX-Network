@@ -309,6 +309,12 @@ impl Store {
         Ok(Self { root, entries })
     }
 
+    /// Returns the directory this store and its tenant audit logs live under.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// Reads an object. There is deliberately no unscoped read API.
     #[must_use]
     pub fn get(&self, key: &TenantKey) -> Option<&StoredValue> {

@@ -11,7 +11,8 @@ mod recovery;
 mod reservations;
 
 pub use accounting::{
-    LocalAccounting, ProtocolBudgetState, ReconcileError, ReconciliationState, SpendReceiptEvidence,
+    budget_state_key, LocalAccounting, ProtocolBudgetRecord, ProtocolBudgetState, ReconcileError,
+    ReconciliationState, SpendReceiptEvidence, BUDGET_MODULE_ID,
 };
 pub use create::{
     create_protocol_budget, BudgetCreationError, BudgetKind, BudgetPipeline, BudgetRequest,
