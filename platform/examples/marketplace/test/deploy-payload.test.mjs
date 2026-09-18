@@ -135,6 +135,108 @@ try {
   await new Promise((closed) => state.close(closed));
 }
 
+const hostedState = {
+  ok: true,
+  result: {
+    network_mode: "hosted",
+    canonical_state_root: stateRoot,
+    state_root: stateRoot,
+    receipt_state_root: "83b1d07a4c96e2f5108b3d6a97c40e2158fb7d3c609a2e4b81d75c3f0a6e9b12",
+    receipt_digest: "2c7e5a10b94df386021c7e5b8a43d6f019bc5e27a806d14f93b2c6e05a1d7f48",
+    batch_number: 8_412,
+    observed_sequence: 5_190_744,
+    timestamp_ms: 1_700_000_500_000,
+    verification: "sequencer-signed-batch-header-and-receipt-inclusion",
+  },
+  trace: "gw-0000000000000002",
+};
+
+const hostedAccounts = {
+  ok: true,
+  result: {
+    did,
+    accounts: [
+      {
+        account_id: "33".repeat(32),
+        name: `agent:${did}:budget:daily`,
+        asset_id: asset,
+        balance: "120",
+        next_sequence: "4",
+        frozen: false,
+        canonical_value: "44".repeat(16),
+        proof_material: "55".repeat(16),
+        observed_head_sequence: "5190744",
+        batch_number: "8412",
+        verification: "settlement_anchored",
+      },
+      {
+        account_id: "66".repeat(32),
+        name: `agent:${did}:main`,
+        asset_id: asset,
+        balance: "7400",
+        next_sequence: "57",
+        frozen: false,
+        canonical_value: "77".repeat(16),
+        proof_material: "88".repeat(16),
+        observed_head_sequence: "5190744",
+        batch_number: "8412",
+        verification: "settlement_anchored",
+      },
+    ],
+    verification: "settlement_anchored",
+  },
+  trace: "gw-0000000000000003",
+};
+
+const hostedRequests = [];
+const hosted = createServer((request, response) => {
+  hostedRequests.push({ method: request.method, url: request.url, authorization: request.headers.authorization });
+  const listing = request.url === `/v1/dids/${did}/accounts`;
+  if (request.url !== "/v1/state" && !listing) {
+    response.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ ok: false }));
+    return;
+  }
+  response.writeHead(200, { "content-type": "application/json" })
+    .end(JSON.stringify(listing ? hostedAccounts : hostedState));
+});
+await new Promise((ready) => hosted.listen(0, "127.0.0.1", ready));
+
+try {
+  const endpoint = `http://127.0.0.1:${hosted.address().port}`;
+  const anchor = await readLifecycleAnchor({ endpoint, token: "hosted-token", did });
+  assert.deepEqual(hostedRequests, [
+    { method: "GET", url: "/v1/state", authorization: "Bearer hosted-token" },
+    { method: "GET", url: `/v1/dids/${did}/accounts`, authorization: "Bearer hosted-token" },
+  ]);
+  assert.equal(anchor.accountSequence, 57n);
+  assert.equal(anchor.notBefore, 1_700_000_500_000n);
+  assert.equal(anchor.expiresAt, 1_700_000_500_000n + LIFECYCLE_WINDOW_MS);
+  assert.equal(anchor.previousStateRoot, stateRoot);
+
+  await assert.rejects(
+    readLifecycleAnchor({ endpoint, token: "hosted-token", did: "did:layerx:absent" }),
+    (error) => error.state === "refused" && error.message === "did_accounts_http_404",
+  );
+} finally {
+  await new Promise((closed) => hosted.close(closed));
+}
+
+const withoutMain = createServer((request, response) => {
+  const body = request.url === "/v1/state"
+    ? hostedState
+    : { ...hostedAccounts, result: { did, accounts: [hostedAccounts.result.accounts[0]], verification: "settlement_anchored" } };
+  response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
+});
+await new Promise((ready) => withoutMain.listen(0, "127.0.0.1", ready));
+try {
+  await assert.rejects(
+    readLifecycleAnchor({ endpoint: `http://127.0.0.1:${withoutMain.address().port}`, token: "hosted-token", did }),
+    (error) => error.state === "refused" && error.message === "did_accounts_omitted_signing_account",
+  );
+} finally {
+  await new Promise((closed) => withoutMain.close(closed));
+}
+
 const refusing = createServer((request, response) => {
   response.writeHead(503, { "content-type": "application/json" })
     .end(JSON.stringify({ ok: false, error: { code: "principal_state_proof_unavailable", retry: "never" } }));
@@ -155,4 +257,5 @@ process.stdout.write(`${JSON.stringify({
   listCalldataBytes: listRequest.calldata.length,
   buyCalldataBytes: buyRequest.calldata.length,
   stateRequests: requests.length,
+  hostedRequests: hostedRequests.length,
 })}\n`);
