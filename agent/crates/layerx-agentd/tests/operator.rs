@@ -47,7 +47,7 @@ fn enqueue_unknown(store: &mut Store, outbox: &mut Outbox, id: u8) {
 
 #[test]
 fn catalogue_routes_every_operator_action_without_protocol_mutating_power() {
-    assert_eq!(commands().len(), 9);
+    assert_eq!(commands().len(), 10);
     assert!(commands().iter().all(|command| !command.protocol_mutating));
 
     for command in [

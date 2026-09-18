@@ -22,14 +22,18 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 
-use crate::admin::{ActionPlan, AdminError, OperatorCommand, OperatorContext, Surface};
+use crate::admin::{
+    ActionPlan, AdminError, OperatorCommand, OperatorContext, Surface, ORDINARY_CLIENT_WRITE,
+};
 use crate::approval::{
     ApprovalDecision, ApprovalExpiry, ApprovalOutcome, ApprovalRecord, ApprovalService,
     ApprovalSubmissionQueue, DecisionKey, DecisionRequest,
 };
 use crate::budget::{
-    budget_state_key, BudgetLimiter, LimitConfig, PersistedReceipt, ProtocolBudgetRecord,
-    ProtocolBudgetState, RestartAccounting, BUDGET_MODULE_ID,
+    budget_create_identity, budget_state_key, create_protocol_budget, BudgetCreationError,
+    BudgetKind, BudgetLimiter, BudgetPipeline, BudgetRequest, CoreBudgetReceipt, LimitConfig,
+    PersistedReceipt, ProtocolBudgetRecord, ProtocolBudgetState, RestartAccounting,
+    BUDGET_MODULE_ID,
 };
 use crate::capability::{
     assert_narrowing, Capability, CapabilityDimensions, CapabilityId, RateCeiling,
@@ -64,6 +68,8 @@ mod subject;
 use native_receipt::RetainedNativeOwner;
 
 const MAX_RESPONSE: usize = 1_048_576;
+const BUDGET_RECEIPT_POLL: Duration = Duration::from_millis(50);
+const BUDGET_RECEIPT_ATTEMPTS: u32 = 200;
 
 pub type BalanceContext = (
     [u8; 32],
@@ -2611,6 +2617,150 @@ fn agent_evidence_digest(
 }
 
 impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
+    /// Creates one managed agent's protocol budget through the ordinary
+    /// prepare, external-sign, verify and submit path, then confirms the
+    /// record from proven core state before it is recorded as active.
+    ///
+    /// The command is audited through the admin surface first. The signed
+    /// activity must be the cached preparation named by `preparation`, must
+    /// decode as a canonical budget-create payload whose `budget_id` is the
+    /// managed agent's digest, and the tenant must not already hold a live
+    /// protocol budget for that agent.
+    fn create_tenant_budget(
+        &mut self,
+        peer: &HumanPeer,
+        operator_id: &str,
+        request_id: [u8; 32],
+        command: OperatorCommand,
+    ) -> Result<HumanResponse, HumanOperationError> {
+        let OperatorCommand::CreateBudget {
+            agent,
+            asset,
+            ceiling,
+            expiry_sequence,
+            preparation,
+            signer_public_key,
+            signature,
+        } = command
+        else {
+            return Err(HumanOperationError::Refused);
+        };
+        if !self.unified_owner_active {
+            return Err(HumanOperationError::Unavailable);
+        }
+        let tenant =
+            TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
+        let root = self
+            .store
+            .lock()
+            .map_err(|_| HumanOperationError::Unavailable)?
+            .root()
+            .to_path_buf();
+        let context = OperatorContext::new(operator_id, request_id).map_err(map_admin_error)?;
+        let mut surface = Surface::open(&root, &tenant).map_err(map_admin_error)?;
+        let plan = surface
+            .dispatch(&context, command)
+            .map_err(map_admin_error)?;
+        if plan != ActionPlan::OrdinaryClientWrite(ORDINARY_CLIENT_WRITE) {
+            return Err(HumanOperationError::Refused);
+        }
+        let prepared_key = (
+            peer.tenant.clone(),
+            peer.principal.clone(),
+            hex(&preparation),
+        );
+        let cached = self
+            .prepared
+            .get(&prepared_key)
+            .cloned()
+            .ok_or(HumanOperationError::Refused)?;
+        let signed = attach_external_signature(&cached.prepared, signature)
+            .map_err(|_| HumanOperationError::Refused)?;
+        let verified = verify_before_submit(
+            &signed,
+            &cached.prepared,
+            &signer_public_key,
+            &cached.registry,
+        )
+        .map_err(|_| HumanOperationError::Refused)?;
+        let identity = budget_create_identity(verified.exact_bytes(), &cached.registry)
+            .map_err(|_| HumanOperationError::Refused)?;
+        if identity.budget_id != agent {
+            return Err(HumanOperationError::Refused);
+        }
+        let candidate = {
+            let store = self
+                .store
+                .lock()
+                .map_err(|_| HumanOperationError::Unavailable)?;
+            managed_agent::budget_candidate(&store, &tenant, agent)?
+        };
+        if candidate.state == 4 {
+            return Err(HumanOperationError::Refused);
+        }
+        let node = self.node.handshake().node().clone();
+        let verifier = EvidenceAuthority::pinned_to_handshake(
+            node.protocol_version,
+            node.network_id,
+            node.authorised_sequencer_key,
+        )
+        .map_err(|_| HumanOperationError::Refused)?;
+        let (_, _, _, _, _, _, authorization) = self.authority.balance_context(peer)?;
+        let correlation = boundary_correlation(peer, &agent, b"budget-create");
+        let mut pipeline = NodeBudgetPipeline {
+            node: &mut self.node,
+            registry: &cached.registry,
+            signer: signer_public_key,
+            correlation,
+            authorization,
+            sequencer_key: node.authorised_sequencer_key,
+            receipt_poll: BUDGET_RECEIPT_POLL,
+            receipt_attempts: BUDGET_RECEIPT_ATTEMPTS,
+        };
+        if candidate.active_budget_id != [0; 32]
+            && live_protocol_budget(&mut pipeline, &verifier, candidate.active_budget_id)
+        {
+            return Err(HumanOperationError::Refused);
+        }
+        let request = BudgetRequest {
+            tenant: tenant.clone(),
+            request_id: verified.idempotency_key(),
+            kind: BudgetKind::ProtocolBudget,
+            asset,
+            ceiling,
+            expiry_sequence,
+            canonical_activity: verified.exact_bytes().to_vec(),
+            verified_submission: Some(verified),
+        };
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| HumanOperationError::Unavailable)?;
+        let budget = create_protocol_budget(
+            &mut store,
+            &request,
+            &cached.registry,
+            &verifier,
+            &mut pipeline,
+        )
+        .map_err(|error| match error {
+            BudgetCreationError::Submission => HumanOperationError::Unavailable,
+            _ => HumanOperationError::Refused,
+        })?;
+        managed_agent::assign_budget(&mut store, &tenant, &candidate.agent_id, budget.object_id())?;
+        drop(store);
+        self.prepared.remove(&prepared_key);
+        let mut out = Encoder::new();
+        out.u8(plan_code(plan));
+        out.fixed(&budget.object_id());
+        out.u64(budget.observed_head_sequence());
+        out.u128(budget.record().per_period_limit);
+        out.u64(budget.record().expiry);
+        out.text(budget.enforcement())?;
+        out.u64(surface.audit_entries());
+        out.finish()
+    }
+
     fn dispatch_queued(
         &mut self,
         peer: &HumanPeer,
@@ -3471,6 +3621,9 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
         request_id: [u8; 32],
         command: OperatorCommand,
     ) -> Result<HumanResponse, HumanOperationError> {
+        if matches!(command, OperatorCommand::CreateBudget { .. }) {
+            return self.create_tenant_budget(peer, operator_id, request_id, command);
+        }
         let tenant =
             TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
         let root = self
@@ -4117,6 +4270,113 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
     ) -> Result<HumanResponse, HumanOperationError> {
         Err(HumanOperationError::Unavailable)
     }
+}
+
+/// Production budget pipeline over the sole frozen node client: the exact
+/// verified bytes are submitted through `submit_signed`, the receipt is fetched
+/// as a raw proof bundle, and the created record is read as proof-gated module
+/// state so the caller can verify both against the pinned handshake authority.
+struct NodeBudgetPipeline<'a> {
+    node: &'a mut Client,
+    registry: &'a ModuleRegistry,
+    signer: [u8; 32],
+    correlation: u64,
+    authorization: SequencerAuthorization,
+    sequencer_key: [u8; 32],
+    receipt_poll: Duration,
+    receipt_attempts: u32,
+}
+
+impl BudgetPipeline for NodeBudgetPipeline<'_> {
+    fn submit_budget(
+        &mut self,
+        request: &BudgetRequest,
+    ) -> Result<CoreBudgetReceipt, BudgetCreationError> {
+        let submission = request
+            .verified_submission
+            .as_ref()
+            .ok_or(BudgetCreationError::ActivityBindingUnavailable)?;
+        let activity_id = match self.node.submit_signed(
+            self.registry,
+            self.signer,
+            self.correlation,
+            0,
+            submission.exact_bytes(),
+        ) {
+            Ok(Submission::Acknowledged(acknowledgement)) => acknowledgement.activity_id(),
+            Ok(Submission::Unknown(_)) | Err(_) => return Err(BudgetCreationError::Submission),
+        };
+        if activity_id != submission.activity_id() {
+            return Err(BudgetCreationError::Submission);
+        }
+        let receipt_correlation = self.correlation.wrapping_add(1).max(1);
+        let mut attempt = 0;
+        loop {
+            match self.node.proof_bundle(
+                ProofBundleSelector::Receipt(activity_id),
+                receipt_correlation,
+                self.registry,
+            ) {
+                Ok(bundle) => {
+                    let evidence = raw_receipt_evidence(&bundle)
+                        .map_err(|_| BudgetCreationError::Submission)?;
+                    return Ok(CoreBudgetReceipt { evidence });
+                }
+                Err(error) if evidence_unavailable(&error) && attempt < self.receipt_attempts => {
+                    attempt += 1;
+                    std::thread::sleep(self.receipt_poll);
+                }
+                Err(_) => return Err(BudgetCreationError::Submission),
+            }
+        }
+    }
+
+    fn budget_state(
+        &mut self,
+        budget_id: [u8; 32],
+    ) -> Result<ProtocolBudgetState, BudgetCreationError> {
+        let key = budget_state_key(budget_id);
+        let value = self
+            .node
+            .module_state(
+                BUDGET_MODULE_ID,
+                &key,
+                VerificationLevel::STATE_PROVEN,
+                self.correlation.wrapping_add(2).max(1),
+                self.authorization,
+            )
+            .map_err(|_| BudgetCreationError::CreatedBudgetUnconfirmed)?;
+        Ok(ProtocolBudgetState {
+            evidence: RawStateEvidence::module_witness(
+                value.canonical_bytes().to_vec(),
+                BUDGET_MODULE_ID,
+                key,
+                value.proof_material().to_vec(),
+                RootSelector::Latest,
+                self.sequencer_key,
+            ),
+        })
+    }
+}
+
+/// Returns whether proven core state currently holds a live (not closed, not
+/// revoked) budget record named `budget_id`. Any missing, unverifiable or
+/// mismatched state is reported as not live.
+fn live_protocol_budget(
+    pipeline: &mut dyn BudgetPipeline,
+    verifier: &EvidenceAuthority,
+    budget_id: [u8; 32],
+) -> bool {
+    let Ok(state) = pipeline.budget_state(budget_id) else {
+        return false;
+    };
+    let Ok(verified) = verifier.verify_state(&state.evidence) else {
+        return false;
+    };
+    let Ok(record) = ProtocolBudgetRecord::decode(verified.canonical_state()) else {
+        return false;
+    };
+    record.budget_id == budget_id && !record.closed && !record.revoked
 }
 
 fn raw_receipt_evidence(

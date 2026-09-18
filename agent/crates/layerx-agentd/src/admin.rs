@@ -33,6 +33,15 @@ pub enum OperatorCommand {
     InspectVerificationBacklog([u8; 32]),
     RetryVerification([u8; 32]),
     SubmitActivity([u8; 32]),
+    CreateBudget {
+        agent: [u8; 32],
+        asset: [u8; 32],
+        ceiling: u128,
+        expiry_sequence: u64,
+        preparation: [u8; 32],
+        signer_public_key: [u8; 32],
+        signature: [u8; 64],
+    },
     AttemptProtectedMutation {
         target: [u8; 32],
         mutation: ProtectedMutation,
@@ -51,6 +60,7 @@ impl OperatorCommand {
             Self::InspectVerificationBacklog(_) => 7,
             Self::RetryVerification(_) => 8,
             Self::SubmitActivity(_) => 9,
+            Self::CreateBudget { .. } => 10,
             Self::AttemptProtectedMutation { mutation, .. } => 32 + mutation.code(),
         }
     }
@@ -66,6 +76,7 @@ impl OperatorCommand {
             | Self::InspectVerificationBacklog(target)
             | Self::RetryVerification(target)
             | Self::SubmitActivity(target)
+            | Self::CreateBudget { agent: target, .. }
             | Self::AttemptProtectedMutation { target, .. } => target,
         }
     }
@@ -129,7 +140,7 @@ pub struct CommandDescriptor {
     pub protocol_mutating: bool,
 }
 
-const COMMANDS: [CommandDescriptor; 9] = [
+const COMMANDS: [CommandDescriptor; 10] = [
     CommandDescriptor {
         name: "unknown.inspect",
         target: "unknown submission",
@@ -184,6 +195,13 @@ const COMMANDS: [CommandDescriptor; 9] = [
         action: "enter the ordinary client prepare, policy, sign and submit path",
         protocol_mutating: false,
     },
+    CommandDescriptor {
+        name: "budget.create",
+        target: "managed agent",
+        action:
+            "submit the signed budget-create activity and confirm the record from proven core state",
+        protocol_mutating: false,
+    },
 ];
 
 /// Returns the complete supported command catalogue.
@@ -211,7 +229,7 @@ pub const fn assert_non_mutating(command: &OperatorCommand) -> Result<ActionPlan
             Ok(ActionPlan::ReconcileFromVerifiedCoreEvidence)
         }
         OperatorCommand::RetryVerification(_) => Ok(ActionPlan::RetryEvidenceVerification),
-        OperatorCommand::SubmitActivity(_) => {
+        OperatorCommand::SubmitActivity(_) | OperatorCommand::CreateBudget { .. } => {
             Ok(ActionPlan::OrdinaryClientWrite(ORDINARY_CLIENT_WRITE))
         }
         OperatorCommand::AttemptProtectedMutation { mutation, .. } => {

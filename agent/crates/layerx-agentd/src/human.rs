@@ -1853,14 +1853,18 @@ fn decode_operation_4(
             HumanRequest::Operator {
                 operator_id,
                 request_id,
-                command: operator_command(code, target)?,
+                command: operator_command(code, target, reader)?,
             }
         }
         _ => return Err(HumanProtocolError::Malformed),
     })
 }
 
-fn operator_command(code: u8, target: [u8; 32]) -> Result<OperatorCommand, HumanProtocolError> {
+fn operator_command(
+    code: u8,
+    target: [u8; 32],
+    reader: &mut Reader,
+) -> Result<OperatorCommand, HumanProtocolError> {
     Ok(match code {
         1 => OperatorCommand::InspectUnknown(target),
         2 => OperatorCommand::ResolveUnknown(target),
@@ -1871,6 +1875,31 @@ fn operator_command(code: u8, target: [u8; 32]) -> Result<OperatorCommand, Human
         7 => OperatorCommand::InspectVerificationBacklog(target),
         8 => OperatorCommand::RetryVerification(target),
         9 => OperatorCommand::SubmitActivity(target),
+        10 => {
+            let asset: [u8; 32] = reader.fixed()?;
+            let ceiling = reader.u128()?;
+            let expiry_sequence = reader.u64()?;
+            let preparation: [u8; 32] = reader.fixed()?;
+            let signer_public_key: [u8; 32] = reader.fixed()?;
+            let signature: [u8; 64] = reader.fixed()?;
+            if ceiling == 0
+                || expiry_sequence == 0
+                || preparation == [0; 32]
+                || signer_public_key == [0; 32]
+                || signature == [0; 64]
+            {
+                return Err(HumanProtocolError::Malformed);
+            }
+            OperatorCommand::CreateBudget {
+                agent: target,
+                asset,
+                ceiling,
+                expiry_sequence,
+                preparation,
+                signer_public_key,
+                signature,
+            }
+        }
         33 => OperatorCommand::AttemptProtectedMutation {
             target,
             mutation: ProtectedMutation::MarkUnknownExecuted,

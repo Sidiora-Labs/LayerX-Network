@@ -15,8 +15,8 @@ pub use accounting::{
     ReconciliationState, SpendReceiptEvidence, BUDGET_MODULE_ID,
 };
 pub use create::{
-    create_protocol_budget, BudgetCreationError, BudgetKind, BudgetPipeline, BudgetRequest,
-    CoreBudgetReceipt, LocalLimit, ProtocolBudget,
+    budget_create_identity, create_protocol_budget, BudgetCreateIdentity, BudgetCreationError,
+    BudgetKind, BudgetPipeline, BudgetRequest, CoreBudgetReceipt, LocalLimit, ProtocolBudget,
 };
 pub use divergence_reporting::{BudgetDivergenceAlert, BudgetHealth, DivergenceAuditRecord};
 pub use recovery::{

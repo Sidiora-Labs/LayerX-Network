@@ -178,6 +178,154 @@ pub fn verified_submission(id: u8) -> VerifiedSubmission {
         .unwrap_or_else(|error| panic!("verify: {error:?}"))
 }
 
+pub const BUDGET_CREATE_ID: [u8; 32] = [0x0b; 32];
+pub const BUDGET_CREATE_OWNER: [u8; 32] = [0x52; 32];
+pub const BUDGET_CREATE_ACCOUNT: [u8; 32] = [0x53; 32];
+pub const BUDGET_CREATE_PURPOSE: [u8; 32] = [0x54; 32];
+pub const BUDGET_CREATE_PERIOD_LENGTH: u64 = 1_000;
+pub const BUDGET_CREATE_PERIOD_START: u64 = 80;
+
+fn budget_create_activity_type() -> ActivityType {
+    ActivityType::new(ModuleId::Budget, 1).unwrap_or_else(|error| panic!("activity: {error:?}"))
+}
+
+/// Module registry declaring the asset send used by `verified_submission` and
+/// the budget create activity used by `budget_create_submission`.
+pub fn budget_registry() -> ModuleRegistry {
+    ModuleRegistry::new(&[
+        ModuleRegistration::new(ModuleId::Asset, &[activity_type()])
+            .unwrap_or_else(|error| panic!("registration: {error:?}")),
+        ModuleRegistration::new(ModuleId::Budget, &[budget_create_activity_type()])
+            .unwrap_or_else(|error| panic!("registration: {error:?}")),
+    ])
+    .unwrap_or_else(|error| panic!("registry: {error:?}"))
+}
+
+/// Canonical budget-create payload in the shape the daemon signs and core keys:
+/// the `budget_id` field is the identifier core stores the record under.
+pub fn budget_create_payload(
+    budget_id: [u8; 32],
+    asset: [u8; 32],
+    per_period_limit: u128,
+    expires_at: u64,
+) -> Vec<u8> {
+    let mut encoder = Encoder::new(512);
+    encoder
+        .u16(0x4201)
+        .unwrap_or_else(|error| panic!("tag: {error:?}"));
+    encoder
+        .u16(10)
+        .unwrap_or_else(|error| panic!("fields: {error:?}"));
+    for fixed in [budget_id, BUDGET_CREATE_OWNER, BUDGET_CREATE_ACCOUNT, asset] {
+        encoder
+            .fixed(&fixed)
+            .unwrap_or_else(|error| panic!("fixed: {error:?}"));
+    }
+    encoder
+        .u128(per_period_limit)
+        .unwrap_or_else(|error| panic!("limit: {error:?}"));
+    encoder
+        .u64(BUDGET_CREATE_PERIOD_LENGTH)
+        .unwrap_or_else(|error| panic!("period: {error:?}"));
+    encoder
+        .u8(1)
+        .unwrap_or_else(|error| panic!("rollover: {error:?}"));
+    encoder
+        .u128(0)
+        .unwrap_or_else(|error| panic!("carry cap: {error:?}"));
+    encoder
+        .fixed(&BUDGET_CREATE_PURPOSE)
+        .unwrap_or_else(|error| panic!("purpose: {error:?}"));
+    encoder
+        .u64(expires_at)
+        .unwrap_or_else(|error| panic!("expiry: {error:?}"));
+    encoder.finish()
+}
+
+/// Prepares, externally signs and verifies one canonical budget-create activity
+/// exactly as the daemon does for an owner-supplied signature.
+pub fn budget_create_submission(
+    id: u8,
+    budget_id: [u8; 32],
+    asset: [u8; 32],
+    per_period_limit: u128,
+    expires_at: u64,
+) -> VerifiedSubmission {
+    let registry = budget_registry();
+    let mut core = RecordedCore(CorePreparationState {
+        network_id: 17,
+        account_sequence: 5,
+        protocol_timestamp: 1_000,
+        observed_head_sequence: 88,
+        module_registry: registry.clone(),
+    });
+    let prepared = prepare_activity(
+        &mut core,
+        PreparationDefaults {
+            timestamp_span: 30,
+            fee_limit: Amount::from_u128(12),
+            maximum_payload_bytes: 1_024,
+        },
+        PrepareRequest {
+            actor: Did::new(b"did:layerx:recovery")
+                .unwrap_or_else(|error| panic!("DID: {error:?}")),
+            authority: Authority::owner(b"external-authority")
+                .unwrap_or_else(|error| panic!("authority: {error:?}")),
+            activity_type: budget_create_activity_type(),
+            expected_account_sequence: Some(5),
+            timestamp_bound: Some(
+                TimestampBound::new(995, 1_010)
+                    .unwrap_or_else(|error| panic!("timestamp: {error:?}")),
+            ),
+            fee_limit: Some(Amount::from_u128(7)),
+            idempotency_key: IdempotencyKey::new([id; 32]),
+            payload: budget_create_payload(budget_id, asset, per_period_limit, expires_at),
+            declared_payload_limit: 1_024,
+        },
+    )
+    .unwrap_or_else(|error| panic!("prepare: {error:?}"));
+    let signer = LocalSigner::new([0xa5; 32]);
+    let signature = ready(sign_disclosed(
+        &signer,
+        &prepared.canonical_bytes,
+        &prepared.disclosure,
+        &registry,
+    ))
+    .unwrap_or_else(|error| panic!("sign: {error:?}"));
+    let signed_bytes = attach_external_signature(&prepared, *signature.as_bytes())
+        .unwrap_or_else(|error| panic!("attach: {error:?}"));
+    verify_before_submit(&signed_bytes, &prepared, &signer.public_key(), &registry)
+        .unwrap_or_else(|error| panic!("verify: {error:?}"))
+}
+
+/// Encodes the 278-byte canonical core budget record core would store under
+/// `budget_state_key(budget_id)` after executing `budget_create_payload`.
+pub fn core_budget_record_for(
+    budget_id: [u8; 32],
+    asset: [u8; 32],
+    per_period_limit: u128,
+    expires_at: u64,
+) -> Vec<u8> {
+    let mut bytes = vec![0_u8; 278];
+    bytes[1] = 1;
+    bytes[2..34].copy_from_slice(&budget_id);
+    bytes[34..66].copy_from_slice(&BUDGET_CREATE_OWNER);
+    bytes[66..98].copy_from_slice(&BUDGET_CREATE_ACCOUNT);
+    bytes[98..130].copy_from_slice(&asset);
+    bytes[130..162].copy_from_slice(&BUDGET_CREATE_PURPOSE);
+    bytes[162..178].copy_from_slice(&per_period_limit.to_be_bytes());
+    bytes[178..194].copy_from_slice(&per_period_limit.to_be_bytes());
+    bytes[194..210].copy_from_slice(&0_u128.to_be_bytes());
+    bytes[210..226].copy_from_slice(&0_u128.to_be_bytes());
+    bytes[226..242].copy_from_slice(&0_u128.to_be_bytes());
+    bytes[242..250].copy_from_slice(&BUDGET_CREATE_PERIOD_LENGTH.to_be_bytes());
+    bytes[250..258].copy_from_slice(&BUDGET_CREATE_PERIOD_START.to_be_bytes());
+    bytes[258..266].copy_from_slice(&expires_at.to_be_bytes());
+    bytes[266..274].copy_from_slice(&0_u64.to_be_bytes());
+    bytes[274] = 1;
+    bytes
+}
+
 pub fn tenant() -> TenantId {
     TenantId::new("tenant-a").unwrap_or_else(|error| panic!("tenant: {error}"))
 }
