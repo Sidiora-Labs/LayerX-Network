@@ -49,6 +49,10 @@
 #                                       set without creating a cluster or loading it into kind nodes; a job
 #                                       that only builds and publishes images sets its own bound here
 #                                       (default LAYERX_BETA_MIN_FREE_GIB)
+#   LAYERX_BETA_INTEROP_MANIFEST_FILE   required interop gateway runtime manifest: the imported upstream
+#                                       conformance suites, the HTTP, MCP and A2A transport pins and the
+#                                       x402, AP2, UCP, Visa TAP and fiat trust roots, none of which this
+#                                       repository can derive (interop/deploy/gateway/README.md)
 #   LAYERX_BETA_TESTNET_PORT            host ports of the testnet, gateway and faucet port-forwards
 #   LAYERX_BETA_GATEWAY_PORT            (defaults 19443, 19444, 19445)
 #   LAYERX_BETA_FAUCET_PORT
@@ -153,6 +157,7 @@ CUSTODY_PROFILE=${LAYERX_BETA_CUSTODY_PROFILE:-}
 STATUS_PUBLISH_URL=${LAYERX_BETA_STATUS_PUBLISH_URL:-}
 STATUS_PUBLISHER_REPORTED=0
 IDENTITY_PORT=19451
+INTEROP_PORT=19458
 PAXEER_CHAIN_ID=125
 MIRROR_SIGNER_SOCKET=/run/mirror-signer/signer.sock
 NODE_MANIFEST="$REPO_ROOT/platform/hosted/node/deployment.yaml"
@@ -498,6 +503,8 @@ ca_generate() {
         "DNS:layerx-relay-archive.$svc,DNS:layerx-relay-archive.$TESTNET_NAMESPACE.svc,DNS:layerx-relay-archive,DNS:$RELAY_HOST,DNS:localhost,IP:127.0.0.1"
     issue_cert faucet-redis layerx-faucet-redis serverAuth "DNS:layerx-faucet-redis.$svc,DNS:layerx-faucet-redis"
     issue_cert gateway-redis layerx-gateway-redis serverAuth "DNS:layerx-gateway-redis.$svc,DNS:layerx-gateway-redis"
+    issue_cert interop-gateway layerx-interop-gateway serverAuth \
+        "DNS:layerx-interop-gateway.$svc,DNS:layerx-interop-gateway.$TESTNET_NAMESPACE.svc,DNS:layerx-interop-gateway,DNS:localhost,IP:127.0.0.1"
     issue_cert developer layerx-developer serverAuth \
         "DNS:layerx-webhooks.$dev,DNS:layerx-dashboard-api.$dev,DNS:layerx-webhooks,DNS:layerx-dashboard-api,DNS:$DEVELOPER_HOST,DNS:localhost,IP:127.0.0.1"
     local internal="$INTERNAL_NAMESPACE.svc.cluster.local"
@@ -524,6 +531,7 @@ ca_generate() {
     issue_cert guarantor-1 layerx-guarantor-1 serverAuth,clientAuth "DNS:localhost,IP:127.0.0.1"
     issue_cert guarantor-2 layerx-guarantor-2 serverAuth,clientAuth "DNS:localhost,IP:127.0.0.1"
     issue_client_identity gateway-client layerx-gateway
+    issue_client_identity interop-client layerx-interop-gateway
     issue_client_identity developer-client layerx-developer
     issue_client_identity registry-event-client layerx-registry-events
     issue_client_identity human-event-client layerx-human-events
@@ -737,6 +745,10 @@ secrets_generate() {
     printf 'layerx-gateway' > "$d/gateway-redis.username"
     write_token "$d/gateway-redis.password"
     write_redis_acl "$d/gateway-redis.acl" layerx-gateway "$(cat "$d/gateway-redis.password")"
+    printf 'layerx-interop' > "$d/interop-redis.username"
+    write_token "$d/interop-redis.password"
+    (umask 077; printf 'user layerx-interop on >%s ~gateway:* &* +@all\n' \
+        "$(cat "$d/interop-redis.password")" >> "$d/gateway-redis.acl")
     printf 'layerx-webhooks' > "$d/webhook-redis.username"
     write_token "$d/webhook-redis.password"
     printf 'layerx-dashboard' > "$d/dashboard-redis.username"
@@ -1027,6 +1039,12 @@ secrets_apply() {
     apply_secret "$ns" layerx-gateway-redis-auth --from-file=users.acl="$s/gateway-redis.acl"
     apply_secret "$ns" layerx-gateway-redis-client --from-file=username="$s/gateway-redis.username" --from-file=password="$s/gateway-redis.password"
     apply_secret "$ns" layerx-gateway-key-provisioning --from-file=key="$s/provisioning.key"
+    apply_secret "$ns" layerx-interop-gateway-tls --from-file=server.crt.der="$c/interop-gateway/cert.der" \
+        --from-file=server.key.der="$c/interop-gateway/key.der"
+    apply_secret "$ns" layerx-interop-client-identity --from-file=client.p12="$c/interop-client/client.p12" \
+        --from-file=password="$c/interop-client/password"
+    apply_secret "$ns" layerx-interop-redis-client --from-file=username="$s/interop-redis.username" \
+        --from-file=password="$s/interop-redis.password"
     apply_configmap "$ns" layerx-core-module-registry --from-file=registry.json="$s/module-registry.json"
     apply_secret "$ns" layerx-program-registry-request-client --from-file=token="$s/registry-request.token"
     apply_secret "$ns" layerx-program-registry-publication-operator --from-file=token="$s/registry-publication.token"
@@ -1518,6 +1536,7 @@ PYREG
     render_manifest "$REPO_ROOT/platform/hosted/testnet/deployment.yaml" "$MANIFESTS_DIR/testnet.yaml"
     status_publisher_render
     render_manifest "$REPO_ROOT/platform/hosted/gateway/deployment.yaml" "$MANIFESTS_DIR/gateway.yaml"
+    render_manifest "$REPO_ROOT/platform/hosted/interop/deployment.yaml" "$MANIFESTS_DIR/interop.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/registry/journal-pvc.yaml" "$MANIFESTS_DIR/registry-journal.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/registry/deployment.yaml" "$MANIFESTS_DIR/registry.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/human/deployment.yaml" "$MANIFESTS_DIR/human.yaml"
@@ -2410,6 +2429,176 @@ port_forwards_stop() {
     done
 }
 
+interop_inputs_require() {
+    local path=${LAYERX_BETA_INTEROP_MANIFEST_FILE:-}
+    [ -n "$path" ] || fail "LAYERX_BETA_INTEROP_MANIFEST_FILE is required: the interop gateway runtime manifest carries the upstream conformance suites, the HTTP, MCP and A2A transport pins and the x402, AP2, UCP, Visa TAP and fiat trust roots, none of which this repository can derive; interop/deploy/gateway/README.md documents its shape"
+    [ -r "$path" ] || fail "LAYERX_BETA_INTEROP_MANIFEST_FILE=$path is not readable"
+}
+
+interop_runtime_render() {
+    interop_inputs_require
+    python3 - "$LAYERX_BETA_INTEROP_MANIFEST_FILE" "$REPO_ROOT/interop/specs/vendor" \
+        "$SECRETS_DIR/module-registry.json" "$SECRETS_DIR/interop-config.json" \
+        "$SECRETS_DIR/interop-modules.json" <<'PYINTEROP'
+import hashlib
+import json
+import pathlib
+import sys
+
+owner, vendor, registry, config_out, modules_out = (pathlib.Path(value) for value in sys.argv[1:])
+missing = []
+document = json.loads(owner.read_text())
+if not isinstance(document, dict):
+    raise SystemExit("beta-cluster: error: LAYERX_BETA_INTEROP_MANIFEST_FILE must hold a JSON object")
+
+VENDORED = {
+    "x402": "x402/x402-specification-v2.md",
+    "ap2": "ap2/specification.md",
+    "ucp": "ucp/specification-checkout.html",
+    "visa-tap": "visa-tap/README.md",
+}
+PINNED_VERSION = {"x402": "2.0.0", "ap2": "1.0.0"}
+EVIDENCE = {
+    "x402": "layerx-receipt",
+    "ap2": "verified-mandate+layerx-receipt",
+    "ucp": "layerx-receipt",
+    "visa-tap": "trusted-agent-credential",
+    "fiat": "external-settlement+layerx-receipt",
+}
+
+
+def hex32(container, field, where):
+    value = container.get(field)
+    if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+        missing.append("%s.%s (lowercase 32-byte hexadecimal digest)" % (where, field))
+        return None
+    if int(value, 16) == 0:
+        missing.append("%s.%s (a zero digest is not a pin)" % (where, field))
+        return None
+    return value
+
+
+def label(container, field, where):
+    value = container.get(field)
+    if not isinstance(value, str) or not value or len(value) > 512:
+        missing.append("%s.%s" % (where, field))
+        return None
+    return value
+
+
+def present(field, kind):
+    value = document.get(field)
+    if not isinstance(value, kind) or (kind is list and not value):
+        missing.append(field)
+        return None
+    return value
+
+
+adapters_input = document.get("adapters")
+if not isinstance(adapters_input, dict):
+    missing.append("adapters (object keyed by x402, ap2, ucp, visa-tap and fiat)")
+    adapters_input = {}
+adapters = []
+for identifier in ("x402", "ap2", "ucp", "visa-tap", "fiat"):
+    where = "adapters.%s" % identifier
+    declared = adapters_input.get(identifier)
+    if not isinstance(declared, dict):
+        missing.append(where)
+        continue
+    vectors = declared.get("conformance_vectors")
+    if not isinstance(vectors, int) or isinstance(vectors, bool) or vectors <= 0:
+        missing.append("%s.conformance_vectors (count of the imported upstream vectors)" % where)
+        vectors = 0
+    if identifier in VENDORED:
+        digest = hashlib.sha256((vendor / VENDORED[identifier]).read_bytes()).hexdigest()
+    else:
+        digest = hex32(declared, "specification_sha256", where)
+    version = PINNED_VERSION.get(identifier) or label(declared, "version", where)
+    specification = identifier if identifier in PINNED_VERSION else label(declared, "specification", where)
+    adapters.append({
+        "id": identifier,
+        "specification": specification,
+        "version": version,
+        "specification_sha256": digest,
+        "conformance_suite": label(declared, "conformance_suite", where),
+        "conformance_vectors": vectors,
+        "conformance_sha256": hex32(declared, "conformance_sha256", where),
+        "evidence_policy": EVIDENCE[identifier],
+    })
+
+transports_input = document.get("transports")
+if not isinstance(transports_input, dict):
+    missing.append("transports (object keyed by http, mcp and a2a)")
+    transports_input = {}
+transports = []
+for identifier in ("http", "mcp", "a2a"):
+    where = "transports.%s" % identifier
+    declared = transports_input.get(identifier)
+    if not isinstance(declared, dict):
+        missing.append(where)
+        continue
+    transports.append({
+        "id": identifier,
+        "version": label(declared, "version", where),
+        "specification_sha256": hex32(declared, "specification_sha256", where),
+        "conformance_sha256": hex32(declared, "conformance_sha256", where),
+    })
+
+roots = {
+    "x402_supported": present("x402_supported", dict),
+    "ap2_keys": present("ap2_keys", list),
+    "ap2_assets": present("ap2_assets", list),
+    "ucp_payment_handler": present("ucp_payment_handler", dict),
+    "visa_agents": present("visa_agents", list),
+    "visa_targets": present("visa_targets", list),
+    "fiat_providers": present("fiat_providers", list),
+}
+if missing:
+    raise SystemExit(
+        "beta-cluster: error: LAYERX_BETA_INTEROP_MANIFEST_FILE=%s does not declare: %s"
+        % (owner, ", ".join(missing))
+    )
+
+config = {"adapters": adapters, "transports": transports}
+config.update(roots)
+config_out.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+config_out.chmod(0o600)
+modules = json.loads(registry.read_text())["modules"]
+modules_out.write_text(json.dumps({"modules": modules}, indent=2) + "\n")
+PYINTEROP
+    [ -s "$SECRETS_DIR/interop-config.json" ] || fail "the interop gateway runtime configuration was not rendered"
+}
+
+interop_gateway_apply() {
+    interop_runtime_render
+    apply_secret "$TESTNET_NAMESPACE" layerx-interop-runtime \
+        --from-file=config.json="$SECRETS_DIR/interop-config.json" \
+        --from-file=registry.json="$SECRETS_DIR/interop-modules.json"
+    kube apply -f "$MANIFESTS_DIR/interop.yaml" > /dev/null
+    wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-interop-gateway 600
+    port_forward interop "$TESTNET_NAMESPACE" layerx-interop-gateway "$INTEROP_PORT" 443
+    interop_gateway_ready
+}
+
+interop_gateway_ready() {
+    local deadline=$((SECONDS + 300)) status
+    while :; do
+        status=$(curl --silent --show-error --max-time 10 --cacert "$CA_DIR/ca.crt" \
+            --output "$WORK_DIR/interop-readyz.json" --write-out '%{http_code}' "$INTEROP_URL/readyz" 2>/dev/null) \
+            || status=unreachable
+        if [ "$status" = 200 ] \
+            && jq -e '.status == "ready" and all(.components[]; . == "ready")' "$WORK_DIR/interop-readyz.json" > /dev/null 2>&1; then
+            log "interop gateway ready at $INTEROP_URL"
+            return 0
+        fi
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            [ -s "$WORK_DIR/interop-readyz.json" ] && cat "$WORK_DIR/interop-readyz.json" >&2
+            fail "the interop gateway did not report ready at $INTEROP_URL/readyz within 300s (last HTTP status $status)"
+        fi
+        sleep 5
+    done
+}
+
 readyz() {
     curl --silent --show-error --max-time 10 --cacert "$CA_DIR/ca.crt" "$1/readyz" 2>/dev/null
 }
@@ -2723,6 +2912,7 @@ beta_cluster_up() {
     require_foundry
     [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ] || require_builder_environment
     custody_profile_validate
+    interop_inputs_require
     MISSING_INPUTS=()
     REVISION=$(revision)
     mkdir -p "$WORK_DIR" "$LOG_DIR"
@@ -2772,6 +2962,7 @@ beta_cluster_up() {
     PAXEER_URL="https://localhost:19449"
     PAXEER_OBSERVER_URL="https://localhost:19452"
     IDENTITY_URL="https://localhost:$IDENTITY_PORT"
+    INTEROP_URL="https://localhost:$INTEROP_PORT"
     HUMAN_URL="https://localhost:19453"
     wait_for_node_genesis
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ]; then
@@ -2832,6 +3023,7 @@ beta_cluster_up() {
     mirror_ready
     relay_archive_apply
     module_registry_verify
+    interop_gateway_apply
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then material_save; fi
     env_write
     identity_write

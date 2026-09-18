@@ -1,0 +1,111 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: layerx-interop-gateway, namespace: layerx-testnet}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: layerx-interop-gateway}}
+  template:
+    metadata: {labels: {app: layerx-interop-gateway, layerx-plane: public}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+      containers:
+        - name: interop-gateway
+          image: ghcr.io/sidiora-labs/layerx-interop-gateway:0.1.0
+          imagePullPolicy: Always
+          ports: [{name: https, containerPort: 9443}]
+          env:
+            - {name: LAYERX_INTEROP_LISTEN, value: "0.0.0.0:9443"}
+            - {name: LAYERX_INTEROP_CONFIG, value: /run/layerx/interop/config.json}
+            - {name: LAYERX_INTEROP_TLS_CERT_DER, value: /run/layerx/server/server.crt.der}
+            - {name: LAYERX_INTEROP_TLS_KEY_DER, value: /run/layerx/server/server.key.der}
+            - {name: LAYERX_INTEROP_OUTBOUND_CA_DER, value: /run/layerx/trust/ca.crt.der}
+            - {name: LAYERX_INTEROP_CLIENT_IDENTITY_PKCS12, value: /run/layerx/client/client.p12}
+            - {name: LAYERX_INTEROP_CLIENT_IDENTITY_PASSWORD_FILE, value: /run/layerx/client/password}
+            - {name: LAYERX_INTEROP_HOSTED_GATEWAY_URL, value: "https://layerx-gateway.layerx-testnet.svc.cluster.local:443"}
+            - {name: LAYERX_INTEROP_RECEIPT_AUTHORITY_URL, value: "https://layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_INTEROP_RECEIPT_AUTHORITY_TOKEN_FILE, value: /run/layerx/authority/token}
+            - {name: LAYERX_INTEROP_REDIS_URL, value: "rediss://layerx-gateway-redis.layerx-testnet.svc.cluster.local:6379"}
+            - {name: LAYERX_INTEROP_REDIS_USERNAME_FILE, value: /run/layerx/redis/username}
+            - {name: LAYERX_INTEROP_REDIS_PASSWORD_FILE, value: /run/layerx/redis/password}
+            - {name: LAYERX_INTEROP_SEQUENCER_PUBLIC_KEY_FILE, value: /run/layerx/authority/sequencer-public-key}
+            - {name: LAYERX_INTEROP_SEQUENCER_ID_FILE, value: /run/layerx/authority/sequencer-id}
+            - {name: LAYERX_INTEROP_SEQUENCER_FIRST_BATCH_FILE, value: /run/layerx/authority/sequencer-first-batch}
+            - {name: LAYERX_INTEROP_SEQUENCER_LAST_BATCH_FILE, value: /run/layerx/authority/sequencer-last-batch}
+            - {name: LAYERX_INTEROP_NETWORK_ID, value: layerx-testnet}
+            - {name: LAYERX_INTEROP_WIRE_VERSION, value: "3"}
+            - {name: LAYERX_INTEROP_PROTOCOL_NETWORK_ID, value: "402"}
+            - {name: LAYERX_INTEROP_MODULE_REGISTRY_FILE, value: /run/layerx/interop/registry.json}
+            - {name: LAYERX_INTEROP_TAP_CLOCK_SKEW_SECONDS, value: "60"}
+            - {name: LAYERX_INTEROP_IDEMPOTENCY_SECONDS, value: "604800"}
+          readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: https}, periodSeconds: 5, failureThreshold: 3}
+          livenessProbe: {httpGet: {scheme: HTTPS, path: /livez, port: https}, periodSeconds: 15}
+          resources: {requests: {cpu: 250m, memory: 192Mi}, limits: {cpu: "2", memory: 1Gi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: server, mountPath: /run/layerx/server, readOnly: true}
+            - {name: trust, mountPath: /run/layerx/trust, readOnly: true}
+            - {name: client, mountPath: /run/layerx/client, readOnly: true}
+            - {name: authority, mountPath: /run/layerx/authority, readOnly: true}
+            - {name: redis, mountPath: /run/layerx/redis, readOnly: true}
+            - {name: interop, mountPath: /run/layerx/interop, readOnly: true}
+      volumes:
+        - {name: server, secret: {secretName: layerx-interop-gateway-tls}}
+        - {name: trust, secret: {secretName: layerx-internal-ca}}
+        - {name: client, secret: {secretName: layerx-interop-client-identity}}
+        - {name: authority, secret: {secretName: layerx-gateway-authority-client}}
+        - {name: redis, secret: {secretName: layerx-interop-redis-client}}
+        - {name: interop, secret: {secretName: layerx-interop-runtime, defaultMode: 0440}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-interop-gateway, namespace: layerx-testnet}
+spec: {selector: {app: layerx-interop-gateway}, ports: [{name: https, port: 443, targetPort: https}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-interop-gateway, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-interop-gateway}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}, {podSelector: {matchLabels: {app: layerx-testnet-control}}}]
+      ports: [{protocol: TCP, port: 9443}]
+  egress:
+    - to: [{podSelector: {matchLabels: {app: layerx-gateway}}}]
+      ports: [{protocol: TCP, port: 9443}]
+    - to: [{podSelector: {matchLabels: {app: layerx-gateway-redis}}}]
+      ports: [{protocol: TCP, port: 6379}]
+    - to: [{podSelector: {matchLabels: {app: layerx-node}}}]
+      ports: [{protocol: TCP, port: 9445}]
+    - to: [{namespaceSelector: {}}]
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-gateway-interop-ingress, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-gateway}}
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: layerx-interop-gateway}}}]
+      ports: [{protocol: TCP, port: 9443}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-gateway-redis-interop-ingress, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-gateway-redis}}
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: layerx-interop-gateway}}}]
+      ports: [{protocol: TCP, port: 6379}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-node-interop-ingress, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-node}}
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: layerx-interop-gateway}}}]
+      ports: [{protocol: TCP, port: 9445}]

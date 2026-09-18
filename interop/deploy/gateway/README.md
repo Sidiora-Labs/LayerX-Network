@@ -41,3 +41,42 @@ tries only the deployment-owned audience and exponent pairs for the
 authenticated principal. Exactly one verified pair whose currency matches its
 binding is required. The hosted execution key is derived from the canonical
 authenticated principal and both verified mandate references.
+
+## Image, manifest and cluster configuration
+
+`Dockerfile` builds the `layerx-interop-gateway` binary from the tracked
+repository sources and runs it as the non-root 4020 user, the same identity the
+hosted gateway image uses. `platform/hosted/interop/deployment.yaml` deploys it
+into the `layerx-testnet` namespace beside the hosted gateway: it mounts its
+server certificate, the internal CA, its outbound client identity, the gateway
+authority client secret (receipt authority token and the sequencer pins), its
+Redis credentials on the shared gateway keyspace, and the
+`layerx-interop-runtime` secret holding `config.json` and `registry.json`.
+
+`config.example.json` is the shape of the document `LAYERX_INTEROP_CONFIG`
+selects. Every identity, key, digest, principal and merchant in it is an example
+and must be replaced with authenticated operator configuration.
+
+`platform/hosted/tests/beta-cluster.sh` renders that document during bring-up.
+It derives the four vendored specification digests from `interop/specs/vendor`,
+fixes each adapter's evidence policy, and takes everything the repository cannot
+derive from the operator manifest named by `LAYERX_BETA_INTEROP_MANIFEST_FILE`:
+
+    {
+      "adapters": {
+        "x402":     {"conformance_suite": ..., "conformance_vectors": ..., "conformance_sha256": ...},
+        "ap2":      {"conformance_suite": ..., "conformance_vectors": ..., "conformance_sha256": ...},
+        "ucp":      {"specification": ..., "version": ..., "conformance_suite": ..., "conformance_vectors": ..., "conformance_sha256": ...},
+        "visa-tap": {"specification": ..., "version": ..., "conformance_suite": ..., "conformance_vectors": ..., "conformance_sha256": ...},
+        "fiat":     {"specification": ..., "version": ..., "specification_sha256": ..., "conformance_suite": ..., "conformance_vectors": ..., "conformance_sha256": ...}
+      },
+      "transports": {"http": {...}, "mcp": {...}, "a2a": {...}},
+      "x402_supported": {...}, "ap2_keys": [...], "ap2_assets": [...],
+      "ucp_payment_handler": {...}, "visa_agents": [...], "visa_targets": [...],
+      "fiat_providers": [...]
+    }
+
+Each transport entry declares `version`, `specification_sha256` and
+`conformance_sha256`. The bring-up refuses to start when the variable is unset
+and names every field the manifest fails to declare; there is no default trust
+root and no adapter is silently skipped.

@@ -8,7 +8,10 @@ use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
 use layerx_platform_gateway::http::{Client, Endpoint};
 use layerx_platform_gateway::store::{RedisEndpoint, RedisStore};
-use layerx_platform_gateway::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
+use layerx_platform_gateway::{
+    configured_sequencer, ActivityType, ModuleId, ModuleRegistration, ModuleRegistry,
+    SequencerAuthorization,
+};
 use layerx_ucp::{ucp_adapter_descriptor, PaymentHandler, UCP_CHECKOUT_SPEC_SHA256};
 use layerx_visa_tap::{
     canonical_tap_authority, canonical_tap_path, visa_tap_adapter_descriptor,
@@ -41,6 +44,7 @@ pub struct Config {
     pub receipt_authority_token: Zeroizing<String>,
     pub store: RedisStore,
     pub trusted_sequencer_key: [u8; 32],
+    pub sequencer_authorization: SequencerAuthorization,
     pub network_id: String,
     pub wire_version: String,
     pub protocol_version: u16,
@@ -209,6 +213,13 @@ pub fn load() -> Result<Config, String> {
     )?;
     let trusted_key = read_secret("LAYERX_INTEROP_SEQUENCER_PUBLIC_KEY_FILE")?;
     let trusted_sequencer_key = parse_hex32(trusted_key.as_str())?;
+    let sequencer_authorization = configured_sequencer(
+        read_secret("LAYERX_INTEROP_SEQUENCER_ID_FILE")?.as_str(),
+        trusted_key.as_str(),
+        read_secret("LAYERX_INTEROP_SEQUENCER_FIRST_BATCH_FILE")?.as_str(),
+        read_secret("LAYERX_INTEROP_SEQUENCER_LAST_BATCH_FILE")?.as_str(),
+    )
+    .map_err(|error| format!("interop sequencer authorization is invalid: {error}"))?;
     let idempotency_seconds = env::var("LAYERX_INTEROP_IDEMPOTENCY_SECONDS")
         .unwrap_or_else(|_| "604800".to_owned())
         .parse::<u64>()
@@ -254,6 +265,7 @@ pub fn load() -> Result<Config, String> {
         receipt_authority_token: read_secret("LAYERX_INTEROP_RECEIPT_AUTHORITY_TOKEN_FILE")?,
         store: RedisStore::new(redis, outbound_ca, redis_username, redis_password),
         trusted_sequencer_key,
+        sequencer_authorization,
         network_id,
         wire_version,
         protocol_version,

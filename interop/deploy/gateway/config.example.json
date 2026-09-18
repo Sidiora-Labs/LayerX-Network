@@ -1,0 +1,131 @@
+{
+  "adapters": [
+    {
+      "id": "x402",
+      "specification": "x402",
+      "version": "2.0.0",
+      "specification_sha256": "7d9be66cbcf51d3593e17ac51a623395f8ccb86fd3d76a27919419e4ce83efef",
+      "conformance_suite": "x402-v2-vectors",
+      "conformance_vectors": 64,
+      "conformance_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "evidence_policy": "layerx-receipt"
+    },
+    {
+      "id": "ap2",
+      "specification": "ap2",
+      "version": "1.0.0",
+      "specification_sha256": "32c3be5011f481d2760e56e7b9935b0842c3da0d5f7d7b8a68402a599f1e6aa3",
+      "conformance_suite": "ap2-v1-vectors",
+      "conformance_vectors": 48,
+      "conformance_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "evidence_policy": "verified-mandate+layerx-receipt"
+    },
+    {
+      "id": "ucp",
+      "specification": "ucp-checkout",
+      "version": "1.0.0",
+      "specification_sha256": "a579df10ae589a63f8f0d01e7b4f8e3183ba227025c692bb0385d92362b894b3",
+      "conformance_suite": "ucp-checkout-vectors",
+      "conformance_vectors": 32,
+      "conformance_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "evidence_policy": "layerx-receipt"
+    },
+    {
+      "id": "visa-tap",
+      "specification": "visa-trusted-agent-protocol",
+      "version": "1.0.0",
+      "specification_sha256": "5f5fbaef32d575d1f83a0a2c8051338c37f7224cd6afd464d638b8f2863cada5",
+      "conformance_suite": "visa-tap-vectors",
+      "conformance_vectors": 24,
+      "conformance_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "evidence_policy": "trusted-agent-credential"
+    },
+    {
+      "id": "fiat",
+      "specification": "layerx-fiat-settlement",
+      "version": "1.0.0",
+      "specification_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "conformance_suite": "layerx-fiat-vectors",
+      "conformance_vectors": 16,
+      "conformance_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+      "evidence_policy": "external-settlement+layerx-receipt"
+    }
+  ],
+  "transports": [
+    {
+      "id": "http",
+      "version": "1.1",
+      "specification_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+      "conformance_sha256": "8888888888888888888888888888888888888888888888888888888888888888"
+    },
+    {
+      "id": "mcp",
+      "version": "2026-06-18",
+      "specification_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+      "conformance_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "a2a",
+      "version": "0.3.0",
+      "specification_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "conformance_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  ],
+  "x402_supported": {
+    "kinds": [{"x402Version": 2, "scheme": "exact", "network": "layerx-testnet"}],
+    "extensions": [],
+    "signers": {"exact": ["layerx-testnet"]}
+  },
+  "ap2_keys": [
+    {
+      "use_case": "checkout-mandate",
+      "key_id": "ap2-checkout-key-1",
+      "public_key_sec1": "04dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  ],
+  "ap2_assets": [
+    {
+      "principal_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+      "audience": "https://interop.testnet.layerx.network",
+      "currency": "USD",
+      "minor_unit_exponent": 2,
+      "atomic_units_per_minor_unit": "10000000000000000",
+      "asset": "b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898",
+      "payer_account": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "payee_account": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "payee_merchant_id": "merchant-1",
+      "payee_merchant_name": "Example Merchant"
+    }
+  ],
+  "ucp_payment_handler": {
+    "id": "layerx-ucp-handler",
+    "version": "1.0.0",
+    "spec": "https://ucp.dev/2026-04-08/services/shopping/checkout/",
+    "schema": "https://ucp.dev/2026-04-08/schemas/shopping/checkout.json"
+  },
+  "visa_agents": [
+    {
+      "key_id": "tap-registry-key-1",
+      "agent_id": "trusted-agent-1",
+      "agent_domain": "https://agent.example",
+      "layerx_agent": "1111111111111111111111111111111111111111111111111111111111111111",
+      "algorithm": "ed25519",
+      "public_key": "2222222222222222222222222222222222222222222222222222222222222222",
+      "status": "active",
+      "expires_at": 1893456000
+    }
+  ],
+  "visa_targets": [
+    {
+      "principal_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+      "authority": "shop.example",
+      "path": "/checkout"
+    }
+  ],
+  "fiat_providers": [
+    {
+      "provider": "example-provider",
+      "public_key_ed25519": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  ]
+}
