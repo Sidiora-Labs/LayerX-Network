@@ -12,7 +12,7 @@ library MerkleLib {
     }
 
     function hashNode(bytes32 left, bytes32 right) internal pure returns (bytes32) {
-        return sha256(abi.encodePacked("LXP/v1/merkle-node\x00", left, right));
+        return sha256(abi.encodePacked("LXP/v1/merkle-internal\x00", left, right));
     }
 
     function root(bytes32 leaf, uint256 leafIndex, bytes32[] calldata siblings) internal pure returns (bytes32 result) {

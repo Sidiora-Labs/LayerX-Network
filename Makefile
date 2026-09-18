@@ -52,7 +52,8 @@ TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 	test-result test-protocol test-arena test-sanitizer-smoke \
 	test-sanitizer-suite test-codec test-codec-limits test-codec-version \
 	test-codec-vectors fuzz-codec-smoke test-crypto-hash test-crypto-ed25519 \
-	test-crypto-secp256k1 test-merkle test-merkle-proof test-crypto-ct \
+	test-crypto-secp256k1 test-merkle test-merkle-proof test-merkle-vector \
+	test-crypto-ct \
 	test-crypto-suite test-crypto-sanitizers \
 	test-arith-u128 test-arith-u256 test-arith-rounding test-arith-property \
 	test-arith-nofloat \
@@ -1718,12 +1719,20 @@ $(BUILD_DIR)/tests/lxp_test_merkle_proof: tests/crypto/lxp_test_merkle_proof.c $
 test-merkle-proof: $(BUILD_DIR)/tests/lxp_test_merkle_proof
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_merkle_proof
 
+$(BUILD_DIR)/tests/lxp_test_merkle_vector: tests/crypto/lxp_test_merkle_vector.c $(LIBRARY)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -o $@
+
+test-merkle-vector: $(BUILD_DIR)/tests/lxp_test_merkle_vector
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_merkle_vector
+
 $(BUILD_DIR)/tests/lxp_test_ct: tests/crypto/lxp_test_ct.c $(LIBRARY)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -o $@
 
 test-crypto-suite: test-crypto-hash test-crypto-ed25519 \
 		test-crypto-secp256k1 test-merkle test-merkle-proof \
+		test-merkle-vector \
 		$(BUILD_DIR)/tests/lxp_test_ct
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_ct
 

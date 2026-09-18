@@ -31,7 +31,7 @@ const SELECTOR_CLAIM_FOR_NULLIFIER: [u8; 4] = [0xb5, 0x7e, 0xa0, 0xa6];
 const WITHDRAWAL_ID_DOMAIN: &[u8] = b"LXP/v1/emergency-withdrawal-id\x00";
 const NULLIFIER_DOMAIN: &[u8] = b"LX:WITHDRAWAL:v1";
 const MERKLE_LEAF_DOMAIN: &[u8] = b"LXP/v1/merkle-leaf\x00";
-const MERKLE_NODE_DOMAIN: &[u8] = b"LXP/v1/merkle-node\x00";
+const MERKLE_NODE_DOMAIN: &[u8] = b"LXP/v1/merkle-internal\x00";
 
 const MAX_PROOF_DEPTH: usize = 256;
 const WORD: usize = 32;
