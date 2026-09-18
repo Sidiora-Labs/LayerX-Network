@@ -36,13 +36,17 @@ layerx environment use emulator --endpoint http://127.0.0.1:9402 --network-id 40
 
 The CLI reads the published anchor, fetches the identity the running emulator advertises on `GET /v1/sequencer`, and saves the profile only when the network id and the sequencer public key both agree.
 
+## Starting it from the reference applications
+
+`node platform/examples/run-reference-apps.mjs --scenario emulator` does all of the above for you on a host that has the CLI built. It resolves the binary from the first of `$LAYERX_BIN`, `build/bin/layerx`, and `layerx` on `PATH`, provisions the sequencer identity into a scratch profile directory, creates its signing keys with `layerx key create`, starts `layerx emulator up` with `--time-ms` set to the current clock and one `--prefund` per DID, polls `GET /healthz` until it reports `ready`, and terminates the emulator and removes the scratch profile when the run ends, including on failure. Every `LAYERX_EMULATOR_*` value the applications need is then read back out of that emulator - the asset from a real transfer receipt, the account identifiers from `GET /v1/state` - rather than being hand-set. Set any of those variables yourself to override one input, or `LAYERX_EMULATOR_SEED_FILE` to start from a seed you already provisioned. The reference application [README](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/platform/examples/README.md) lists every derived input.
+
 Loopback `http://` is accepted here and only here. Every non-loopback endpoint must be `https://`, in the CLI and in the middleware transport alike, and that is a refusal rather than a warning.
 
 ## The protocol surface
 
 | Method and path | Purpose |
 |---|---|
-| `GET /healthz` | Readiness |
+| `GET /healthz` | Readiness; `status` is `ready` once the core answers |
 | `GET /v1/sequencer` | Network id and the sequencer public key receipts are signed with |
 | `POST /v1/activities` | Submit a canonical activity, receive a receipt |
 | `GET /v1/state` | State root, next sequence, batch number, clock, cell and account counts |

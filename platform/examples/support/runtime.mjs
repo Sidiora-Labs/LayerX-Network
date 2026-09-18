@@ -32,8 +32,25 @@ export async function loadApplicationConfig(moduleUrl, application) {
   if (document.version !== 1 || document.application !== application) throw new Error("invalid_application_config");
   const selected = parseArguments();
   const environments = exactObject(document.environments);
-  const config = exactObject(environments[selected.environment]);
+  const config = applyEndpointOverride(selected.environment, exactObject(environments[selected.environment]));
   return Object.freeze({ name: selected.environment, action: selected.action, directory, ...config });
+}
+
+const ENDPOINT_FIELDS = Object.freeze(["humanUrl", "receiptAuthorityUrl", "settlementUrl", "endpoint"]);
+
+export function applyEndpointOverride(environment, config) {
+  const override = optionalEnvironment("LAYERX_EXAMPLE_ENDPOINT");
+  if (override === undefined || environment !== "testnet") return config;
+  const base = secureBaseUrl(override);
+  const rebased = { ...config };
+  for (const field of ENDPOINT_FIELDS) {
+    const current = config[field];
+    if (current === undefined) continue;
+    if (typeof current !== "string") throw new Error("invalid_application_endpoint");
+    const path = secureUrl(current).pathname.replace(/^\//u, "");
+    rebased[field] = new URL(path, base).toString();
+  }
+  return rebased;
 }
 
 export class ReceiptAuthorityClient {
