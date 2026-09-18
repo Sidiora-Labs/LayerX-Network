@@ -68,8 +68,10 @@
 #   LAYERX_BETA_RAMP_PORT               host port of the reference ramp port-forward (default 19459)
 #   LAYERX_BETA_RAMP_WORKER_ID          reference ramp worker identity (default layerx-beta-ramp-1)
 #   LAYERX_BETA_RAMP_FEE_LIMIT          LayerX activity fee limit of the ramp operator (default 1000)
-#   The reference ramp step refuses to start unless the owner supplies every coordinate the ramp cannot
-#   derive from the cluster. Values:
+#   The reference fiat ramp is optional: when no LAYERX_BETA_RAMP_* variable is set the bring-up records
+#   one missing owner input naming every ramp input and leaves the ramp image, workload, port-forward and
+#   sandbox journey out; when some are set it refuses to start and names each one still missing; when all
+#   are set it brings the ramp up. Values:
 #   LAYERX_BETA_RAMP_OPERATOR_PRINCIPAL_ID, LAYERX_BETA_RAMP_OPERATOR_DID,
 #   LAYERX_BETA_RAMP_OPERATOR_SIGNER_KEY_HANDLE, LAYERX_BETA_RAMP_PROVIDER_ENDPOINT,
 #   LAYERX_BETA_RAMP_PROVIDER_CALLBACK_PUBLIC_KEY, LAYERX_BETA_RAMP_COMPLIANCE_ENDPOINT,
@@ -82,7 +84,8 @@
 #   LAYERX_BETA_RAMP_GATEWAY_KEY_FILE, LAYERX_BETA_RAMP_PAXEER_CUSTODY_TOKEN_FILE,
 #   LAYERX_BETA_RAMP_QUOTES_FILE. The sandbox journey inputs LAYERX_BETA_RAMP_CUSTOMER_TOKEN,
 #   LAYERX_BETA_RAMP_OFF_GRANT_JSON, LAYERX_BETA_RAMP_ON_ACCOUNT_SEQUENCE and
-#   LAYERX_BETA_RAMP_OFF_RECEIVER_SEQUENCE are recorded as missing inputs when unset
+#   LAYERX_BETA_RAMP_OFF_RECEIVER_SEQUENCE are recorded as missing inputs when unset; setting any of them,
+#   or LAYERX_BETA_RAMP_ON_QUOTE_ID or LAYERX_BETA_RAMP_OFF_QUOTE_ID, also asks for the ramp
 #   LAYERX_BETA_TEST_AUTH_TOKEN_FILE    identity session token for the smoke source; when unset the bring-up
 #                                       provisions a principal for the source DID in the identity service with
 #                                       a generated ed25519 signer key and mints its session
@@ -183,6 +186,7 @@ RAMP_PORT=${LAYERX_BETA_RAMP_PORT:-19459}
 RAMP_HOST=ramp.testnet.layerx.network
 RAMP_WORKER_ID=${LAYERX_BETA_RAMP_WORKER_ID:-layerx-beta-ramp-1}
 RAMP_FEE_LIMIT=${LAYERX_BETA_RAMP_FEE_LIMIT:-1000}
+RAMP_ENABLED=1
 TESTNET_NAMESPACE=layerx-testnet
 DEVELOPER_NAMESPACE=layerx-developer
 IMAGE_LABEL=io.layerx.beta-cluster
@@ -208,6 +212,10 @@ RAMP_FILE_INPUTS=(LAYERX_BETA_RAMP_OUTBOUND_CA_PEM_FILE LAYERX_BETA_RAMP_OUTBOUN
     LAYERX_BETA_RAMP_OUTBOUND_IDENTITY_PASSWORD_FILE LAYERX_BETA_RAMP_PROVIDER_TOKEN_FILE
     LAYERX_BETA_RAMP_COMPLIANCE_TOKEN_FILE LAYERX_BETA_RAMP_SIGNER_TOKEN_FILE LAYERX_BETA_RAMP_GATEWAY_KEY_FILE
     LAYERX_BETA_RAMP_PAXEER_CUSTODY_TOKEN_FILE LAYERX_BETA_RAMP_QUOTES_FILE)
+RAMP_OPTIONAL_INPUTS=(LAYERX_BETA_RAMP_PORT LAYERX_BETA_RAMP_WORKER_ID LAYERX_BETA_RAMP_FEE_LIMIT
+    LAYERX_BETA_RAMP_ON_QUOTE_ID LAYERX_BETA_RAMP_OFF_QUOTE_ID LAYERX_BETA_RAMP_CUSTOMER_TOKEN
+    LAYERX_BETA_RAMP_OFF_GRANT_JSON LAYERX_BETA_RAMP_ON_ACCOUNT_SEQUENCE
+    LAYERX_BETA_RAMP_OFF_RECEIVER_SEQUENCE)
 PAXEER_CHAIN_ID=125
 MIRROR_SIGNER_SOCKET=/run/mirror-signer/signer.sock
 MIRROR_ETHEREUM_KEY_HANDLE=mirror/ethereum/beta
@@ -335,6 +343,14 @@ build_context() {
         | tar --null --files-from - -cf "$WORK_DIR/context.tar")
 }
 
+image_selected() {
+    # image_selected NAME: an image whose workload this bring-up leaves out is not built or pulled
+    case "$1" in
+        layerx-reference-ramp) [ "$RAMP_ENABLED" = 1 ] ;;
+        *) return 0 ;;
+    esac
+}
+
 build_images() {
     local name canonical dockerfile ref id
     local -a build_args
@@ -342,6 +358,7 @@ build_images() {
     : > "$WORK_DIR/images"
     build_context
     for name in "${IMAGE_NAMES[@]}"; do
+        image_selected "$name" || continue
         read -r canonical dockerfile <<<"$(image_source "$name")"
         ref=$(image_ref "$name")
         read -r -a build_args <<<"$(image_build_args "$name")"
@@ -366,6 +383,7 @@ pull_images() {
     mkdir -p "$LOG_DIR"
     : > "$WORK_DIR/images"
     for name in "${IMAGE_NAMES[@]}"; do
+        image_selected "$name" || continue
         read -r canonical dockerfile <<<"$(image_source "$name")"
         remote="ghcr.io/sidiora-labs/$name"
         digest=$(registry_image_digest "$remote:$REVISION")
@@ -1641,7 +1659,9 @@ PYREG
     sed -i "s|relay\.layerx\.example|$RELAY_HOST|g" "$MANIFESTS_DIR/relay-archive.yaml"
     grep -Fq "host: $RELAY_HOST" "$MANIFESTS_DIR/relay-archive.yaml" \
         || fail "the relay/archive manifest host could not be bound to $RELAY_HOST"
-    render_manifest "$REPO_ROOT/platform/ramps/deployment.yaml" "$MANIFESTS_DIR/ramp.yaml"
+    if [ "$RAMP_ENABLED" = 1 ]; then
+        render_manifest "$REPO_ROOT/platform/ramps/deployment.yaml" "$MANIFESTS_DIR/ramp.yaml"
+    fi
     python3 "$SCRIPT_DIR/sequencer-pins.py" --manifests "$MANIFESTS_DIR"
     cat >> "$MANIFESTS_DIR/testnet.yaml" <<EOF
 ---
@@ -3036,12 +3056,22 @@ human_custody_evidence_publish() {
 
 ramp_inputs_require() {
     local variable path
-    local -a missing=()
+    local -a missing=() supplied=()
+    for variable in "${RAMP_VALUE_INPUTS[@]}" "${RAMP_FILE_INPUTS[@]}" "${RAMP_OPTIONAL_INPUTS[@]}"; do
+        if [ -n "${!variable:-}" ]; then supplied+=("$variable"); fi
+    done
+    if [ "${#supplied[@]}" -eq 0 ]; then
+        RAMP_ENABLED=0
+        MISSING_INPUTS+=("${RAMP_VALUE_INPUTS[*]} ${RAMP_FILE_INPUTS[*]}: the reference fiat ramp; the repository does not invent provider, compliance or custody-owner coordinates, so the ramp image, workload, port-forward and sandbox journey are left out until the owner supplies all of them")
+        log "the reference fiat ramp is unconfigured: no LAYERX_BETA_RAMP_* input is set, so its image, workload and port-forward are left out of this bring-up"
+        return 0
+    fi
+    RAMP_ENABLED=1
     for variable in "${RAMP_VALUE_INPUTS[@]}" "${RAMP_FILE_INPUTS[@]}"; do
         [ -n "${!variable:-}" ] || missing+=("$variable")
     done
     if [ "${#missing[@]}" -ne 0 ]; then
-        fail "the reference ramp needs owner coordinates it cannot derive from the cluster; set ${missing[*]}"
+        fail "the reference ramp needs owner coordinates it cannot derive from the cluster; set ${missing[*]}, or unset every LAYERX_BETA_RAMP_* variable to bring the cluster up without the ramp"
     fi
     for variable in "${RAMP_FILE_INPUTS[@]}"; do
         path=${!variable}
@@ -3229,6 +3259,7 @@ ramp_wait_ready() {
 
 ramp_apply() {
     ramp_inputs_require
+    [ "$RAMP_ENABLED" = 1 ] || return 0
     ramp_secrets_apply
     kube apply -f "$MANIFESTS_DIR/ramp.yaml" > /dev/null
     wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-reference-ramp 600
@@ -3250,6 +3281,7 @@ ramp_journey_input() {
 
 ramp_env_write() {
     local on_quote off_quote
+    [ "$RAMP_ENABLED" = 1 ] || return 0
     on_quote=$(jq -r 'map(select(.direction == "on_ramp")) | .[0].quote_id // empty' "$LAYERX_BETA_RAMP_QUOTES_FILE")
     off_quote=$(jq -r 'map(select(.direction == "off_ramp")) | .[0].quote_id // empty' "$LAYERX_BETA_RAMP_QUOTES_FILE")
     {
