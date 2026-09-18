@@ -952,17 +952,6 @@ impl LayerxClient {
         order: &RampOrder,
         activity: [u8; 32],
     ) -> Result<LayerxSubmission, RampError> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct ResultBody {
-            result: ReceiptBody,
-        }
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct ReceiptBody {
-            activity_id: String,
-            receipt: String,
-        }
         let id = hex(&activity);
         let gateway_authorization = format!("LayerX-Key {}", self.gateway_key);
         let receipt_path = format!("/v1/receipts/{id}");
@@ -989,12 +978,9 @@ impl LayerxClient {
                 canonical_activity: None,
             });
         }
-        let receipt: ResultBody =
+        let envelope: GatewayReceiptEnvelope =
             serde_json::from_slice(&response.body).map_err(|_| RampError::Layerx)?;
-        if receipt.result.activity_id != id {
-            return Err(RampError::Layerx);
-        }
-        let canonical_receipt = decode_hex(&receipt.result.receipt, 256 * 1024)?;
+        let (canonical_receipt, gateway_authority) = envelope.verified(&id)?;
         let authority_authorization = format!("Bearer {}", self.authority_token);
         let authority_path = format!("/v1/authorized-batches/by-activity/{id}");
         let authority = self.http.json::<serde_json::Value>(
@@ -1041,6 +1027,9 @@ impl LayerxClient {
                     &self.sequencer_authorization,
                 )
                 .map_err(|_| RampError::Layerx)?;
+        }
+        if evidence.authorized_batch != gateway_authority {
+            return Err(RampError::Layerx);
         }
         verify_order_receipt(order, &evidence).map(|leg| LayerxSubmission::Verified {
             leg,
@@ -1535,6 +1524,53 @@ fn present_maintained<'de, D: serde::Deserializer<'de>>(
     <MaintainedBatchDocument as serde::Deserialize>::deserialize(deserializer).map(Some)
 }
 
+/// The gateway wraps every successful read in `{"ok", "result", "trace"}` and
+/// publishes the authorized batch facts it verified alongside the receipt.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GatewayReceiptEnvelope {
+    ok: bool,
+    result: GatewayReceiptBody,
+    trace: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GatewayReceiptBody {
+    activity_id: String,
+    receipt: String,
+    authority: GatewayAuthorityBody,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GatewayAuthorityBody {
+    batch_id: String,
+    asset: String,
+    previous_state_root: String,
+    resulting_state_root: String,
+    sequencer_public_key: String,
+}
+
+impl GatewayReceiptEnvelope {
+    fn verified(&self, activity_id: &str) -> Result<(Vec<u8>, AuthorizedBatch), RampError> {
+        if !self.ok || self.trace.is_empty() || self.result.activity_id != activity_id {
+            return Err(RampError::Layerx);
+        }
+        let authority = &self.result.authority;
+        Ok((
+            decode_hex(&self.result.receipt, 256 * 1024)?,
+            AuthorizedBatch::new(
+                parse_hex32(&authority.batch_id)?,
+                parse_hex32(&authority.asset)?,
+                parse_hex32(&authority.previous_state_root)?,
+                parse_hex32(&authority.resulting_state_root)?,
+                parse_hex32(&authority.sequencer_public_key)?,
+            ),
+        ))
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AuthorityBody {
@@ -1805,5 +1841,146 @@ mod authority_shape_tests {
         let mut unknown = document;
         unknown["unexpected"] = serde_json::json!(true);
         assert!(serde_json::from_value::<AuthorityBody>(unknown).is_err());
+    }
+}
+
+#[cfg(test)]
+mod gateway_receipt_envelope_tests {
+    use super::*;
+
+    fn required<T, E: std::fmt::Debug>(value: Result<T, E>) -> T {
+        value.unwrap_or_else(|error| panic!("{error:?}"))
+    }
+
+    fn field(value: &serde_json::Value, name: &str) -> String {
+        value[name]
+            .as_str()
+            .unwrap_or_else(|| panic!("missing {name}"))
+            .to_owned()
+    }
+
+    fn captured() -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../hosted/gateway/tests/fixtures/maintained-authority.json");
+        required(serde_json::from_slice(&required(std::fs::read(path))))
+    }
+
+    fn published(capture: &serde_json::Value) -> (Vec<u8>, AuthorizedBatch) {
+        let authority = &capture["authority"];
+        let receipt = required(decode_hex(&field(capture, "receipt_hex"), MAX_BODY_BYTES));
+        let document: MaintainedBatchDocument =
+            required(serde_json::from_value(authority["batch_evidence"].clone()));
+        let original = AuthorizedBatch::new(
+            required(parse_hex32(&field(authority, "batch_id"))),
+            required(parse_hex32(&field(authority, "asset"))),
+            required(parse_hex32(&field(authority, "previous_state_root"))),
+            required(parse_hex32(&field(authority, "resulting_state_root"))),
+            required(parse_hex32(&field(authority, "sequencer_public_key"))),
+        );
+        let authorization = required(SequencerAuthorization::from_config(
+            &field(capture, "sequencer_id"),
+            &field(capture, "sequencer_public_key"),
+            &field(capture, "first_batch"),
+            &field(capture, "last_batch"),
+        ));
+        let selected = required(document.authorize(&receipt, &original, &authorization));
+        (receipt, selected)
+    }
+
+    fn envelope(capture: &serde_json::Value) -> serde_json::Value {
+        let (_, selected) = published(capture);
+        serde_json::json!({
+            "ok": true,
+            "result": {
+                "activity_id": field(&capture["authority"], "activity_id"),
+                "receipt": field(capture, "receipt_hex"),
+                "authority": {
+                    "batch_id": hex(&selected.batch_id()),
+                    "asset": hex(&selected.asset()),
+                    "previous_state_root": hex(&selected.previous_state_root()),
+                    "resulting_state_root": hex(&selected.resulting_state_root()),
+                    "sequencer_public_key": hex(&selected.sequencer_public_key()),
+                }
+            },
+            "trace": "gw-3f2a9c1d4e5b6a7c8d9e0f11"
+        })
+    }
+
+    fn read(body: &serde_json::Value, activity_id: &str) -> Result<(Vec<u8>, AuthorizedBatch), ()> {
+        let bytes = required(serde_json::to_vec(body));
+        let envelope: GatewayReceiptEnvelope = serde_json::from_slice(&bytes).map_err(|_| ())?;
+        envelope.verified(activity_id).map_err(|_| ())
+    }
+
+    #[test]
+    fn real_gateway_envelope_carries_the_receipt_and_the_authority_it_verified() {
+        let capture = captured();
+        let activity = field(&capture["authority"], "activity_id");
+        let (receipt, selected) = published(&capture);
+        let (decoded, authority) = required(read(&envelope(&capture), &activity));
+        assert_eq!(decoded, receipt);
+        assert_eq!(authority, selected);
+        assert_ne!(
+            authority,
+            AuthorizedBatch::new(
+                required(parse_hex32(&field(&capture["authority"], "batch_id"))),
+                required(parse_hex32(&field(&capture["authority"], "asset"))),
+                required(parse_hex32(&field(
+                    &capture["authority"],
+                    "previous_state_root"
+                ))),
+                required(parse_hex32(&field(
+                    &capture["authority"],
+                    "resulting_state_root"
+                ))),
+                required(parse_hex32(&field(
+                    &capture["authority"],
+                    "sequencer_public_key"
+                ))),
+            ),
+            "the gateway publishes the maintained facts, not the historical ones"
+        );
+    }
+
+    #[test]
+    fn flat_partial_and_disowned_gateway_bodies_are_refused() {
+        let capture = captured();
+        let activity = field(&capture["authority"], "activity_id");
+        let document = envelope(&capture);
+        assert!(read(&document["result"], &activity).is_err());
+        let mut without_authority = document.clone();
+        assert!(without_authority["result"]
+            .as_object_mut()
+            .unwrap_or_else(|| panic!("result object"))
+            .remove("authority")
+            .is_some());
+        assert!(read(&without_authority, &activity).is_err());
+        let mut unknown = document.clone();
+        unknown["result"]["unexpected"] = serde_json::json!(true);
+        assert!(read(&unknown, &activity).is_err());
+        let mut extra = document.clone();
+        extra["unexpected"] = serde_json::json!(true);
+        assert!(read(&extra, &activity).is_err());
+        let mut refused = document.clone();
+        refused["ok"] = serde_json::json!(false);
+        assert!(read(&refused, &activity).is_err());
+        let mut untraced = document.clone();
+        untraced["trace"] = serde_json::json!("");
+        assert!(read(&untraced, &activity).is_err());
+        let mut other = document.clone();
+        other["result"]["activity_id"] = serde_json::json!("00".repeat(32));
+        assert!(read(&other, &activity).is_err());
+        for name in [
+            "batch_id",
+            "asset",
+            "previous_state_root",
+            "resulting_state_root",
+            "sequencer_public_key",
+        ] {
+            let mut changed = document.clone();
+            changed["result"]["authority"][name] = serde_json::json!("zz".repeat(32));
+            assert!(read(&changed, &activity).is_err(), "{name}");
+        }
+        assert!(read(&document, &activity).is_ok());
     }
 }
