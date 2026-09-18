@@ -1,11 +1,17 @@
 //! Fail-closed restart recovery for durable submissions and spend accounting.
 
-use crate::budget::{self, PersistedReceipt, ProtocolBudgetState, RestartAccounting, RestartError};
+use crate::budget::{
+    self, LocalAccounting, PersistedReceipt, ProtocolBudgetState, ReconcileError,
+    RestartAccounting, RestartError, SpendReceiptEvidence,
+};
 use crate::capability::{self, Ceiling, CeilingError, ReceiptApplication as CeilingReceipt};
 use crate::protocol_evidence::EvidenceAuthority;
 use crate::store::{ObjectKind, Store, StoreError, TenantId};
 
 use super::{Outbox, OutboxError, SubmissionState};
+
+/// Approval release journal entries share the outbox object kind but are not submissions.
+const APPROVAL_RELEASE_PREFIX: &[u8] = b"approval-released-v1:";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UnknownCeilingReservation {
@@ -81,7 +87,8 @@ impl From<StoreError> for RecoveryError {
 /// # Errors
 ///
 /// Returns `Budget` from restart accounting, `Ceiling` when the ceiling cannot be rebuilt or an
-/// unknown reservation cannot be re-held, `Corrupt` for an object identifier that is not 32 bytes
+/// unknown reservation cannot be re-held, `Budget` when reconciled accounting cannot issue the
+/// protocol reconciliation that admits ceiling reservations, `Corrupt` for an object identifier that is not 32 bytes
 /// or a record restored as `Prepared` or `Signed`, and `Outbox` or `Store` from each restore.
 pub fn recover(
     store: &mut Store,
@@ -103,6 +110,31 @@ pub fn recover(
         inputs.ceiling_receipts,
     )
     .map_err(RecoveryError::Ceiling)?;
+    if budget_accounting.reconciled {
+        let spend_receipts: Vec<SpendReceiptEvidence> = inputs
+            .budget_receipts
+            .iter()
+            .map(|receipt| SpendReceiptEvidence {
+                expected_activity_id: receipt.expected_activity_id,
+                evidence: receipt.evidence.clone(),
+            })
+            .collect();
+        let mut local = LocalAccounting {
+            consumed: budget_accounting.receipt_consumed,
+            window_start_sequence: 0,
+            last_receipt: None,
+        };
+        let reconciliation = budget::reconcile(
+            &mut local,
+            &inputs.protocol_budget,
+            &spend_receipts,
+            &inputs.verifier,
+        )
+        .map_err(|error| RecoveryError::Budget(map_reconcile_error(error)))?;
+        ceiling
+            .reconcile(reconciliation)
+            .map_err(RecoveryError::Ceiling)?;
+    }
     for reservation in inputs.unknown_ceiling_reservations {
         capability::consume(
             &ceiling,
@@ -123,6 +155,9 @@ pub fn recover(
     let mut awaiting_receipt_resolution = Vec::new();
     let identifiers = store.list_object_ids(tenant, ObjectKind::Outbox);
     for identifier in identifiers {
+        if identifier.starts_with(APPROVAL_RELEASE_PREFIX) {
+            continue;
+        }
         let submission_id: [u8; 32] = identifier
             .as_slice()
             .try_into()
@@ -164,4 +199,17 @@ pub fn recover(
         ceiling,
         recovery_complete: true,
     })
+}
+
+const fn map_reconcile_error(error: ReconcileError) -> RestartError {
+    match error {
+        ReconcileError::UnverifiedProtocolState => RestartError::UnverifiedProtocol,
+        ReconcileError::ProtocolStateSchemaUnavailable => {
+            RestartError::ProtocolStateSchemaUnavailable
+        }
+        ReconcileError::UnverifiedReceipt => RestartError::UnverifiedReceipt,
+        ReconcileError::DuplicateReceipt => RestartError::DuplicateReceipt,
+        ReconcileError::DuplicateActivity => RestartError::DuplicateActivity,
+        ReconcileError::ReceiptActivityMismatch => RestartError::ReceiptActivityMismatch,
+    }
 }

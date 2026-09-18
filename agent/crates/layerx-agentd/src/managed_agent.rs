@@ -270,6 +270,52 @@ pub fn validate_tenant(store: &Store, tenant: &TenantId) -> Result<(), HumanOper
     Ok(())
 }
 
+/// One managed agent's protocol budget as durably recorded for a tenant.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BudgetOwner {
+    pub agent_id: String,
+    pub agent_did: String,
+    pub active_budget_id: [u8; 32],
+}
+
+/// Lists every managed agent of `tenant` holding an active protocol budget,
+/// ordered by agent identifier. Agents without an assigned budget are omitted.
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
+pub fn budget_owners(
+    store: &Store,
+    tenant: &TenantId,
+) -> Result<Vec<BudgetOwner>, HumanOperationError> {
+    let mut owners = Vec::new();
+    for object_id in store.list_object_ids(tenant, ObjectKind::Configuration) {
+        if !object_id.starts_with(PREFIX) {
+            continue;
+        }
+        let object_key = key(tenant.clone(), ObjectKind::Configuration, object_id)
+            .map_err(|_| HumanOperationError::Refused)?;
+        let value = store
+            .get(&object_key)
+            .ok_or(HumanOperationError::Unavailable)?;
+        if value.class() != StorageClass::LocalOnly {
+            return Err(HumanOperationError::Refused);
+        }
+        let agent = decode(value.bytes())?;
+        if agent_key(tenant, &agent.agent_id)? != object_key {
+            return Err(HumanOperationError::Refused);
+        }
+        if agent.active_budget_id == [0; 32] {
+            continue;
+        }
+        owners.push(BudgetOwner {
+            agent_id: agent.agent_id,
+            agent_did: agent.agent_did,
+            active_budget_id: agent.active_budget_id,
+        });
+    }
+    owners.sort_by(|left, right| left.agent_id.cmp(&right.agent_id));
+    Ok(owners)
+}
+
 /// Validates every durable managed-agent credential against the restored authoritative session
 /// record. Legacy v3 managed records decode at the legacy session generation of one and are
 /// refused if the corresponding restored session has ever advanced.

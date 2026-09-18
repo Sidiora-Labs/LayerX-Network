@@ -532,6 +532,18 @@ pub fn raw_state_leaf_with_sequencer_id(
     let leaves = [canonical_state.as_slice()];
     let (proof, root) =
         build_proof(&leaves, 0).unwrap_or_else(|error| panic!("state proof: {error:?}"));
+    let (header, signature) = signed_batch_header(identity, sequencer_id, observed_head, root);
+    RawStateEvidence::new(canonical_state, proof, root, header, signature)
+}
+
+/// Builds and signs one canonical 15-field batch header whose resulting state
+/// root is `resulting_state_root`, returning the header bytes and signature.
+pub fn signed_batch_header(
+    identity: StateHeaderIdentity,
+    sequencer_id: [u8; 32],
+    observed_head: u64,
+    resulting_state_root: [u8; 32],
+) -> (Vec<u8>, [u8; 64]) {
     let key = SigningKey::from_bytes(&identity.signing_seed);
     let mut encoder = Encoder::new(354);
     assert_eq!(
@@ -547,7 +559,7 @@ pub fn raw_state_leaf_with_sequencer_id(
         (5, 1_u64.to_be_bytes().to_vec()),
         (6, observed_head.to_be_bytes().to_vec()),
         (7, [0x31; 32].to_vec()),
-        (8, root.to_vec()),
+        (8, resulting_state_root.to_vec()),
         (9, [0x32; 32].to_vec()),
         (10, [0x33; 32].to_vec()),
         (11, [0x34; 32].to_vec()),
@@ -587,21 +599,23 @@ pub fn raw_state_leaf_with_sequencer_id(
     let header = encoder.finish();
     let digest =
         batch_header_digest(&header).unwrap_or_else(|error| panic!("header digest: {error:?}"));
-    RawStateEvidence::new(
-        canonical_state,
-        proof,
-        root,
-        header,
-        key.sign(&digest).to_bytes(),
-    )
+    (header, key.sign(&digest).to_bytes())
 }
 
 pub fn corrupt_raw_state(raw: &RawStateEvidence, canonical_state: Vec<u8>) -> RawStateEvidence {
+    let (Some(proof), Some(resulting_state_root), Some(canonical_header), Some(header_signature)) = (
+        raw.proof().cloned(),
+        raw.resulting_state_root(),
+        raw.canonical_header().map(<[u8]>::to_vec),
+        raw.header_signature(),
+    ) else {
+        panic!("corrupt_raw_state requires state-leaf evidence");
+    };
     RawStateEvidence::new(
         canonical_state,
-        raw.proof().clone(),
-        raw.resulting_state_root(),
-        raw.canonical_header().to_vec(),
-        raw.header_signature(),
+        proof,
+        resulting_state_root,
+        canonical_header,
+        header_signature,
     )
 }
