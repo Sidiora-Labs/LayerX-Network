@@ -5,9 +5,9 @@
       "specification": "x402",
       "version": "2.0.0",
       "specification_sha256": "7d9be66cbcf51d3593e17ac51a623395f8ccb86fd3d76a27919419e4ce83efef",
-      "conformance_suite": "x402-v2-vectors",
-      "conformance_vectors": 64,
-      "conformance_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "conformance_suite": "layerx-x402-conformance-v1",
+      "conformance_vectors": 18,
+      "conformance_sha256": "9a8040d0e6c4a983815928ddb4f5b91b021851c64c779c28cad17a5e089c9d84",
       "evidence_policy": "layerx-receipt"
     },
     {
@@ -15,9 +15,9 @@
       "specification": "ap2",
       "version": "1.0.0",
       "specification_sha256": "32c3be5011f481d2760e56e7b9935b0842c3da0d5f7d7b8a68402a599f1e6aa3",
-      "conformance_suite": "ap2-v1-vectors",
-      "conformance_vectors": 48,
-      "conformance_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "conformance_suite": "layerx-ap2-conformance-v1",
+      "conformance_vectors": 6,
+      "conformance_sha256": "fc3f20f609e63327eed98bdb7984151faf459690514b0b9f9fa7a0d04b781698",
       "evidence_policy": "verified-mandate+layerx-receipt"
     },
     {
@@ -79,22 +79,32 @@
   "ap2_keys": [
     {
       "use_case": "checkout-mandate",
-      "key_id": "ap2-checkout-key-1",
-      "public_key_sec1": "04dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      "key_id": "layerx-beta-checkout-mandate-key",
+      "public_key_sec1": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "use_case": "payment-mandate",
+      "key_id": "layerx-beta-payment-mandate-key",
+      "public_key_sec1": "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "use_case": "merchant-checkout",
+      "key_id": "layerx-beta-merchant-checkout-key",
+      "public_key_sec1": "04cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     }
   ],
   "ap2_assets": [
     {
       "principal_digest": "3333333333333333333333333333333333333333333333333333333333333333",
-      "audience": "https://interop.testnet.layerx.network",
-      "currency": "USD",
-      "minor_unit_exponent": 2,
-      "atomic_units_per_minor_unit": "10000000000000000",
+      "audience": "https://layerx-interop-gateway.layerx-testnet.svc.cluster.local:9443",
+      "currency": "LXT",
+      "minor_unit_exponent": 0,
+      "atomic_units_per_minor_unit": "1000000000000000000",
       "asset": "b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898",
-      "payer_account": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      "payee_account": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "payee_merchant_id": "merchant-1",
-      "payee_merchant_name": "Example Merchant"
+      "payer_account": "1111111111111111111111111111111111111111111111111111111111111111",
+      "payee_account": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "payee_merchant_id": "layerx-beta-merchant",
+      "payee_merchant_name": "LayerX Beta Testnet Merchant"
     }
   ],
   "ucp_payment_handler": {
@@ -105,9 +115,9 @@
   },
   "visa_agents": [
     {
-      "key_id": "tap-registry-key-1",
-      "agent_id": "trusted-agent-1",
-      "agent_domain": "https://agent.example",
+      "key_id": "layerx-beta-tap-key-1",
+      "agent_id": "layerx-beta-trusted-agent",
+      "agent_domain": "https://layerx-interop-gateway.layerx-testnet.svc.cluster.local:9443",
       "layerx_agent": "1111111111111111111111111111111111111111111111111111111111111111",
       "algorithm": "ed25519",
       "public_key": "2222222222222222222222222222222222222222222222222222222222222222",
@@ -118,13 +128,13 @@
   "visa_targets": [
     {
       "principal_digest": "3333333333333333333333333333333333333333333333333333333333333333",
-      "authority": "shop.example",
+      "authority": "layerx-interop-gateway.layerx-testnet.svc.cluster.local:9443",
       "path": "/checkout"
     }
   ],
   "fiat_providers": [
     {
-      "provider": "example-provider",
+      "provider": "layerx-beta-fiat-provider",
       "public_key_ed25519": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
     }
   ]

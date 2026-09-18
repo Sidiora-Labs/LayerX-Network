@@ -1,6 +1,8 @@
-//! x402 v2 reference test vectors and conformance harness. These vectors verify
-//! wire format compatibility, canonical encoding, bounds enforcement, and
-//! interoperability with independent x402 implementations.
+//! x402 v2 conformance harness. The vectors are the first-party suite under
+//! `interop/specs/conformance/x402`, which the gateway deployment pins by
+//! vector count and digest, and they verify wire format compatibility,
+//! canonical encoding, bounds enforcement, and interoperability with
+//! independent x402 implementations.
 
 use std::collections::BTreeMap;
 
@@ -15,339 +17,64 @@ use layerx_x402::transport::{
 };
 use serde_json::json;
 
+const PAYMENT_REQUIRED_SUITE: &str =
+    include_str!("../../../specs/conformance/x402/payment-required.json");
+const PAYMENT_PAYLOAD_SUITE: &str =
+    include_str!("../../../specs/conformance/x402/payment-payload.json");
+const SETTLEMENT_RESPONSE_SUITE: &str =
+    include_str!("../../../specs/conformance/x402/settlement-response.json");
+
 struct Vector {
-    name: &'static str,
+    name: String,
     valid: bool,
     json: serde_json::Value,
 }
 
+fn suite_vectors(suite: &str, source: &str) -> Vec<Vector> {
+    let records: Vec<serde_json::Value> =
+        serde_json::from_str(suite).unwrap_or_else(|error| panic!("{source}: {error}"));
+    assert!(
+        !records.is_empty(),
+        "{source}: a suite that carries no vector is not a conformance suite"
+    );
+    records
+        .into_iter()
+        .map(|record| {
+            let name = record["name"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{source}: every vector is named"))
+                .to_owned();
+            let valid = record["valid"].as_bool().unwrap_or_else(|| {
+                panic!("{name}: every vector declares whether it must validate")
+            });
+            let json = record
+                .get("document")
+                .cloned()
+                .unwrap_or_else(|| panic!("{name}: every vector carries its wire document"));
+            Vector { name, valid, json }
+        })
+        .collect()
+}
+
 fn payment_required_vectors() -> Vec<Vector> {
-    let mut vectors = valid_payment_required_vectors();
-    vectors.extend(invalid_payment_required_vectors());
-    vectors
-}
-
-fn valid_payment_required_vectors() -> Vec<Vector> {
-    vec![
-        Vector {
-            name: "minimal_valid_payment_required",
-            valid: true,
-            json: json!({
-                "x402Version": 2,
-                "resource": {
-                    "url": "https://api.example.com/resource"
-                },
-                "accepts": [{
-                    "scheme": "exact",
-                    "network": "layerx:testnet",
-                    "amount": "1000",
-                    "asset": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-                    "payTo": "0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
-                    "maxTimeoutSeconds": 120
-                }]
-            }),
-        },
-        Vector {
-            name: "payment_required_with_all_optional_fields",
-            valid: true,
-            json: json!({
-                "x402Version": 2,
-                "error": "Unauthorized access",
-                "resource": {
-                    "url": "https://api.example.com/resource",
-                    "description": "Premium content",
-                    "mimeType": "application/json",
-                    "serviceName": "API Service",
-                    "tags": ["api", "premium"],
-                    "iconUrl": "https://api.example.com/icon.png"
-                },
-                "accepts": [{
-                    "scheme": "exact",
-                    "network": "layerx:mainnet",
-                    "amount": "5000",
-                    "asset": "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
-                    "payTo": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-                    "maxTimeoutSeconds": 300,
-                    "extra": {"customField": "value"}
-                }],
-                "extensions": {}
-            }),
-        },
-        Vector {
-            name: "payment_required_with_multiple_accepts",
-            valid: true,
-            json: json!({
-                "x402Version": 2,
-                "resource": {
-                    "url": "https://service.example/data"
-                },
-                "accepts": [
-                    {
-                        "scheme": "exact",
-                        "network": "layerx:testnet",
-                        "amount": "100",
-                        "asset": "0x".to_owned() + &"11".repeat(32),
-                        "payTo": "0x".to_owned() + &"22".repeat(32),
-                        "maxTimeoutSeconds": 60
-                    },
-                    {
-                        "scheme": "402lxp",
-                        "network": "layerx:mainnet",
-                        "amount": "200",
-                        "asset": "0x".to_owned() + &"33".repeat(32),
-                        "payTo": "0x".to_owned() + &"44".repeat(32),
-                        "maxTimeoutSeconds": 90
-                    }
-                ]
-            }),
-        },
-    ]
-}
-
-fn invalid_payment_required_vectors() -> Vec<Vector> {
-    vec![
-        Vector {
-            name: "payment_required_wrong_version",
-            valid: false,
-            json: json!({
-                "x402Version": 1,
-                "resource": {
-                    "url": "https://api.example.com/resource"
-                },
-                "accepts": [{
-                    "scheme": "exact",
-                    "network": "layerx:testnet",
-                    "amount": "1000",
-                    "asset": "0x".to_owned() + &"ab".repeat(32),
-                    "payTo": "0x".to_owned() + &"cd".repeat(32),
-                    "maxTimeoutSeconds": 120
-                }]
-            }),
-        },
-        Vector {
-            name: "payment_required_empty_accepts",
-            valid: false,
-            json: json!({
-                "x402Version": 2,
-                "resource": {
-                    "url": "https://api.example.com/resource"
-                },
-                "accepts": []
-            }),
-        },
-        Vector {
-            name: "payment_required_zero_amount",
-            valid: false,
-            json: json!({
-                "x402Version": 2,
-                "resource": {
-                    "url": "https://api.example.com/resource"
-                },
-                "accepts": [{
-                    "scheme": "exact",
-                    "network": "layerx:testnet",
-                    "amount": "0",
-                    "asset": "0x".to_owned() + &"ab".repeat(32),
-                    "payTo": "0x".to_owned() + &"cd".repeat(32),
-                    "maxTimeoutSeconds": 120
-                }]
-            }),
-        },
-        Vector {
-            name: "payment_required_negative_amount",
-            valid: false,
-            json: json!({
-                "x402Version": 2,
-                "resource": {
-                    "url": "https://api.example.com/resource"
-                },
-                "accepts": [{
-                    "scheme": "exact",
-                    "network": "layerx:testnet",
-                    "amount": "-100",
-                    "asset": "0x".to_owned() + &"ab".repeat(32),
-                    "payTo": "0x".to_owned() + &"cd".repeat(32),
-                    "maxTimeoutSeconds": 120
-                }]
-            }),
-        },
-        Vector {
-            name: "payment_required_empty_url",
-            valid: false,
-            json: json!({
-                "x402Version": 2,
-                "resource": {
-                    "url": ""
-                },
-                "accepts": [{
-                    "scheme": "exact",
-                    "network": "layerx:testnet",
-                    "amount": "1000",
-                    "asset": "0x".to_owned() + &"ab".repeat(32),
-                    "payTo": "0x".to_owned() + &"cd".repeat(32),
-                    "maxTimeoutSeconds": 120
-                }]
-            }),
-        },
-    ]
+    suite_vectors(
+        PAYMENT_REQUIRED_SUITE,
+        "interop/specs/conformance/x402/payment-required.json",
+    )
 }
 
 fn payment_payload_vectors() -> Vec<Vector> {
-    vec![
-        Vector {
-            name: "minimal_valid_payment_payload",
-            valid: true,
-            json: json!({
-                "x402Version": 2,
-                "payload": {"authorization": "signed-payment"},
-                "accepted": {
-                    "scheme": "exact",
-                    "network": "layerx:testnet",
-                    "amount": "1500",
-                    "asset": "0x".to_owned() + &"aa".repeat(32),
-                    "payTo": "0x".to_owned() + &"bb".repeat(32),
-                    "maxTimeoutSeconds": 180
-                }
-            }),
-        },
-        Vector {
-            name: "payment_payload_with_resource",
-            valid: true,
-            json: json!({
-                "x402Version": 2,
-                "resource": {
-                    "url": "https://service.example/content",
-                    "description": "Paid content"
-                },
-                "payload": {"scheme": "exact", "data": "payment-data"},
-                "accepted": {
-                    "scheme": "exact",
-                    "network": "layerx:mainnet",
-                    "amount": "2500",
-                    "asset": "0x".to_owned() + &"cc".repeat(32),
-                    "payTo": "0x".to_owned() + &"dd".repeat(32),
-                    "maxTimeoutSeconds": 240
-                }
-            }),
-        },
-        Vector {
-            name: "payment_payload_with_extensions",
-            valid: true,
-            json: json!({
-                "x402Version": 2,
-                "payload": {"authorization": "signed"},
-                "accepted": {
-                    "scheme": "402lxp",
-                    "network": "layerx:testnet",
-                    "amount": "500",
-                    "asset": "0x".to_owned() + &"ee".repeat(32),
-                    "payTo": "0x".to_owned() + &"ff".repeat(32),
-                    "maxTimeoutSeconds": 90
-                },
-                "extensions": {
-                    "custom": {
-                        "info": {"key": "value"},
-                        "schema": {"type": "object"}
-                    }
-                }
-            }),
-        },
-        Vector {
-            name: "payment_payload_wrong_version",
-            valid: false,
-            json: json!({
-                "x402Version": 3,
-                "payload": {"authorization": "signed"},
-                "accepted": {
-                    "scheme": "exact",
-                    "network": "layerx:testnet",
-                    "amount": "1000",
-                    "asset": "0x".to_owned() + &"ab".repeat(32),
-                    "payTo": "0x".to_owned() + &"cd".repeat(32),
-                    "maxTimeoutSeconds": 120
-                }
-            }),
-        },
-        Vector {
-            name: "payment_payload_non_object_payload",
-            valid: false,
-            json: json!({
-                "x402Version": 2,
-                "payload": "not-an-object",
-                "accepted": {
-                    "scheme": "exact",
-                    "network": "layerx:testnet",
-                    "amount": "1000",
-                    "asset": "0x".to_owned() + &"ab".repeat(32),
-                    "payTo": "0x".to_owned() + &"cd".repeat(32),
-                    "maxTimeoutSeconds": 120
-                }
-            }),
-        },
-    ]
+    suite_vectors(
+        PAYMENT_PAYLOAD_SUITE,
+        "interop/specs/conformance/x402/payment-payload.json",
+    )
 }
 
 fn settlement_response_vectors() -> Vec<Vector> {
-    vec![
-        Vector {
-            name: "successful_settlement",
-            valid: true,
-            json: json!({
-                "success": true,
-                "payer": "0x".to_owned() + &"12".repeat(32),
-                "transaction": "lxp:".to_owned() + &"ab".repeat(32),
-                "network": "layerx:mainnet",
-                "amount": "1000",
-                "extensions": {
-                    "layerx": {
-                        "receipt": STANDARD.encode(vec![0u8; 64]),
-                        "receiptDigest": "ab".repeat(32),
-                        "verificationLevel": "sequencer-signed"
-                    }
-                }
-            }),
-        },
-        Vector {
-            name: "pending_settlement",
-            valid: true,
-            json: json!({
-                "success": false,
-                "errorReason": "settlement_pending",
-                "transaction": "pending:ref-123",
-                "network": "layerx:testnet"
-            }),
-        },
-        Vector {
-            name: "refused_settlement",
-            valid: true,
-            json: json!({
-                "success": false,
-                "errorReason": "insufficient_balance",
-                "transaction": "",
-                "network": "layerx:testnet"
-            }),
-        },
-        Vector {
-            name: "settlement_success_with_error_reason",
-            valid: false,
-            json: json!({
-                "success": true,
-                "errorReason": "should-not-be-here",
-                "transaction": "lxp:".to_owned() + &"ab".repeat(32),
-                "network": "layerx:testnet",
-                "amount": "500"
-            }),
-        },
-        Vector {
-            name: "settlement_failed_without_error_reason",
-            valid: false,
-            json: json!({
-                "success": false,
-                "transaction": "",
-                "network": "layerx:testnet"
-            }),
-        },
-    ]
+    suite_vectors(
+        SETTLEMENT_RESPONSE_SUITE,
+        "interop/specs/conformance/x402/settlement-response.json",
+    )
 }
 
 #[test]

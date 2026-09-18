@@ -1,0 +1,105 @@
+[
+  {
+    "name": "minimal_valid_payment_payload",
+    "valid": true,
+    "document": {
+      "x402Version": 2,
+      "payload": {
+        "authorization": "signed-payment"
+      },
+      "accepted": {
+        "scheme": "exact",
+        "network": "layerx:testnet",
+        "amount": "1500",
+        "asset": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "payTo": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "maxTimeoutSeconds": 180
+      }
+    }
+  },
+  {
+    "name": "payment_payload_with_resource",
+    "valid": true,
+    "document": {
+      "x402Version": 2,
+      "resource": {
+        "url": "https://service.example/content",
+        "description": "Paid content"
+      },
+      "payload": {
+        "scheme": "exact",
+        "data": "payment-data"
+      },
+      "accepted": {
+        "scheme": "exact",
+        "network": "layerx:mainnet",
+        "amount": "2500",
+        "asset": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "payTo": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "maxTimeoutSeconds": 240
+      }
+    }
+  },
+  {
+    "name": "payment_payload_with_extensions",
+    "valid": true,
+    "document": {
+      "x402Version": 2,
+      "payload": {
+        "authorization": "signed"
+      },
+      "accepted": {
+        "scheme": "402lxp",
+        "network": "layerx:testnet",
+        "amount": "500",
+        "asset": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "payTo": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "maxTimeoutSeconds": 90
+      },
+      "extensions": {
+        "custom": {
+          "info": {
+            "key": "value"
+          },
+          "schema": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "payment_payload_wrong_version",
+    "valid": false,
+    "document": {
+      "x402Version": 3,
+      "payload": {
+        "authorization": "signed"
+      },
+      "accepted": {
+        "scheme": "exact",
+        "network": "layerx:testnet",
+        "amount": "1000",
+        "asset": "0xabababababababababababababababababababababababababababababababab",
+        "payTo": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "maxTimeoutSeconds": 120
+      }
+    }
+  },
+  {
+    "name": "payment_payload_non_object_payload",
+    "valid": false,
+    "document": {
+      "x402Version": 2,
+      "payload": "not-an-object",
+      "accepted": {
+        "scheme": "exact",
+        "network": "layerx:testnet",
+        "amount": "1000",
+        "asset": "0xabababababababababababababababababababababababababababababababab",
+        "payTo": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "maxTimeoutSeconds": 120
+      }
+    }
+  }
+]

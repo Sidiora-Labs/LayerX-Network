@@ -49,20 +49,22 @@
 #                                       set without creating a cluster or loading it into kind nodes; a job
 #                                       that only builds and publishes images sets its own bound here
 #                                       (default LAYERX_BETA_MIN_FREE_GIB)
-#   LAYERX_BETA_INTEROP_CONFORMANCE_X402  the imported conformance suite of each interop adapter as
-#   LAYERX_BETA_INTEROP_CONFORMANCE_AP2   '<suite-identifier>,<vector-count>,<suite-sha256>'. No upstream
-#   LAYERX_BETA_INTEROP_CONFORMANCE_UCP   publishes one (interop/specs/vendor/CONFORMANCE.md), so the suite
-#   LAYERX_BETA_INTEROP_CONFORMANCE_VISA_TAP  the deployment ran is a deployment input; the specifications,
-#   LAYERX_BETA_INTEROP_CONFORMANCE_FIAT  versions and digests behind them are derived from the vendored
-#                                       documents and are not
+#   LAYERX_BETA_INTEROP_CONFORMANCE_UCP   the imported conformance suite of the interop adapters this
+#   LAYERX_BETA_INTEROP_CONFORMANCE_VISA_TAP  repository carries no vectors for, as
+#   LAYERX_BETA_INTEROP_CONFORMANCE_FIAT  '<suite-identifier>,<vector-count>,<suite-sha256>'; no upstream
+#                                       publishes one (interop/specs/vendor/CONFORMANCE.md)
 #   LAYERX_BETA_INTEROP_CONFORMANCE_HTTP  the digest of the imported conformance suite of each transport
 #   LAYERX_BETA_INTEROP_CONFORMANCE_MCP   binding; the binding version and specification digest are derived
 #   LAYERX_BETA_INTEROP_CONFORMANCE_A2A   from interop/specs/vendor/x402/transports
-#   LAYERX_BETA_INTEROP_AP2_KEYS        JSON counterparty trust roots the cluster cannot generate for itself:
-#   LAYERX_BETA_INTEROP_AP2_ASSETS      the AP2 mandate issuer keys and asset bindings, the Visa TAP agent
-#   LAYERX_BETA_INTEROP_VISA_AGENTS     registry keys and merchant targets, and the fiat provider callback
-#   LAYERX_BETA_INTEROP_VISA_TARGETS    keys (interop/deploy/gateway/README.md)
-#   LAYERX_BETA_INTEROP_FIAT_PROVIDERS
+#   LAYERX_BETA_INTEROP_CONFORMANCE_X402  optional overrides of the first-party suites derived from
+#   LAYERX_BETA_INTEROP_CONFORMANCE_AP2   interop/specs/conformance, whose identifier, vector count and
+#                                       SHA-256 come from the very vector files the adapter tests read
+#   LAYERX_BETA_INTEROP_AP2_KEYS        optional JSON counterparty trust roots that pin real external
+#   LAYERX_BETA_INTEROP_AP2_ASSETS      counterparties: the AP2 mandate issuer keys and asset bindings, the
+#   LAYERX_BETA_INTEROP_VISA_AGENTS     Visa TAP agent registry keys and merchant targets, and the fiat
+#   LAYERX_BETA_INTEROP_VISA_TARGETS    provider callback keys. Unset, the bring-up generates them for this
+#   LAYERX_BETA_INTEROP_FIAT_PROVIDERS  testnet's own test clients and names them layerx-beta-*
+#                                       (interop/deploy/gateway/README.md)
 #   LAYERX_BETA_INTEROP_X402_SUPPORTED  optional overrides of the two in-cluster trust roots, which default
 #   LAYERX_BETA_INTEROP_UCP_PAYMENT_HANDLER  to this cluster's own facilitator declaration and the UCP
 #                                       payment handler of the vendored UCP revision
@@ -664,6 +666,60 @@ ca_generate() {
     SEQUENCER_ID=$(printf 'layerx-sequencer:%s' "$(cat "$CA_DIR/sequencer.pub.hex")" | sha256sum | cut -d ' ' -f 1)
 }
 
+interop_beta_roots_generate() {
+    # The interop counterparties of a private testnet are its own test clients, so the bring-up
+    # generates their trust roots and interop/deploy/gateway/render.py renders the public halves
+    # under layerx-beta-* names; LAYERX_BETA_INTEROP_{AP2_KEYS,AP2_ASSETS,VISA_AGENTS,VISA_TARGETS,
+    # FIAT_PROVIDERS} pin real external counterparties instead.
+    local d=$1 use_case decimals currency port audience principal expires
+    for use_case in checkout-mandate payment-mandate merchant-checkout; do
+        (umask 077; openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
+            -out "$d/interop-ap2-$use_case.key" 2>/dev/null)
+        openssl pkey -in "$d/interop-ap2-$use_case.key" -pubout -outform DER 2>/dev/null \
+            | tail -c 65 | od -An -v -tx1 | tr -d ' \n' > "$d/interop-ap2-$use_case.pub.hex"
+        [ "$(wc -c < "$d/interop-ap2-$use_case.pub.hex")" -eq 130 ] \
+            || fail "the generated AP2 $use_case key is not an uncompressed P-256 public key"
+    done
+    (umask 077; openssl genpkey -algorithm ed25519 -out "$d/interop-visa-agent.key" 2>/dev/null)
+    ed25519_public_hex "$d/interop-visa-agent.key" > "$d/interop-visa-agent.pub.hex"
+    [ "$(wc -c < "$d/interop-visa-agent.pub.hex")" -eq 64 ] \
+        || fail "the generated Visa TAP agent key is not an ed25519 key"
+    (umask 077; openssl genpkey -algorithm ed25519 -out "$d/interop-fiat-provider.key" 2>/dev/null)
+    ed25519_public_hex "$d/interop-fiat-provider.key" > "$d/interop-fiat-provider.pub.hex"
+    [ "$(wc -c < "$d/interop-fiat-provider.pub.hex")" -eq 64 ] \
+        || fail "the generated fiat provider key is not an ed25519 key"
+    decimals=$(sed -n 's/^ASSET_DECIMALS=\([0-9]*\)$/\1/p' "$REPO_ROOT/platform/hosted/node/bootstrap.sh")
+    currency=$(sed -n 's/^ASSET_CURRENCY=\([A-Z]*\)$/\1/p' "$REPO_ROOT/platform/hosted/node/bootstrap.sh")
+    [ -n "$decimals" ] && [ -n "$currency" ] || fail "the node bootstrap does not declare the asset currency and decimals"
+    port=$(sed -n 's/^ *- {name: LAYERX_INTEROP_LISTEN, value: "0.0.0.0:\([0-9]*\)"}$/\1/p' \
+        "$REPO_ROOT/platform/hosted/interop/deployment.yaml")
+    [ -n "$port" ] || fail "the interop deployment does not declare LAYERX_INTEROP_LISTEN"
+    audience="https://layerx-interop-gateway.$TESTNET_NAMESPACE.svc.cluster.local:$port"
+    principal=$(printf '%s' "$TEST_SOURCE_DID" | sha256sum | cut -d ' ' -f 1)
+    expires=$(( $(date -u +%s) + 31536000 ))
+    (umask 077; jq -n \
+        --arg checkout "$(cat "$d/interop-ap2-checkout-mandate.pub.hex")" \
+        --arg payment "$(cat "$d/interop-ap2-payment-mandate.pub.hex")" \
+        --arg merchant "$(cat "$d/interop-ap2-merchant-checkout.pub.hex")" \
+        --arg agent "$(cat "$d/interop-visa-agent.pub.hex")" \
+        --arg provider "$(cat "$d/interop-fiat-provider.pub.hex")" \
+        --arg principal "$principal" \
+        --arg actor "$(cat "$d/test-source-signer.pub.hex")" \
+        --arg payee "$(cat "$d/test-destination-signer.pub.hex")" \
+        --arg asset "$NODE_ASSET_ID" \
+        --arg audience "$audience" \
+        --arg currency "$currency" \
+        --argjson decimals "$decimals" \
+        --argjson expires "$expires" \
+        '{ap2_keys: {"checkout-mandate": $checkout, "payment-mandate": $payment,
+            "merchant-checkout": $merchant},
+          visa_agent_public_key: $agent, visa_agent_expires_at: $expires,
+          fiat_provider_public_key: $provider, principal_digest: $principal,
+          layerx_agent: $actor, payer_account: $actor, payee_account: $payee,
+          asset: $asset, audience: $audience, currency: $currency, asset_decimals: $decimals}' \
+        > "$d/interop-beta-roots.json")
+}
+
 ed25519_public_hex() {
     openssl pkey -in "$1" -pubout -outform DER 2>/dev/null | tail -c 32 | od -An -v -tx1 | tr -d ' \n'
 }
@@ -949,6 +1005,7 @@ secrets_generate() {
     TEST_DESTINATION_DID=${LAYERX_BETA_TEST_DESTINATION_DID:-did:layerx:$(cat "$d/test-destination-signer.pub.hex")}
     [ "$TEST_SOURCE_DID" = "did:layerx:$(cat "$d/test-source-signer.pub.hex")" ] || fail "smoke source DID must be derived from its generated signer"
     [ "$TEST_DESTINATION_DID" = "did:layerx:$(cat "$d/test-destination-signer.pub.hex")" ] || fail "smoke destination DID must be derived from its generated signer"
+    interop_beta_roots_generate "$d"
     source "$REPO_ROOT/platform/hosted/human/material.sh"
     human_secrets_generate
     [ "$TEST_SOURCE_DID" != "$TEST_DESTINATION_DID" ] || fail "the smoke source and destination DIDs must differ"
@@ -2669,8 +2726,11 @@ interop_runtime_render() {
     network=$(sed -n 's/^ *- {name: LAYERX_INTEROP_NETWORK_ID, value: \([A-Za-z0-9_.-]*\)}$/\1/p' \
         "$REPO_ROOT/platform/hosted/interop/deployment.yaml")
     [ -n "$network" ] || fail "the interop deployment does not declare LAYERX_INTEROP_NETWORK_ID"
+    [ -r "$SECRETS_DIR/interop-beta-roots.json" ] \
+        || fail "the generated interop beta trust roots are missing; the bring-up generates them in secrets_generate"
     python3 "$REPO_ROOT/interop/deploy/gateway/render.py" --network-id "$network" \
         --sequencer-public-key-file "$SECRETS_DIR/sequencer-public-key" \
+        --beta-roots-file "$SECRETS_DIR/interop-beta-roots.json" \
         --out "$SECRETS_DIR/interop-config.json" \
         || fail "the interop gateway runtime configuration was refused"
     python3 - "$SECRETS_DIR/module-registry.json" "$SECRETS_DIR/interop-modules.json" <<'PYINTEROP'
@@ -3512,7 +3572,7 @@ main() {
         test-genesis-metadata) genesis_metadata_test ;;
         down) beta_cluster_down ;;
         render) beta_cluster_render ;;
-        *) sed -n '2,143p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 64 ;;
+        *) awk 'NR > 1 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}" >&2; exit 64 ;;
     esac
 }
 

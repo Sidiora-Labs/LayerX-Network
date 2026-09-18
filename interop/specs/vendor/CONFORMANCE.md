@@ -45,11 +45,25 @@ Findings per adapter:
   `docs/wiki/FiatRamps.md`). There is no upstream protocol body and therefore
   no upstream suite.
 
-Consequence for the bring-up: the five adapter conformance triples and the
-three transport conformance digests remain deployment inputs, named one
-variable per adapter and per transport in
-`interop/deploy/gateway/README.md`. Everything else the gateway configuration
-needs — specification identifiers, versions and digests for all five adapters,
-and the transport versions and specification digests — is derived from the
-vendored documents at render time. No vector count or suite digest is
-synthesised here or by the renderer.
+Consequence for the bring-up: nothing upstream can be vendored as a suite, so
+the suites the gateway declares are either this repository's own or a
+deployment input.
+
+`interop/specs/conformance/x402` and `interop/specs/conformance/ap2` hold the
+first-party suites: the x402 wire vectors that
+`interop/crates/layerx-x402/tests/vectors.rs` runs through the production
+`PaymentRequired`, `PaymentPayload` and `SettlementResponse` types, and the AP2
+mandate vectors that `interop/crates/layerx-ap2/tests/mandates.rs` runs through
+`MandateVerifier`. The renderer derives their identifier, vector count and
+SHA-256 from those files, so the configuration pins the suite the tests
+exercise.
+
+The UCP, Visa TAP and fiat suites and the three transport conformance digests
+remain deployment inputs, named one variable each in
+`interop/deploy/gateway/README.md`: those adapters' tests construct their cases
+in Rust rather than reading vector files, and no upstream publishes a suite to
+import. Everything else the gateway configuration needs — specification
+identifiers, versions and digests for all five adapters, and the transport
+versions and specification digests — is derived from the vendored documents at
+render time. No vector count or suite digest is synthesised here or by the
+renderer.

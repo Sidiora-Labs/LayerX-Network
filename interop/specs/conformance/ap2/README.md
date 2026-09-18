@@ -13,7 +13,7 @@ This directory contains golden vectors for AP2 mandate verification conformance 
 
 Each vector is a JSON file containing:
 - `description`: Human-readable test case description
-- `generator`: Deterministic builder in `tests/mandates.rs`
+- `generator`: Deterministic builder in `interop/crates/layerx-ap2/tests/mandates.rs`
 - fixed public test-key scalars or the semantic input/mutation for that case
 - `verification_context`: Context parameters (time, nonce, audience, etc.)
 - `expected_outcome`: "success" or error variant name
@@ -27,7 +27,10 @@ These vectors target the AP2 specification version pinned at:
 
 ## Generation
 
-The JSON records are reviewable vector specifications. `tests/mandates.rs`
+The JSON records are reviewable vector specifications.
+`interop/crates/layerx-ap2/tests/mandates.rs` reads these files, so the suite
+`interop/deploy/gateway/render.py` pins by vector count and SHA-256 is the
+suite the tests exercise. It
 materializes them with fixed, valid P-256 issuer, merchant, and agent keys and
 passes the resulting JWS and SD-JWT presentations through the production
 `MandateVerifier`. Refusal vectors minimally alter or re-sign an authentic
