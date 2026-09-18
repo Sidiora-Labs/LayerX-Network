@@ -952,6 +952,111 @@ fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<()
     Ok(())
 }
 
+/// The registry read the CLI's `program registry get` consumes must publish the
+/// hosted registry's `value_accounts` block for the program the emulator itself
+/// holds, with the same statuses, account fields and receipt semantics
+/// (`platform/hosted/registry/src/routes.rs`).
+#[test]
+fn registry_reads_publish_the_program_value_accounts_the_core_proves() -> Result<(), String> {
+    let address = boot_protocol(3)?;
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED);
+    let public_hex = hex_encode(&signing_key.verifying_key().to_bytes())?;
+    let prefund = format!("{{\"did\":\"did:layerx:lifecycle\",\"public_key\":\"{public_hex}\",\"amount_lo\":100000000}}");
+    assert_eq!(
+        post_json(&address, "/__emulator/accounts/prefund", &prefund)?.status,
+        200
+    );
+    let (program, operations) = lifecycle_operations()?;
+    let mut sequence = 0_u64;
+    for (ordinal, path, payload) in operations.into_iter().take(1) {
+        let (bytes, key, _) = lifecycle_signed_activity(ordinal, &payload, sequence)?;
+        let reply = request_with_idempotency(
+            &address,
+            "POST",
+            path,
+            "application/octet-stream",
+            &bytes,
+            Some(&key),
+        )?;
+        assert_eq!(reply.status, 200, "{}", reply.text());
+        sequence += 1;
+    }
+    assert_eq!(sequence, 1);
+    let program_hex = hex_encode(&program.bytes())?;
+    let selector = format!(
+        "{{\"program_id\":\"{program_hex}\",\"requested_verification_level\":\"sequencer-signed\"}}"
+    );
+    let read = request(
+        &address,
+        "GET",
+        &format!("/v1/programs/registry/{program_hex}"),
+        "application/json",
+        selector.as_bytes(),
+    )?;
+    assert_eq!(read.status, 200, "{}", read.text());
+    let document = serde_json::from_slice::<serde_json::Value>(&read.body)
+        .map_err(|error| error.to_string())?;
+    let accounts = document
+        .get("value")
+        .ok_or_else(|| format!("registry read omitted its wrapped value: {}", read.text()))?
+        .get("value_accounts")
+        .ok_or_else(|| format!("registry read omitted value_accounts: {}", read.text()))?;
+    let listed = accounts["accounts"]
+        .as_array()
+        .ok_or("value accounts omitted their canonical account list")?;
+    for account in listed {
+        let account_id = account["account_id"]
+            .as_str()
+            .ok_or("program balance omitted its account id")?;
+        let asset_id = account["asset_id"]
+            .as_str()
+            .ok_or("program balance omitted its asset id")?;
+        assert_eq!(hex_decode(account_id)?.len(), 32);
+        assert_eq!(hex_decode(asset_id)?.len(), 32);
+        account["balance"]
+            .as_str()
+            .ok_or("program balance omitted its amount")?
+            .parse::<u128>()
+            .map_err(|error| error.to_string())?;
+        assert!(
+            account["frozen"].is_boolean(),
+            "program balance omitted its freeze state"
+        );
+    }
+    if accounts["status"] == "account-incapable-abi1" {
+        assert!(
+            listed.is_empty(),
+            "an account-incapable program published balances"
+        );
+        assert!(accounts.get("receipt").is_none());
+        return Ok(());
+    }
+    assert_eq!(accounts["status"], "current", "{accounts}");
+    assert_eq!(accounts["lifecycle"], "active");
+    let receipt = &accounts["receipt"];
+    assert_eq!(
+        receipt["verification"],
+        "account-primary-and-state-proof-verified"
+    );
+    for name in ["receipt_digest", "state_root"] {
+        let value = receipt[name]
+            .as_str()
+            .ok_or_else(|| format!("program balance proof omitted {name}"))?;
+        let bytes = hex_decode(value)?;
+        assert_eq!(bytes.len(), 32, "{name}");
+        assert!(bytes.iter().any(|byte| *byte != 0), "{name}");
+    }
+    for name in ["observed_sequence", "observed_at"] {
+        let value = receipt[name]
+            .as_str()
+            .ok_or_else(|| format!("program balance proof omitted {name}"))?
+            .parse::<u64>()
+            .map_err(|error| error.to_string())?;
+        assert!(value != 0, "{name}");
+    }
+    Ok(())
+}
+
 #[test]
 fn receipt_reads_publish_the_authority_that_verifies_the_retained_receipt() -> Result<(), String> {
     let address = boot_protocol(3)?;
