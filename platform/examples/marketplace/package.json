@@ -10,7 +10,8 @@
     "list:emulator": "node index.mjs --environment emulator --action list",
     "list:testnet": "node index.mjs --environment testnet --action list",
     "buy:emulator": "node index.mjs --environment emulator --action buy",
-    "buy:testnet": "node index.mjs --environment testnet --action buy"
+    "buy:testnet": "node index.mjs --environment testnet --action buy",
+    "test": "node --check index.mjs && node test/deploy-payload.test.mjs"
   },
   "dependencies": {
     "@sidiora/layerx-sdk": "0.1.0"

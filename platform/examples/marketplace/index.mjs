@@ -9,8 +9,13 @@ import {
   hex32,
   loadApplicationConfig,
   requiredEnvironment,
-  secureBaseUrl,
 } from "../support/runtime.mjs";
+import {
+  accountNameForDid,
+  canonicalNativeProgramDeploy,
+  marketplaceCallRequest,
+  readLifecycleAnchor,
+} from "./deploy-payload.mjs";
 
 export function platform_ref_marketplace() {
   return "programs-shared-listing-receipt-settled-marketplace";
@@ -20,7 +25,6 @@ const config = await loadApplicationConfig(import.meta.url, "marketplace");
 const cli = requiredEnvironment(config.cliBinaryEnvironment);
 const token = requiredEnvironment(config.tokenEnvironment);
 const authority = new ReceiptAuthorityClient(config.receiptAuthorityUrl, token);
-const endpoint = secureBaseUrl(config.endpoint);
 
 const runCli = (arguments_) => new Promise((resolvePromise, reject) => {
   const child = spawn(cli, ["--json", ...arguments_], {
@@ -66,75 +70,13 @@ const classifyCliFailure = (detail) => {
 
 const toHex = (bytes) => Buffer.from(bytes).toString("hex");
 
-const capabilityTags = Object.freeze({
-  "storage-read": 1,
-  "storage-write": 2,
-  transfer: 3,
-  "emit-event": 4,
-});
-
-const u128 = (value) => {
-  if (!/^(0|[1-9][0-9]{0,38})$/u.test(value)) throw new Error("invalid_marketplace_price");
-  let number = BigInt(value);
-  if (number <= 0n || number > 0xffffffffffffffffffffffffffffffffn) throw new Error("invalid_marketplace_price");
-  const bytes = new Uint8Array(16);
-  for (let index = 15; index >= 0; index -= 1) {
-    bytes[index] = Number(number & 0xffn);
-    number >>= 8n;
-  }
-  return bytes;
-};
+const CALL_FUEL = 1_000_000;
 
 const idempotency = (suffix) => {
   const prefix = requiredEnvironment(config.idempotencyEnvironment);
   const value = `${prefix}-${suffix}`;
   if (!/^[A-Za-z0-9_-]{16,128}$/u.test(value)) throw new Error("invalid_marketplace_idempotency_key");
   return value;
-};
-
-const post = async (path, body, idempotencyKey) => {
-  let response;
-  try {
-    response = await fetch(new URL(path, endpoint), {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-        "idempotency-key": idempotencyKey,
-      },
-      body: JSON.stringify(body),
-    });
-  } catch {
-    throw new LayerXApplicationStateError("unknown", "program_gateway_unreachable");
-  }
-  const value = await response.json().catch(() => undefined);
-  if (!response.ok) throw classifyHttpFailure(response.status);
-  if (value === undefined) throw new LayerXApplicationStateError("unknown", "program_gateway_returned_non_json");
-  return exactObject(value);
-};
-
-const classifyHttpFailure = (status) => {
-  if (status === 202 || status === 408 || status === 409 || status === 425) {
-    return new LayerXApplicationStateError("pending", `program_gateway_http_${status}`);
-  }
-  if (status === 400 || status === 401 || status === 403 || status === 410 || status === 422) {
-    return new LayerXApplicationStateError("refused", `program_gateway_http_${status}`);
-  }
-  return new LayerXApplicationStateError("unknown", `program_gateway_http_${status}`);
-};
-
-const canonicalCallPayload = (programId, calldata, capabilities) => {
-  const domain = Buffer.from("LayerX/programs/call/v1\0", "utf8");
-  const fuel = Buffer.alloc(8);
-  fuel.writeBigUInt64BE(1_000_000n);
-  const feeLimit = Buffer.alloc(16);
-  const tags = Buffer.from(capabilities.map((name) => capabilityTags[name]).sort((left, right) => left - right));
-  const count = Buffer.alloc(2);
-  count.writeUInt16BE(tags.length);
-  const length = Buffer.alloc(4);
-  length.writeUInt32BE(calldata.length);
-  return Buffer.concat([domain, programId, fuel, feeLimit, count, tags, length, calldata]);
 };
 
 const canonicalReceipt = (value) => {
@@ -191,58 +133,104 @@ const findState = (value) => {
   return undefined;
 };
 
+const signingKeyDid = async () => {
+  const listed = await runCli(["key", "list"]);
+  const keys = Array.isArray(listed.data) ? listed.data : undefined;
+  if (keys === undefined) throw new LayerXApplicationStateError("unknown", "layerx_cli_omitted_key_list");
+  const selected = keys.find((entry) => exactObject(entry).default === true) ?? keys[0];
+  if (selected === undefined) throw new LayerXApplicationStateError("refused", "layerx_cli_has_no_signing_key");
+  const did = exactObject(selected).did;
+  accountNameForDid(did);
+  return did;
+};
+
+const anchor = async () => readLifecycleAnchor({
+  endpoint: config.endpoint,
+  token,
+  did: await signingKeyDid(),
+});
+
 const deploy = async () => {
   const manifest = resolve(config.directory, "program/Cargo.toml");
   const built = await runCli(["program", "build", "--manifest-path", manifest]);
   const artifact = built.data?.artifact;
   const codeHash = built.data?.code_hash;
-  if (typeof artifact !== "string" || typeof codeHash !== "string" || !/^[0-9a-f]{64}$/u.test(codeHash)) {
+  const abiVersion = built.data?.abi_version;
+  if (typeof artifact !== "string" || typeof codeHash !== "string" || !/^[0-9a-f]{64}$/u.test(codeHash)
+    || !Number.isSafeInteger(abiVersion)) {
     throw new LayerXApplicationStateError("unknown", "program_build_omitted_artifact_identity");
   }
+  const artifactPath = resolve(config.directory, artifact);
   let wasm;
   try {
-    wasm = await readFile(resolve(config.directory, artifact));
+    wasm = await readFile(artifactPath);
   } catch {
     throw new LayerXApplicationStateError("unknown", "program_build_artifact_unreadable");
   }
-  const deployment = await post("/v1/programs/deploy", {
-    abi_version: 1,
-    code_hash: codeHash,
-    wasm_hex: wasm.toString("hex"),
-    upgrade_policy: { kind: "immutable" },
-    source_uri: "platform/examples/marketplace/program",
-  }, idempotency("deploy"));
-  return verifyOutcome(deployment);
+  const deployment = canonicalNativeProgramDeploy({
+    programId: requiredEnvironment(config.programIdEnvironment),
+    abiVersion,
+    codeHash,
+    wasm,
+  });
+  const anchored = await anchor();
+  return verifyOutcome(await runCli([
+    "program",
+    "deploy",
+    artifactPath,
+    "--program-id",
+    toHex(deployment.value.programId),
+    "--idempotency-key",
+    idempotency("deploy"),
+    "--account-sequence",
+    anchored.accountSequence.toString(),
+    "--not-before-ms",
+    anchored.notBefore.toString(),
+    "--expires-at-ms",
+    anchored.expiresAt.toString(),
+    "--previous-state-root",
+    anchored.previousStateRoot,
+  ]));
 };
 
 const call = async (action) => {
-  const programId = Buffer.from(hex32(requiredEnvironment(config.programIdEnvironment)));
-  const listing = hex32(requiredEnvironment(config.listingIdEnvironment));
-  const calldata = Buffer.from(action === "list"
-    ? Buffer.concat([
-      Buffer.from([1]),
-      Buffer.from(listing),
-      Buffer.from(hex32(requiredEnvironment(config.assetEnvironment))),
-      Buffer.from(hex32(requiredEnvironment(config.sellerEnvironment))),
-      Buffer.from(u128(requiredEnvironment(config.priceEnvironment))),
-    ])
-    : Buffer.concat([
-      Buffer.from([2]),
-      Buffer.from(listing),
-      Buffer.from(hex32(requiredEnvironment(config.receiptDigestEnvironment))),
-    ]));
-  const capabilities = action === "list"
-    ? ["storage-read", "storage-write", "emit-event"]
-    : ["storage-read", "storage-write", "transfer", "emit-event"];
-  const canonicalPayload = canonicalCallPayload(programId, calldata, capabilities);
-  return verifyOutcome(await post("/v1/programs/call", {
-    program_id: toHex(programId),
-    calldata: toHex(calldata),
-    budget: { fuel: 1_000_000, fee_limit: "0" },
-    capabilities,
-    canonical_payload: toHex(canonicalPayload),
-    contract_major: 1,
-  }, idempotency(action)));
+  const programId = toHex(hex32(requiredEnvironment(config.programIdEnvironment)));
+  const request = marketplaceCallRequest({
+    action,
+    listingId: requiredEnvironment(config.listingIdEnvironment),
+    asset: requiredEnvironment(config.assetEnvironment),
+    seller: requiredEnvironment(config.sellerEnvironment),
+    price: requiredEnvironment(config.priceEnvironment),
+    receiptDigest: action === "buy" ? requiredEnvironment(config.receiptDigestEnvironment) : undefined,
+  });
+  const discovered = await runCli(["program", "discover", programId]);
+  const abiVersion = discovered.data?.abi_version;
+  if (!Number.isSafeInteger(abiVersion)) {
+    throw new LayerXApplicationStateError("unknown", "program_discovery_omitted_abi_version");
+  }
+  const anchored = await anchor();
+  return verifyOutcome(await runCli([
+    "program",
+    "call",
+    programId,
+    "--abi-version",
+    abiVersion.toString(),
+    "--calldata",
+    toHex(request.calldata),
+    "--fuel",
+    CALL_FUEL.toString(),
+    "--fee-limit",
+    "0",
+    ...request.capabilities.flatMap((capability) => ["--capability", capability]),
+    "--idempotency-key",
+    idempotency(action),
+    "--account-sequence",
+    anchored.accountSequence.toString(),
+    "--not-before-ms",
+    anchored.notBefore.toString(),
+    "--expires-at-ms",
+    anchored.expiresAt.toString(),
+  ]));
 };
 
 try {
