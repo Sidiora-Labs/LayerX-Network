@@ -1,5 +1,6 @@
 mod native_call;
 mod program_lifecycle;
+mod settlement;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{c_char, c_int, c_uchar, c_uint, c_ulonglong, c_void, CStr};
@@ -1191,6 +1192,88 @@ fn submit(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
         "refused"
     };
     success(trace, &format!("{{\"state\":\"{state}\",\"activity_id\":\"{activity_id}\",\"batch_id\":\"{}\",\"global_sequence\":{global_sequence},\"result_code\":{result_code},\"state_root\":\"{}\",\"receipt\":\"{receipt_hex}\"}}", hex_encode(&batch_id), hex_encode(&state_root)))
+}
+
+fn settle(emulator: &Emulator, request: &Request, trace: u64) -> Response {
+    let media_type = request
+        .content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if media_type != "application/json" {
+        return refusal(
+            trace,
+            415,
+            "unsupported_media_type",
+            "settlement requests must carry application/json",
+        );
+    }
+    let claim = match settlement::claim(&request.body) {
+        Ok(claim) => claim,
+        Err(refused) => {
+            return refusal(
+                trace,
+                400,
+                refused.reason(),
+                "the settlement request is not the seller settlement contract",
+            )
+        }
+    };
+    let activity_id = hex_encode(&claim.activity_id());
+    let Some(retained) = emulator.receipts.get(&activity_id) else {
+        return success(
+            trace,
+            &settlement::refused("activity_not_settled").to_string(),
+        );
+    };
+    let Ok(canonical) = hex_decode(retained) else {
+        return refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "the retained receipt is not canonical hexadecimal",
+        );
+    };
+    if canonical.as_slice() != claim.receipt() {
+        return success(
+            trace,
+            &settlement::refused("settlement_receipt_mismatch").to_string(),
+        );
+    }
+    let Ok(decoded) = layerx_wire::receipt::decode(&canonical) else {
+        return refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "the retained receipt is not canonically encoded",
+        );
+    };
+    let Some(protocol) = decoded.protocol() else {
+        return refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "the retained receipt carries no protocol body",
+        );
+    };
+    let authorized = AuthorizedBatch::new(
+        protocol.batch_id(),
+        protocol.asset(),
+        protocol.previous_state_root(),
+        protocol.resulting_state_root(),
+        emulator.signing_key.verifying_key().to_bytes(),
+    );
+    let Ok(verified) = verify_receipt(&canonical, &authorized) else {
+        return success(
+            trace,
+            &settlement::refused("receipt_verification_failed").to_string(),
+        );
+    };
+    success(
+        trace,
+        &settlement::settled(&claim, verified.canonical_bytes(), &authorized).to_string(),
+    )
 }
 
 fn decode_activity(request: &Request) -> Result<Vec<u8>, String> {
@@ -2718,6 +2801,7 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
         ("GET", "/healthz") => health(emulator, trace),
         ("GET", "/v1/sequencer") => sequencer_identity(emulator, trace),
         ("POST", "/v1/activities") => submit(emulator, request, trace),
+        ("POST", "/v1/settle") => settle(emulator, request, trace),
         ("POST", "/v1/moves/quote") => move_quote(emulator, request, trace),
         ("POST", "/v1/moves") => move_commit(emulator, request, trace),
         (
@@ -2769,6 +2853,7 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
             | "/v1/activities"
             | "/v1/moves/quote"
             | "/v1/moves"
+            | "/v1/settle"
             | "/v1/state"
             | "/__emulator/accounts/prefund"
             | "/__emulator/time/set"
