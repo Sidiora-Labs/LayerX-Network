@@ -105,7 +105,7 @@ install = "npm install"
 run = "node index.mjs"
 measured_region = "integration"
 maximum_integration_lines = 9
-requires = "Node.js 22 or newer and the twenty declared seller keys the integration reads from the environment: LAYERX_PRINCIPAL, LAYERX_PROTECTED_PATH, the LAYERX_RESOURCE_* fields, LAYERX_X402_SCHEME, LAYERX_X402_NETWORK, LAYERX_PRICE, LAYERX_ASSET, LAYERX_PAY_TO, LAYERX_PAYMENT_TIMEOUT_SECONDS, LAYERX_AUTHORIZED_BATCH_JSON, LAYERX_WEBHOOK_PATH, LAYERX_WEBHOOK_PUBLIC_KEYS_JSON, LAYERX_WEBHOOK_MAX_AGE_MS and LAYERX_WEBHOOK_LEASE_MS."
+requires = "Node.js 22 or newer and the twenty-one declared seller keys the integration reads from the environment: LAYERX_PRINCIPAL, LAYERX_PROTECTED_PATH, the LAYERX_RESOURCE_* fields, LAYERX_PROTOCOL_VERSION, LAYERX_X402_SCHEME, LAYERX_X402_NETWORK, LAYERX_PRICE, LAYERX_ASSET, LAYERX_PAY_TO, LAYERX_PAYMENT_TIMEOUT_SECONDS, LAYERX_AUTHORIZED_BATCH_JSON, LAYERX_WEBHOOK_PATH, LAYERX_WEBHOOK_PUBLIC_KEYS_JSON, LAYERX_WEBHOOK_MAX_AGE_MS and LAYERX_WEBHOOK_LEASE_MS."
 
 [sample.paid-route-next]
 title = "Paid route on Next.js"
@@ -131,7 +131,7 @@ install = "python3 -m pip install -r requirements.txt"
 run = "uvicorn app:app --host 127.0.0.1 --port 8080"
 measured_region = "integration"
 maximum_integration_lines = 9
-requires = "Python 3.11 or newer, uvicorn, and the same twenty declared seller keys as the Express sample."
+requires = "Python 3.11 or newer, uvicorn, and the same twenty-one declared seller keys as the Express sample."
 
 [sample.paid-endpoint-spring]
 title = "Paid endpoint on Spring Boot"
