@@ -3,7 +3,7 @@
 use crate::protocol_evidence::{EvidenceAuthority, RawReceiptEvidence, ReceiptReplayError};
 use crate::store::{ObjectKind, Store, StoreError, TenantId, TenantKey};
 
-use super::ProtocolBudgetState;
+use super::{ProtocolBudgetRecord, ProtocolBudgetState};
 
 /// Reservation kept unavailable until a receipt resolves it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -110,9 +110,12 @@ pub(crate) fn rebuild_accounting(
                 .ok_or(RestartError::Arithmetic)?;
         }
     }
-    verifier
+    let verified = verifier
         .verify_state(&protocol.evidence)
         .map_err(|_| RestartError::UnverifiedProtocol)?;
+    let protocol_consumed = ProtocolBudgetRecord::decode(verified.canonical_state())
+        .ok()
+        .map(|record| record.spent_this_period);
     let mut held_unresolved = 0_u128;
     let mut unresolved_count = 0_usize;
     for id in unknown_ids {
@@ -128,12 +131,17 @@ pub(crate) fn rebuild_accounting(
             unresolved_count += 1;
         }
     }
+    let reconciled = protocol_consumed.is_some_and(|consumed| {
+        receipt_consumed
+            .checked_add(held_unresolved)
+            .is_some_and(|ceiling| consumed >= receipt_consumed && consumed <= ceiling)
+    });
     Ok(RestartAccounting {
-        protocol_consumed: None,
+        protocol_consumed,
         receipt_consumed,
         held_unresolved,
         unresolved_count,
-        reconciled: false,
+        reconciled,
     })
 }
 
