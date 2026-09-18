@@ -1869,3 +1869,162 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
     move_stale_quote(&setup, &race)?;
     Ok(())
 }
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+        encoded.push(char::from(ALPHABET[usize::from(first >> 2)]));
+        encoded.push(char::from(
+            ALPHABET[usize::from(((first & 0x03) << 4) | (second >> 4))],
+        ));
+        if chunk.len() > 1 {
+            encoded.push(char::from(
+                ALPHABET[usize::from(((second & 0x0f) << 2) | (third >> 6))],
+            ));
+        } else {
+            encoded.push('=');
+        }
+        if chunk.len() > 2 {
+            encoded.push(char::from(ALPHABET[usize::from(third & 0x3f)]));
+        } else {
+            encoded.push('=');
+        }
+    }
+    encoded
+}
+
+fn settlement_body(receipt: &[u8], principal: &str) -> Result<String, String> {
+    use sha2::Digest as _;
+    let request_digest = [0x5a_u8; 32];
+    let receipt_digest =
+        layerx_proof::merkle::leaf_hash(receipt).map_err(|error| format!("{error:?}"))?;
+    let mut binding = sha2::Sha256::new();
+    binding.update(b"LayerX/middleware/x402/idempotency\0");
+    binding.update(principal.as_bytes());
+    binding.update(request_digest);
+    let idempotency: [u8; 32] = binding.finalize().into();
+    Ok(serde_json::json!({
+        "principal": principal,
+        "payload": {
+            "x402Version": 2,
+            "payload": {
+                "receipt": base64_encode(receipt),
+                "receiptDigest": hex_encode(&receipt_digest)?,
+                "verificationLevel": "sequencer-signed",
+            },
+            "accepted": { "scheme": "exact", "network": "layerx:emulator" },
+        },
+        "requirements": { "scheme": "exact", "network": "layerx:emulator" },
+        "idempotencyKey": hex_encode(&idempotency)?,
+        "requestDigest": hex_encode(&request_digest)?,
+    })
+    .to_string())
+}
+
+#[test]
+fn settle_verifies_a_real_move_receipt_against_the_emulator_ledger() -> Result<(), String> {
+    let setup = move_setup()?;
+    let payment = move_commit(&setup)?;
+    let receipt_path = payment
+        .committed_result
+        .pointer("/evidence/0/source_ref")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("move journey omitted receipt source_ref")?;
+    let receipt_reply = request(&setup.address, "GET", receipt_path, "", &[])?;
+    assert_eq!(receipt_reply.status, 200);
+    let receipt_hex = response_result(&receipt_reply)?
+        .get("receipt")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("receipt lookup omitted canonical bytes")?
+        .to_owned();
+    let receipt = hex_decode(&receipt_hex)?;
+    let decoded = layerx_wire::receipt::decode(&receipt).map_err(|error| format!("{error:?}"))?;
+    let protocol = decoded
+        .protocol()
+        .ok_or("settled receipt was not a protocol receipt")?;
+    let principal = "did:layerx:merchant-settlement";
+    let body = settlement_body(&receipt, principal)?;
+
+    let settled = post_json(&setup.address, "/v1/settle", &body)?;
+    assert_eq!(settled.status, 200, "settle failed: {}", settled.text());
+    let result = response_result(&settled)?;
+    assert_eq!(
+        result.get("state").and_then(serde_json::Value::as_str),
+        Some("settled")
+    );
+    assert_eq!(
+        result
+            .get("activity_id")
+            .and_then(serde_json::Value::as_str),
+        Some(hex_encode(&protocol.activity_id())?.as_str())
+    );
+    assert_eq!(
+        result
+            .get("receipt_base64")
+            .and_then(serde_json::Value::as_str),
+        Some(base64_encode(&receipt).as_str())
+    );
+    let sequencer_public_key = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED)
+        .verifying_key()
+        .to_bytes();
+    assert_eq!(
+        result.get("authorized_batch"),
+        Some(&serde_json::json!({
+            "batch_id": hex_encode(&protocol.batch_id())?,
+            "asset": hex_encode(&protocol.asset())?,
+            "previous_state_root": hex_encode(&protocol.previous_state_root())?,
+            "resulting_state_root": hex_encode(&protocol.resulting_state_root())?,
+            "sequencer_public_key": hex_encode(&sequencer_public_key)?,
+        }))
+    );
+
+    let wrong_verb = request(&setup.address, "GET", "/v1/settle", "", &[])?;
+    assert_eq!(wrong_verb.status, 405);
+    assert_eq!(
+        error_code(&wrong_verb).as_deref(),
+        Some("method_not_allowed")
+    );
+
+    let unbound = settlement_body(&receipt, "did:layerx:another-merchant")?.replace(
+        "did:layerx:another-merchant",
+        "did:layerx:merchant-settlement",
+    );
+    let unbound_reply = post_json(&setup.address, "/v1/settle", &unbound)?;
+    assert_eq!(unbound_reply.status, 400);
+    assert_eq!(
+        error_code(&unbound_reply).as_deref(),
+        Some("idempotency_binding_mismatch")
+    );
+
+    let tampered = body.replace(
+        &hex_encode(&layerx_proof::merkle::leaf_hash(&receipt).map_err(|e| format!("{e:?}"))?)?,
+        &"00".repeat(32),
+    );
+    let tampered_reply = post_json(&setup.address, "/v1/settle", &tampered)?;
+    assert_eq!(tampered_reply.status, 400);
+    assert_eq!(
+        error_code(&tampered_reply).as_deref(),
+        Some("receipt_digest_mismatch")
+    );
+
+    let fresh = boot()?;
+    let unknown = post_json(&fresh, "/v1/settle", &body)?;
+    assert_eq!(unknown.status, 200);
+    assert_eq!(
+        response_result(&unknown)?
+            .get("state")
+            .and_then(serde_json::Value::as_str),
+        Some("refused")
+    );
+    assert_eq!(
+        response_result(&unknown)?
+            .get("reason")
+            .and_then(serde_json::Value::as_str),
+        Some("activity_not_settled")
+    );
+    Ok(())
+}

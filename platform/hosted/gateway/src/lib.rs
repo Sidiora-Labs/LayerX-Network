@@ -799,6 +799,7 @@ fn program_failure_json(failure: ProgramCallFailure) -> serde_json::Value {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductionRoute<'a> {
     Activity,
+    Settle,
     State,
     Receipt(&'a str),
     ProgramRegistry(&'a str),
@@ -842,6 +843,7 @@ pub fn production_route<'a>(
 ) -> Result<ProductionRoute<'a>, GatewayError> {
     match (method, path) {
         ("POST", "/v1/activities") => Ok(ProductionRoute::Activity),
+        ("POST", "/v1/settle") => Ok(ProductionRoute::Settle),
         ("POST", "/v1/programs/simulate") => Ok(ProductionRoute::ProgramSimulation),
         ("POST", "/v1/programs/read") => Ok(ProductionRoute::ProgramRead),
         ("POST", "/v1/programs/call") => Ok(ProductionRoute::ProgramCall),

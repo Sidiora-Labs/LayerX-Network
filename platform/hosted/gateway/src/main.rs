@@ -4,6 +4,7 @@ mod public_reads;
 mod rpc;
 mod rpc_faucet;
 mod rpc_register;
+mod settlement;
 mod ws;
 mod ws_wire;
 
@@ -1111,6 +1112,7 @@ fn record_scopes(record: &KeyRecord) -> Vec<&str> {
 fn permits(record: &KeyRecord, route: &ProductionRoute<'_>) -> bool {
     let required = match route {
         ProductionRoute::Activity => "activity:write",
+        ProductionRoute::Settle => "receipt:read",
         ProductionRoute::ProgramCall
         | ProductionRoute::ProgramDeploy
         | ProductionRoute::ProgramUpgrade
@@ -2792,6 +2794,7 @@ fn read_route(
             read_program_activity(config, record, activity_id, trace_id)
         }
         ProductionRoute::Activity
+        | ProductionRoute::Settle
         | ProductionRoute::ProgramCall
         | ProductionRoute::ProgramDeploy
         | ProductionRoute::ProgramUpgrade
@@ -2951,6 +2954,7 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
         };
     }
     let result = match parsed {
+        ProductionRoute::Settle => settle(config, request, &record, &trace_id),
         ProductionRoute::ProgramCall => {
             activity(config, request, &record, &trace_id, true, false, None)
         }
@@ -3475,6 +3479,94 @@ fn receipt_document(activity_id: &str, receipt: &[u8], facts: AuthorityFacts) ->
             "sequencer_public_key": hex(&authorized.sequencer_public_key()),
         }
     })
+}
+
+fn settlement_response(
+    status: u16,
+    result: &serde_json::Value,
+    trace_id: &str,
+) -> OutgoingResponse {
+    json_response(
+        status,
+        &serde_json::json!({ "ok": true, "result": result, "trace": trace_id }),
+    )
+}
+
+fn settle(
+    config: &Config,
+    request: &IncomingRequest,
+    record: &KeyRecord,
+    trace_id: &str,
+) -> OutgoingResponse {
+    if !media_type_is(request, "application/json") {
+        return response(415, "settlement_content_type_required", None);
+    }
+    match config.store.consume_read(
+        record,
+        now().unwrap_or(0),
+        &audit_event(
+            &record.principal_digest,
+            "settle",
+            &record.key_id,
+            "attempted",
+        ),
+    ) {
+        Ok(None) => {}
+        Ok(Some(retry)) => return response(429, "quota_exceeded", Some(retry)),
+        Err(_) => return response(503, "persistence_unavailable", Some(5)),
+    }
+    let claim = match settlement::claim(&request.body) {
+        Ok(claim) => claim,
+        Err(refused) => return response(400, refused.reason(), None),
+    };
+    let activity_id = hex(&claim.activity_id());
+    let upstream = match authority_request(config, &activity_id, false) {
+        Ok(upstream) => upstream,
+        Err(error) => return error,
+    };
+    if matches!(upstream.status, 202 | 404) {
+        return settlement_response(202, &settlement::pending(), trace_id);
+    }
+    let prepared = match authority_response(config, &activity_id, &upstream) {
+        Ok(prepared) => prepared,
+        Err(error) => return error,
+    };
+    if prepared.receipt.len() != claim.receipt().len()
+        || prepared.receipt.ct_eq(claim.receipt()).unwrap_u8() != 1
+    {
+        return settlement_response(
+            200,
+            &settlement::refused("settlement_receipt_mismatch"),
+            trace_id,
+        );
+    }
+    let verified = match verify_activity_operation(
+        claim.receipt(),
+        prepared.facts,
+        &config.sequencer_authorization.public_key(),
+        Some(claim.activity_id()),
+    ) {
+        Ok(verified) => verified,
+        Err(_) => {
+            return settlement_response(
+                200,
+                &settlement::refused("receipt_verification_failed"),
+                trace_id,
+            )
+        }
+    };
+    if verified.result_code() != 0 {
+        return settlement_response(
+            200,
+            &settlement::refused("settlement_result_refused"),
+            trace_id,
+        );
+    }
+    settlement_response(
+        200,
+        &settlement::settled(&claim, verified.receipt(), &prepared.facts.authorized()),
+        trace_id,
+    )
 }
 
 fn read_program_registry(config: &Config, program: &str, trace_id: &str) -> OutgoingResponse {
@@ -4531,5 +4623,224 @@ mod module_schema_tests {
         let mut old_version = valid;
         old_version["schema_version"] = serde_json::json!(1);
         assert!(parse(old_version).is_err());
+    }
+}
+
+#[cfg(test)]
+mod settlement_contract_tests {
+    use super::*;
+
+    const PRINCIPAL: &str = "did:layerx:merchant-settlement";
+    const REQUEST_DIGEST: [u8; 32] = [0x5a; 32];
+
+    fn fixture() -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/maintained-authority.json");
+        let bytes = std::fs::read(path).unwrap_or_else(|error| panic!("{error}"));
+        serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    fn fixture_receipt(capture: &serde_json::Value) -> Vec<u8> {
+        let encoded = capture["receipt_hex"]
+            .as_str()
+            .unwrap_or_else(|| panic!("fixture receipt_hex"));
+        decode_hex(encoded, 512 * 1024).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    fn settlement_request(receipt: &[u8]) -> serde_json::Value {
+        let digest =
+            layerx_proof::merkle::leaf_hash(receipt).unwrap_or_else(|error| panic!("{error:?}"));
+        let mut binding = Sha256::new();
+        binding.update(b"LayerX/middleware/x402/idempotency\0");
+        binding.update(PRINCIPAL.as_bytes());
+        binding.update(REQUEST_DIGEST);
+        let idempotency: [u8; 32] = binding.finalize().into();
+        serde_json::json!({
+            "principal": PRINCIPAL,
+            "payload": {
+                "x402Version": 2,
+                "payload": {
+                    "receipt": layerx_platform_internal::base64::encode(receipt),
+                    "receiptDigest": hex(&digest),
+                    "verificationLevel": "sequencer-signed",
+                },
+                "accepted": { "scheme": "exact", "network": "layerx:testnet" },
+            },
+            "requirements": { "scheme": "exact", "network": "layerx:testnet" },
+            "idempotencyKey": hex(&idempotency),
+            "requestDigest": hex(&REQUEST_DIGEST),
+        })
+    }
+
+    fn key_record(scopes: &str) -> KeyRecord {
+        KeyRecord {
+            key_id: "settlement-key".to_owned(),
+            principal_digest: "11".repeat(32),
+            salt: "22".repeat(32),
+            secret_digest: "33".repeat(32),
+            signer_public_key: "44".repeat(32),
+            scopes: scopes.to_owned(),
+            quota_requests: 16,
+            quota_window_seconds: 60,
+            epoch: 1,
+            disabled: false,
+        }
+    }
+
+    #[test]
+    fn settle_is_an_exact_post_route_scoped_to_receipt_reads() {
+        assert_eq!(
+            production_route("POST", "/v1/settle"),
+            Ok(ProductionRoute::Settle)
+        );
+        for (method, path) in [
+            ("GET", "/v1/settle"),
+            ("PUT", "/v1/settle"),
+            ("POST", "/v1/settle/"),
+            ("POST", "/v1/settle/extra"),
+            ("POST", "/settle"),
+        ] {
+            assert!(production_route(method, path).is_err());
+        }
+        assert!(permits(
+            &key_record("receipt:read"),
+            &ProductionRoute::Settle
+        ));
+        assert!(permits(
+            &key_record("activity:write,receipt:read"),
+            &ProductionRoute::Settle
+        ));
+        for scopes in ["activity:write", "program:read", "state:read"] {
+            assert!(!permits(&key_record(scopes), &ProductionRoute::Settle));
+        }
+        assert!(!programs_request_path("POST", "/v1/settle"));
+    }
+
+    #[test]
+    fn settle_binds_a_real_receipt_and_refuses_every_tampered_field() {
+        let capture = fixture();
+        let receipt = fixture_receipt(&capture);
+        let expected_activity = capture["authority"]["activity_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("fixture activity_id"));
+        let body = settlement_request(&receipt);
+        let claim = settlement::claim(body.to_string().as_bytes())
+            .unwrap_or_else(|refusal| panic!("{refusal:?}"));
+        assert_eq!(hex(&claim.activity_id()), expected_activity);
+        assert_eq!(claim.receipt(), receipt.as_slice());
+
+        let authorized = AuthorityFacts::new(
+            parse_hex32(
+                capture["authority"]["batch_id"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("fixture batch_id")),
+            )
+            .unwrap_or_else(|error| panic!("{error}")),
+            parse_hex32(
+                capture["authority"]["asset"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("fixture asset")),
+            )
+            .unwrap_or_else(|error| panic!("{error}")),
+            parse_hex32(
+                capture["authority"]["previous_state_root"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("fixture previous_state_root")),
+            )
+            .unwrap_or_else(|error| panic!("{error}")),
+            parse_hex32(
+                capture["authority"]["resulting_state_root"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("fixture resulting_state_root")),
+            )
+            .unwrap_or_else(|error| panic!("{error}")),
+            parse_hex32(
+                capture["authority"]["sequencer_public_key"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("fixture sequencer_public_key")),
+            )
+            .unwrap_or_else(|error| panic!("{error}")),
+        );
+        let settled = settlement::settled(&claim, &receipt, &authorized.authorized());
+        assert_eq!(settled["state"], serde_json::json!("settled"));
+        assert_eq!(settled["activity_id"], serde_json::json!(expected_activity));
+        assert_eq!(settled["idempotency_key"], body["idempotencyKey"],);
+        assert_eq!(
+            settled["receipt_base64"],
+            serde_json::json!(layerx_platform_internal::base64::encode(&receipt))
+        );
+        assert_eq!(
+            settled["authorized_batch"],
+            serde_json::json!({
+                "batch_id": capture["authority"]["batch_id"],
+                "asset": capture["authority"]["asset"],
+                "previous_state_root": capture["authority"]["previous_state_root"],
+                "resulting_state_root": capture["authority"]["resulting_state_root"],
+                "sequencer_public_key": capture["authority"]["sequencer_public_key"],
+            })
+        );
+        assert_eq!(
+            settlement::pending(),
+            serde_json::json!({ "state": "pending" })
+        );
+        assert_eq!(
+            settlement::refused("activity_not_settled"),
+            serde_json::json!({ "state": "refused", "reason": "activity_not_settled" })
+        );
+
+        let mut digest_tamper = body.clone();
+        digest_tamper["payload"]["payload"]["receiptDigest"] = serde_json::json!("00".repeat(32));
+        assert_eq!(
+            settlement::claim(digest_tamper.to_string().as_bytes()),
+            Err(settlement::Refusal::ReceiptDigest)
+        );
+
+        let mut binding_tamper = body.clone();
+        binding_tamper["idempotencyKey"] = serde_json::json!("11".repeat(32));
+        assert_eq!(
+            settlement::claim(binding_tamper.to_string().as_bytes()),
+            Err(settlement::Refusal::IdempotencyBinding)
+        );
+
+        let mut principal_tamper = body.clone();
+        principal_tamper["principal"] = serde_json::json!("did:layerx:other-merchant");
+        assert_eq!(
+            settlement::claim(principal_tamper.to_string().as_bytes()),
+            Err(settlement::Refusal::IdempotencyBinding)
+        );
+
+        let mut level_tamper = body.clone();
+        level_tamper["payload"]["payload"]["verificationLevel"] =
+            serde_json::json!("rpc-confirmed");
+        assert_eq!(
+            settlement::claim(level_tamper.to_string().as_bytes()),
+            Err(settlement::Refusal::VerificationLevel)
+        );
+
+        let mut version_tamper = body.clone();
+        version_tamper["payload"]["x402Version"] = serde_json::json!(1);
+        assert_eq!(
+            settlement::claim(version_tamper.to_string().as_bytes()),
+            Err(settlement::Refusal::Request)
+        );
+
+        let mut unknown_field = body.clone();
+        unknown_field["trusted"] = serde_json::json!(true);
+        assert_eq!(
+            settlement::claim(unknown_field.to_string().as_bytes()),
+            Err(settlement::Refusal::Request)
+        );
+
+        let mut short_receipt = body.clone();
+        let truncated = &receipt[..receipt.len() - 8];
+        short_receipt["payload"]["payload"]["receipt"] =
+            serde_json::json!(layerx_platform_internal::base64::encode(truncated));
+        short_receipt["payload"]["payload"]["receiptDigest"] =
+            serde_json::json!(hex(&layerx_proof::merkle::leaf_hash(truncated)
+                .unwrap_or_else(|error| panic!("{error:?}"))));
+        assert_eq!(
+            settlement::claim(short_receipt.to_string().as_bytes()),
+            Err(settlement::Refusal::Receipt)
+        );
     }
 }
