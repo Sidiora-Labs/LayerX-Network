@@ -298,26 +298,46 @@ impl SignerService {
     /// carries and binds each one to its algorithm and policy domain.
     ///
     /// # Errors
-    /// Returns an error when a key file is missing, writable by anyone but its
-    /// owner, malformed, or carries a public half that does not match its
-    /// secret half.
+    /// Returns an error when the Ethereum key file is missing, when any key
+    /// file is writable by anyone but its owner, malformed, or carries a public
+    /// half that does not match its secret half. A Solana keypair file that
+    /// does not exist leaves the signer serving the Ethereum handle alone, for
+    /// a deployment that mirrors to the EVM chain only; a Solana keypair file
+    /// that does exist is loaded under exactly the same rules as before.
     pub fn load(options: &Options) -> Result<Self, StartupError> {
         let ethereum = load_secp256k1(&options.ethereum_key_file)?;
-        let solana = load_ed25519(&options.solana_keypair_file)?;
-        Ok(Self {
-            keys: vec![
-                KeyPolicy {
-                    handle: options.ethereum_key_handle.clone(),
-                    domain: ETHEREUM_POLICY_DOMAIN,
-                    key: ChainKey::Secp256k1(Box::new(ethereum)),
-                },
-                KeyPolicy {
-                    handle: options.solana_key_handle.clone(),
-                    domain: SOLANA_POLICY_DOMAIN,
-                    key: ChainKey::Ed25519(Box::new(solana)),
-                },
-            ],
-        })
+        let mut keys = vec![KeyPolicy {
+            handle: options.ethereum_key_handle.clone(),
+            domain: ETHEREUM_POLICY_DOMAIN,
+            key: ChainKey::Secp256k1(Box::new(ethereum)),
+        }];
+        if options.solana_keypair_file.exists() {
+            let solana = load_ed25519(&options.solana_keypair_file)?;
+            keys.push(KeyPolicy {
+                handle: options.solana_key_handle.clone(),
+                domain: SOLANA_POLICY_DOMAIN,
+                key: ChainKey::Ed25519(Box::new(solana)),
+            });
+        }
+        Ok(Self { keys })
+    }
+
+    /// Names the handles this signer answers for, in the order they were
+    /// loaded.
+    #[must_use]
+    pub fn handles(&self) -> Vec<&str> {
+        self.keys
+            .iter()
+            .map(|policy| policy.handle.as_str())
+            .collect()
+    }
+
+    /// Reports whether the Solana publisher key was present and loaded.
+    #[must_use]
+    pub fn serves_solana(&self) -> bool {
+        self.keys
+            .iter()
+            .any(|policy| matches!(policy.key, ChainKey::Ed25519(_)))
     }
 
     fn sign(&self, request: &Request<'_>) -> Option<Vec<u8>> {
@@ -456,6 +476,12 @@ impl SignerListener {
     #[must_use]
     pub fn socket(&self) -> &Path {
         &self.socket
+    }
+
+    /// Keys this listener answers with.
+    #[must_use]
+    pub fn service(&self) -> &SignerService {
+        &self.service
     }
 
     /// Answers one connection. A client that sends an unusable frame is

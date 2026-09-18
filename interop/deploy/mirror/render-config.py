@@ -8,6 +8,12 @@ container co-located with the publisher, and refuses any identity, endpoint or
 path whose shape the publisher's own configuration loader would reject. The
 signer handles and socket are overridable for a deployment that keeps the
 publisher keys in an external signer.
+
+The Ethereum mirror target is always rendered. The Solana target is rendered
+from the `--solana-*` identities when they are given and left out of the
+configuration entirely when none of them is, which the publisher reads as a
+deployment that mirrors to the EVM chain only. A partial Solana target is
+refused by name rather than half rendered.
 """
 
 import argparse
@@ -149,13 +155,13 @@ def main(argv):
     parser.add_argument("--ethereum-signer-public-key", required=True)
     parser.add_argument("--ethereum-signer-socket", default=SIGNER_SOCKET)
     parser.add_argument("--solana-endpoint", action="append", default=[])
-    parser.add_argument("--solana-genesis-hash", required=True)
-    parser.add_argument("--solana-archive-program", required=True)
-    parser.add_argument("--solana-upgradeable-loader", required=True)
-    parser.add_argument("--solana-program-data-account", required=True)
-    parser.add_argument("--solana-program-code-hash", required=True)
+    parser.add_argument("--solana-genesis-hash")
+    parser.add_argument("--solana-archive-program")
+    parser.add_argument("--solana-upgradeable-loader")
+    parser.add_argument("--solana-program-data-account")
+    parser.add_argument("--solana-program-code-hash")
     parser.add_argument("--solana-signer-key-handle", default=SOLANA_KEY_HANDLE)
-    parser.add_argument("--solana-signer-public-key", required=True)
+    parser.add_argument("--solana-signer-public-key")
     parser.add_argument("--solana-signer-socket", default=SIGNER_SOCKET)
     arguments = parser.parse_args(argv)
 
@@ -163,7 +169,24 @@ def main(argv):
         refuse("--first-batch-number must be at least 1")
     if arguments.network_id < 1:
         refuse("--network-id must be a real LayerX network id")
-    if arguments.ethereum_signer_key_handle == arguments.solana_signer_key_handle:
+
+    solana_inputs = {
+        "--solana-endpoint": arguments.solana_endpoint,
+        "--solana-genesis-hash": arguments.solana_genesis_hash,
+        "--solana-archive-program": arguments.solana_archive_program,
+        "--solana-upgradeable-loader": arguments.solana_upgradeable_loader,
+        "--solana-program-data-account": arguments.solana_program_data_account,
+        "--solana-program-code-hash": arguments.solana_program_code_hash,
+        "--solana-signer-public-key": arguments.solana_signer_public_key,
+    }
+    missing = sorted(name for name, value in solana_inputs.items() if not value)
+    solana_requested = len(missing) < len(solana_inputs)
+    if solana_requested and missing:
+        refuse(
+            "the Solana mirror target needs every identity it publishes under; missing %s"
+            % ", ".join(missing)
+        )
+    if solana_requested and arguments.ethereum_signer_key_handle == arguments.solana_signer_key_handle:
         refuse("the Ethereum and Solana signer key handles must differ")
     host, separator, port = arguments.status_listen.rpartition(":")
     if not separator or host not in ("127.0.0.1", "[::1]") or not port.isdigit() or int(port) == 0:
@@ -217,7 +240,9 @@ def main(argv):
                 "ethereum",
             ),
         },
-        "solana": {
+    }
+    if solana_requested:
+        config["solana"] = {
             "rpc": endpoints(arguments.solana_endpoint, "--solana-endpoint"),
             "genesis_hash_base58": base58(arguments.solana_genesis_hash, "--solana-genesis-hash"),
             "archive_program_base58": base58(
@@ -241,8 +266,7 @@ def main(argv):
                 arguments.solana_signer_socket,
                 "solana",
             ),
-        },
-    }
+        }
     output = pathlib.Path(arguments.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with open(output, "w", encoding="utf-8") as handle:

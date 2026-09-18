@@ -33,7 +33,10 @@ pub struct RuntimeConfig {
     pub status_listen: SocketAddr,
     pub node: NodeFileConfig,
     pub ethereum: EthereumFileConfig,
-    pub solana: SolanaFileConfig,
+    /// Absent when the deployment mirrors to the EVM chain only. A present
+    /// section is validated exactly as a required one.
+    #[serde(default)]
+    pub solana: Option<SolanaFileConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -122,7 +125,7 @@ struct ComponentStatus {
 struct RuntimeStatus {
     node: ComponentStatus,
     ethereum: ComponentStatus,
-    solana: ComponentStatus,
+    solana: Option<ComponentStatus>,
     checkpoint_proof_boundary_ready: bool,
     checkpoint_identifier_observed: bool,
 }
@@ -163,7 +166,10 @@ pub fn run(config_path: &Path) -> Result<(), RuntimeError> {
         .map_err(|_| RuntimeError::State)?;
     let next_batch =
         recover_next_batch(&spool, config.first_batch_number).map_err(|_| RuntimeError::State)?;
-    let status = Arc::new(Mutex::new(RuntimeStatus::default()));
+    let status = Arc::new(Mutex::new(RuntimeStatus {
+        solana: config.solana.as_ref().map(|_| ComponentStatus::default()),
+        ..RuntimeStatus::default()
+    }));
     let poll = Duration::from_millis(config.poll_interval_ms);
 
     spawn_status(config.status_listen, Arc::clone(&status))?;
@@ -175,7 +181,9 @@ pub fn run(config_path: &Path) -> Result<(), RuntimeError> {
         next_batch,
     );
     spawn_ethereum(config.clone(), spool.clone(), Arc::clone(&status), poll);
-    spawn_solana(config, spool, status, poll);
+    if let Some(solana) = config.solana.clone() {
+        spawn_solana(config, solana, spool, status, poll);
+    }
     loop {
         thread::park();
     }
@@ -291,17 +299,18 @@ fn spawn_ethereum(
 
 fn spawn_solana(
     config: RuntimeConfig,
+    solana: SolanaFileConfig,
     spool: ArchiveSpool,
     status: Arc<Mutex<RuntimeStatus>>,
     poll: Duration,
 ) {
     thread::spawn(move || {
         let mut client = loop {
-            match solana_client(&config) {
+            match solana_client(&config, &solana) {
                 Ok(value) => break value,
                 Err(error) => {
-                    update_status(&status, |value| {
-                        value.solana.error_class = Some(solana_error_class(&error));
+                    update_solana_status(&status, |value| {
+                        value.error_class = Some(solana_error_class(&error));
                     });
                     thread::sleep(poll);
                 }
@@ -312,14 +321,14 @@ fn spawn_solana(
                 match archive {
                     Ok(archive) => match client.advance(&archive) {
                         Ok(progress) => update_solana(&status, progress),
-                        Err(error) => update_status(&status, |value| {
-                            value.solana.ready = false;
-                            value.solana.error_class = Some(solana_error_class(&error));
+                        Err(error) => update_solana_status(&status, |value| {
+                            value.ready = false;
+                            value.error_class = Some(solana_error_class(&error));
                         }),
                     },
-                    Err(()) => update_status(&status, |value| {
-                        value.solana.ready = false;
-                        value.solana.error_class = Some("archive_spool");
+                    Err(()) => update_solana_status(&status, |value| {
+                        value.ready = false;
+                        value.error_class = Some("archive_spool");
                     }),
                 }
             }
@@ -405,12 +414,12 @@ fn ethereum_client(config: &RuntimeConfig) -> Result<EthereumArchiveClient, Ethe
     EthereumArchiveClient::open(ethereum_production_config(config)?, signer)
 }
 
-fn solana_client(config: &RuntimeConfig) -> Result<SolanaArchiveClient, SolanaError> {
-    let signer = RemoteChainSigner::new(signer_config(
-        &config.solana.signer,
-        SigningAlgorithm::Ed25519,
-    )?)?;
-    SolanaArchiveClient::open(solana_production_config(config)?, signer)
+fn solana_client(
+    config: &RuntimeConfig,
+    solana: &SolanaFileConfig,
+) -> Result<SolanaArchiveClient, SolanaError> {
+    let signer = RemoteChainSigner::new(signer_config(&solana.signer, SigningAlgorithm::Ed25519)?)?;
+    SolanaArchiveClient::open(solana_production_config(config, solana)?, signer)
 }
 
 fn ethereum_production_config(
@@ -436,19 +445,22 @@ fn ethereum_production_config(
     })
 }
 
-fn solana_production_config(config: &RuntimeConfig) -> Result<SolanaProductionConfig, SolanaError> {
+fn solana_production_config(
+    config: &RuntimeConfig,
+    solana: &SolanaFileConfig,
+) -> Result<SolanaProductionConfig, SolanaError> {
     Ok(SolanaProductionConfig {
-        rpc: config.solana.rpc.clone(),
-        genesis_hash: fixed_base58(&config.solana.genesis_hash_base58)?,
-        archive_program: fixed_base58(&config.solana.archive_program_base58)?,
-        upgradeable_loader: fixed_base58(&config.solana.upgradeable_loader_base58)?,
-        program_data_account: fixed_base58(&config.solana.program_data_account_base58)?,
-        program_code_hash: fixed_hex(&config.solana.program_code_hash_hex)
+        rpc: solana.rpc.clone(),
+        genesis_hash: fixed_base58(&solana.genesis_hash_base58)?,
+        archive_program: fixed_base58(&solana.archive_program_base58)?,
+        upgradeable_loader: fixed_base58(&solana.upgradeable_loader_base58)?,
+        program_data_account: fixed_base58(&solana.program_data_account_base58)?,
+        program_code_hash: fixed_hex(&solana.program_code_hash_hex)
             .map_err(|_| SolanaError::Configuration)?,
         first_batch_number: config.first_batch_number,
-        required_rooted_slots: config.solana.required_rooted_slots,
-        maximum_ancestry: config.solana.maximum_ancestry,
-        chunk_bytes: config.solana.chunk_bytes,
+        required_rooted_slots: solana.required_rooted_slots,
+        maximum_ancestry: solana.maximum_ancestry,
+        chunk_bytes: solana.chunk_bytes,
         journal_directory: config.state_directory.join("solana"),
     })
 }
@@ -575,7 +587,7 @@ fn serve_status(
     let snapshot = status.lock().map_err(|_| RuntimeError::Status)?.clone();
     let ready = snapshot.node.ready
         && snapshot.ethereum.ready
-        && snapshot.solana.ready
+        && snapshot.solana.as_ref().is_none_or(|solana| solana.ready)
         && snapshot.checkpoint_proof_boundary_ready;
     let (code, reason, body) = match first {
         "GET /status HTTP/1.1" | "GET /status HTTP/1.0" => (
@@ -618,18 +630,32 @@ fn update_ethereum(status: &Arc<Mutex<RuntimeStatus>>, progress: EthereumProgres
 }
 
 fn update_solana(status: &Arc<Mutex<RuntimeStatus>>, progress: SolanaProgress) {
-    update_status(status, |value| {
+    update_solana_status(status, |value| {
         if progress.phase == PublicationPhase::Reorged {
-            value.solana.reorgs_observed = value.solana.reorgs_observed.saturating_add(1);
+            value.reorgs_observed = value.reorgs_observed.saturating_add(1);
         }
-        value.solana.ready = !matches!(
+        value.ready = !matches!(
             progress.phase,
             PublicationPhase::PermanentRefusal | PublicationPhase::Reorged
         );
-        value.solana.latest_batch_mirrored = progress.cursor.latest_batch;
-        set_checkpoint_status(&mut value.solana, progress.cursor.latest_checkpoint);
-        value.solana.phase = Some(phase_name(progress.phase));
-        value.solana.error_class = None;
+        value.latest_batch_mirrored = progress.cursor.latest_batch;
+        set_checkpoint_status(value, progress.cursor.latest_checkpoint);
+        value.phase = Some(phase_name(progress.phase));
+        value.error_class = None;
+    });
+}
+
+/// Updates the Solana component of a runtime that has one. The Solana worker is
+/// spawned only for a configured section, so the slot it reports into is always
+/// present while that worker runs.
+fn update_solana_status(
+    status: &Arc<Mutex<RuntimeStatus>>,
+    update: impl FnOnce(&mut ComponentStatus),
+) {
+    update_status(status, |value| {
+        if let Some(solana) = value.solana.as_mut() {
+            update(solana);
+        }
     });
 }
 
@@ -740,12 +766,15 @@ fn validate_runtime(config: &RuntimeConfig) -> Result<(), RuntimeError> {
     .map_err(|_| RuntimeError::Configuration)?;
     RemoteChainSigner::new(ethereum_signer).map_err(|_| RuntimeError::Configuration)?;
 
-    let solana = solana_production_config(config).map_err(|_| RuntimeError::Configuration)?;
-    crate::solana::validate_config(&solana).map_err(|_| RuntimeError::Configuration)?;
-    RpcCluster::new(&solana.rpc).map_err(|_| RuntimeError::Configuration)?;
-    let solana_signer = signer_config(&config.solana.signer, SigningAlgorithm::Ed25519)
-        .map_err(|_| RuntimeError::Configuration)?;
-    RemoteChainSigner::new(solana_signer).map_err(|_| RuntimeError::Configuration)?;
+    if let Some(section) = &config.solana {
+        let solana =
+            solana_production_config(config, section).map_err(|_| RuntimeError::Configuration)?;
+        crate::solana::validate_config(&solana).map_err(|_| RuntimeError::Configuration)?;
+        RpcCluster::new(&solana.rpc).map_err(|_| RuntimeError::Configuration)?;
+        let solana_signer = signer_config(&section.signer, SigningAlgorithm::Ed25519)
+            .map_err(|_| RuntimeError::Configuration)?;
+        RemoteChainSigner::new(solana_signer).map_err(|_| RuntimeError::Configuration)?;
+    }
     Ok(())
 }
 
@@ -828,7 +857,8 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{
-        hex_bytes, recover_batch_sequence, recover_next_batch, recover_spool, SpoolRecoveryError,
+        hex_bytes, recover_batch_sequence, recover_next_batch, recover_spool, RuntimeConfig,
+        SpoolRecoveryError,
     };
     use crate::store::{ArchiveSpool, StoreError};
     use crate::{archive_commitment, ArchiveCommitment, NodeHead};
@@ -866,6 +896,127 @@ mod tests {
 
     fn commitment(byte: u8) -> ArchiveCommitment {
         ArchiveCommitment::from_bytes([byte; 32])
+    }
+
+    const ETHEREUM_SECTION: &str = r#"
+        "ethereum": {
+          "rpc": {
+            "endpoints": [
+              {"url":"https://ethereum-a.invalid/rpc","ca_certificate_der":"/run/secrets/a.der","bearer_token_file":"/run/secrets/a.token","independent_backend":"ethereum-a"},
+              {"url":"https://ethereum-b.invalid/rpc","ca_certificate_der":"/run/secrets/b.der","bearer_token_file":"/run/secrets/b.token","independent_backend":"ethereum-b"}
+            ],
+            "quorum": 2,
+            "connect_timeout_ms": 3000,
+            "request_timeout_ms": 15000,
+            "maximum_response_bytes": 16777216
+          },
+          "chain_id": 125,
+          "genesis_hash_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+          "archive_contract_hex": "0000000000000000000000000000000000000001",
+          "archive_code_hash_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+          "required_confirmations": 12,
+          "maximum_reorg_depth": 256,
+          "chunk_bytes": 24576,
+          "transaction_gas_limit": 30000000,
+          "maximum_fee_per_gas": 100000000000,
+          "maximum_priority_fee_per_gas": 5000000000,
+          "signer": {
+            "key_handle": "mirror/ethereum/beta",
+            "public_key": "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "timeout_ms": 5000,
+            "transport": {"kind":"uds","socket":"/run/mirror-signer/signer.sock"}
+          }
+        }"#;
+
+    const SOLANA_SECTION: &str = r#"
+        "solana": {
+          "rpc": {
+            "endpoints": [
+              {"url":"https://solana-a.invalid/rpc","ca_certificate_der":"/run/secrets/a.der","bearer_token_file":"/run/secrets/a.token","independent_backend":"solana-a"},
+              {"url":"https://solana-b.invalid/rpc","ca_certificate_der":"/run/secrets/b.der","bearer_token_file":"/run/secrets/b.token","independent_backend":"solana-b"}
+            ],
+            "quorum": 2,
+            "connect_timeout_ms": 3000,
+            "request_timeout_ms": 15000,
+            "maximum_response_bytes": 16777216
+          },
+          "genesis_hash_base58": "11111111111111111111111111111112",
+          "archive_program_base58": "11111111111111111111111111111113",
+          "upgradeable_loader_base58": "BPFLoaderUpgradeab1e11111111111111111111111",
+          "program_data_account_base58": "11111111111111111111111111111114",
+          "program_code_hash_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+          "required_rooted_slots": 32,
+          "maximum_ancestry": 4096,
+          "chunk_bytes": 640,
+          "signer": {
+            "key_handle": "mirror/solana/beta",
+            "public_key": "11111111111111111111111111111115",
+            "timeout_ms": 5000,
+            "transport": {"kind":"uds","socket":"/run/mirror-signer/signer.sock"}
+          }
+        }"#;
+
+    /// The rendered publisher configuration, with the chain sections the caller
+    /// names. This is the shape `interop/deploy/mirror/render-config.py` writes.
+    fn rendered_configuration(sections: &[&str]) -> String {
+        format!(
+            r#"{{
+              "state_directory": "/var/lib/layerx-mirror",
+              "first_batch_number": 1,
+              "poll_interval_ms": 5000,
+              "status_listen": "127.0.0.1:9091",
+              "node": {{
+                "socket": "/run/layerx/node/layerxd.lni.sock",
+                "expected_protocol_version": 3,
+                "expected_network_id": 1,
+                "maximum_frame_bytes": 67108864,
+                "maximum_connections": 2,
+                "maximum_streams": 2,
+                "maximum_queued_bytes": 67108864,
+                "deadline_ms": 30000,
+                "maximum_archive_bytes": 67108864,
+                "maximum_archive_chunks": 65536
+              }},
+              {}
+            }}"#,
+            sections.join(",\n")
+        )
+    }
+
+    #[test]
+    fn a_configuration_without_a_solana_section_mirrors_to_the_evm_chain_only() {
+        let both: RuntimeConfig =
+            serde_json::from_str(&rendered_configuration(&[ETHEREUM_SECTION, SOLANA_SECTION]))
+                .unwrap_or_else(|error| panic!("parse the dual-target configuration: {error}"));
+        assert!(both.solana.is_some());
+
+        let ethereum_only: RuntimeConfig =
+            serde_json::from_str(&rendered_configuration(&[ETHEREUM_SECTION]))
+                .unwrap_or_else(|error| panic!("parse the Ethereum-only configuration: {error}"));
+
+        assert!(
+            ethereum_only.solana.is_none(),
+            "a configuration with no solana section mirrors to the EVM chain only"
+        );
+        assert_eq!(ethereum_only.ethereum.chain_id, both.ethereum.chain_id);
+    }
+
+    #[test]
+    fn a_present_solana_section_is_still_complete_or_refused() {
+        let incomplete = SOLANA_SECTION.replace(
+            r#""program_data_account_base58": "11111111111111111111111111111114","#,
+            "",
+        );
+        assert_ne!(incomplete, SOLANA_SECTION);
+
+        assert!(
+            serde_json::from_str::<RuntimeConfig>(&rendered_configuration(&[
+                ETHEREUM_SECTION,
+                &incomplete
+            ]))
+            .is_err(),
+            "a solana section that is present must still carry every field"
+        );
     }
 
     #[test]

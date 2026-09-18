@@ -200,3 +200,41 @@ fn an_unknown_handle_and_a_foreign_policy_domain_are_refused() {
 
     let _ = fs::remove_dir_all(&directory);
 }
+
+#[test]
+fn an_ethereum_only_secret_serves_the_ethereum_handle_and_refuses_the_solana_one() {
+    let directory = work_directory("ethereum-only");
+    let options = write_key_material(&directory);
+    fs::remove_file(&options.solana_keypair_file)
+        .unwrap_or_else(|error| panic!("drop the solana keypair: {error}"));
+    serve(&options);
+
+    let ethereum = client(
+        &options,
+        SigningAlgorithm::Secp256k1Recoverable,
+        &options.ethereum_key_handle,
+    );
+    match ethereum.sign_digest(ETHEREUM_POLICY_DOMAIN, [0x42_u8; 32]) {
+        Ok(ChainSignature::Secp256k1(signature)) => {
+            assert!(
+                signature[64] <= 1,
+                "the recovery identifier must be 0 or 1, got {}",
+                signature[64]
+            );
+        }
+        other => panic!("the Ethereum publisher key must still sign: {other:?}"),
+    }
+
+    let solana = client(
+        &options,
+        SigningAlgorithm::Ed25519,
+        &options.solana_key_handle,
+    );
+    assert_eq!(
+        solana.sign_message(SOLANA_POLICY_DOMAIN, b"archive"),
+        Err(SignerError::Refused),
+        "a secret without solana.json must not serve the Solana handle"
+    );
+
+    let _ = fs::remove_dir_all(&directory);
+}

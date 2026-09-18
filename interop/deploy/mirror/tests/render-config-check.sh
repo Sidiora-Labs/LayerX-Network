@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Offline check of interop/deploy/mirror/render-config.py: a configuration
 # rendered from deployment-shaped inputs is accepted by the publisher's own
-# configuration loader, the signer handles and socket fall back to the
-# co-located layerx-mirror-signer container unless they are overridden, and a
-# configuration outside the publisher's bounds is refused by the publisher. No
-# network and no cluster are involved.
+# configuration loader with and without a Solana mirror target, the signer
+# handles and socket fall back to the co-located layerx-mirror-signer container
+# unless they are overridden, and a configuration outside the publisher's bounds
+# or a half-supplied Solana target is refused. No network and no cluster are
+# involved.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -62,7 +63,7 @@ while number:
 print(text)
 ')
 
-render() {
+render_ethereum_only() {
     python3 "$RENDERER" \
         --output "$1" \
         --state-directory "$WORK/state" \
@@ -78,6 +79,11 @@ render() {
         --ethereum-archive-contract 00000000000000000000000000000000000000ff \
         --ethereum-archive-code-hash "$(printf 'code' | sha256sum | cut -d ' ' -f 1)" \
         --ethereum-signer-public-key "$ETHEREUM_PUBLIC" \
+        "${@:2}"
+}
+
+solana_target() {
+    printf '%s\n' \
         --solana-endpoint "https://solana-a.invalid:443/rpc,solana-a,$WORK/rpc.der,$WORK/solana-a.token" \
         --solana-endpoint "https://solana-b.invalid:443/rpc,solana-b,$WORK/rpc.der,$WORK/solana-b.token" \
         --solana-genesis-hash "$PROGRAM" \
@@ -85,8 +91,13 @@ render() {
         --solana-upgradeable-loader BPFLoaderUpgradeab1e11111111111111111111111 \
         --solana-program-data-account "$PROGRAM" \
         --solana-program-code-hash "$(printf 'elf' | sha256sum | cut -d ' ' -f 1)" \
-        --solana-signer-public-key "$SOLANA_PUBLIC" \
-        "${@:2}"
+        --solana-signer-public-key "$SOLANA_PUBLIC"
+}
+
+render() {
+    local -a solana=()
+    mapfile -t solana < <(solana_target)
+    render_ethereum_only "$1" "${solana[@]}" "${@:2}"
 }
 
 mkdir -p "$WORK/state"
@@ -109,6 +120,21 @@ timeout 10 "$PUBLISHER" "$WORK/config.json" > "$WORK/publisher.log" 2>&1 || stat
 if [ "$status" -ne 124 ]; then
     cat "$WORK/publisher.log" >&2
     fail "the publisher did not accept the rendered configuration (exit $status)"
+fi
+
+render_ethereum_only "$WORK/ethereum-only.json"
+python3 - "$WORK/ethereum-only.json" <<'PYETHEREUMONLY' || fail "the Ethereum-only configuration still carries a Solana target"
+import json
+import sys
+config = json.load(open(sys.argv[1]))
+assert "solana" not in config, sorted(config)
+assert config["ethereum"]["signer"]["key_handle"] == "mirror/ethereum/beta", config["ethereum"]["signer"]
+PYETHEREUMONLY
+status=0
+timeout 10 "$PUBLISHER" "$WORK/ethereum-only.json" > "$WORK/ethereum-only.log" 2>&1 || status=$?
+if [ "$status" -ne 124 ]; then
+    cat "$WORK/ethereum-only.log" >&2
+    fail "the publisher did not accept a configuration with no Solana mirror target (exit $status)"
 fi
 
 python3 - "$WORK/config.json" "$WORK/out-of-bounds.json" <<'PY'
@@ -144,6 +170,13 @@ status=0
 render_output=$(render "$WORK/shared-handle.json" --ethereum-signer-key-handle shared \
     --solana-signer-key-handle shared 2>&1) || status=$?
 [ "$status" -ne 0 ] || fail "the renderer accepted one key handle for both publisher keys"
+
+status=0
+render_output=$(render_ethereum_only "$WORK/never.json" \
+    --solana-genesis-hash "$PROGRAM" --solana-archive-program "$PROGRAM" 2>&1) || status=$?
+[ "$status" -ne 0 ] || fail "the renderer accepted a half-supplied Solana mirror target"
+printf '%s' "$render_output" | grep -q -- --solana-signer-public-key \
+    || fail "the renderer did not name the missing Solana inputs: $render_output"
 
 render "$WORK/external.json" --ethereum-signer-key-handle owner/ethereum \
     --ethereum-signer-socket /run/signers/ethereum.sock \
