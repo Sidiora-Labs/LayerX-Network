@@ -5,6 +5,7 @@ mod rpc;
 mod rpc_faucet;
 mod rpc_register;
 mod settlement;
+mod state;
 mod ws;
 mod ws_wire;
 
@@ -2738,9 +2739,6 @@ fn read_route(
     route: &ProductionRoute<'_>,
     trace_id: &str,
 ) -> OutgoingResponse {
-    if matches!(route, ProductionRoute::State) {
-        return response(503, "principal_state_proof_unavailable", Some(30));
-    }
     let expected_receipt_activity = match &route {
         ProductionRoute::ProgramRegistry(program) | ProductionRoute::ProgramInterface(program) => {
             if program_selector(request, program).is_err() {
@@ -2777,7 +2775,7 @@ fn read_route(
         Err(_) => return response(503, "persistence_unavailable", Some(5)),
     }
     match route {
-        ProductionRoute::State => response(503, "principal_state_proof_unavailable", Some(30)),
+        ProductionRoute::State => state::read(config, trace_id),
         ProductionRoute::Receipt(activity_id) => {
             read_receipt(config, record, activity_id, trace_id)
         }
