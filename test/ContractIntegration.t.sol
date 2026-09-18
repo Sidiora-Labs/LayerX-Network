@@ -568,6 +568,12 @@ contract ContractIntegrationTest {
         );
         require(guarantorBond.bondRecord(bytes32(uint256(1))).jailed, "first guarantor not slashed");
         require(guarantorBond.bondRecord(bytes32(uint256(2))).jailed, "second guarantor not slashed");
+        require(challenger.balance == 1 ether, "upheld bond pushed during resolution");
+        require(challengeManager.owedBond(challenger) == 1 ether, "upheld bond not owed to challenger");
+        vm.prank(challenger);
+        challengeManager.withdrawBond();
+        require(challenger.balance == 2 ether, "upheld bond not returned to challenger");
+        require(challengeManager.owedBond(challenger) == 0, "upheld bond still owed after withdrawal");
         vm.expectPartialRevert(WithdrawalClaims.ClaimNotReady.selector);
         withdrawalClaims.finaliseClaim(claimId);
     }
@@ -586,7 +592,11 @@ contract ContractIntegrationTest {
             address(challengeManager),
             abi.encodeCall(CheckpointChallengeManager.resolveChallenge, (checkpointHash, false))
         );
+        require(address(timelock).balance == governanceBalance, "rejected bond pushed during resolution");
+        require(challengeManager.owedBond(address(timelock)) == 1 ether, "rejected bond not owed to governance");
+        _governanceCall(address(challengeManager), abi.encodeCall(CheckpointChallengeManager.withdrawBond, ()));
         require(address(timelock).balance == governanceBalance + 1 ether, "rejected bond not conserved");
+        require(challengeManager.owedBond(address(timelock)) == 0, "rejected bond still owed after withdrawal");
         vm.warp(challengeManager.windowClosesAt(checkpointHash));
         require(challengeManager.claimable(checkpointHash), "rejected checkpoint not claimable");
     }
@@ -1214,8 +1224,8 @@ contract ContractIntegrationTest {
     }
 
     function _bootstrapGovernance() private {
-        address[] memory targets = new address[](22);
-        bytes4[] memory selectors = new bytes4[](22);
+        address[] memory targets = new address[](23);
+        bytes4[] memory selectors = new bytes4[](23);
         uint256 index;
         targets[index] = address(assetRegistry);
         selectors[index++] = AssetRegistry.registerAsset.selector;
@@ -1247,6 +1257,8 @@ contract ContractIntegrationTest {
         selectors[index++] = GuarantorBond.sealGenesisBondedSet.selector;
         targets[index] = address(challengeManager);
         selectors[index++] = CheckpointChallengeManager.resolveChallenge.selector;
+        targets[index] = address(challengeManager);
+        selectors[index++] = CheckpointChallengeManager.withdrawBond.selector;
         targets[index] = address(nullifierRegistry);
         selectors[index++] = WithdrawalNullifierRegistry.setConsumer.selector;
         targets[index] = address(emergencyExit);

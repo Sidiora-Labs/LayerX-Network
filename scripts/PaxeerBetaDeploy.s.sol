@@ -750,8 +750,8 @@ contract PaxeerBetaDeploy {
         pure
         returns (address[] memory targets, bytes4[] memory selectors)
     {
-        targets = new address[](22);
-        selectors = new bytes4[](22);
+        targets = new address[](23);
+        selectors = new bytes4[](23);
         uint256 i;
         targets[i] = a.assetRegistry;
         selectors[i++] = AssetRegistry.registerAsset.selector;
@@ -781,6 +781,8 @@ contract PaxeerBetaDeploy {
         selectors[i++] = GuarantorBond.sealGenesisBondedSet.selector;
         targets[i] = a.challengeManager;
         selectors[i++] = CheckpointChallengeManager.resolveChallenge.selector;
+        targets[i] = a.challengeManager;
+        selectors[i++] = CheckpointChallengeManager.withdrawBond.selector;
         targets[i] = a.nullifierRegistry;
         selectors[i++] = WithdrawalNullifierRegistry.setConsumer.selector;
         targets[i] = a.emergencyExit;
@@ -797,7 +799,7 @@ contract PaxeerBetaDeploy {
         selectors[i++] = ManagerMigrator.cancelMigration.selector;
         targets[i] = a.vault;
         selectors[i++] = LayerXVault.setDepositRootAuthority.selector;
-        if (i != 22) revert InvalidDeploymentState();
+        if (i != 23) revert InvalidDeploymentState();
     }
 
     function _schedulePermissions(Addresses memory a, uint64 delay) private {
