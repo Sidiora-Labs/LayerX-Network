@@ -34,6 +34,7 @@ If the SDK raises with `retry === "unknown-outcome"`, the middleware returns `un
 A resolved receipt is verified against its batch authorisation, and then three fields are compared to the request:
 
 - `verification.receipt.amount` must equal the protocol amount that was reserved.
+- The receipt must carry the `protocolVersion` the middleware was configured with. That version has no default; a configuration that omits it is refused at construction with `missing-protocol-version`.
 - `verification.receipt.asset` must equal the requested asset, compared in constant time.
 - `verification.receipt.to` must equal the requested recipient, compared in constant time.
 

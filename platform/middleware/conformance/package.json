@@ -8,6 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "conformance": "node run.mjs",
+    "test": "npm run build && node --test test/*.test.mjs",
     "test:payments": "node --test pay6/*.test.mjs"
   },
   "dependencies": {

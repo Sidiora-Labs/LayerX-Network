@@ -33,6 +33,7 @@ import {
   type MerchantOrderStore,
 } from "@sidiora/layerx-merchant-middleware";
 import {
+  CONFORMANCE_PROTOCOL_VERSION,
   ConformanceSequencer,
   buildSignedReceipt,
   buyerPayload,
@@ -63,6 +64,7 @@ function buildBuyer(offer: OfferFixture): BuyerMiddleware {
   return new BuyerMiddleware({
     client: new ProductionClient(transport),
     source: "acct:conformance-buyer",
+    protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
     supported: [{ scheme: offer.requirements.scheme, network: offer.requirements.network }],
     authorizedBatches: new FixedBatchResolver(buildAuthorizedBatchPlaceholder()),
   });
@@ -188,6 +190,7 @@ async function releasedDecision(
 ): Promise<SellerDecision<string>> {
   const seller = new SellerMiddleware<string>({
     paymentRequired: offer.paymentRequired,
+    protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
     authority: new ReceiptPayloadAuthority(resolver),
     fulfillments: repository,
   });
@@ -224,7 +227,9 @@ export async function runScenarios(): Promise<Suite> {
       resultingStateRoot: receipt.authorizedBatch.resultingStateRoot.slice(),
       sequencerPublicKey: receipt.authorizedBatch.sequencerPublicKey.slice(),
     };
-    const verification = verifyReceipt(mutableReceipt, mutableAuthority);
+    const verification = verifyReceipt(mutableReceipt, mutableAuthority, {
+      protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
+    });
     mutableReceipt.fill(0);
     mutableAuthority.batchId.fill(0);
     mutableAuthority.asset.fill(0);
@@ -240,6 +245,7 @@ export async function runScenarios(): Promise<Suite> {
     const repository = new InMemoryFulfillmentRepository<string>();
     const seller = new SellerMiddleware<string>({
       paymentRequired: offer.paymentRequired,
+      protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
       authority: new ReceiptPayloadAuthority(resolver),
       fulfillments: repository,
     });
@@ -346,6 +352,7 @@ export async function runScenarios(): Promise<Suite> {
         bearerToken: new SecretBytes(new TextEncoder().encode("unused-conformance-token")),
       })),
       source: "acct:conformance-buyer",
+      protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
       supported: [{ scheme: offer.requirements.scheme, network: offer.requirements.network }],
       authorizedBatches: resolver,
     });
@@ -492,12 +499,14 @@ export async function runScenarios(): Promise<Suite> {
       }) },
       orders,
       sellers: {
-        create: (paymentRequired) => new SellerMiddleware({
+        create: (paymentRequired, protocolVersion) => new SellerMiddleware({
           paymentRequired,
+          protocolVersion,
           authority: new ReceiptPayloadAuthority(resolver),
           fulfillments: new InMemoryFulfillmentRepository<MerchantOrder>(),
         }),
       },
+      protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
       resourceUrl: (checkoutKey) => `https://merchant.example/checkout/${checkoutKey}`,
     });
     const checkout = await merchant.checkout(
@@ -511,11 +520,12 @@ export async function runScenarios(): Promise<Suite> {
       publicKeys: { "seq-merchant": sequencer.publicKey },
       deliveries,
     });
-    const webhooks = new MerchantSettlementWebhooks(
-      consumer,
+    const webhooks = new MerchantSettlementWebhooks({
+      verifier: consumer,
       orders,
-      { resolve: async () => ({ canonicalReceipt: receipt.canonicalReceipt, authorizedBatch: receipt.authorizedBatch }) },
-    );
+      receipts: { resolve: async () => ({ canonicalReceipt: receipt.canonicalReceipt, authorizedBatch: receipt.authorizedBatch }) },
+      protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
+    });
     const event = {
       order_id: checkout.order.orderId,
       request_digest: checkout.order.requestDigest,
@@ -560,12 +570,14 @@ export async function runScenarios(): Promise<Suite> {
       }) },
       orders,
       sellers: {
-        create: (paymentRequired) => new SellerMiddleware({
+        create: (paymentRequired, protocolVersion) => new SellerMiddleware({
           paymentRequired,
+          protocolVersion,
           authority: new ReceiptPayloadAuthority(resolver),
           fulfillments: new InMemoryFulfillmentRepository<MerchantOrder>(),
         }),
       },
+      protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
       resourceUrl: (checkoutKey) => `https://merchant.example/checkout/${checkoutKey}`,
     });
     const checkout = await merchant.checkout(
@@ -575,14 +587,15 @@ export async function runScenarios(): Promise<Suite> {
     );
     assert(checkout.kind === "payment-required", "mismatch checkout must start payment-required");
     const order = checkout.order;
-    const webhooks = new MerchantSettlementWebhooks(
-      new VerifiedWebhookConsumer({
+    const webhooks = new MerchantSettlementWebhooks({
+      verifier: new VerifiedWebhookConsumer({
         publicKeys: { "seq-merchant": sequencer.publicKey },
         deliveries: new InMemoryDeliveryStore(),
       }),
       orders,
-      { resolve: async () => ({ canonicalReceipt: receipt.canonicalReceipt, authorizedBatch: receipt.authorizedBatch }) },
-    );
+      receipts: { resolve: async () => ({ canonicalReceipt: receipt.canonicalReceipt, authorizedBatch: receipt.authorizedBatch }) },
+      protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
+    });
     const body = new TextEncoder().encode(JSON.stringify({
       order_id: order.orderId,
       request_digest: order.requestDigest,
@@ -621,6 +634,8 @@ async function sequencerVerification(receipt: SignedReceipt, resolver: FixedBatc
       payTo: toHex(fixedBytes(0xaa)),
       maxTimeoutSeconds: 120,
     },
+    undefined,
+    { protocolVersion: CONFORMANCE_PROTOCOL_VERSION },
   );
 }
 

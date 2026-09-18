@@ -18,6 +18,7 @@ const authority = new ReceiptAuthorityClient(config.receiptAuthorityUrl, rawToke
 const buyer = new BuyerMiddleware({
   client: new ProductionClient(new LayerXPaymentHttpTransport({ baseUrl: config.humanUrl, bearerToken: token })),
   source: requiredEnvironment(config.sourceEnvironment),
+  protocolVersion: config.protocolVersion,
   supported: [{ scheme: config.scheme, network: config.network }],
   authorizedBatches: authority,
 });

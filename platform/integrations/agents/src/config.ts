@@ -1,7 +1,8 @@
-import { SecretBytes } from "@sidiora/layerx-sdk";
+import { isSelectableProtocolVersion, SecretBytes, type SelectableProtocolVersion } from "@sidiora/layerx-sdk";
 
 export const DECLARED_KEYS = [
   "LAYERX_AGENT_RPC_URL",
+  "LAYERX_PROTOCOL_VERSION",
   "LAYERX_BUDGET_SERVICE_URL",
   "LAYERX_SIGNER_SERVICE_URL",
   "LAYERX_RECEIPT_SERVICE_URL",
@@ -56,6 +57,7 @@ export interface WebhookListener {
 
 export interface AgentDeclaredConfig {
   readonly agentRpcUrl: string;
+  readonly protocolVersion: SelectableProtocolVersion;
   readonly budgetServiceUrl: string;
   readonly signerServiceUrl: string;
   readonly receiptServiceUrl: string;
@@ -80,6 +82,7 @@ export function readDeclaredConfig(environment: Environment): AgentDeclaredConfi
   assertServerRuntime();
   return {
     agentRpcUrl: endpoint(required(environment, "LAYERX_AGENT_RPC_URL")),
+    protocolVersion: declaredProtocolVersion(required(environment, "LAYERX_PROTOCOL_VERSION")),
     budgetServiceUrl: endpoint(required(environment, "LAYERX_BUDGET_SERVICE_URL")),
     signerServiceUrl: endpoint(required(environment, "LAYERX_SIGNER_SERVICE_URL")),
     receiptServiceUrl: endpoint(required(environment, "LAYERX_RECEIPT_SERVICE_URL")),
@@ -165,6 +168,14 @@ export function filesystemPath(value: string): string {
     throw new AgentIntegrationError("invalid-declared-key");
   }
   return value;
+}
+
+export function declaredProtocolVersion(value: string): SelectableProtocolVersion {
+  const parsed = boundedInteger(value, 1, 1_000);
+  if (!isSelectableProtocolVersion(parsed)) {
+    throw new AgentIntegrationError("invalid-declared-key");
+  }
+  return parsed;
 }
 
 export function boundedInteger(value: string, minimum: number, maximum: number): number {

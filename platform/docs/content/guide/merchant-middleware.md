@@ -40,9 +40,11 @@ The request digest is computed over the quote itself - lines, total, asset, reci
 
 1. Looks the order up by `order_id` and requires the event's `request_digest` to match the stored one.
 2. Resolves the receipt reference to canonical receipt bytes and a batch authorisation.
-3. Verifies the receipt against the offer's requirements.
+3. Verifies the receipt against the offer's requirements, at the `protocolVersion` the merchant declares.
 4. Recomputes the receipt's Merkle leaf digest and compares it to the event's `receipt_digest` in constant time.
 5. Only then marks the order paid.
+
+`MerchantMiddleware` and `MerchantSettlementWebhooks` both take that `protocolVersion`, the checkout path hands it to every seller it creates, and a configuration that does not name a selectable version is refused at construction with `missing-protocol-version`. A seller that declares a different version than the merchant is `protocol-version-mismatch`, so the HTTP path and the webhook path cannot verify against different receipt versions.
 
 A webhook body that says "paid" proves nothing here. The receipt does. An event carrying an unknown field, a non-hex digest or a verification level outside the five real ones is `invalid-webhook`.
 

@@ -18,7 +18,8 @@ use std::time::Duration;
 
 use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_proof::program::{
-    verify_program_execution, ProgramExecutionExpectation, VerifiedProgramExecution,
+    verify_authorized_program_execution, verify_program_execution,
+    AuthorizedProgramExecutionExpectation, ProgramExecutionExpectation, VerifiedProgramExecution,
 };
 use layerx_proof::receipt::{
     verify as verify_receipt, verify_sequencer_signature, AuthorizedBatch,
@@ -202,6 +203,7 @@ struct Emulator {
     core: *mut c_void,
     signing_key: SigningKey,
     network_id: u32,
+    protocol_version: u16,
     receipts: HashMap<String, String>,
     receipt_order: VecDeque<String>,
     program_operations: HashMap<String, ProgramOperation>,
@@ -589,6 +591,7 @@ fn move_send_payload(
     quote: &MoveQuoteRecord,
     idempotency: [u8; 32],
     network_id: u32,
+    protocol_version: u16,
 ) -> Result<MovePayload, String> {
     let public_key = signing_key.verifying_key().to_bytes();
     let context = move_context(
@@ -613,7 +616,7 @@ fn move_send_payload(
         .and_then(|()| authorization.fixed(&quote.source_id))
         .and_then(|()| authorization.fixed(&context))
         .and_then(|()| authorization.u32(network_id))
-        .and_then(|()| authorization.u16(layerx_wire::limits::PROTOCOL_VERSION))
+        .and_then(|()| authorization.u16(protocol_version))
         .map_err(|_| "move authorization exceeds its canonical bound".to_owned())?;
     let authorization_hash = protocol_hash(Domain::SignaturePreimage, &authorization.finish());
     let authorization_signature = signing_key.sign(&authorization_hash).to_bytes();
@@ -636,7 +639,7 @@ fn move_send_payload(
         .and_then(|()| payload.fixed(&authorization_signature))
         .and_then(|()| payload.fixed(&context))
         .and_then(|()| payload.u32(network_id))
-        .and_then(|()| payload.u16(layerx_wire::limits::PROTOCOL_VERSION))
+        .and_then(|()| payload.u16(protocol_version))
         .map_err(|_| "move payload exceeds its canonical bound".to_owned())?;
     Ok((payload.finish(), context, authorization_hash))
 }
@@ -652,6 +655,7 @@ fn signed_move_activity(
         quote,
         idempotency,
         emulator.network_id,
+        emulator.protocol_version,
     )?;
     let payload = Payload::new(&registry, activity_type, &payload_bytes)
         .map_err(|_| "move payload is not canonical".to_owned())?;
@@ -665,7 +669,7 @@ fn signed_move_activity(
         .map_err(|_| "move timestamp bound is invalid".to_owned())?;
     let mut builder = EnvelopeBuilder::new();
     builder
-        .protocol_version(layerx_wire::limits::PROTOCOL_VERSION)
+        .protocol_version(emulator.protocol_version)
         .and_then(|value| value.network_id(emulator.network_id))
         .and_then(|value| value.activity_type(activity_type))
         .and_then(|value| value.actor_did(actor))
@@ -2782,6 +2786,114 @@ fn receipt_read(emulator: &Emulator, activity_id: &str, receipt_hex: &str, trace
     )
 }
 
+fn evidence_read(emulator: &Emulator, evidence_id: &str, trace: u64) -> Response {
+    let Some(digest) = evidence_id
+        .strip_prefix("evd_")
+        .filter(|hex| hex.len() == 64)
+        .and_then(|hex| hex_decode(hex).ok())
+    else {
+        return refusal(
+            trace,
+            400,
+            "invalid_evidence_id",
+            "evidence id must be evd_ followed by a 64-character hex digest",
+        );
+    };
+    let sequencer_public_key = emulator.signing_key.verifying_key().to_bytes();
+    for receipt_hex in emulator.receipts.values() {
+        let Ok(bytes) = hex_decode(receipt_hex) else {
+            continue;
+        };
+        let Ok(receipt) = verify_sequencer_signature(&bytes, sequencer_public_key) else {
+            continue;
+        };
+        let Ok(unsigned) = layerx_wire::receipt::encode_unsigned(&receipt) else {
+            continue;
+        };
+        if layerx_wire::hash::receipt_digest(&unsigned).is_ok_and(|value| value[..] == digest[..]) {
+            return success(
+                trace,
+                &serde_json::json!({
+                    "evidence_id": evidence_id,
+                    "class": "layerx-receipt",
+                    "verification": "receipt-verified",
+                    "content_type": "application/vnd.layerx.receipt",
+                    "bytes_base64": base64_encode(&bytes),
+                })
+                .to_string(),
+            );
+        }
+    }
+    refusal(
+        trace,
+        404,
+        "not_found",
+        "evidence is not present in this emulator process",
+    )
+}
+
+fn journey_read(emulator: &Emulator, journey_id: &str, trace: u64) -> Response {
+    let Some(digest) = journey_id
+        .strip_prefix("jrn_")
+        .filter(|hex| hex.len() == 64)
+        .and_then(|hex| hex_decode(hex).ok())
+    else {
+        return refusal(
+            trace,
+            400,
+            "invalid_journey_id",
+            "journey id must be jrn_ followed by a 64-character hex digest",
+        );
+    };
+    for (idempotency, operation) in &emulator.move_operations {
+        if operation.status != 200
+            || hash_bytes(MOVE_JOURNEY_DOMAIN, idempotency.as_bytes())[..] != digest[..]
+        {
+            continue;
+        }
+        let Some(journey) = serde_json::from_str::<serde_json::Value>(&operation.body)
+            .ok()
+            .and_then(|body| body.get("result").cloned())
+        else {
+            continue;
+        };
+        return success(trace, &journey.to_string());
+    }
+    refusal(
+        trace,
+        404,
+        "not_found",
+        "journey is not present in this emulator process",
+    )
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+        encoded.push(char::from(ALPHABET[usize::from(first >> 2)]));
+        encoded.push(char::from(
+            ALPHABET[usize::from(((first & 0x03) << 4) | (second >> 4))],
+        ));
+        if chunk.len() > 1 {
+            encoded.push(char::from(
+                ALPHABET[usize::from(((second & 0x0f) << 2) | (third >> 6))],
+            ));
+        } else {
+            encoded.push('=');
+        }
+        if chunk.len() > 2 {
+            encoded.push(char::from(ALPHABET[usize::from(third & 0x3f)]));
+        } else {
+            encoded.push('=');
+        }
+    }
+    encoded
+}
+
 fn route(emulator: &mut Emulator, request: &Request) -> Response {
     let program_request = programs_request_path(&request.method, &request.path);
     let Some(trace) = advance_trace(&mut emulator.trace) else {
@@ -2835,6 +2947,12 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
         ("POST", "/__emulator/faults") => inject_fault(emulator, request, trace),
         ("GET", "/__emulator/snapshot") => export_snapshot(emulator, trace),
         ("PUT", "/__emulator/snapshot") => import_snapshot(emulator, &request.body, trace),
+        ("GET", path) if path.starts_with("/v1/evidence/") => {
+            evidence_read(emulator, &path[13..], trace)
+        }
+        ("GET", path) if path.starts_with("/v1/journeys/") => {
+            journey_read(emulator, &path[13..], trace)
+        }
         ("GET", path) if path.starts_with("/v1/receipts/") => {
             let id = &path[13..];
             match emulator.receipts.get(id) {
@@ -3170,6 +3288,7 @@ fn platform_emulator(config: &Config) -> Result<(), String> {
         core,
         signing_key: SigningKey::from_bytes(&seed),
         network_id: config.network_id,
+        protocol_version: config.protocol_version,
         receipts: HashMap::new(),
         receipt_order: VecDeque::new(),
         program_operations: HashMap::new(),
@@ -4378,17 +4497,13 @@ fn execute_program_call(
     if code != 0 {
         return core_response(trace, code);
     }
-    let lifecycle_authority = if lifecycle {
-        Some(AuthorizedBatch::new(
-            receipt.batch_id,
-            receipt.asset,
-            before.receipt_state_root,
-            receipt.state_root,
-            emulator.signing_key.verifying_key().to_bytes(),
-        ))
-    } else {
-        None
-    };
+    let authority = AuthorizedBatch::new(
+        receipt.batch_id,
+        receipt.asset,
+        receipt.previous_state_root,
+        receipt.state_root,
+        emulator.signing_key.verifying_key().to_bytes(),
+    );
     let lifecycle_result_code = receipt.result_code;
     let material = match take_core_receipt(&mut receipt) {
         Ok(material) => material,
@@ -4403,7 +4518,7 @@ fn execute_program_call(
             activity_id,
             head,
             before,
-            lifecycle_authority,
+            authority,
             lifecycle_result_code,
             material,
         },
@@ -4423,11 +4538,19 @@ fn retain_program_execution(
         activity_id,
         head,
         before,
-        lifecycle_authority,
+        authority,
         lifecycle_result_code,
         material,
     } = result;
     let program_id = decoded.program_id;
+    if authority.previous_state_root() != before.receipt_state_root {
+        return refusal(
+            trace,
+            503,
+            "program_receipt_verification_failed",
+            "the core batch does not continue from the trusted state boundary",
+        );
+    }
     if lifecycle {
         return retain_lifecycle_execution(
             emulator,
@@ -4435,7 +4558,7 @@ fn retain_program_execution(
                 decoded,
                 protocol_idempotency,
                 activity_id,
-                lifecycle_authority,
+                authority,
                 lifecycle_result_code,
                 material: &material,
             },
@@ -4450,13 +4573,12 @@ fn retain_program_execution(
             "call requires a verified program head",
         );
     };
-    let verified = match verify_program_execution(
+    let verified = match verify_authorized_program_execution(
         &material.receipt,
         &material.terminal_payload,
         &material.call_graph,
-        ProgramExecutionExpectation {
-            sequencer_public_key: emulator.signing_key.verifying_key().to_bytes(),
-            previous_state_root: before.receipt_state_root,
+        &AuthorizedProgramExecutionExpectation {
+            authority,
             activity_id: decoded.activity_id,
             payload_hash: decoded.payload_hash,
             program_id,
@@ -4523,7 +4645,7 @@ struct ProgramExecutionResult<'a> {
     activity_id: String,
     head: Option<CoreProgram>,
     before: CoreState,
-    lifecycle_authority: Option<AuthorizedBatch>,
+    authority: AuthorizedBatch,
     lifecycle_result_code: c_int,
     material: OwnedCoreReceipt,
 }
@@ -4532,7 +4654,7 @@ struct LifecycleExecution<'a> {
     decoded: &'a DecodedProgramActivity,
     protocol_idempotency: String,
     activity_id: String,
-    lifecycle_authority: Option<AuthorizedBatch>,
+    authority: AuthorizedBatch,
     lifecycle_result_code: c_int,
     material: &'a OwnedCoreReceipt,
 }
@@ -4545,18 +4667,10 @@ fn retain_lifecycle_execution(
         decoded,
         protocol_idempotency,
         activity_id,
-        lifecycle_authority,
+        authority,
         lifecycle_result_code,
         material,
     } = result;
-    let Some(authority) = lifecycle_authority else {
-        return refusal(
-            trace,
-            503,
-            "program_receipt_verification_failed",
-            "missing lifecycle authority",
-        );
-    };
     let valid =
         program_lifecycle::verify_receipt(&material.receipt, &authority, decoded.activity_id)
             .is_ok();
@@ -5221,7 +5335,7 @@ fn verify_move_commit(
     let protocol = match verified.receipt().protocol() {
         Some(value)
             if material.activity_id == expected_activity_id
-                && value.protocol_version() == layerx_wire::limits::PROTOCOL_VERSION
+                && value.protocol_version() == emulator.protocol_version
                 && value.activity_id() == expected_activity_id
                 && value.result_code() == 0
                 && value.module_id() == 1
@@ -5235,7 +5349,10 @@ fn verify_move_commit(
                 && value.credit_balance_before() == destination.balance
                 && value.credit_balance_after() == expected_destination_after
                 && value.debit_sequence() == quote.source_sequence
-                && value.previous_state_root() == state.receipt_state_root
+                && value.batch_id() == authorised.batch_id()
+                && value.previous_state_root() == authorised.previous_state_root()
+                && value.resulting_state_root() == authorised.resulting_state_root()
+                && authorised.previous_state_root() == state.receipt_state_root
                 && value.resulting_state_root() != value.previous_state_root()
                 && value.context_hash() == expected_context_hash
                 && value.authorization_hash() == expected_authorization_hash
@@ -5264,6 +5381,7 @@ fn verify_move_commit(
         idempotency.clone(),
         &quote,
         &state,
+        &authorised,
         protocol,
         trace,
     ) {
@@ -5301,6 +5419,7 @@ fn validate_move_post_state(
     idempotency: String,
     quote: &MoveQuoteRecord,
     state: &CoreState,
+    authorised: &AuthorizedBatch,
     protocol: &layerx_wire::receipt::ProtocolReceipt,
     trace: u64,
 ) -> Result<(), Response> {
@@ -5339,7 +5458,8 @@ fn validate_move_post_state(
     if post_source.balance != protocol.debit_balance_after()
         || post_source.next_sequence != quote.source_sequence + 1
         || post_destination.balance != protocol.credit_balance_after()
-        || post_state.receipt_state_root != protocol.resulting_state_root()
+        || authorised.resulting_state_root() != protocol.resulting_state_root()
+        || authorised.previous_state_root() != protocol.previous_state_root()
         || post_state.canonical_state_root == state.canonical_state_root
     {
         return Err(move_unknown(

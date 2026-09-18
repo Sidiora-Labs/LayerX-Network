@@ -1,5 +1,7 @@
 import {
+  paymentAccount,
   paymentCommitment,
+  paymentCurrency,
   paymentPayer,
   paymentPurpose,
   verifyPaymentCommitment,
@@ -8,9 +10,12 @@ import {
 export * from "./commitment.js";
 import {
   PlatformSdkError,
+  isSelectableProtocolVersion,
   verifyReceipt,
   type AuthorizedReceiptBatch,
+  type ProtocolSelection,
   type ReceiptVerification,
+  type SelectableProtocolVersion,
 } from "@sidiora/layerx-sdk";
 
 export const X402_VERSION = 2 as const;
@@ -93,7 +98,8 @@ export type MiddlewareErrorCode =
   | "fulfillment-conflict"
   | "fulfillment-outcome-unknown"
   | "invalid-webhook"
-  | "webhook-replay";
+  | "webhook-replay"
+  | "missing-protocol-version";
 
 export class MiddlewareError extends Error {
   public constructor(public readonly code: MiddlewareErrorCode) {
@@ -144,9 +150,21 @@ export interface FulfillmentRepository<T> {
 
 export interface SellerMiddlewareConfig<T> {
   readonly paymentRequired: PaymentRequired;
+  readonly protocolVersion: SelectableProtocolVersion;
   readonly authority: SellerPaymentAuthority;
   readonly fulfillments: FulfillmentRepository<T>;
   readonly commitments?: PaymentCommitmentResolver;
+}
+
+export function requireProtocolVersion(value: unknown): SelectableProtocolVersion {
+  if (typeof value !== "number" || !Number.isInteger(value) || !isSelectableProtocolVersion(value)) {
+    throw new MiddlewareError("missing-protocol-version");
+  }
+  return value;
+}
+
+export function protocolSelection(value: unknown): ProtocolSelection {
+  return Object.freeze({ protocolVersion: requireProtocolVersion(value) });
 }
 
 export type SellerDecision<T> =
@@ -189,15 +207,23 @@ export class ReceiptPayloadAuthority implements SellerPaymentAuthority {
 
 export class SellerMiddleware<T> {
   readonly #required: PaymentRequired;
+  readonly #protocolVersion: SelectableProtocolVersion;
+  readonly #protocol: ProtocolSelection;
   readonly #authority: SellerPaymentAuthority;
   readonly #fulfillments: FulfillmentRepository<T>;
   readonly #commitments: PaymentCommitmentResolver | undefined;
 
   public constructor(config: SellerMiddlewareConfig<T>) {
     this.#required = validatePaymentRequired(config.paymentRequired);
+    this.#protocolVersion = requireProtocolVersion(config.protocolVersion);
+    this.#protocol = protocolSelection(this.#protocolVersion);
     this.#authority = config.authority;
     this.#fulfillments = config.fulfillments;
     this.#commitments = config.commitments;
+  }
+
+  public get protocolVersion(): SelectableProtocolVersion {
+    return this.#protocolVersion;
   }
 
   public paymentRequired(): Extract<SellerDecision<T>, { readonly kind: "payment-required" }> {
@@ -249,12 +275,12 @@ export class SellerMiddleware<T> {
       canonicalReceipt: outcome.canonicalReceipt,
       authorizedBatch: outcome.authorizedBatch,
     };
-    const verification = await verifyPaymentReceipt(proposed, requirements, this.#commitments);
+    const verification = await verifyPaymentReceipt(proposed, requirements, this.#commitments, this.#protocol);
     const stored = await this.#fulfillments.fulfill(proposed, () => release(idempotencyKey));
     if (stored.idempotencyKey !== idempotencyKey || stored.requestDigest !== requestDigest) {
       throw new MiddlewareError("fulfillment-conflict");
     }
-    const storedVerification = await verifyPaymentReceipt(stored, requirements, this.#commitments);
+    const storedVerification = await verifyPaymentReceipt(stored, requirements, this.#commitments, this.#protocol);
     if (!equalBytes(verification.receiptDigest, storedVerification.receiptDigest)) {
       throw new MiddlewareError("fulfillment-conflict");
     }
@@ -317,10 +343,11 @@ export async function verifyPaymentReceipt(
   evidence: Pick<StoredFulfillment<unknown>, "canonicalReceipt" | "authorizedBatch">,
   requirements: PaymentRequirements,
   commitments?: PaymentCommitmentResolver,
+  selection?: ProtocolSelection,
 ): Promise<ReceiptVerification> {
   let verified: ReceiptVerification;
   try {
-    verified = await verifyReceipt(evidence.canonicalReceipt, evidence.authorizedBatch);
+    verified = await verifyReceipt(evidence.canonicalReceipt, evidence.authorizedBatch, selection);
   } catch (error) {
     if (error instanceof PlatformSdkError) {
       throw new MiddlewareError("verification-failure");
@@ -597,6 +624,8 @@ function parseRequirements(value: unknown): PaymentRequirements {
     paymentCommitment(extra);
     paymentPayer(extra, scheme !== "exact");
     paymentPurpose(extra, scheme !== "exact");
+    paymentAccount(extra);
+    paymentCurrency(extra);
   } catch (error) {
     if (error instanceof PlatformSdkError) throw new MiddlewareError("invalid-payment-required");
     throw error;

@@ -351,20 +351,29 @@ export async function runMerchantApplication(moduleUrl, application) {
       scheme: config.scheme,
       network: config.network,
       maxTimeoutSeconds: 60,
+      extra: {
+        layerx: {
+          commitment: "executed",
+          account: requiredEnvironment(config.accountEnvironment),
+          currency: requiredEnvironment(config.currencyEnvironment),
+        },
+      },
     }),
     orders,
-    sellers: { create: (paymentRequired) => new SellerMiddleware({ paymentRequired, authority, fulfillments }) },
+    sellers: { create: (paymentRequired, protocolVersion) => new SellerMiddleware({ paymentRequired, protocolVersion, authority, fulfillments }) },
+    protocolVersion: config.protocolVersion,
     resourceUrl: (checkoutKey) => new URL(`/orders/${encodeURIComponent(checkoutKey)}`, config.publicUrl).toString(),
   });
   const receiptAuthority = new ReceiptAuthorityClient(config.receiptAuthorityUrl, token);
-  const webhook = new MerchantSettlementWebhooks(
-    new VerifiedWebhookConsumer({
+  const webhook = new MerchantSettlementWebhooks({
+    verifier: new VerifiedWebhookConsumer({
       publicKeys: parseWebhookKeys(requiredEnvironment(config.webhookKeysEnvironment)),
       deliveries: new FileWebhookDeliveries(join(state, "webhook-deliveries")),
     }),
     orders,
-    { resolve: (receiptRef) => receiptAuthority.resolveReference(receiptRef) },
-  );
+    receipts: { resolve: (receiptRef) => receiptAuthority.resolveReference(receiptRef) },
+    protocolVersion: config.protocolVersion,
+  });
   const port = Number(config.port);
   if (!Number.isSafeInteger(port) || port <= 0 || port > 65535) throw new Error("invalid_port");
   createServer(async (request, response) => {

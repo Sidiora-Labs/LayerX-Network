@@ -6,7 +6,9 @@ import {
 import {
   ProductionClient,
   SecretBytes,
+  isSelectableProtocolVersion,
   type AuthorizedReceiptBatch,
+  type SelectableProtocolVersion,
 } from "@sidiora/layerx-sdk";
 import {
   MiddlewareError,
@@ -79,6 +81,7 @@ export const DECLARED_KEYS = [
   "LAYERX_RESOURCE_DESCRIPTION",
   "LAYERX_RESOURCE_MIME_TYPE",
   "LAYERX_RESOURCE_SERVICE_NAME",
+  "LAYERX_PROTOCOL_VERSION",
   "LAYERX_X402_SCHEME",
   "LAYERX_X402_NETWORK",
   "LAYERX_PRICE",
@@ -171,6 +174,7 @@ export interface LayerXBuyerSettings {
 export interface LayerXDeclaredConfig {
   readonly principal: string;
   readonly protectedPath: string;
+  readonly protocolVersion: SelectableProtocolVersion;
   readonly paymentRequired: PaymentRequired;
   readonly requirements: PaymentRequirements;
   readonly authorizedBatch: AuthorizedReceiptBatch;
@@ -278,6 +282,7 @@ export function readDeclaredConfig(environment: Environment): LayerXDeclaredConf
   return {
     principal: required(environment, "LAYERX_PRINCIPAL"),
     protectedPath: mountPath(required(environment, "LAYERX_PROTECTED_PATH")),
+    protocolVersion: declaredProtocolVersion(required(environment, PROTOCOL_VERSION_VARIABLE)),
     paymentRequired,
     requirements,
     authorizedBatch: parseAuthorizedBatch(required(environment, "LAYERX_AUTHORIZED_BATCH_JSON")),
@@ -350,6 +355,7 @@ export function createLayerXMount(options: LayerXMountOptions): LayerXExpressMou
   const authorizedBatches = options.authorizedBatches ?? staticAuthorizedBatches(config.authorizedBatch);
   const seller = new SellerMiddleware<LayerXResource>({
     paymentRequired: config.paymentRequired,
+    protocolVersion: config.protocolVersion,
     authority: options.authority ?? new ReceiptPayloadAuthority(authorizedBatches),
     fulfillments: options.fulfillments,
   });
@@ -373,6 +379,7 @@ export function createLayerXMount(options: LayerXMountOptions): LayerXExpressMou
         ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       })),
       source: config.buyer.source,
+      protocolVersion: config.protocolVersion,
       supported: config.buyer.supported,
       authorizedBatches,
       ...(options.now === undefined ? {} : { now: options.now }),
@@ -626,6 +633,16 @@ function required(environment: Environment, key: DeclaredKey): string {
 function optional(environment: Environment, key: DeclaredKey): string | undefined {
   const value = environment[key];
   return value === undefined || value.length === 0 ? undefined : value;
+}
+
+export const PROTOCOL_VERSION_VARIABLE = "LAYERX_PROTOCOL_VERSION" as const;
+
+function declaredProtocolVersion(value: string): SelectableProtocolVersion {
+  const parsed = positiveInteger(value);
+  if (!isSelectableProtocolVersion(parsed)) {
+    throw new LayerXIntegrationError("invalid-declared-key");
+  }
+  return parsed;
 }
 
 function positiveInteger(value: string): number {

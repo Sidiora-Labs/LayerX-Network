@@ -5,7 +5,9 @@ import {
   idempotencyKey,
   type AuthorizedReceiptBatch,
   type ProductionTransport,
+  type ProtocolSelection,
   type ReceiptVerification,
+  type SelectableProtocolVersion,
   type TransportCall,
 } from "@sidiora/layerx-sdk";
 import {
@@ -18,8 +20,12 @@ import {
   decodePaymentPayloadHeader,
   decodeSettlementHeader,
   encodePaymentPayloadHeader,
+  protocolSelection,
+  requireProtocolVersion,
   verifyPaymentReceipt,
+  paymentAccount,
   paymentCommitment,
+  paymentCurrency,
   paymentPayer,
   paymentPurpose,
   type AuthorizedBatchResolver,
@@ -35,6 +41,8 @@ import {
 
 const MAX_U128 = 340282366920938463463374607431768211455n;
 const MERKLE_LEAF_DOMAIN = new TextEncoder().encode("LXP/v1/merkle-leaf\0");
+const LEGACY_ACCOUNT_ID_DOMAIN = new TextEncoder().encode("LXP/v1/account-id\0");
+const NATIVE_ACCOUNT_ID_DOMAIN = new TextEncoder().encode("LX:ACCOUNT:v1");
 const MAXIMUM_HTTP_RESPONSE_BYTES = 8 * 1024 * 1024;
 const HTTP_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -54,6 +62,7 @@ export interface BuyerRetryPolicy {
 export interface BuyerMiddlewareConfig {
   readonly client: ProductionClient;
   readonly source: string;
+  readonly protocolVersion: SelectableProtocolVersion;
   readonly supported: readonly BuyerSupportedKind[];
   readonly authorizedBatches: AuthorizedBatchResolver;
   readonly commitments?: PaymentCommitmentResolver;
@@ -71,6 +80,11 @@ export interface MoveQuoteRequest {
   readonly source: string;
   readonly destination: string;
   readonly money: { readonly amount: string; readonly currency: string };
+}
+
+export interface PaymentQuoteTerms {
+  readonly account: string;
+  readonly currency: string;
 }
 
 export interface MoveQuote {
@@ -170,6 +184,8 @@ export type PaidFetchResult =
 export class BuyerMiddleware {
   readonly #client: ProductionClient;
   readonly #source: string;
+  readonly #protocolVersion: SelectableProtocolVersion;
+  readonly #protocol: ProtocolSelection;
   readonly #supported: readonly BuyerSupportedKind[];
   readonly #authorizedBatches: AuthorizedBatchResolver;
   readonly #commitments: PaymentCommitmentResolver | undefined;
@@ -191,12 +207,18 @@ export class BuyerMiddleware {
     }
     this.#client = config.client;
     this.#source = config.source;
+    this.#protocolVersion = requireProtocolVersion(config.protocolVersion);
+    this.#protocol = protocolSelection(this.#protocolVersion);
     this.#supported = config.supported;
     this.#authorizedBatches = config.authorizedBatches;
     this.#commitments = config.commitments;
     this.#retry = retryPolicy(config.retry);
     this.#now = config.now ?? Date.now;
     this.#fetch = config.fetch ?? globalThis.fetch;
+  }
+
+  public get protocolVersion(): SelectableProtocolVersion {
+    return this.#protocolVersion;
   }
 
   public parseOffer(paymentRequiredHeader: string): ParsedOffer {
@@ -216,12 +238,16 @@ export class BuyerMiddleware {
   public async prepare(paymentRequiredHeader: string, callerIdempotencyKey: string): Promise<PaymentPreparation> {
     const offer = this.parseOffer(paymentRequiredHeader);
     if (offer.accepted.scheme !== "exact") throw new MiddlewareError("unsupported-payment");
+    const terms = paymentQuoteTerms(offer.accepted);
+    if (!(await accountNamesPayTo(terms.account, offer.accepted.payTo))) {
+      throw new MiddlewareError("requirements-mismatch");
+    }
     const mutationKey = idempotencyKey(callerIdempotencyKey);
     const quote = await this.#retrySdk(
       () => this.#client.human<MoveQuoteRequest, unknown>("move.quote", {
         source: this.#source,
-        destination: offer.accepted.payTo,
-        money: { amount: offer.accepted.amount, currency: offer.accepted.asset },
+        destination: terms.account,
+        money: { amount: offer.accepted.amount, currency: terms.currency },
       }),
       this.#retry.maximumQuoteAttempts,
       false,
@@ -229,7 +255,7 @@ export class BuyerMiddleware {
     const parsedQuote = parseMoveQuote(quote);
     if (
       parsedQuote.money.amount !== offer.accepted.amount
-      || !constantTimeEqualText(parsedQuote.money.currency, offer.accepted.asset)
+      || !constantTimeEqualText(parsedQuote.money.currency, terms.currency)
       || Date.parse(parsedQuote.expires_at) <= this.#now()
     ) {
       throw new MiddlewareError("requirements-mismatch");
@@ -331,7 +357,7 @@ export class BuyerMiddleware {
     if (evidence.purposeHash !== purpose) throw new MiddlewareError("verification-failure");
     const canonicalReceipt = decodeBase64(evidence.receipt);
     const authorizedBatch = await this.#authorizedBatches.resolve(canonicalReceipt);
-    const verification = await verifyPaymentReceipt({ canonicalReceipt, authorizedBatch }, payload.accepted, this.#commitments);
+    const verification = await verifyPaymentReceipt({ canonicalReceipt, authorizedBatch }, payload.accepted, this.#commitments, this.#protocol);
     const digest = toHex(await merkleLeafDigest(canonicalReceipt));
     if (evidence.receiptDigest !== digest || response.transaction !== `lxp:${digest}`
       || toHex(verification.receipt.activityId) !== expectedActivity || toHex(verification.receipt.from) !== receive.slice(8, 72)
@@ -368,6 +394,7 @@ export class BuyerMiddleware {
       { canonicalReceipt, authorizedBatch },
       payment.offer.accepted,
       this.#commitments,
+      this.#protocol,
     );
     if (response.payer !== toHex(verification.receipt.from)) throw new MiddlewareError("verification-failure");
     return { response, verification, canonicalReceipt };
@@ -431,7 +458,7 @@ export class BuyerMiddleware {
       if (
         material.evidence_id !== reference.evidence_id
         || material.class !== "layerx-receipt"
-        || material.content_type !== "application/layerx-receipt"
+        || material.content_type !== "application/vnd.layerx.receipt"
         || (material.verification !== "receipt-verified" && material.verification !== "checkpoint-finalised")
       ) {
         throw new MiddlewareError("verification-failure");
@@ -445,7 +472,7 @@ export class BuyerMiddleware {
         readonly receiptDigest: string;
       };
       try {
-        const verification = await verifyPaymentReceipt({ canonicalReceipt, authorizedBatch }, requirements, this.#commitments);
+        const verification = await verifyPaymentReceipt({ canonicalReceipt, authorizedBatch }, requirements, this.#commitments, this.#protocol);
         const receiptDigest = toHex(await merkleLeafDigest(canonicalReceipt));
         candidate = { canonicalReceipt, authorizedBatch, verification, receiptDigest };
       } catch (error) {
@@ -833,6 +860,43 @@ function decodeBase64(value: string): Uint8Array {
   } catch {
     throw new MiddlewareError("verification-failure");
   }
+}
+
+export function paymentQuoteTerms(requirements: PaymentRequirements): PaymentQuoteTerms {
+  try {
+    return {
+      account: paymentAccount(requirements.extra, true)!,
+      currency: paymentCurrency(requirements.extra, true)!,
+    };
+  } catch (error) {
+    if (error instanceof PlatformSdkError) throw new MiddlewareError("invalid-payment-required");
+    throw error;
+  }
+}
+
+export async function accountIdentifiers(account: string): Promise<readonly Uint8Array[]> {
+  const name = new TextEncoder().encode(account);
+  const length = new Uint8Array(4);
+  new DataView(length.buffer).setUint32(0, name.length);
+  return Promise.all([
+    sha256(concatenate(LEGACY_ACCOUNT_ID_DOMAIN, name)),
+    sha256(concatenate(NATIVE_ACCOUNT_ID_DOMAIN, length, name)),
+  ]);
+}
+
+async function accountNamesPayTo(account: string, payTo: string): Promise<boolean> {
+  const digits = payTo.startsWith("0x") ? payTo.slice(2) : payTo;
+  if (!/^[0-9a-fA-F]{64}$/u.test(digits)) return false;
+  const expected = Uint8Array.from({ length: 32 }, (_, index) => Number.parseInt(digits.slice(index * 2, index * 2 + 2), 16));
+  let matched = false;
+  for (const candidate of await accountIdentifiers(account)) {
+    matched = equalBytes(candidate, expected) || matched;
+  }
+  return matched;
+}
+
+async function sha256(value: Uint8Array): Promise<Uint8Array> {
+  return new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", arrayBuffer(value)));
 }
 
 function constantTimeEqualText(left: string, right: string): boolean {

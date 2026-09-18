@@ -256,6 +256,7 @@ function environment(path) {
   const endpoint = "http://127.0.0.1:1";
   return {
     LAYERX_AGENT_RPC_URL: endpoint,
+    LAYERX_PROTOCOL_VERSION: "3",
     LAYERX_BUDGET_SERVICE_URL: endpoint,
     LAYERX_SIGNER_SERVICE_URL: endpoint,
     LAYERX_RECEIPT_SERVICE_URL: endpoint,

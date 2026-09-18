@@ -15,6 +15,12 @@ const object = (value) => {
   return value;
 };
 
+const protocolVersion = (name) => {
+  const value = required(name);
+  if (value !== "2" && value !== "3") throw new Error(`invalid_${name.toLowerCase()}`);
+  return Number(value);
+};
+
 const hex32 = (value) => {
   if (typeof value !== "string" || !/^[0-9a-fA-F]{64}$/.test(value)) throw new Error("invalid_service_response");
   return Uint8Array.from({ length: 32 }, (_, index) => Number.parseInt(value.slice(index * 2, index * 2 + 2), 16));
@@ -203,6 +209,7 @@ const token = new SecretBytes(new TextEncoder().encode(required("LAYERX_TOKEN"))
 const agentService = new ServiceClient(endpoint("LAYERX_AGENT_RPC_URL"), token);
 const middleware = new AgentMiddleware({
   client: new ProductionClient(new AgentTransport(agentService)),
+  protocolVersion: protocolVersion("LAYERX_PROTOCOL_VERSION"),
   budgets: new BudgetLedger(new ServiceClient(endpoint("LAYERX_BUDGET_SERVICE_URL"), token)),
   signer: new RemoteSigner(new ServiceClient(endpoint("LAYERX_SIGNER_SERVICE_URL"), token)),
   receipts: new ReceiptResolver(new ServiceClient(endpoint("LAYERX_RECEIPT_SERVICE_URL"), token)),

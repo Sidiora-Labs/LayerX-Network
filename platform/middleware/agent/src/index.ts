@@ -1,4 +1,4 @@
-import { paymentCommitment, verifyPaymentReceipt, type GrantDrawExecution, type SellerSettlementOutcome } from "@sidiora/layerx-seller-middleware";
+import { paymentCommitment, protocolSelection, requireProtocolVersion, verifyPaymentReceipt, type GrantDrawExecution, type SellerSettlementOutcome } from "@sidiora/layerx-seller-middleware";
 import { verifyPaymentCommitment, type PaymentCommitment, type PaymentCommitmentResolver } from "@sidiora/layerx-seller-middleware";
 import {
   PlatformSdkError,
@@ -8,9 +8,11 @@ import {
   protocolAmount,
   verifyReceipt,
   type AuthorizedReceiptBatch,
+  type ProtocolSelection,
   type ReceiptVerification,
   type RetryClass,
   type SdkErrorCode,
+  type SelectableProtocolVersion,
 } from "@sidiora/layerx-sdk";
 
 const POST_SUBMIT_UNCERTAIN_CODES: ReadonlySet<SdkErrorCode> = new Set([
@@ -156,6 +158,7 @@ export interface AgentRefusal {
 export interface AgentMiddlewareConfig {
   readonly commitments?: PaymentCommitmentResolver;
   readonly client: ProductionClient;
+  readonly protocolVersion: SelectableProtocolVersion;
   readonly budgets: AgentBudgetLedger;
   readonly signer: AgentSigner;
   readonly receipts: AgentReceiptResolver;
@@ -179,6 +182,8 @@ export type AgentSpendResult =
 export class AgentMiddleware {
   readonly #commitments: PaymentCommitmentResolver | undefined;
   readonly #client: ProductionClient;
+  readonly #protocolVersion: SelectableProtocolVersion;
+  readonly #protocol: ProtocolSelection;
   readonly #budgets: AgentBudgetLedger;
   readonly #signer: AgentSigner;
   readonly #receipts: AgentReceiptResolver;
@@ -188,6 +193,8 @@ export class AgentMiddleware {
   public constructor(config: AgentMiddlewareConfig) {
     this.#commitments = config.commitments;
     this.#client = config.client;
+    this.#protocolVersion = requireProtocolVersion(config.protocolVersion);
+    this.#protocol = protocolSelection(this.#protocolVersion);
     this.#budgets = config.budgets;
     this.#signer = config.signer;
     this.#receipts = config.receipts;
@@ -196,6 +203,10 @@ export class AgentMiddleware {
     if (!Number.isSafeInteger(this.#maximumTrackPolls) || this.#maximumTrackPolls < 0 || this.#maximumTrackPolls > 1_000) {
       throw new AgentMiddlewareError("invalid-request");
     }
+  }
+
+  public get protocolVersion(): SelectableProtocolVersion {
+    return this.#protocolVersion;
   }
 
   public async spend(request: AgentSpendRequest): Promise<AgentSpendResult> {
@@ -241,7 +252,7 @@ export class AgentMiddleware {
     if (reservation.state === "committed") {
       try {
         const evidence = await this.#receipts.resolve(reservation.receiptDigest);
-        return await verifyCommittedAgentPayment(evidence, reservation, request, this.#commitments);
+        return await verifyCommittedAgentPayment(evidence, reservation, request, this.#commitments, this.#protocol);
       } catch {
         return { kind: "unknown", reservation };
       }
@@ -374,7 +385,7 @@ export class AgentMiddleware {
     }
     let verification: ReceiptVerification;
     try {
-      verification = await verifyAgentPayment(evidence, request, this.#commitments);
+      verification = await verifyAgentPayment(evidence, request, this.#commitments, this.#protocol);
     } catch {
       return { kind: "unknown", reservation, submission };
     }
@@ -802,8 +813,9 @@ export async function verifyCommittedAgentPayment(
   reservation: CommittedBudgetReservation,
   request: Pick<AgentSpendRequest, "amount" | "asset" | "recipient" | "commitment">,
   commitments?: PaymentCommitmentResolver,
+  selection?: ProtocolSelection,
 ): Promise<Extract<AgentSpendResult, { readonly kind: "verified" }>> {
-  const verification = await verifyReceipt(evidence.canonicalReceipt, evidence.authorizedBatch);
+  const verification = await verifyReceipt(evidence.canonicalReceipt, evidence.authorizedBatch, selection);
   if (toHex(verification.receiptDigest) !== reservation.receiptDigest
     || verification.receipt.amount !== protocolAmount(request.amount)
     || reservation.amount !== request.amount
@@ -818,9 +830,9 @@ export async function verifyCommittedAgentPayment(
 }
 
 export async function verifyAgentPayment(evidence: AgentReceiptEvidence, request: AgentSpendRequest,
-  commitments?: PaymentCommitmentResolver): Promise<ReceiptVerification> {
+  commitments?: PaymentCommitmentResolver, selection?: ProtocolSelection): Promise<ReceiptVerification> {
   validateSpend(request);
-  const verification = await verifyReceipt(evidence.canonicalReceipt, evidence.authorizedBatch);
+  const verification = await verifyReceipt(evidence.canonicalReceipt, evidence.authorizedBatch, selection);
   if (verification.receipt.amount !== BigInt(request.amount)
     || !constantTimeHex(verification.receipt.asset, request.asset)
     || !constantTimeHex(verification.receipt.to, request.recipient)) throw new AgentMiddlewareError("verification-failure");
@@ -830,14 +842,18 @@ export async function verifyAgentPayment(evidence: AgentReceiptEvidence, request
 }
 
 export class AgentGrantMiddleware implements GrantDrawExecution {
+  readonly #protocol: ProtocolSelection;
+
   public constructor(private readonly config: {
     readonly tenant: string;
+    readonly protocolVersion: SelectableProtocolVersion;
     readonly budgets: AgentBudgetLedger;
     readonly draws: GrantDrawExecution;
     readonly receipts: AgentReceiptResolver;
     readonly commitments?: PaymentCommitmentResolver;
   }) {
     if (!config.tenant || config.tenant.length > 512 || config.tenant.includes("\0")) throw new AgentMiddlewareError("invalid-request");
+    this.#protocol = protocolSelection(config.protocolVersion);
   }
 
   public async execute(request: Parameters<GrantDrawExecution["execute"]>[0]): Promise<SellerSettlementOutcome> {
@@ -857,13 +873,13 @@ export class AgentGrantMiddleware implements GrantDrawExecution {
     if (reservation.state === "committed") {
       const evidence = await this.config.receipts.resolve(reservation.receiptDigest);
       const outcome: SellerSettlementOutcome = { kind: "settled", ...evidence };
-      const verification = await verifyPaymentReceipt(outcome, requirements, this.config.commitments);
+      const verification = await verifyPaymentReceipt(outcome, requirements, this.config.commitments, this.#protocol);
       if (toHex(verification.receiptDigest) !== reservation.receiptDigest) throw new AgentMiddlewareError("budget-conflict");
       return outcome;
     }
     const outcome = await this.config.draws.execute(request);
     if (outcome.kind !== "settled") return outcome;
-    const verification = await verifyPaymentReceipt(outcome, requirements, this.config.commitments);
+    const verification = await verifyPaymentReceipt(outcome, requirements, this.config.commitments, this.#protocol);
     const receiptDigest = toHex(verification.receiptDigest);
     const committed = validateBudgetReservation(await this.config.budgets.commit({ reservationId: reservation.reservationId, ...facts, receiptDigest }), facts, reservation.reservationId);
     if (committed.state !== "committed" || committed.receiptDigest !== receiptDigest) throw new AgentMiddlewareError("budget-conflict");

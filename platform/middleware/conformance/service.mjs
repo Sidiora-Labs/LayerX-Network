@@ -11,9 +11,11 @@ import {
 import {
   BuyerMiddleware,
   LayerXPaymentHttpTransport,
+  accountIdentifiers,
 } from "@sidiora/layerx-buyer-middleware";
 import { ProductionClient, SecretBytes } from "@sidiora/layerx-sdk";
 import {
+  CONFORMANCE_PROTOCOL_VERSION,
   ConformanceSequencer,
   buildSignedReceipt,
   buyerPayload,
@@ -27,9 +29,33 @@ const EXAMPLE_ENTRY = fileURLToPath(new URL("../../examples/paid-api/index.mjs",
 const MERCHANT_ENTRY = fileURLToPath(new URL("../../examples/merchant-shop/index.mjs", import.meta.url));
 const AGENT_ENTRY = fileURLToPath(new URL("../../examples/agent-spend/index.mjs", import.meta.url));
 
+export const SERVICE_PAYEE_ACCOUNT = "agent:did:layerx:conformance-seller:main";
+
+/**
+ * Derives the payee account identifier the advertised `extra.layerx.account`
+ * resolves to, using the same derivation the buyer middleware applies in
+ * `accountNamesPayTo` and the interop adapter applies in
+ * `interop/crates/layerx-x402/src/model.rs`. The native (`LX:ACCOUNT:v1`)
+ * identifier is the current one; the legacy digest is the protocol-2 form the
+ * buyer still accepts.
+ */
+export async function servicePayee(account) {
+  const identifiers = await accountIdentifiers(account);
+  const native = identifiers[identifiers.length - 1];
+  if (native === undefined || native.length !== 32) throw new Error("invalid_service_payee_account");
+  return native;
+}
+
+export async function assertServiceAccountPayTo(account, payTo) {
+  for (const candidate of await accountIdentifiers(account)) {
+    if (toHex(candidate) === payTo) return;
+  }
+  throw new Error(`LAYERX_PAY_TO ${payTo} does not derive from LAYERX_ACCOUNT ${account}`);
+}
+
 export async function runServiceScenarios(suite) {
   const sequencer = await ConformanceSequencer.generate();
-  const payTo = fixedBytes(0xaa);
+  const payTo = await servicePayee(SERVICE_PAYEE_ACCOUNT);
   const asset = fixedBytes(0xbb);
   const amount = 250_000n;
   const facts = {
@@ -62,6 +88,8 @@ export async function runServiceScenarios(suite) {
     LAYERX_PRICE: amount.toString(),
     LAYERX_ASSET: toHex(asset),
     LAYERX_PAY_TO: toHex(payTo),
+    LAYERX_ACCOUNT: SERVICE_PAYEE_ACCOUNT,
+    LAYERX_CURRENCY: "LXP",
     LAYERX_PAYMENT_TIMEOUT_SECONDS: "120",
     LAYERX_AUTHORIZED_BATCH_JSON: JSON.stringify({
       batchId: toHex(receipt.authorizedBatch.batchId),
@@ -73,10 +101,13 @@ export async function runServiceScenarios(suite) {
   };
 
   const configFile = join(workDir, "example.json");
+  await assertServiceAccountPayTo(environment.LAYERX_ACCOUNT, environment.LAYERX_PAY_TO);
   await writeFile(configFile, JSON.stringify({ version: 1, application: "paid-api", environments: { emulator: {
     port, resourceFile, fulfillmentDirectory: join(workDir, "fulfillments"),
     resourceUrl: environment.LAYERX_RESOURCE_URL, scheme: "exact", network: "layerx:testnet",
+    protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
     priceEnvironment: "LAYERX_PRICE", assetEnvironment: "LAYERX_ASSET", payToEnvironment: "LAYERX_PAY_TO",
+    accountEnvironment: "LAYERX_ACCOUNT", currencyEnvironment: "LAYERX_CURRENCY",
     authorizedBatchEnvironment: "LAYERX_AUTHORIZED_BATCH_JSON",
   } } }));
   environment.LAYERX_EXAMPLE_CONFIG = configFile;
@@ -92,6 +123,7 @@ export async function runServiceScenarios(suite) {
         bearerToken: new SecretBytes(new TextEncoder().encode("unused-conformance-token")),
       })),
       source: "acct:conformance-buyer",
+      protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
       supported: [{ scheme: "exact", network: "layerx:testnet" }],
       authorizedBatches: resolver,
     });
@@ -226,13 +258,17 @@ async function runMerchantServiceScenarios(suite, receipt, resolver, amount, ass
   await writeFile(configFile, JSON.stringify({ version: 1, application: "merchant-shop", environments: { emulator: {
     port, publicUrl: environment.LAYERX_PUBLIC_URL, settlementUrl: environment.LAYERX_SETTLEMENT_URL,
     receiptAuthorityUrl: settlement.url, stateDirectory: workDir, scheme: "exact", network: "layerx:testnet",
+    protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
     tokenEnvironment: "LAYERX_SETTLEMENT_TOKEN", priceEnvironment: "LAYERX_PRICE",
     assetEnvironment: "LAYERX_ASSET", payToEnvironment: "LAYERX_PAY_TO",
+    accountEnvironment: "LAYERX_ACCOUNT", currencyEnvironment: "LAYERX_CURRENCY",
     webhookKeysEnvironment: "LAYERX_WEBHOOK_KEYS",
   } } }));
   Object.assign(environment, { LAYERX_EXAMPLE_CONFIG: configFile, LAYERX_PRICE: amount.toString(),
     LAYERX_ASSET: toHex(asset), LAYERX_PAY_TO: toHex(payTo),
+    LAYERX_ACCOUNT: SERVICE_PAYEE_ACCOUNT, LAYERX_CURRENCY: "LXP",
     LAYERX_WEBHOOK_KEYS: JSON.stringify({ conformance: toHex(receipt.authorizedBatch.sequencerPublicKey) }) });
+  await assertServiceAccountPayTo(environment.LAYERX_ACCOUNT, environment.LAYERX_PAY_TO);
   let child;
   try {
     child = spawn(process.execPath, [MERCHANT_ENTRY, "--environment", "emulator"], { env: environment, stdio: ["ignore", "pipe", "pipe"] });
@@ -249,6 +285,7 @@ async function runMerchantServiceScenarios(suite, receipt, resolver, amount, ass
         bearerToken: new SecretBytes(new TextEncoder().encode("unused-merchant-token")),
       })),
       source: "acct:merchant-conformance",
+      protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
       supported: [{ scheme: "exact", network: "layerx:testnet" }],
       authorizedBatches: resolver,
     });
@@ -402,6 +439,7 @@ async function runAgentServiceScenarios(suite, sequencer, receipt, amount, asset
     const baseEnvironment = {
       ...process.env,
       LAYERX_TOKEN: "agent-conformance-token",
+      LAYERX_PROTOCOL_VERSION: String(CONFORMANCE_PROTOCOL_VERSION),
       LAYERX_AGENT_RPC_URL: `${boundary.url}/agent`,
       LAYERX_BUDGET_SERVICE_URL: `${boundary.url}/budget`,
       LAYERX_SIGNER_SERVICE_URL: `${boundary.url}/signer`,
@@ -842,6 +880,8 @@ async function preparedPayment(parsed, receipt, resolver) {
   const verification = await verifyPaymentReceipt(
     { canonicalReceipt: receipt.canonicalReceipt, authorizedBatch: batch },
     parsed.accepted,
+    undefined,
+    { protocolVersion: CONFORMANCE_PROTOCOL_VERSION },
   );
   const payload = buyerPayload({ requirements: parsed.accepted, paymentRequired: parsed.required }, receipt, "service-happy");
   return {

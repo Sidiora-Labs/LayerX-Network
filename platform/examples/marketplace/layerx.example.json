@@ -5,6 +5,7 @@
     "emulator": {
       "endpoint": "http://127.0.0.1:9402",
       "network": "layerx:emulator",
+      "protocolVersion": 3,
       "cliBinaryEnvironment": "LAYERX_BIN",
       "receiptAuthorityUrl": "http://127.0.0.1:9402",
       "tokenEnvironment": "LAYERX_EMULATOR_TOKEN",
@@ -19,6 +20,7 @@
     "testnet": {
       "endpoint": "https://api.testnet.layerx.network",
       "network": "layerx:testnet",
+      "protocolVersion": 3,
       "cliBinaryEnvironment": "LAYERX_BIN",
       "receiptAuthorityUrl": "https://api.testnet.layerx.network",
       "tokenEnvironment": "LAYERX_TESTNET_TOKEN",

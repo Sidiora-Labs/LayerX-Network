@@ -64,6 +64,29 @@ export function paymentPurpose(extra: unknown, required = false): string | undef
   return purpose;
 }
 
+export const MAX_PAYMENT_ACCOUNT_BYTES = 512;
+export const MAX_PAYMENT_DID_BYTES = 255;
+export const MAX_PAYMENT_CURRENCY_BYTES = 16;
+
+export function paymentAccount(extra: unknown, required = false): string | undefined {
+  const account = layerXTerms(extra)?.["account"];
+  if (account === undefined && !required) return undefined;
+  if (typeof account !== "string" || account.length > MAX_PAYMENT_ACCOUNT_BYTES) return failure();
+  const did = /^agent:([a-z0-9._:-]+):main$/u.exec(account)?.[1];
+  if (did === undefined || did.length > MAX_PAYMENT_DID_BYTES || did.startsWith(":") || did.endsWith(":")
+    || did.includes("::") || did.includes(":asset:")) return failure();
+  return account;
+}
+
+export function paymentCurrency(extra: unknown, required = false): string | undefined {
+  const currency = layerXTerms(extra)?.["currency"];
+  if (currency === undefined && !required) return undefined;
+  if (typeof currency !== "string" || currency.length > MAX_PAYMENT_CURRENCY_BYTES || !/^[A-Z0-9]+$/u.test(currency)) {
+    return failure();
+  }
+  return currency;
+}
+
 function equal(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);
 }

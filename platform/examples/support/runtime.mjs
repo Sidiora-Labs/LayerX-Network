@@ -32,8 +32,39 @@ export async function loadApplicationConfig(moduleUrl, application) {
   if (document.version !== 1 || document.application !== application) throw new Error("invalid_application_config");
   const selected = parseArguments();
   const environments = exactObject(document.environments);
-  const config = exactObject(environments[selected.environment]);
-  return Object.freeze({ name: selected.environment, action: selected.action, directory, ...config });
+  const config = applyEndpointOverride(selected.environment, exactObject(environments[selected.environment]));
+  return Object.freeze({
+    name: selected.environment,
+    action: selected.action,
+    directory,
+    ...config,
+    protocolVersion: applicationProtocolVersion(config),
+  });
+}
+
+export const SELECTABLE_PROTOCOL_VERSIONS = Object.freeze([2, 3]);
+
+export function applicationProtocolVersion(config) {
+  const version = exactObject(config).protocolVersion;
+  if (!SELECTABLE_PROTOCOL_VERSIONS.includes(version)) throw new Error("missing_application_protocol_version");
+  return version;
+}
+
+const ENDPOINT_FIELDS = Object.freeze(["humanUrl", "receiptAuthorityUrl", "settlementUrl", "endpoint"]);
+
+export function applyEndpointOverride(environment, config) {
+  const override = optionalEnvironment("LAYERX_EXAMPLE_ENDPOINT");
+  if (override === undefined || environment !== "testnet") return config;
+  const base = secureBaseUrl(override);
+  const rebased = { ...config };
+  for (const field of ENDPOINT_FIELDS) {
+    const current = config[field];
+    if (current === undefined) continue;
+    if (typeof current !== "string") throw new Error("invalid_application_endpoint");
+    const path = secureUrl(current).pathname.replace(/^\//u, "");
+    rebased[field] = new URL(path, base).toString();
+  }
+  return rebased;
 }
 
 export class ReceiptAuthorityClient {
@@ -80,6 +111,28 @@ export class ReceiptAuthorityClient {
       },
     };
   }
+}
+
+const DIAGNOSTIC_LIMIT = 1024;
+
+export function diagnosticText(value, secrets = [], limit = DIAGNOSTIC_LIMIT) {
+  if (!Number.isSafeInteger(limit) || limit < 32) throw new Error("invalid_diagnostic_limit");
+  let text = typeof value === "string" ? value : Buffer.from(value ?? []).toString("utf8");
+  for (const secret of secrets) {
+    if (typeof secret !== "string" || secret.length < 8) continue;
+    text = text.split(secret).join("[redacted]");
+  }
+  text = text.replaceAll(/[^\t\n\r\u0020-\u007e]+/gu, " ").replaceAll(/\s+/gu, " ").trim();
+  return text.length > limit ? `${text.slice(0, limit)} [truncated]` : text;
+}
+
+export function commandPath(arguments_) {
+  const path = [];
+  for (const part of arguments_) {
+    if (typeof part !== "string" || part.startsWith("-")) break;
+    path.push(part);
+  }
+  return path.length === 0 ? "layerx" : path.join(" ");
 }
 
 export function exactObject(value) {
@@ -131,9 +184,18 @@ function receiptActivityId(receipt) {
   if (!(receipt instanceof Uint8Array) || receipt.length < 42) {
     throw new LayerXApplicationStateError("refused", "invalid_canonical_receipt");
   }
-  const header = [0x00, 0x01, 0x52, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x20];
-  for (let index = 0; index < header.length; index += 1) {
-    if (receipt[index] !== header[index]) throw new LayerXApplicationStateError("refused", "invalid_canonical_receipt");
+  const view = new DataView(receipt.buffer, receipt.byteOffset, receipt.byteLength);
+  const envelopeVersion = view.getUint16(0);
+  const structureTag = view.getUint16(2);
+  const protocolVersion = view.getUint16(4);
+  const activityIdLength = view.getUint32(6);
+  if (
+    envelopeVersion < 1 || envelopeVersion > 3
+    || (structureTag !== 0x5201 && structureTag !== 0x5202)
+    || protocolVersion !== envelopeVersion
+    || activityIdLength !== 32
+  ) {
+    throw new LayerXApplicationStateError("refused", "invalid_canonical_receipt");
   }
   return Buffer.from(receipt.subarray(10, 42)).toString("hex");
 }

@@ -30,7 +30,9 @@ The four decisions are total. There is no fallthrough.
 
 Your resource handler runs at step 4 and only at step 4. There is no code path that releases the resource before verification.
 
-## The two things you supply
+## The three things you supply
+
+**The declared protocol version.** `protocolVersion` selects the receipt protocol the middleware verifies against, and it has no default. A configuration that omits it, or names a version the SDK cannot select, is refused at construction with `missing-protocol-version`. The beta network runs protocol `3`; a receipt of any other version is a `verification-failure`, not a downgrade.
 
 **The authorised batch resolver.** Verification is meaningless if the facts you verify against come from the same party that gave you the receipt. `staticAuthorizedBatches` is right for a single-batch test; in production resolve the batch from a source you trust independently.
 
@@ -44,7 +46,7 @@ An in-memory implementation is correct and not durable. On restart it forgets, a
 
 ## Errors
 
-`MiddlewareError` carries one of a closed set of codes: `invalid-payment-required`, `invalid-payment-payload`, `requirements-mismatch`, `unsupported-payment`, `payment-pending`, `payment-refused`, `verification-failure`, `fulfillment-conflict`, `invalid-webhook`, `webhook-replay`. Map them to status codes once, centrally.
+`MiddlewareError` carries one of a closed set of codes: `invalid-payment-required`, `invalid-payment-payload`, `requirements-mismatch`, `unsupported-payment`, `payment-pending`, `payment-refused`, `verification-failure`, `fulfillment-conflict`, `fulfillment-outcome-unknown`, `invalid-webhook`, `webhook-replay`, `missing-protocol-version`. Map them to status codes once, centrally.
 
 ## Enforced by
 

@@ -26,7 +26,7 @@
 
 The idempotency key you pass to `prepare` is the one that protects the payment. Derive it from what you are buying - the URL plus a request digest, an order identifier - not from the attempt. The middleware's retry policy governs how many times it will re-quote, re-commit and re-poll; the key governs whether any of that can cost you twice. Both matter, and only the key is a correctness property.
 
-The retry policy is configurable and validated: non-integer or non-positive attempt counts are refused at construction rather than producing a loop that never terminates.
+The retry policy is configurable and validated: non-integer or non-positive attempt counts are refused at construction rather than producing a loop that never terminates. `protocolVersion` is configured the same way and has no default: a configuration that omits it is refused at construction with `missing-protocol-version`, and every receipt the buyer verifies is verified at that version.
 
 ## The transport
 

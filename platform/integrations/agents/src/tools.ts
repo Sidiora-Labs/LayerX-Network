@@ -186,7 +186,9 @@ export class AgentToolExecutor {
     const amount = canonicalInteger(object, "amount");
     const recipient = hex32(object, "recipient");
     const evidence = await this.#receipts.resolve(receiptRef);
-    const verification = await verifyReceipt(evidence.canonicalReceipt, evidence.authorizedBatch);
+    const verification = await verifyReceipt(evidence.canonicalReceipt, evidence.authorizedBatch, {
+      protocolVersion: this.#config.protocolVersion,
+    });
     if (
       verification.receipt.amount !== BigInt(amount)
       || toHex(verification.receipt.asset) !== asset

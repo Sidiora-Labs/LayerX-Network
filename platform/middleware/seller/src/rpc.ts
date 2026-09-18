@@ -1,4 +1,4 @@
-import { type AuthorizedReceiptBatch, type ReceiptVerification } from "@sidiora/layerx-sdk";
+import { type AuthorizedReceiptBatch, type ProtocolSelection, type ReceiptVerification } from "@sidiora/layerx-sdk";
 import { MiddlewareError, verifyPaymentReceipt, paymentCommitment, type PaymentRequirements, type PaymentCommitmentResolver } from "./index.js";
 
 export function rpcObject(value: unknown): Record<string, unknown> {
@@ -62,7 +62,7 @@ export class PaymentRpc {
 export async function verifyRpcPayment(
   result: Record<string, unknown>, expectedActivity: string, expectedPayer: string,
   requirements: PaymentRequirements, authorizedBatch: AuthorizedReceiptBatch,
-  commitments?: PaymentCommitmentResolver,
+  commitments?: PaymentCommitmentResolver, selection?: ProtocolSelection,
 ): Promise<{ readonly kind: "pending" } | { readonly kind: "verified"; readonly canonicalReceipt: Uint8Array; readonly authorizedBatch: AuthorizedReceiptBatch; readonly verification: ReceiptVerification }> {
   rpcHex(expectedActivity, 32); rpcHex(expectedPayer, 32);
   if (result["activity_id"] !== expectedActivity) throw new MiddlewareError("verification-failure");
@@ -71,7 +71,7 @@ export async function verifyRpcPayment(
   const canonicalReceipt = rpcHex(result["receipt"]);
   const commitment = paymentCommitment(requirements.extra);
   if (result["commitment"] !== undefined && result["commitment"] !== commitment) throw new MiddlewareError("verification-failure");
-  const verification = await verifyPaymentReceipt({ canonicalReceipt, authorizedBatch }, requirements, commitments);
+  const verification = await verifyPaymentReceipt({ canonicalReceipt, authorizedBatch }, requirements, commitments, selection);
   const hex = (value: Uint8Array) => Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
   if (hex(verification.receipt.activityId) !== expectedActivity || hex(verification.receipt.from) !== expectedPayer) throw new MiddlewareError("verification-failure");
   return { kind: "verified", canonicalReceipt, authorizedBatch, verification };
