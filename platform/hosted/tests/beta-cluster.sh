@@ -49,10 +49,25 @@
 #                                       set without creating a cluster or loading it into kind nodes; a job
 #                                       that only builds and publishes images sets its own bound here
 #                                       (default LAYERX_BETA_MIN_FREE_GIB)
-#   LAYERX_BETA_INTEROP_MANIFEST_FILE   required interop gateway runtime manifest: the imported upstream
-#                                       conformance suites, the HTTP, MCP and A2A transport pins and the
-#                                       x402, AP2, UCP, Visa TAP and fiat trust roots, none of which this
-#                                       repository can derive (interop/deploy/gateway/README.md)
+#   LAYERX_BETA_INTEROP_CONFORMANCE_X402  the imported conformance suite of each interop adapter as
+#   LAYERX_BETA_INTEROP_CONFORMANCE_AP2   '<suite-identifier>,<vector-count>,<suite-sha256>'. No upstream
+#   LAYERX_BETA_INTEROP_CONFORMANCE_UCP   publishes one (interop/specs/vendor/CONFORMANCE.md), so the suite
+#   LAYERX_BETA_INTEROP_CONFORMANCE_VISA_TAP  the deployment ran is a deployment input; the specifications,
+#   LAYERX_BETA_INTEROP_CONFORMANCE_FIAT  versions and digests behind them are derived from the vendored
+#                                       documents and are not
+#   LAYERX_BETA_INTEROP_CONFORMANCE_HTTP  the digest of the imported conformance suite of each transport
+#   LAYERX_BETA_INTEROP_CONFORMANCE_MCP   binding; the binding version and specification digest are derived
+#   LAYERX_BETA_INTEROP_CONFORMANCE_A2A   from interop/specs/vendor/x402/transports
+#   LAYERX_BETA_INTEROP_AP2_KEYS        JSON counterparty trust roots the cluster cannot generate for itself:
+#   LAYERX_BETA_INTEROP_AP2_ASSETS      the AP2 mandate issuer keys and asset bindings, the Visa TAP agent
+#   LAYERX_BETA_INTEROP_VISA_AGENTS     registry keys and merchant targets, and the fiat provider callback
+#   LAYERX_BETA_INTEROP_VISA_TARGETS    keys (interop/deploy/gateway/README.md)
+#   LAYERX_BETA_INTEROP_FIAT_PROVIDERS
+#   LAYERX_BETA_INTEROP_X402_SUPPORTED  optional overrides of the two in-cluster trust roots, which default
+#   LAYERX_BETA_INTEROP_UCP_PAYMENT_HANDLER  to this cluster's own facilitator declaration and the UCP
+#                                       payment handler of the vendored UCP revision
+#   LAYERX_BETA_INTEROP_MANIFEST_FILE   optional interop gateway manifest that overrides any rendered field
+#                                       (interop/deploy/gateway/README.md)
 #   LAYERX_BETA_TESTNET_PORT            host ports of the testnet, gateway and faucet port-forwards
 #   LAYERX_BETA_GATEWAY_PORT            (defaults 19443, 19444, 19445)
 #   LAYERX_BETA_FAUCET_PORT
@@ -2507,141 +2522,29 @@ port_forwards_stop() {
 }
 
 interop_inputs_require() {
-    local path=${LAYERX_BETA_INTEROP_MANIFEST_FILE:-}
-    [ -n "$path" ] || fail "LAYERX_BETA_INTEROP_MANIFEST_FILE is required: the interop gateway runtime manifest carries the upstream conformance suites, the HTTP, MCP and A2A transport pins and the x402, AP2, UCP, Visa TAP and fiat trust roots, none of which this repository can derive; interop/deploy/gateway/README.md documents its shape"
-    [ -r "$path" ] || fail "LAYERX_BETA_INTEROP_MANIFEST_FILE=$path is not readable"
+    local manifest=${LAYERX_BETA_INTEROP_MANIFEST_FILE:-}
+    [ -z "$manifest" ] || [ -r "$manifest" ] || fail "LAYERX_BETA_INTEROP_MANIFEST_FILE=$manifest is not readable"
+    python3 "$REPO_ROOT/interop/deploy/gateway/render.py" --check \
+        || fail "the interop gateway configuration lacks deployment inputs named above; interop/deploy/gateway/README.md documents each variable"
 }
 
 interop_runtime_render() {
     interop_inputs_require
-    python3 - "$LAYERX_BETA_INTEROP_MANIFEST_FILE" "$REPO_ROOT/interop/specs/vendor" \
-        "$SECRETS_DIR/module-registry.json" "$SECRETS_DIR/interop-config.json" \
-        "$SECRETS_DIR/interop-modules.json" <<'PYINTEROP'
-import hashlib
+    local network
+    network=$(sed -n 's/^ *- {name: LAYERX_INTEROP_NETWORK_ID, value: \([A-Za-z0-9_.-]*\)}$/\1/p' \
+        "$REPO_ROOT/platform/hosted/interop/deployment.yaml")
+    [ -n "$network" ] || fail "the interop deployment does not declare LAYERX_INTEROP_NETWORK_ID"
+    python3 "$REPO_ROOT/interop/deploy/gateway/render.py" --network-id "$network" \
+        --sequencer-public-key-file "$SECRETS_DIR/sequencer-public-key" \
+        --out "$SECRETS_DIR/interop-config.json" \
+        || fail "the interop gateway runtime configuration was refused"
+    python3 - "$SECRETS_DIR/module-registry.json" "$SECRETS_DIR/interop-modules.json" <<'PYINTEROP'
 import json
 import pathlib
 import sys
 
-owner, vendor, registry, config_out, modules_out = (pathlib.Path(value) for value in sys.argv[1:])
-missing = []
-document = json.loads(owner.read_text())
-if not isinstance(document, dict):
-    raise SystemExit("beta-cluster: error: LAYERX_BETA_INTEROP_MANIFEST_FILE must hold a JSON object")
-
-VENDORED = {
-    "x402": "x402/x402-specification-v2.md",
-    "ap2": "ap2/specification.md",
-    "ucp": "ucp/specification-checkout.html",
-    "visa-tap": "visa-tap/README.md",
-}
-PINNED_VERSION = {"x402": "2.0.0", "ap2": "1.0.0"}
-EVIDENCE = {
-    "x402": "layerx-receipt",
-    "ap2": "verified-mandate+layerx-receipt",
-    "ucp": "layerx-receipt",
-    "visa-tap": "trusted-agent-credential",
-    "fiat": "external-settlement+layerx-receipt",
-}
-
-
-def hex32(container, field, where):
-    value = container.get(field)
-    if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
-        missing.append("%s.%s (lowercase 32-byte hexadecimal digest)" % (where, field))
-        return None
-    if int(value, 16) == 0:
-        missing.append("%s.%s (a zero digest is not a pin)" % (where, field))
-        return None
-    return value
-
-
-def label(container, field, where):
-    value = container.get(field)
-    if not isinstance(value, str) or not value or len(value) > 512:
-        missing.append("%s.%s" % (where, field))
-        return None
-    return value
-
-
-def present(field, kind):
-    value = document.get(field)
-    if not isinstance(value, kind) or (kind is list and not value):
-        missing.append(field)
-        return None
-    return value
-
-
-adapters_input = document.get("adapters")
-if not isinstance(adapters_input, dict):
-    missing.append("adapters (object keyed by x402, ap2, ucp, visa-tap and fiat)")
-    adapters_input = {}
-adapters = []
-for identifier in ("x402", "ap2", "ucp", "visa-tap", "fiat"):
-    where = "adapters.%s" % identifier
-    declared = adapters_input.get(identifier)
-    if not isinstance(declared, dict):
-        missing.append(where)
-        continue
-    vectors = declared.get("conformance_vectors")
-    if not isinstance(vectors, int) or isinstance(vectors, bool) or vectors <= 0:
-        missing.append("%s.conformance_vectors (count of the imported upstream vectors)" % where)
-        vectors = 0
-    if identifier in VENDORED:
-        digest = hashlib.sha256((vendor / VENDORED[identifier]).read_bytes()).hexdigest()
-    else:
-        digest = hex32(declared, "specification_sha256", where)
-    version = PINNED_VERSION.get(identifier) or label(declared, "version", where)
-    specification = identifier if identifier in PINNED_VERSION else label(declared, "specification", where)
-    adapters.append({
-        "id": identifier,
-        "specification": specification,
-        "version": version,
-        "specification_sha256": digest,
-        "conformance_suite": label(declared, "conformance_suite", where),
-        "conformance_vectors": vectors,
-        "conformance_sha256": hex32(declared, "conformance_sha256", where),
-        "evidence_policy": EVIDENCE[identifier],
-    })
-
-transports_input = document.get("transports")
-if not isinstance(transports_input, dict):
-    missing.append("transports (object keyed by http, mcp and a2a)")
-    transports_input = {}
-transports = []
-for identifier in ("http", "mcp", "a2a"):
-    where = "transports.%s" % identifier
-    declared = transports_input.get(identifier)
-    if not isinstance(declared, dict):
-        missing.append(where)
-        continue
-    transports.append({
-        "id": identifier,
-        "version": label(declared, "version", where),
-        "specification_sha256": hex32(declared, "specification_sha256", where),
-        "conformance_sha256": hex32(declared, "conformance_sha256", where),
-    })
-
-roots = {
-    "x402_supported": present("x402_supported", dict),
-    "ap2_keys": present("ap2_keys", list),
-    "ap2_assets": present("ap2_assets", list),
-    "ucp_payment_handler": present("ucp_payment_handler", dict),
-    "visa_agents": present("visa_agents", list),
-    "visa_targets": present("visa_targets", list),
-    "fiat_providers": present("fiat_providers", list),
-}
-if missing:
-    raise SystemExit(
-        "beta-cluster: error: LAYERX_BETA_INTEROP_MANIFEST_FILE=%s does not declare: %s"
-        % (owner, ", ".join(missing))
-    )
-
-config = {"adapters": adapters, "transports": transports}
-config.update(roots)
-config_out.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
-config_out.chmod(0o600)
-modules = json.loads(registry.read_text())["modules"]
-modules_out.write_text(json.dumps({"modules": modules}, indent=2) + "\n")
+registry, modules_out = (pathlib.Path(value) for value in sys.argv[1:])
+modules_out.write_text(json.dumps({"modules": json.loads(registry.read_text())["modules"]}, indent=2) + "\n")
 PYINTEROP
     [ -s "$SECRETS_DIR/interop-config.json" ] || fail "the interop gateway runtime configuration was not rendered"
 }

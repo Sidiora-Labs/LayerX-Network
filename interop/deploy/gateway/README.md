@@ -42,7 +42,7 @@ authenticated principal. Exactly one verified pair whose currency matches its
 binding is required. The hosted execution key is derived from the canonical
 authenticated principal and both verified mandate references.
 
-## Image, manifest and cluster configuration
+## Image, configuration and cluster bring-up
 
 `Dockerfile` builds the `layerx-interop-gateway` binary from the tracked
 repository sources and runs it as the non-root 4020 user, the same identity the
@@ -54,29 +54,80 @@ Redis credentials on the shared gateway keyspace, and the
 `layerx-interop-runtime` secret holding `config.json` and `registry.json`.
 
 `config.example.json` is the shape of the document `LAYERX_INTEROP_CONFIG`
-selects. Every identity, key, digest, principal and merchant in it is an example
-and must be replaced with authenticated operator configuration.
+selects. Its derived fields are the real ones this checkout renders; every
+conformance digest, identity, principal and merchant in it is an example and
+must be replaced with authenticated deployment configuration.
 
-`platform/hosted/tests/beta-cluster.sh` renders that document during bring-up.
-It derives the four vendored specification digests from `interop/specs/vendor`,
-fixes each adapter's evidence policy, and takes everything the repository cannot
-derive from the operator manifest named by `LAYERX_BETA_INTEROP_MANIFEST_FILE`:
+`render.py` produces that document and
+`platform/hosted/tests/beta-cluster.sh` calls it during bring-up. The
+deployment supplies variables only: there is no document to author, and
+`render.py --check` refuses the bring-up up front, naming every variable that
+is absent or malformed.
+
+### Derived by `render.py`, never a deployment input
+
+| Field | Source |
+|---|---|
+| `x402` specification, version `2.0.0`, digest | `interop/specs/vendor/x402/x402-specification-v2.md` |
+| `ap2` specification, version `1.0.0`, digest | `interop/specs/vendor/ap2/specification.md` |
+| `ucp` specification `ucp-checkout`, version `20260408`, digest | `interop/specs/vendor/ucp/specification-checkout.html` at the vendored `2026-04-08` revision |
+| `visa-tap` specification, version `1`, digest | `interop/specs/vendor/visa-tap/README.md` |
+| `fiat` specification `layerx-fiat-settlement`, version `1`, digest | `docs/wiki/FiatRamps.md`, the adapter's own surface description; there is no upstream |
+| `http`, `mcp` and `a2a` binding version `2` and specification digests | `interop/specs/vendor/x402/transports/*.md`, the x402 v2 transport bindings vendored at the same pinned commit |
+| every adapter's `evidence_policy` | the policy the service already requires per adapter |
+| `x402_supported` | this cluster's own facilitator declaration: the CAIP-2 form of the network the deployment serves, the `exact` scheme, and the generated sequencer identity as its signer |
+| `ucp_payment_handler` | the `layerx-ucp-handler` declaration of the vendored UCP revision |
+
+`x402_supported` and `ucp_payment_handler` are in-cluster counterparties, so
+they default to the cluster's own material. `LAYERX_BETA_INTEROP_X402_SUPPORTED`
+and `LAYERX_BETA_INTEROP_UCP_PAYMENT_HANDLER` hold a JSON document each and
+replace those defaults when a deployment fronts a different facilitator or
+payment handler.
+
+### Deployment variables
+
+| Variable | Value | How to produce it |
+|---|---|---|
+| `LAYERX_BETA_INTEROP_CONFORMANCE_X402` | `<suite-identifier>,<vector-count>,<suite-sha256>` | run the x402 conformance suite the deployment imported, then name it, count its vectors and take the SHA-256 of the suite content |
+| `LAYERX_BETA_INTEROP_CONFORMANCE_AP2` | same form | as above for AP2 |
+| `LAYERX_BETA_INTEROP_CONFORMANCE_UCP` | same form | as above for UCP |
+| `LAYERX_BETA_INTEROP_CONFORMANCE_VISA_TAP` | same form | as above for Visa TAP |
+| `LAYERX_BETA_INTEROP_CONFORMANCE_FIAT` | same form | as above for the fiat provider-callback suite |
+| `LAYERX_BETA_INTEROP_CONFORMANCE_HTTP` | `<suite-sha256>` | SHA-256 of the imported HTTP transport conformance suite |
+| `LAYERX_BETA_INTEROP_CONFORMANCE_MCP` | `<suite-sha256>` | as above for MCP |
+| `LAYERX_BETA_INTEROP_CONFORMANCE_A2A` | `<suite-sha256>` | as above for A2A |
+| `LAYERX_BETA_INTEROP_AP2_KEYS` | JSON array | the mandate issuer keys the AP2 credential provider publishes |
+| `LAYERX_BETA_INTEROP_AP2_ASSETS` | JSON array | one binding per principal and currency, from the merchant agreement and the asset the deployment settles in |
+| `LAYERX_BETA_INTEROP_VISA_AGENTS` | JSON array | the trusted-agent keys the Visa TAP registry publishes |
+| `LAYERX_BETA_INTEROP_VISA_TARGETS` | JSON array | the merchant authority and path each principal is authorised for |
+| `LAYERX_BETA_INTEROP_FIAT_PROVIDERS` | JSON array | the ed25519 callback key of each card, bank or RTP provider under contract |
+| `LAYERX_BETA_INTEROP_MANIFEST_FILE` | path to a JSON document | optional; overrides any rendered field, field by field |
+
+The conformance suites are deployment inputs because no upstream publishes one:
+`interop/specs/vendor/CONFORMANCE.md` records the tree each protocol publishes
+at its pinned commit and what was found there. The renderer refuses a suite
+with no vectors and a zero digest rather than inventing either, so
+`ConformanceSuite` keeps meaning a suite that actually ran. The five trust
+roots above are counterparty credentials this cluster cannot generate for
+itself; the bring-up names each missing one instead of skipping the adapter.
+
+`LAYERX_BETA_INTEROP_MANIFEST_FILE` stays available for a deployment that
+keeps its pins in one document. It is applied last and wins field by field, in
+the shape:
 
     {
-      "adapters": {
-        "x402":     {"conformance_suite": ..., "conformance_vectors": ..., "conformance_sha256": ...},
-        "ap2":      {"conformance_suite": ..., "conformance_vectors": ..., "conformance_sha256": ...},
-        "ucp":      {"specification": ..., "version": ..., "conformance_suite": ..., "conformance_vectors": ..., "conformance_sha256": ...},
-        "visa-tap": {"specification": ..., "version": ..., "conformance_suite": ..., "conformance_vectors": ..., "conformance_sha256": ...},
-        "fiat":     {"specification": ..., "version": ..., "specification_sha256": ..., "conformance_suite": ..., "conformance_vectors": ..., "conformance_sha256": ...}
-      },
-      "transports": {"http": {...}, "mcp": {...}, "a2a": {...}},
+      "adapters": {"x402": {"conformance_suite": ..., "conformance_vectors": ..., "conformance_sha256": ...}, ...},
+      "transports": {"http": {"conformance_sha256": ...}, ...},
       "x402_supported": {...}, "ap2_keys": [...], "ap2_assets": [...],
       "ucp_payment_handler": {...}, "visa_agents": [...], "visa_targets": [...],
       "fiat_providers": [...]
     }
 
-Each transport entry declares `version`, `specification_sha256` and
-`conformance_sha256`. The bring-up refuses to start when the variable is unset
-and names every field the manifest fails to declare; there is no default trust
-root and no adapter is silently skipped.
+Every field it sets is validated exactly as a variable is, and an unknown
+adapter, transport or field is refused rather than ignored.
+
+`python3 interop/deploy/gateway/render.py --self-test` exercises the render
+against the vendored documents in this checkout: the refusal list when nothing
+is declared, the derived digests against the provenance records, the in-cluster
+defaults, the field-by-field override, and the refusals for an empty suite, a
+zero digest and an out-of-charset suite identifier.
