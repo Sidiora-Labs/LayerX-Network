@@ -35,6 +35,10 @@ contract PaxeerBetaDeploy {
 
     error InvalidPhase();
     error InvalidDeploymentState();
+
+    uint256 private constant GENESIS_ACTIVATION_CALLS = 9;
+    uint256 private constant GENESIS_CALL_COUNT = 17;
+
     uint256 private broadcastKey;
 
     struct Addresses {
@@ -217,7 +221,9 @@ contract PaxeerBetaDeploy {
         }
         uint256 firstNonce = timelock.operationNonce();
         _scheduleGenesis(addresses, input, guarantors);
-        emit BetaGovernancePhase("GENESIS_SCHEDULED", addresses.blueprint, firstNonce, 12 + guarantors.length);
+        emit BetaGovernancePhase(
+            "GENESIS_SCHEDULED", addresses.blueprint, firstNonce, GENESIS_CALL_COUNT + guarantors.length
+        );
         vm.stopBroadcast();
     }
 
@@ -232,10 +238,11 @@ contract PaxeerBetaDeploy {
         vm.startBroadcast(key);
         ScheduledCall[] memory calls = _genesisCalls(addresses, input, guarantors);
         LayerXTimelock timelock = LayerXTimelock(payable(addresses.timelock));
-        uint256 activationEnd = 4 + guarantors.length;
+        uint256 activationEnd = GENESIS_ACTIVATION_CALLS + guarantors.length;
         for (uint256 i = 0; i < activationEnd; ++i) {
             _execute(timelock, calls[i].target, calls[i].data, calls[i].salt, genesisStartNonce + i);
         }
+        _requireSettlementWiring(addresses);
         emit BetaGovernancePhase("GENESIS_ACTIVATED", addresses.blueprint, genesisStartNonce, activationEnd);
         vm.stopBroadcast();
     }
@@ -295,7 +302,7 @@ contract PaxeerBetaDeploy {
         vm.startBroadcast(key);
         ScheduledCall[] memory calls = _genesisCalls(addresses, input, guarantors);
         LayerXTimelock timelock = LayerXTimelock(payable(addresses.timelock));
-        uint256 start = 4 + guarantors.length;
+        uint256 start = GENESIS_ACTIVATION_CALLS + guarantors.length;
         for (uint256 i = start; i < calls.length; ++i) {
             _execute(timelock, calls[i].target, calls[i].data, calls[i].salt, genesisStartNonce + i);
         }
@@ -826,7 +833,7 @@ contract PaxeerBetaDeploy {
         PaxeerBetaDeploymentValidator.Input calldata input,
         PaxeerBetaDeploymentValidator.GuarantorInput[] calldata guarantors
     ) private view returns (ScheduledCall[] memory calls) {
-        calls = new ScheduledCall[](12 + guarantors.length);
+        calls = new ScheduledCall[](GENESIS_CALL_COUNT + guarantors.length);
         uint256 i;
         calls[i] = _call(
             "GENESIS",
@@ -856,6 +863,31 @@ contract PaxeerBetaDeploy {
         ++i;
         calls[i] = _call("GENESIS", i, a.vault, abi.encodeCall(LayerXVault.setGuarantorBond, (a.guarantorBond)));
         ++i;
+        calls[i] =
+            _call("GENESIS", i, a.vault, abi.encodeCall(LayerXVault.setSettlementModule, (a.withdrawalClaims, true)));
+        ++i;
+        calls[i] =
+            _call("GENESIS", i, a.vault, abi.encodeCall(LayerXVault.setSettlementModule, (a.emergencyExit, true)));
+        ++i;
+        calls[i] = _call(
+            "GENESIS",
+            i,
+            a.nullifierRegistry,
+            abi.encodeCall(WithdrawalNullifierRegistry.setConsumer, (a.withdrawalClaims, true))
+        );
+        ++i;
+        calls[i] = _call(
+            "GENESIS",
+            i,
+            a.nullifierRegistry,
+            abi.encodeCall(WithdrawalNullifierRegistry.setConsumer, (a.emergencyExit, true))
+        );
+        ++i;
+        calls[i] = _call(
+            "GENESIS", i, a.guarantorBond, abi.encodeCall(GuarantorBond.setSlashingAuthority, (a.challengeManager))
+        );
+        ++i;
+        if (i != GENESIS_ACTIVATION_CALLS) revert InvalidDeploymentState();
         for (uint256 j = 0; j < guarantors.length; ++j) {
             PaxeerBetaDeploymentValidator.GuarantorInput calldata g = guarantors[j];
             calls[i] = _call(
@@ -992,6 +1024,16 @@ contract PaxeerBetaDeploy {
         }
     }
 
+    function _requireSettlementWiring(Addresses memory a) private view {
+        WithdrawalNullifierRegistry nullifiers = WithdrawalNullifierRegistry(a.nullifierRegistry);
+        LayerXVault vault = LayerXVault(payable(a.vault));
+        if (
+            !nullifiers.consumer(a.withdrawalClaims) || !nullifiers.consumer(a.emergencyExit)
+                || !vault.settlementModule(a.withdrawalClaims) || !vault.settlementModule(a.emergencyExit)
+                || GuarantorBond(payable(a.guarantorBond)).slashingAuthority() != a.challengeManager
+        ) revert InvalidDeploymentState();
+    }
+
     function _requireFinal(
         Addresses memory a,
         PaxeerBetaDeploymentValidator.Input calldata input,
@@ -1009,6 +1051,7 @@ contract PaxeerBetaDeploy {
                 || bond.genesisBondedSetVersion() != bond.membershipVersion()
                 || LayerXVault(payable(a.vault)).depositRootAuthority() == bytes32(0)
         ) revert InvalidDeploymentState();
+        _requireSettlementWiring(a);
         for (uint256 i = 0; i < Predeploys.COUNT; ++i) {
             bytes32 role = Predeploys.roleAt(i);
             if (manager.componentForRole(role) != _component(a, role)) revert InvalidDeploymentState();
