@@ -48,7 +48,7 @@ limit enforced by the gateway is 8 MiB. Parameters are positional.
 | `lx_sendActivity` | `[canonical_hex, commitment]` | Verified outcome at the requested commitment |
 | `lx_subscribe` | `["receipts"]`, `["checkpoints"]`, or `["account", account_id]`, each optionally followed by a `cursor` string | Subscription id string; WebSocket only |
 | `lx_unsubscribe` | `[subscription]` | `true` once that subscription stops; WebSocket only |
-| `lx_listAssets` | `[]` or no `params` | Asset registry snapshot under `assets`, bounded at 64 records |
+| `lx_listAssets` | `[]`, `[cursor]`, or `[cursor, limit]`, where `cursor` is `null` or a 64-hex asset id and `limit` is 1..256 | One page of assets under `assets`, ordered by ascending `asset_id`, with `next_cursor` |
 | `lx_getAsset` | `[asset_id]` | One Asset metadata record |
 | `lx_estimateFee` | `[canonical_hex]` | Committed-schedule estimate |
 
@@ -437,14 +437,22 @@ success is never returned. See [Commitment levels](CommitmentLevels.md).
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"lx_listAssets","params":[]}
+{"jsonrpc":"2.0","id":1,"method":"lx_listAssets","params":[null,64]}
+{"jsonrpc":"2.0","id":1,"method":"lx_listAssets","params":["<64-hex asset id>",256]}
 {"jsonrpc":"2.0","id":1,"method":"lx_getAsset","params":["<64-hex asset id>"]}
 ```
 
 An asset record: `asset_id`, `symbol`, `name`, `decimals`,
 `custody_kind`, `custody_reference`, `paused`, `supply_cap`,
-`issuer_did`, `issuer_kind`, `total_units`, `salt`. The list nests
-records under `assets` (native bound 64). A single record nests under
-`asset`. Both carry `observed_head_sequence`, `state_root`, and
+`issuer_did`, `issuer_kind`, `total_units`, `salt`. The list nests one
+page of records under `assets`, ordered by ascending `asset_id`, and
+carries `next_cursor`: the `asset_id` of the last record on the page
+while more records follow, and `null` once the page is the last one.
+`cursor` is the exclusive `asset_id` to resume after and may be `null`;
+`limit` defaults to 64 and may not exceed 256; the native registry
+holds up to 1024 records. A malformed cursor or limit returns `-32602`.
+A single record nests under `asset`. Both carry
+`observed_head_sequence`, `state_root`, and
 `verification: "authenticated_committed_snapshot"`.
 
 ### `lx_estimateFee`

@@ -6,6 +6,9 @@ import * as https from "node:https";
 import { LayerXKeyCredential } from "./agent-http.js";
 
 export type Commitment = "executed" | "batched" | "finalised";
+export type RpcParam = string | number | null;
+export const LIST_ASSETS_DEFAULT_PAGE = 64;
+export const LIST_ASSETS_MAX_PAGE = 256;
 export interface IdentitySequenceSnapshot {
   readonly did: string;
   readonly nextSequence: bigint;
@@ -33,6 +36,7 @@ export interface AssetSnapshot {
 }
 export interface AssetListSnapshot {
   readonly assets: readonly AssetMetadata[];
+  readonly nextCursor: string | null;
   readonly observedHeadSequence: bigint;
   readonly stateRoot: string;
 }
@@ -83,7 +87,15 @@ export class JsonRpcClient {
   public getBatchHeader(batch: string): Promise<Record<string, unknown>> { return this.call("lx_getBatchHeader", [batch]); }
   public getCheckpoint(checkpoint: string): Promise<Record<string, unknown>> { return this.call("lx_getCheckpoint", [checkpoint]); }
   public getNodeInfo(): Promise<Record<string, unknown>> { return this.call("lx_getNodeInfo", []); }
-  public listAssets(): Promise<AssetListSnapshot> { return this.call("lx_listAssets", []).then(decodeAssetListSnapshot); }
+  public listAssets(): Promise<AssetListSnapshot> { return this.listAssetsPage(); }
+  public listAssetsPage(cursor?: string, limit?: number): Promise<AssetListSnapshot> {
+    const params = listAssetsParams(cursor, limit);
+    return this.call("lx_listAssets", params).then(value => {
+      const snapshot = decodeAssetListSnapshot(value);
+      if (snapshot.assets.length > (limit ?? LIST_ASSETS_DEFAULT_PAGE)) throw new Error("Oversized asset page");
+      return snapshot;
+    });
+  }
   public getAsset(asset: string): Promise<AssetSnapshot> {
     if (!/^[0-9a-f]{64}$/u.test(asset)) throw new Error("Invalid asset identifier");
     return this.call("lx_getAsset", [asset]).then(value => {
@@ -104,7 +116,7 @@ export class JsonRpcClient {
     if (canonical.length === 0 || canonical.length > 524288 || !["executed", "batched", "finalised"].includes(commitment)) throw new Error("Invalid submission");
     return this.call("lx_sendActivity", [Buffer.from(canonical).toString("hex"), commitment]);
   }
-  private async call(method: string, params: readonly string[]): Promise<Record<string, unknown>> {
+  private async call(method: string, params: readonly RpcParam[]): Promise<Record<string, unknown>> {
     const id = (++this.#id).toString();
     const body = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     if (body.length > 1048576 + 4096) throw new Error("RPC request too large");
@@ -186,11 +198,20 @@ function asset(value: unknown): AssetMetadata {
 export function decodeAssetSnapshot(value: Record<string, unknown>): AssetSnapshot {
   return Object.freeze({ asset: asset(value.asset), ...committed(value) });
 }
+export function listAssetsParams(cursor?: string, limit?: number): readonly RpcParam[] {
+  if (cursor !== undefined && (!/^[0-9a-f]{64}$/u.test(cursor) || cursor === "00".repeat(32))) throw new Error("Invalid asset cursor");
+  if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > LIST_ASSETS_MAX_PAGE)) throw new Error("Invalid asset page limit");
+  if (limit === undefined) return Object.freeze(cursor === undefined ? [] : [cursor]);
+  return Object.freeze([cursor ?? null, limit]);
+}
 export function decodeAssetListSnapshot(value: Record<string, unknown>): AssetListSnapshot {
-  if (!Array.isArray(value.assets) || value.assets.length > 64) throw new Error("Invalid asset list");
+  if (!Array.isArray(value.assets) || value.assets.length > LIST_ASSETS_MAX_PAGE) throw new Error("Invalid asset list");
   const assets = Object.freeze(value.assets.map(asset));
   for (let index = 1; index < assets.length; index += 1) if (assets[index - 1]!.assetId >= assets[index]!.assetId) throw new Error("Unordered asset list");
-  return Object.freeze({ assets, ...committed(value) });
+  if (!("next_cursor" in value)) throw new Error("Invalid asset page cursor");
+  const nextCursor = value.next_cursor === null ? null : hex(value.next_cursor, 32);
+  if (nextCursor !== null && assets[assets.length - 1]?.assetId !== nextCursor) throw new Error("Invalid asset page cursor");
+  return Object.freeze({ assets, nextCursor, ...committed(value) });
 }
 export function decodeIdentitySequenceSnapshot(value: Record<string, unknown>): IdentitySequenceSnapshot {
   if (value.verification !== "authenticated_node_snapshot" || typeof value.did !== "string") throw new Error("Invalid identity sequence");

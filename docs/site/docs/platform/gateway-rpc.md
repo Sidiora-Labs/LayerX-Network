@@ -47,7 +47,7 @@ limit enforced by the gateway is 8 MiB. Parameters are positional.
 | `lx_sendActivity` | `[canonical_hex, commitment]` | Verified outcome at the requested commitment |
 | `lx_subscribe` | `["receipts"]`, `["checkpoints"]`, or `["account", account_id]`, each optionally followed by a `cursor` string | Subscription id string; WebSocket only |
 | `lx_unsubscribe` | `[subscription]` | `true` once that subscription stops; WebSocket only |
-| `lx_listAssets` | `[]` or no `params` | Asset registry snapshot under `assets`, bounded at 64 records |
+| `lx_listAssets` | `[]`, `[cursor]`, or `[cursor, limit]`, where `cursor` is `null` or a 64-hex asset id and `limit` is 1..256 | One page of assets under `assets`, ordered by ascending `asset_id`, with `next_cursor` |
 | `lx_getAsset` | `[asset_id]` | One Asset metadata record |
 | `lx_estimateFee` | `[canonical_hex]` | Committed-schedule estimate |
 
