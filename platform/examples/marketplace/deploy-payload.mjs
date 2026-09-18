@@ -38,26 +38,40 @@ export function accountNameForDid(did) {
 
 export async function readLifecycleAnchor({ endpoint, token, did, fetchImplementation = fetch }) {
   const accountName = accountNameForDid(did);
-  const state = await readState(endpoint, token, fetchImplementation);
-  const accounts = state.accounts;
-  if (!Array.isArray(accounts)) {
-    throw new LayerXApplicationStateError("unknown", "program_state_omitted_accounts");
-  }
-  const account = accounts.find((entry) => exactObject(entry).name === accountName);
-  if (account === undefined) {
-    throw new LayerXApplicationStateError("refused", "program_state_omitted_signing_account");
-  }
+  const state = await readJson(endpoint, "v1/state", token, fetchImplementation, "program_state");
+  const accountSequence = state.accounts === undefined
+    ? await readDidAccountSequence(endpoint, token, did, accountName, fetchImplementation)
+    : signingAccountSequence(state.accounts, accountName, "program_state");
   const notBefore = unsigned64(state.timestamp_ms, "program_state_timestamp_ms");
   const expiresAt = notBefore + LIFECYCLE_WINDOW_MS;
   if (expiresAt > MAX_U64) {
     throw new LayerXApplicationStateError("unknown", "invalid_program_state_timestamp_ms");
   }
   return Object.freeze({
-    accountSequence: unsigned64(account.next_sequence, "program_state_next_sequence"),
+    accountSequence,
     notBefore,
     expiresAt,
     previousStateRoot: Buffer.from(hex32(state.canonical_state_root)).toString("hex"),
   });
+}
+
+async function readDidAccountSequence(endpoint, token, did, accountName, fetchImplementation) {
+  const listing = await readJson(endpoint, `v1/dids/${did}/accounts`, token, fetchImplementation, "did_accounts");
+  if (listing.did !== did) {
+    throw new LayerXApplicationStateError("unknown", "did_accounts_named_another_did");
+  }
+  return signingAccountSequence(listing.accounts, accountName, "did_accounts");
+}
+
+function signingAccountSequence(accounts, accountName, source) {
+  if (!Array.isArray(accounts)) {
+    throw new LayerXApplicationStateError("unknown", `${source}_omitted_accounts`);
+  }
+  const account = accounts.find((entry) => exactObject(entry).name === accountName);
+  if (account === undefined) {
+    throw new LayerXApplicationStateError("refused", `${source}_omitted_signing_account`);
+  }
+  return unsigned64(account.next_sequence, `${source}_next_sequence`);
 }
 
 export const LIST_OPERATION = 1;
@@ -108,29 +122,29 @@ export function u128(value) {
   return bytes;
 }
 
-async function readState(endpoint, token, fetchImplementation) {
+async function readJson(endpoint, path, token, fetchImplementation, source) {
   let response;
   try {
-    response = await fetchImplementation(new URL("v1/state", secureBaseUrl(endpoint)), {
+    response = await fetchImplementation(new URL(path, secureBaseUrl(endpoint)), {
       headers: { accept: "application/json", authorization: `Bearer ${token}` },
     });
   } catch {
-    throw new LayerXApplicationStateError("unknown", "program_state_unreachable");
+    throw new LayerXApplicationStateError("unknown", `${source}_unreachable`);
   }
   const body = await response.json().catch(() => undefined);
-  if (!response.ok) throw stateHttpFailure(response.status);
+  if (!response.ok) throw httpFailure(response.status, source);
   const envelope = exactObject(body);
   return exactObject(envelope.result ?? envelope);
 }
 
-function stateHttpFailure(status) {
-  if (status === 408 || status === 409 || status === 425 || status === 503) {
-    return new LayerXApplicationStateError("pending", `program_state_http_${status}`);
+function httpFailure(status, source) {
+  if (status === 408 || status === 409 || status === 425 || status === 429 || status === 503) {
+    return new LayerXApplicationStateError("pending", `${source}_http_${status}`);
   }
   if (status === 400 || status === 401 || status === 403 || status === 404 || status === 410 || status === 422) {
-    return new LayerXApplicationStateError("refused", `program_state_http_${status}`);
+    return new LayerXApplicationStateError("refused", `${source}_http_${status}`);
   }
-  return new LayerXApplicationStateError("unknown", `program_state_http_${status}`);
+  return new LayerXApplicationStateError("unknown", `${source}_http_${status}`);
 }
 
 function unsigned64(value, name) {
