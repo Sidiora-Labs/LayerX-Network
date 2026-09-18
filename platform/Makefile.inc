@@ -98,7 +98,7 @@ platform-build:
 	$(PLATFORM_CARGO) run --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-release -- --check platform/release/registries.kvx
 
 platform-build-all: platform-build platform-sample-dependencies-ready
-	npm run build --workspaces --if-present
+	npm run build
 	cd platform/sdk/go && GOPROXY=off go build ./...
 	cargo build --offline --locked --manifest-path platform/examples/marketplace/program/Cargo.toml --target wasm32-unknown-unknown --release
 	mvn -o -q -f platform/sdk/jvm/pom.xml -DskipTests package

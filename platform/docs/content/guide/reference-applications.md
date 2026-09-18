@@ -6,11 +6,14 @@ The checked-in `platform/examples/reference-apps.json` is the launch manifest. I
 
 ```
 npm ci
+npm run build
 npm run start:emulator --workspace @sidiora/layerx-example-buyer-agent
 npm run start:emulator --workspace @sidiora/layerx-example-paid-api
 npm run start:emulator --workspace @sidiora/layerx-example-merchant-shop
 npm run start:emulator --workspace @sidiora/layerx-example-marketplace
 ```
+
+`npm run build` is the one build command for every JavaScript workspace in this repository. It orders the workspaces by their declared dependencies, so the middleware an application imports is compiled before the application that imports it, and it needs no environment variable: the samples read their declared configuration on the first request, not at build time.
 
 Replace `start:emulator` with `start:testnet` to use the testnet profile. `merchant-checkout` remains an alias package for existing consumers; `merchant-shop` is the reference manifest name.
 
