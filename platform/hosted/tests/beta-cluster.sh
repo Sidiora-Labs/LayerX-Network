@@ -18,8 +18,10 @@
 #   LAYERX_BETA_CLUSTER_NAME            kind cluster name (default layerx-beta)
 #   LAYERX_BETA_IMAGE_REGISTRY          registry prefix images are pushed to for an owner cluster; unset loads
 #                                       the locally built images into the kind nodes
-#   LAYERX_BETA_BUILDER_ENVIRONMENT_DIR owner hermetic builder root filesystem (regular files and directories only,
-#                                       entrypoint bin/layerx-build) published into the registry builder release PVC
+#   LAYERX_BETA_BUILDER_ENVIRONMENT_DIR required by up (unless LAYERX_BETA_RETAIN_MATERIAL=1 reuses the digests of a
+#                                       previous run): owner hermetic builder root filesystem (regular files and
+#                                       directories only, entrypoint bin/layerx-build) published into the
+#                                       layerx-program-builder-release volume the program registry mounts
 #   LAYERX_BETA_SEQUENCER_KEY_FILE      PEM ed25519 private key of the beta sequencer; generated when unset. Its
 #                                       32-byte seed is the node's sequencer key, so the node, the receipt
 #                                       authority, the gateway and the registry share one sequencer identity
@@ -457,7 +459,7 @@ ca_generate() {
     issue_cert pending-core-admin layerx-pending-core-admin serverAuth \
         "DNS:layerx-pending-core-admin.$svc,DNS:layerx-pending-core-admin.$TESTNET_NAMESPACE.svc,DNS:layerx-pending-core-admin"
     issue_cert receipt-authority layerx-receipt-authority serverAuth \
-        "DNS:layerx-receipt-authority.$svc,DNS:layerx-receipt-authority.$TESTNET_NAMESPACE.svc,DNS:layerx-receipt-authority,DNS:authority.$internal,DNS:authority.$INTERNAL_NAMESPACE.svc"
+        "DNS:layerx-receipt-authority.$svc,DNS:layerx-receipt-authority.$TESTNET_NAMESPACE.svc,DNS:layerx-receipt-authority,DNS:authority.$internal,DNS:authority.$INTERNAL_NAMESPACE.svc,DNS:localhost,IP:127.0.0.1"
     issue_cert agent-boundary layerx-agent-boundary serverAuth \
         "DNS:layerx-agent-boundary.$svc,DNS:layerx-agent-boundary.$TESTNET_NAMESPACE.svc,DNS:layerx-agent-boundary,DNS:component.$internal,DNS:component.$INTERNAL_NAMESPACE.svc,DNS:localhost,IP:127.0.0.1"
     issue_cert agentd layerx-agentd serverAuth \
@@ -973,12 +975,7 @@ builder_release_publish() {
     [ "${#bwrap_digest}" -eq 64 ] && [ "${#cgroup_digest}" -eq 64 ] || fail "could not read bwrap and layerx-cgroup-exec digests from $ref"
     printf '%s' "$bwrap_digest" > "$SECRETS_DIR/bwrap-digest"
     printf '%s' "$cgroup_digest" > "$SECRETS_DIR/cgroup-exec-digest"
-    if [ -z "${LAYERX_BETA_BUILDER_ENVIRONMENT_DIR:-}" ]; then
-        MISSING_INPUTS+=("LAYERX_BETA_BUILDER_ENVIRONMENT_DIR (hermetic builder root filesystem for the layerx-program-builder-release volume; the registry cannot start without it)")
-        return 0
-    fi
-    [ -d "$LAYERX_BETA_BUILDER_ENVIRONMENT_DIR" ] || fail "LAYERX_BETA_BUILDER_ENVIRONMENT_DIR=$LAYERX_BETA_BUILDER_ENVIRONMENT_DIR is not a directory"
-    [ -f "$LAYERX_BETA_BUILDER_ENVIRONMENT_DIR/bin/layerx-build" ] || fail "LAYERX_BETA_BUILDER_ENVIRONMENT_DIR lacks the bin/layerx-build entrypoint"
+    require_builder_environment
     digest=$(environment_digest "$LAYERX_BETA_BUILDER_ENVIRONMENT_DIR") || fail "builder environment digest failed"
     printf '%s' "$digest" > "$SECRETS_DIR/environment-tree-digest"
     apply_configmap "$ns" layerx-program-builder-release --from-file=environment-tree-digest="$SECRETS_DIR/environment-tree-digest" \
@@ -2006,6 +2003,13 @@ require_foundry() {
     [ -x "$FOUNDRY_BIN/forge" ] && [ -x "$FOUNDRY_BIN/cast" ] || fail "pinned forge and cast are not installed at $FOUNDRY_BIN (LAYERX_BETA_FOUNDRY_BIN); deploy-contracts.sh needs them"
 }
 
+require_builder_environment() {
+    [ -n "${LAYERX_BETA_BUILDER_ENVIRONMENT_DIR:-}" ] \
+        || fail "LAYERX_BETA_BUILDER_ENVIRONMENT_DIR is unset; it must name the owner hermetic builder root filesystem (regular files and directories only, entrypoint bin/layerx-build) that is published into the layerx-program-builder-release ConfigMap and volume platform/hosted/registry/deployment.yaml mounts, so the program registry cannot schedule without it (docs/site/docs/operators/beta-cluster.md, LAYERX_BETA_BUILDER_ENVIRONMENT_DIR)"
+    [ -d "$LAYERX_BETA_BUILDER_ENVIRONMENT_DIR" ] || fail "LAYERX_BETA_BUILDER_ENVIRONMENT_DIR=$LAYERX_BETA_BUILDER_ENVIRONMENT_DIR is not a directory"
+    [ -f "$LAYERX_BETA_BUILDER_ENVIRONMENT_DIR/bin/layerx-build" ] || fail "LAYERX_BETA_BUILDER_ENVIRONMENT_DIR lacks the bin/layerx-build entrypoint"
+}
+
 beta_cluster_up() {
     local run_boundary_checks=$1
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ]; then
@@ -2014,6 +2018,7 @@ beta_cluster_up() {
     fi
     require_tool docker curl openssl jq python3 git sha256sum tar base64
     require_foundry
+    [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ] || require_builder_environment
     custody_profile_validate
     MISSING_INPUTS=()
     REVISION=$(revision)
@@ -2224,7 +2229,7 @@ main() {
         test-deposit-root-authority) deposit_root_authority_test ;;
         down) beta_cluster_down ;;
         render) beta_cluster_render ;;
-        *) sed -n '2,53p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 64 ;;
+        *) sed -n '2,55p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 64 ;;
     esac
 }
 

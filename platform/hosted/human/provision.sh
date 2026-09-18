@@ -226,7 +226,7 @@ human_evidence_provision() (
     registry_deployment_produce
     human_journal_deploy
     python3 "$provision" --validate-evidence-inputs --work-dir "$WORK_DIR" \
-        --registry "$SECRETS_DIR/module-registry.json" --journal "$LAYERX_REGISTRY_JOURNAL"
+        --registry "$SECRETS_DIR/module-registry.json" --journal "$WORK_DIR/registry-journal"
     python3 "$provision" --assemble --work-dir "$WORK_DIR" \
         --registry "$SECRETS_DIR/module-registry.json" --asset "$NODE_ASSET_ID" \
         --journal "$WORK_DIR/registry-journal"
