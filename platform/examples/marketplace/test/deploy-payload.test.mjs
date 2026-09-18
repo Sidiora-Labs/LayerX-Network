@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { decodeNativeProgramDeploy } from "@sidiora/layerx-sdk";
 import {
   BUY_OPERATION,
+  IDENTITY_SEQUENCE_SELECTOR,
   LIFECYCLE_WINDOW_MS,
   LIST_OPERATION,
   accountNameForDid,
@@ -107,32 +108,71 @@ const stateBody = {
   trace: "emu-0000000000000001",
 };
 
+const emulatorSequence = {
+  ok: true,
+  result: {
+    did,
+    next_sequence: "23",
+    observed_head_sequence: "41",
+    state_root: stateRoot,
+    verification: "emulator_core_snapshot",
+  },
+  trace: "emu-0000000000000002",
+};
+
 const requests = [];
 const state = createServer((request, response) => {
   requests.push({ method: request.method, url: request.url, authorization: request.headers.authorization });
-  if (request.url !== "/v1/state") {
-    response.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ ok: false }));
+  if (request.url === "/v1/state") {
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(stateBody));
     return;
   }
-  response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(stateBody));
+  if (request.url === `/v1/dids/${did}/sequence`) {
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(emulatorSequence));
+    return;
+  }
+  response.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ ok: false }));
 });
 await new Promise((ready) => state.listen(0, "127.0.0.1", ready));
 
 try {
   const endpoint = `http://127.0.0.1:${state.address().port}`;
   const anchor = await readLifecycleAnchor({ endpoint, token: "reference-token", did });
-  assert.deepEqual(requests, [{ method: "GET", url: "/v1/state", authorization: "Bearer reference-token" }]);
-  assert.equal(anchor.accountSequence, 19n);
+  assert.deepEqual(requests, [
+    { method: "GET", url: "/v1/state", authorization: "Bearer reference-token" },
+    { method: "GET", url: `/v1/dids/${did}/sequence`, authorization: "Bearer reference-token" },
+  ]);
+  assert.equal(anchor.identitySequence, 23n);
   assert.equal(anchor.notBefore, 1_700_000_000_000n);
   assert.equal(anchor.expiresAt, 1_700_000_000_000n + LIFECYCLE_WINDOW_MS);
   assert.equal(anchor.previousStateRoot, stateRoot);
 
   await assert.rejects(
     readLifecycleAnchor({ endpoint, token: "reference-token", did: "did:layerx:absent" }),
-    (error) => error.state === "refused" && error.message === "program_state_omitted_signing_account",
+    (error) => error.state === "refused" && error.message === "identity_sequence_http_404",
   );
 } finally {
   await new Promise((closed) => state.close(closed));
+}
+
+const mismatchedSequence = createServer((request, response) => {
+  const body = request.url === "/v1/state"
+    ? stateBody
+    : { ...emulatorSequence, result: { ...emulatorSequence.result, did: "did:layerx:other" } };
+  response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
+});
+await new Promise((ready) => mismatchedSequence.listen(0, "127.0.0.1", ready));
+try {
+  await assert.rejects(
+    readLifecycleAnchor({
+      endpoint: `http://127.0.0.1:${mismatchedSequence.address().port}`,
+      token: "reference-token",
+      did,
+    }),
+    (error) => error.state === "unknown" && error.message === "identity_sequence_named_another_did",
+  );
+} finally {
+  await new Promise((closed) => mismatchedSequence.close(closed));
 }
 
 const hostedState = {
@@ -188,17 +228,40 @@ const hostedAccounts = {
   trace: "gw-0000000000000003",
 };
 
+const hostedIdentitySnapshot = {
+  did,
+  next_sequence: "61",
+  observed_head_sequence: "5190744",
+  state_root: stateRoot,
+  verification: "authenticated_node_snapshot",
+};
+
 const hostedRequests = [];
-const hosted = createServer((request, response) => {
+const hostedRpcBodies = [];
+const hostedGateway = (identitySnapshot) => createServer((request, response) => {
   hostedRequests.push({ method: request.method, url: request.url, authorization: request.headers.authorization });
-  const listing = request.url === `/v1/dids/${did}/accounts`;
-  if (request.url !== "/v1/state" && !listing) {
-    response.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ ok: false }));
+  if (request.url === "/v1/state") {
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(hostedState));
     return;
   }
-  response.writeHead(200, { "content-type": "application/json" })
-    .end(JSON.stringify(listing ? hostedAccounts : hostedState));
+  if (request.url === `/v1/dids/${did}/accounts`) {
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(hostedAccounts));
+    return;
+  }
+  if (request.method === "POST" && request.url === "/rpc") {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.once("end", () => {
+      hostedRpcBodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      response.writeHead(200, { "content-type": "application/json" })
+        .end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: identitySnapshot }));
+    });
+    return;
+  }
+  response.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ ok: false }));
 });
+
+const hosted = hostedGateway(hostedIdentitySnapshot);
 await new Promise((ready) => hosted.listen(0, "127.0.0.1", ready));
 
 try {
@@ -206,35 +269,48 @@ try {
   const anchor = await readLifecycleAnchor({ endpoint, token: "hosted-token", did });
   assert.deepEqual(hostedRequests, [
     { method: "GET", url: "/v1/state", authorization: "Bearer hosted-token" },
-    { method: "GET", url: `/v1/dids/${did}/accounts`, authorization: "Bearer hosted-token" },
+    { method: "POST", url: "/rpc", authorization: "Bearer hosted-token" },
   ]);
-  assert.equal(anchor.accountSequence, 57n);
+  assert.deepEqual(hostedRpcBodies, [
+    { jsonrpc: "2.0", id: 1, method: "lx_getSequence", params: [did, IDENTITY_SEQUENCE_SELECTOR] },
+  ]);
+  assert.equal(IDENTITY_SEQUENCE_SELECTOR, "identity");
+  assert.equal(anchor.identitySequence, 61n);
   assert.equal(anchor.notBefore, 1_700_000_500_000n);
   assert.equal(anchor.expiresAt, 1_700_000_500_000n + LIFECYCLE_WINDOW_MS);
   assert.equal(anchor.previousStateRoot, stateRoot);
-
-  await assert.rejects(
-    readLifecycleAnchor({ endpoint, token: "hosted-token", did: "did:layerx:absent" }),
-    (error) => error.state === "refused" && error.message === "did_accounts_http_404",
-  );
 } finally {
   await new Promise((closed) => hosted.close(closed));
 }
 
-const withoutMain = createServer((request, response) => {
-  const body = request.url === "/v1/state"
-    ? hostedState
-    : { ...hostedAccounts, result: { did, accounts: [hostedAccounts.result.accounts[0]], verification: "settlement_anchored" } };
-  response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
-});
-await new Promise((ready) => withoutMain.listen(0, "127.0.0.1", ready));
+const unauthenticated = hostedGateway({ ...hostedIdentitySnapshot, verification: "settlement_anchored" });
+await new Promise((ready) => unauthenticated.listen(0, "127.0.0.1", ready));
 try {
   await assert.rejects(
-    readLifecycleAnchor({ endpoint: `http://127.0.0.1:${withoutMain.address().port}`, token: "hosted-token", did }),
-    (error) => error.state === "refused" && error.message === "did_accounts_omitted_signing_account",
+    readLifecycleAnchor({
+      endpoint: `http://127.0.0.1:${unauthenticated.address().port}`,
+      token: "hosted-token",
+      did,
+    }),
+    (error) => error.state === "unknown"
+      && error.message === "identity_sequence_snapshot_unauthenticated",
   );
 } finally {
-  await new Promise((closed) => withoutMain.close(closed));
+  await new Promise((closed) => unauthenticated.close(closed));
+}
+
+const unknownMode = createServer((request, response) => {
+  response.writeHead(200, { "content-type": "application/json" })
+    .end(JSON.stringify({ ...hostedState, result: { ...hostedState.result, network_mode: "mirror" } }));
+});
+await new Promise((ready) => unknownMode.listen(0, "127.0.0.1", ready));
+try {
+  await assert.rejects(
+    readLifecycleAnchor({ endpoint: `http://127.0.0.1:${unknownMode.address().port}`, token: "hosted-token", did }),
+    (error) => error.state === "unknown" && error.message === "program_state_omitted_network_mode",
+  );
+} finally {
+  await new Promise((closed) => unknownMode.close(closed));
 }
 
 const refusing = createServer((request, response) => {
@@ -258,4 +334,5 @@ process.stdout.write(`${JSON.stringify({
   buyCalldataBytes: buyRequest.calldata.length,
   stateRequests: requests.length,
   hostedRequests: hostedRequests.length,
+  identitySequenceReads: hostedRpcBodies.length,
 })}\n`);

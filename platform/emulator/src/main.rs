@@ -2033,6 +2033,35 @@ fn inspect(emulator: &Emulator, trace: u64) -> Response {
     success(trace, &format!("{{\"network_mode\":\"emulator\",\"batch_cadence\":\"instant\",\"state_root\":\"{}\",\"canonical_state_root\":\"{}\",\"receipt_state_root\":\"{}\",\"next_sequence\":{},\"batch_number\":{},\"timestamp_ms\":{},\"cells\":[{cells}],\"accounts\":[{accounts}]}}", hex_encode(&state.canonical_state_root), hex_encode(&state.canonical_state_root), hex_encode(&state.receipt_state_root), state.next_sequence, state.batch_number, state.timestamp_ms))
 }
 
+fn identity_sequence_read(emulator: &Emulator, path: &str, trace: u64) -> Response {
+    let Some(did) = path
+        .strip_prefix("/v1/dids/")
+        .and_then(|tail| tail.strip_suffix("/sequence"))
+    else {
+        return refusal(trace, 404, "not_found", "route does not exist");
+    };
+    if did.contains('/') || Did::new(did.as_bytes()).is_err() {
+        return refusal(trace, 400, "invalid_did", "did is not a canonical DID");
+    }
+    let state = match inspect_state(emulator) {
+        Ok(state) => state,
+        Err(code) => return core_response(trace, code),
+    };
+    let next_sequence = match core_identity_sequence(emulator, did) {
+        Ok(value) => value,
+        Err(code) => return core_response(trace, code),
+    };
+    success(
+        trace,
+        &format!(
+            "{{\"did\":\"{}\",\"next_sequence\":\"{next_sequence}\",\"observed_head_sequence\":\"{}\",\"state_root\":\"{}\",\"verification\":\"emulator_core_snapshot\"}}",
+            escape_json(did),
+            state.next_sequence,
+            hex_encode(&state.canonical_state_root)
+        ),
+    )
+}
+
 fn sequencer_identity(emulator: &Emulator, trace: u64) -> Response {
     success(
         trace,
@@ -3055,6 +3084,9 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
             program_activity(emulator, request, trace)
         }
         ("GET", "/v1/state") => inspect(emulator, trace),
+        ("GET", path) if path.starts_with("/v1/dids/") && path.ends_with("/sequence") => {
+            identity_sequence_read(emulator, path, trace)
+        }
         ("GET", path)
             if programs_route("GET", path) && path.starts_with("/v1/programs/registry/") =>
         {
