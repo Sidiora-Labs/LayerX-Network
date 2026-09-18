@@ -20,9 +20,6 @@ pub(super) fn consume_read() -> bool {
 }
 
 pub(super) fn target(path: &str) -> Result<Option<&str>, ()> {
-    if path == "/v1/state" {
-        return Ok(Some(path));
-    }
     let parts: Vec<_> = path.split('/').collect();
     match parts.as_slice() {
         ["", "v1", "accounts", id, "balance"] => {
@@ -106,7 +103,6 @@ mod tests {
         let id = "ab".repeat(32);
         let path = format!("/v1/accounts/{id}/balance");
         assert_eq!(target(&path), Ok(Some(path.as_str())));
-        assert_eq!(target("/v1/state"), Ok(Some("/v1/state")));
         assert_eq!(
             target("/v1/dids/did:layerx:alice/accounts"),
             Ok(Some("/v1/dids/did:layerx:alice/accounts"))
@@ -119,6 +115,7 @@ mod tests {
             assert!(target(path).is_err(), "{path}");
         }
         for path in [
+            "/v1/state",
             "/v1/state?x=1",
             "/v1/accounts",
             "/v1/activities",
