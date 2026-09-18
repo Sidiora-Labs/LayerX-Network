@@ -6,6 +6,7 @@ members = [
     "crates/layerx-fiat",
     "crates/layerx-migrate",
     "crates/layerx-mirror",
+    "crates/layerx-mirror-signer",
     "crates/layerx-portable",
     "crates/layerx-ucp",
     "crates/layerx-visa-tap",
@@ -27,6 +28,7 @@ layerx-wire = { path = "../agent/crates/layerx-wire" }
 layerx-crypto = { path = "../agent/crates/layerx-crypto" }
 layerx-proof = { path = "../agent/crates/layerx-proof" }
 layerx-interop-gateway = { path = "crates/layerx-interop-gateway" }
+layerx-mirror = { path = "crates/layerx-mirror" }
 layerx-portable = { path = "crates/layerx-portable" }
 layerx-intents = { path = "../human/crates/layerx-intents" }
 layerx-agent-api = { path = "../agent/crates/layerx-agent-api" }

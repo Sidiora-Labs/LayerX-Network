@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Offline check of interop/deploy/mirror/render-config.py: a configuration
 # rendered from deployment-shaped inputs is accepted by the publisher's own
-# configuration loader, and a configuration outside the publisher's bounds is
-# refused by it. No network and no cluster are involved.
+# configuration loader, the signer handles and socket fall back to the
+# co-located layerx-mirror-signer container unless they are overridden, and a
+# configuration outside the publisher's bounds is refused by the publisher. No
+# network and no cluster are involved.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -75,9 +77,7 @@ render() {
         --ethereum-genesis-hash "$(printf 'genesis' | sha256sum | cut -d ' ' -f 1)" \
         --ethereum-archive-contract 00000000000000000000000000000000000000ff \
         --ethereum-archive-code-hash "$(printf 'code' | sha256sum | cut -d ' ' -f 1)" \
-        --ethereum-signer-key-handle mirror/ethereum/beta \
         --ethereum-signer-public-key "$ETHEREUM_PUBLIC" \
-        --ethereum-signer-socket /run/signers/ethereum.sock \
         --solana-endpoint "https://solana-a.invalid:443/rpc,solana-a,$WORK/rpc.der,$WORK/solana-a.token" \
         --solana-endpoint "https://solana-b.invalid:443/rpc,solana-b,$WORK/rpc.der,$WORK/solana-b.token" \
         --solana-genesis-hash "$PROGRAM" \
@@ -85,14 +85,24 @@ render() {
         --solana-upgradeable-loader BPFLoaderUpgradeab1e11111111111111111111111 \
         --solana-program-data-account "$PROGRAM" \
         --solana-program-code-hash "$(printf 'elf' | sha256sum | cut -d ' ' -f 1)" \
-        --solana-signer-key-handle mirror/solana/beta \
         --solana-signer-public-key "$SOLANA_PUBLIC" \
-        --solana-signer-socket /run/signers/solana.sock
+        "${@:2}"
 }
 
 mkdir -p "$WORK/state"
 render "$WORK/config.json"
-python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$WORK/config.json"
+python3 - "$WORK/config.json" <<'PYDEFAULTS' || fail "the rendered configuration does not reach the co-located signer"
+import json
+import sys
+config = json.load(open(sys.argv[1]))
+ethereum = config["ethereum"]["signer"]
+solana = config["solana"]["signer"]
+socket = {"kind": "uds", "socket": "/run/mirror-signer/signer.sock"}
+assert ethereum["transport"] == socket, ethereum["transport"]
+assert solana["transport"] == socket, solana["transport"]
+assert ethereum["key_handle"] == "mirror/ethereum/beta", ethereum["key_handle"]
+assert solana["key_handle"] == "mirror/solana/beta", solana["key_handle"]
+PYDEFAULTS
 
 status=0
 timeout 10 "$PUBLISHER" "$WORK/config.json" > "$WORK/publisher.log" 2>&1 || status=$?
@@ -122,12 +132,32 @@ render_output=$(python3 "$RENDERER" --output "$WORK/never.json" --state-director
     --first-batch-number 1 --status-listen 127.0.0.1:1 --lni-socket /run/s --network-id 1 \
     --protocol-version 3 --ethereum-chain-id 125 --ethereum-genesis-hash 00 \
     --ethereum-archive-contract 00 --ethereum-archive-code-hash 00 \
-    --ethereum-signer-key-handle h --ethereum-signer-public-key "$ETHEREUM_PUBLIC" \
+    --ethereum-signer-key-handle owner/ethereum --ethereum-signer-public-key "$ETHEREUM_PUBLIC" \
     --ethereum-signer-socket /s --solana-genesis-hash "$PROGRAM" \
     --solana-archive-program "$PROGRAM" --solana-upgradeable-loader "$PROGRAM" \
     --solana-program-data-account "$PROGRAM" --solana-program-code-hash 00 \
-    --solana-signer-key-handle h --solana-signer-public-key "$SOLANA_PUBLIC" \
+    --solana-signer-key-handle owner/solana --solana-signer-public-key "$SOLANA_PUBLIC" \
     --solana-signer-socket /s 2>&1) || status=$?
 [ "$status" -ne 0 ] || fail "the renderer accepted a relative state directory"
+
+status=0
+render_output=$(render "$WORK/shared-handle.json" --ethereum-signer-key-handle shared \
+    --solana-signer-key-handle shared 2>&1) || status=$?
+[ "$status" -ne 0 ] || fail "the renderer accepted one key handle for both publisher keys"
+
+render "$WORK/external.json" --ethereum-signer-key-handle owner/ethereum \
+    --ethereum-signer-socket /run/signers/ethereum.sock \
+    --solana-signer-key-handle owner/solana --solana-signer-socket /run/signers/solana.sock
+python3 - "$WORK/external.json" <<'PYEXTERNAL' || fail "an external signer override is not carried into the configuration"
+import json
+import sys
+config = json.load(open(sys.argv[1]))
+ethereum = config["ethereum"]["signer"]
+solana = config["solana"]["signer"]
+assert ethereum["key_handle"] == "owner/ethereum", ethereum["key_handle"]
+assert ethereum["transport"]["socket"] == "/run/signers/ethereum.sock", ethereum["transport"]
+assert solana["key_handle"] == "owner/solana", solana["key_handle"]
+assert solana["transport"]["socket"] == "/run/signers/solana.sock", solana["transport"]
+PYEXTERNAL
 
 printf 'render-config-check: the rendered mirror configuration is accepted by the publisher loader\n' >&2

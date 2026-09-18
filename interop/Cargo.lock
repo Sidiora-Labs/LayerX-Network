@@ -799,6 +799,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-mirror-signer"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "k256",
+ "layerx-mirror",
+ "serde_json",
+ "sha2",
+ "zeroize",
+]
+
+[[package]]
 name = "layerx-paxeer-verifier"
 version = "0.1.0"
 dependencies = [
