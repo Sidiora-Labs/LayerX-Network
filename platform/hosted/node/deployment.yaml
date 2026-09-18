@@ -274,6 +274,39 @@ spec:
             - {name: checkpoint-submitter, mountPath: /run/layerx/checkpoint-submitter, readOnly: true}
             - {name: data, mountPath: /var/lib/guarantor-submitter, subPath: guarantor-submitter}
             - {name: publication-policy, mountPath: /run/layerx/publication-input, readOnly: true}
+        - name: mirror-signer
+          image: ghcr.io/sidiora-labs/layerx-mirror:0.1.0
+          imagePullPolicy: Always
+          command: [/usr/local/bin/layerx-mirror-signer]
+          securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          env:
+            - {name: LAYERX_MIRROR_SIGNER_SOCKET, value: /run/mirror-signer/signer.sock}
+            - {name: LAYERX_MIRROR_SIGNER_ETHEREUM_KEY_FILE, value: /etc/layerx/mirror-signer/ethereum.key}
+            - {name: LAYERX_MIRROR_SIGNER_SOLANA_KEY_FILE, value: /etc/layerx/mirror-signer/solana.json}
+          resources: {requests: {cpu: 50m, memory: 32Mi}, limits: {cpu: 500m, memory: 128Mi}}
+          volumeMounts:
+            - {name: mirror-signer-material, mountPath: /etc/layerx/mirror-signer, readOnly: true}
+            - {name: mirror-signer-run, mountPath: /run/mirror-signer}
+        - name: mirror-publisher
+          image: ghcr.io/sidiora-labs/layerx-mirror:0.1.0
+          imagePullPolicy: Always
+          command: [/usr/local/bin/layerx-mirror-publisher]
+          args: [/etc/layerx-mirror/config.json]
+          securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "2", memory: 2Gi}}
+          livenessProbe:
+            exec: {command: [/usr/local/bin/layerx-mirror-publisher, --probe, 127.0.0.1:9091]}
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 6
+          volumeMounts:
+            - {name: mirror-config, mountPath: /etc/layerx-mirror, readOnly: true}
+            - {name: mirror-rpc-credentials, mountPath: /run/secrets, readOnly: true}
+            - {name: mirror-signer-run, mountPath: /run/mirror-signer}
+            - {name: data, mountPath: /var/lib/layerx-mirror, subPath: mirror}
+            - {name: run, mountPath: /run/layerx}
+            - {name: tmp, mountPath: /tmp}
         - name: paxeer-relay
           image: ghcr.io/sidiora-labs/layerx-node:0.1.0
           imagePullPolicy: Always
@@ -868,6 +901,10 @@ spec:
             defaultMode: 0440
         - {name: human-state, persistentVolumeClaim: {claimName: layerx-human-state}}
         - {name: run, emptyDir: {medium: Memory, sizeLimit: 16Mi}}
+        - {name: mirror-config, secret: {secretName: layerx-mirror-config, defaultMode: 0440}}
+        - {name: mirror-rpc-credentials, secret: {secretName: layerx-mirror-rpc-credentials, defaultMode: 0440}}
+        - {name: mirror-signer-material, secret: {secretName: layerx-mirror-signer, defaultMode: 0440}}
+        - {name: mirror-signer-run, emptyDir: {medium: Memory, sizeLimit: 1Mi}}
         - {name: tmp, emptyDir: {medium: Memory, sizeLimit: 64Mi}}
         - {name: keys, secret: {secretName: layerx-node-keys, defaultMode: 0440, items: [{key: sequencer.key, path: sequencer.key}]}}
         - {name: genesis-metadata, configMap: {name: layerx-node-genesis-metadata, defaultMode: 0444, items: [{key: metadata.lxgb, path: metadata.lxgb}]}}
@@ -1014,3 +1051,16 @@ spec:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-developer}}
           podSelector: {matchLabels: {app: layerx-webhooks}}
       ports: [{protocol: TCP, port: 9444}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-mirror-publication-egress, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-node}}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+      ports: [{protocol: TCP, port: 443}]
