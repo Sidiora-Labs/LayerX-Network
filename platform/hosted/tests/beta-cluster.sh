@@ -231,6 +231,7 @@ STATUS_PUBLISH_URL=${LAYERX_BETA_STATUS_PUBLISH_URL:-}
 STATUS_PUBLISHER_REPORTED=0
 IDENTITY_PORT=19451
 INTEROP_PORT=19458
+EXPLORER_INDEX_PORT=19460
 RAMP_VALUE_INPUTS=(LAYERX_BETA_RAMP_OPERATOR_PRINCIPAL_ID LAYERX_BETA_RAMP_OPERATOR_DID
     LAYERX_BETA_RAMP_OPERATOR_SIGNER_KEY_HANDLE LAYERX_BETA_RAMP_PROVIDER_ENDPOINT
     LAYERX_BETA_RAMP_PROVIDER_CALLBACK_PUBLIC_KEY LAYERX_BETA_RAMP_COMPLIANCE_ENDPOINT
@@ -3450,7 +3451,7 @@ beta_cluster_up() {
     HUMAN_URL="https://localhost:19453"
     HUMAN_WEB_URL="https://$HUMAN_WEB_HOST"
     RAMP_URL="https://localhost:$RAMP_PORT"
-    EXPLORER_INDEX_URL="https://localhost:19458"
+    EXPLORER_INDEX_URL="https://localhost:$EXPLORER_INDEX_PORT"
     wait_for_node_genesis
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ]; then
         apply_configmap "$TESTNET_NAMESPACE" layerx-node-settlement --from-file=settlement.env="$WORK_DIR/paxeer/settlement.env"
@@ -3513,7 +3514,7 @@ beta_cluster_up() {
         [ "$HUMAN_WEB_PORT" = 443 ] || fail "LAYERX_BETA_HUMAN_WEB_PORT must be 443 or empty because the browser origin $HUMAN_WEB_URL carries no port"
         port_forward human-web "$TESTNET_NAMESPACE" layerx-human-web "$HUMAN_WEB_PORT" 443
     fi
-    port_forward explorer-index "$TESTNET_NAMESPACE" layerx-explorer-index 19458 9443
+    port_forward explorer-index "$TESTNET_NAMESPACE" layerx-explorer-index "$EXPLORER_INDEX_PORT" 9443
     module_registry_verify
     explorer_observation_publish
     interop_gateway_apply
