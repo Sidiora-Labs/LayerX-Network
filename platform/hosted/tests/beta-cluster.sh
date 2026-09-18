@@ -2484,6 +2484,84 @@ require_builder_environment() {
     [ -f "$LAYERX_BETA_BUILDER_ENVIRONMENT_DIR/bin/layerx-build" ] || fail "LAYERX_BETA_BUILDER_ENVIRONMENT_DIR lacks the bin/layerx-build entrypoint"
 }
 
+custody_latest_checkpoint() {
+    python3 - "$REPO_ROOT" "$PAXEER_URL" "$PAXEER_OBSERVER_URL" "$CA_DIR/ca.pem" "$WORK_DIR/paxeer/rpc-origins.json" "$CHECKPOINT_REGISTRY" <<'PYCHECKPOINT'
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / 'tests/bridge'))
+from custody_credit import eth_hash, unhex
+from deploy_local_custody import disposable_rpc
+rpcs = [disposable_rpc(url, sys.argv[4], sys.argv[5]) for url in sys.argv[2:4]]
+data = '0x' + eth_hash(b'latestCanonicalCheckpointHash()')[:4].hex()
+observed = {unhex(rpc.call('eth_call', [dict(to=sys.argv[6], data=data), 'latest']), 32) for rpc in rpcs}
+if len(observed) != 1:
+    raise SystemExit('the Paxeer origins disagree on the latest canonical checkpoint')
+print('0x' + observed.pop().hex())
+PYCHECKPOINT
+}
+
+human_evidence_delivery_script() {
+    cat <<'HUMAN_EVIDENCE_DELIVERY'
+set -eu
+umask 077
+root=$1 transaction=$2 encoded=$3 digest=$4
+[ -d "$root" ] && [ ! -L "$root" ] || { printf '%s: movement provider evidence root missing\n' "$root" >&2; exit 1; }
+credit=$root/credit-$transaction.bin
+deposit=$root/deposit-$transaction.bin
+if [ ! -e "$credit" ] && [ ! -L "$credit" ]; then
+    (set -C; printf '%s' "$encoded" | base64 -d > "$credit") || { rm -f "$credit"; printf '%s: custody credit could not be written\n' "$credit" >&2; exit 1; }
+fi
+printf '%s  %s\n' "$digest" "$credit" | sha256sum -c --status - || { printf '%s: custody credit bytes differ from the attested credit\n' "$credit" >&2; exit 1; }
+[ "$(stat -c %s "$credit")" -eq 427 ] || { printf '%s: custody credit is not 427 bytes\n' "$credit" >&2; exit 1; }
+for path in "$deposit" "$credit"; do
+    [ -f "$path" ] && [ ! -L "$path" ] || { printf '%s: evidence file missing\n' "$path" >&2; exit 1; }
+    [ "$(stat -c '%u %a %h' "$path")" = "$(id -u) 600 1" ] || { printf '%s: evidence file is not private to the movement provider\n' "$path" >&2; exit 1; }
+done
+HUMAN_EVIDENCE_DELIVERY
+}
+
+human_custody_evidence_publish() {
+    local input="$WORK_DIR/human-evidence-input" ns="$TESTNET_NAMESPACE" log_file="$LOG_DIR/human-deposit-proof.log"
+    local transaction account credit checkpoint attempted="" deadline
+    transaction=$(jq -er '.transactionHash' "$input/custody-deposit.json" | tr '[:upper:]' '[:lower:]') \
+        || fail "$input/custody-deposit.json: the owner custody deposit receipt is required before evidence delivery"
+    [[ $transaction =~ ^0x[0-9a-f]{64}$ ]] || fail "custody-deposit.json carries no 32-byte transaction hash"
+    account="agent:$(jq -er '.did' "$input/owner-admission.json"):main" \
+        || fail "$input/owner-admission.json: the admitted owner DID is required before evidence delivery"
+    credit="$input/credit-${transaction#0x}.bin"
+    [ -f "$credit" ] && [ ! -L "$credit" ] && [ "$(stat -c %s "$credit")" -eq 427 ] \
+        || fail "$credit: the attested custody credit for the owner deposit is missing; owner_custody.py deposit publishes it"
+    [[ $CHECKPOINT_REGISTRY =~ ^0x[0-9a-fA-F]{40}$ ]] || fail "the CheckpointRegistry address is required before evidence delivery"
+    log "publishing the owner custody deposit proof for $transaction through the in-cluster movement provider"
+    deadline=$((SECONDS + 600))
+    while :; do
+        checkpoint=$(custody_latest_checkpoint) \
+            || fail "the latest canonical checkpoint could not be read from CheckpointRegistry $CHECKPOINT_REGISTRY"
+        if [ "$checkpoint" != "$attempted" ] && [[ ! $checkpoint =~ ^0x0{64}$ ]]; then
+            attempted=$checkpoint
+            printf 'attempting deposit proof publication against checkpoint %s\n' "$checkpoint" >> "$log_file"
+            if kube -n "$ns" exec layerx-node-0 -c human-movement -- sh -ec '
+                umask 077
+                runtime=$(mktemp -d /run/human-private/movement-publish.XXXXXX)
+                status=0
+                /usr/local/bin/layerx-runtime-clock --runtime-dir "$runtime" -- \
+                    /usr/local/bin/layerx-human-movement-provider --publish-deposit-proof "$@" || status=$?
+                rm -r "$runtime"
+                exit "$status"
+            ' sh "$transaction" "$checkpoint" "$account" >> "$log_file" 2>&1; then
+                break
+            fi
+        fi
+        [ "$SECONDS" -lt "$deadline" ] \
+            || fail "no canonical checkpoint covered the owner custody deposit $transaction within 600s; see $log_file"
+        sleep 5
+    done
+    human_evidence_delivery_script | kube -n "$ns" exec -i layerx-node-0 -c human-movement -- \
+        sh -s -- /var/lib/layerx/human/evidence "${transaction#0x}" "$(base64 -w0 "$credit")" "$(sha256sum "$credit" | cut -c1-64)" \
+        || fail "the custody credit material for $transaction was not delivered to the movement provider evidence root"
+    log "owner custody deposit proof and credit material delivered to the movement provider for $transaction"
+}
+
 beta_cluster_up() {
     local run_boundary_checks=$1
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ]; then
@@ -2597,6 +2675,7 @@ beta_cluster_up() {
     port_forward agent-boundary "$TESTNET_NAMESPACE" layerx-agent-boundary 19447 9443
     port_forward agentd "$TESTNET_NAMESPACE" layerx-agentd 19456 9443
     wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-node 600
+    if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then human_custody_evidence_publish; fi
     agentd_check
     mirror_publish
     module_registry_verify
