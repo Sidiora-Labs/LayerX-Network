@@ -1,0 +1,20 @@
+[
+  {
+    "name": "sdk: in-flight receipt verification snapshots evidence and authority",
+    "ok": true
+  },
+  {
+    "name": "seller: a receipt signed by an unauthorised sequencer is rejected",
+    "ok": false,
+    "detail": "seller: a receipt signed by an unauthorised sequencer is rejected: expected a rejection but the call resolved"
+  },
+  {
+    "name": "webhook: a valid signature is processed exactly once and replays are duplicates",
+    "ok": false,
+    "detail": "fulfillment-conflict"
+  },
+  {
+    "name": "buyer: a failed settlement is never reported as paid",
+    "ok": true
+  }
+]

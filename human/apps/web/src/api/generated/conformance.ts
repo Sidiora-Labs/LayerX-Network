@@ -20,6 +20,8 @@ import {
   decodeExitStartRequest,
   decodeExportEvidenceRequest,
   decodeExportStatementRequest,
+  decodeKeyExportBegin,
+  decodeKeyExportFinish,
   decodeMoveCommitRequest,
   decodeMoveQuoteRequest,
   decodeNotificationPreferences,
@@ -64,10 +66,12 @@ import {
   encodeEvidenceMaterial,
   encodeExitEligibility,
   encodeExportArtefact,
+  encodeExportedPrimaryKey,
   encodeHomeSummary,
   encodeJourney,
   encodeJourneyPage,
   encodeKeyChallenge,
+  encodeKeyExportChallenge,
   encodeMoveQuote,
   encodeNativeFeeAsset,
   encodeNotificationPage,
@@ -238,6 +242,10 @@ export const conformance: { readonly [name in OperationName]: (run: ConformanceR
     encodeProfile(await run.client.profileUpdate(decodeProfileUpdate(runBody(run), "golden request body"))),
   "security.action": async (run) =>
     encodeSecurityAction(await run.client.securityAction(decodeSecurityActionRequest(runBody(run), "golden request body"))),
+  "security.key-export.begin": async (run) =>
+    encodeKeyExportChallenge(await run.client.securityKeyExportBegin(decodeKeyExportBegin(runBody(run), "golden request body"))),
+  "security.key-export.finish": async (run) =>
+    encodeExportedPrimaryKey(await run.client.securityKeyExportFinish(decodeKeyExportFinish(runBody(run), "golden request body"))),
   "security.passkey.list": async (run) =>
     encodePasskeyList(await run.client.securityPasskeyList()),
   "security.passkey.register.begin": async (run) =>

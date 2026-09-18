@@ -436,7 +436,7 @@ reqs = ["7.1","7.2","7.3","7.4","7.6"]
 
 [task.3.7]
 title = "Stand the hosted stack up on a beta cluster from the repository"
-status = "in_progress"
+status = "pending"
 wave = 3
 requires = ["3.6","6.7"]
 do_1 = "Write platform/hosted/tests/beta-cluster.sh: build the testnet, gateway, faucet, webhooks and dashboard images from their Dockerfiles at the current revision, add the missing platform/hosted/registry/Dockerfile so the layerx-program-registry image the StatefulSet references is built from source rather than pulled, create a disposable local cluster or target the owner-designated beta cluster from an environment variable, install the registry node boundary unit and node-provision-build-boundary.sh on every node that schedules the registry, generate a beta CA and beta secrets by secret name, apply the real hosted manifests for every service, and wait until every journey reports ready through the readiness endpoint from task 3.6."
@@ -557,7 +557,7 @@ status = "pending"
 
 [task.6.1]
 title = "Build the layerx-node image and the genesis-bootstrapped node pod"
-status = "in_progress"
+status = "pending"
 wave = 6
 requires = ["3.6"]
 do_1 = "Add platform/hosted/node/Dockerfile building build/bin/layerxd, layerx-genesis and layerxctl with the root Makefile on a pinned Debian bookworm builder and runtime (libcrypto, libsqlite3), uid 4020, and add platform/hosted/node/bootstrap.sh that, given a data directory, a network id, a sequencer key pair and a treasury key pair, generates the ordinary genesis manifest and snapshot with layerx-genesis (zero treasury balance, single asset at genesis), with funding through the admin treasury SEND path after bootstrap, writes the eight-line layerxd config for the sequencer and for the replica, and starts the sequencer under a supervisor that answers a reset request on a pod-local unix socket by stopping the daemons, discarding the data directory contents, re-running bootstrap and restarting."
@@ -570,7 +570,7 @@ reqs = ["14.1","7.1","7.2"]
 
 [task.6.2]
 title = "Implement the layerx-pending-core boundary and its admin plane"
-status = "in_progress"
+status = "pending"
 wave = 6
 requires = ["3.6"]
 do_1 = "Add the crate platform/hosted/core (package layerx-platform-core, binary layerx-core-boundary) in the hosted house style - std TcpListener, rustls server TLS from DER cert and PKCS#8 DER key, hand-framed HTTP/1.1, no tokio - opening two listeners: LAYERX_CORE_LISTEN (default 0.0.0.0:9443) and LAYERX_CORE_ADMIN_LISTEN (default 0.0.0.0:9444), each with its own certificate, the core listener accepting an optional client certificate chaining to LAYERX_CORE_CLIENT_CA_DER."
@@ -584,7 +584,7 @@ reqs = ["14.2","14.3","7.3","7.4"]
 
 [task.6.3]
 title = "Implement the layerx-receipt-authority service over the independent replica"
-status = "in_progress"
+status = "pending"
 wave = 6
 requires = ["3.6"]
 do_1 = "Add the crate platform/hosted/authority (package layerx-platform-authority, binary layerx-receipt-authority) in the hosted house style listening on LAYERX_AUTHORITY_LISTEN (default 0.0.0.0:9445) with rustls server TLS accepting an optional client certificate, authenticating the gateway, registry and webhooks bearer tokens from LAYERX_AUTHORITY_TOKEN_FILES, and dialing only the replica at LAYERX_AUTHORITY_REPLICA_URL (loopback) with LAYERX_AUTHORITY_REPLICA_BEARER_TOKEN_FILE and LAYERX_AUTHORITY_REPLICA_ID, plus the receipt source at LAYERX_AUTHORITY_RECEIPT_URL for receipt bytes by activity id."
@@ -597,7 +597,7 @@ reqs = ["14.4","7.3"]
 
 [task.6.4]
 title = "Implement the layerx-agent-boundary component service over the LNI"
-status = "in_progress"
+status = "pending"
 wave = 6
 requires = ["3.6"]
 do_1 = "Add the crate platform/hosted/agent-boundary (package layerx-platform-agent-boundary, binary layerx-agent-boundary) in the hosted house style listening on LAYERX_AGENT_BOUNDARY_LISTEN (default 0.0.0.0:9446) with rustls server TLS that accepts an optional client certificate chaining to LAYERX_AGENT_BOUNDARY_CLIENT_CA_DER, two distinct bearer tokens from LAYERX_AGENT_BOUNDARY_GATEWAY_TOKEN_FILE and LAYERX_AGENT_BOUNDARY_REGISTRY_TOKEN_FILE with per-token route entitlement, an LNI client over LAYERX_AGENT_BOUNDARY_LNI_SOCKET and the daemon program listener at LAYERX_AGENT_BOUNDARY_NODE_URL."
@@ -611,7 +611,7 @@ reqs = ["14.5","7.3"]
 
 [task.6.5]
 title = "Implement the layerx-identity principal and session service"
-status = "in_progress"
+status = "pending"
 wave = 6
 requires = ["3.6"]
 do_1 = "Add the crate platform/hosted/identity (package layerx-platform-identity, binary layerx-identity) in the hosted house style listening on LAYERX_IDENTITY_LISTEN (default 0.0.0.0:9443) with rustls server TLS, a durable fsync-backed store under LAYERX_IDENTITY_STATE_DIR holding principals {sub, allowed_signer_public_keys, account, audiences} and sessions {session_id, principal, token_digest, csrf_digest, csrf_token sealed at rest with the store key, expires_at, revoked_at}, and service tokens from LAYERX_IDENTITY_SERVICE_TOKENS_DIR where each file name is the calling service (gateway, webhooks, dashboard, faucet, testnet, ramp, provisioning) and the content its token."
@@ -624,7 +624,7 @@ reqs = ["14.6","7.3"]
 
 [task.6.6]
 title = "Run Paxeer in the cluster behind the paxeer-boundary and deploy the settlement contracts"
-status = "in_progress"
+status = "pending"
 wave = 6
 requires = ["3.6"]
 do_1 = "Add the crate platform/hosted/paxeer (package layerx-platform-paxeer-boundary, binary layerx-paxeer-boundary) in the hosted house style listening on LAYERX_PAXEER_BOUNDARY_LISTEN (default 0.0.0.0:9443) with rustls server TLS, relaying POST / Ethereum JSON-RPC bodies up to 2 MiB to the single node at LAYERX_PAXEER_NODE_URL (loopback http) with the id preserved and a 200 for RPC-level errors, serving GET /readyz with 200 only when eth_chainId against the node equals LAYERX_PAXEER_CHAIN_ID, GET /livez, and refusing any other method or path."
@@ -639,7 +639,7 @@ reqs = ["14.7","6.4"]
 
 [task.6.7]
 title = "Bring the trusted-boundary services up from the repository and rerun the beta cluster gate"
-status = "in_progress"
+status = "pending"
 wave = 7
 requires = ["6.1","6.2","6.3","6.4","6.5","6.6"]
 do_1 = "Extend platform/hosted/tests/beta-cluster.sh: build and load the layerx-node, layerx-core-boundary, layerx-receipt-authority, layerx-agent-boundary, layerx-identity, layerx-paxeer-boundary and paxd images; issue beta CA certificates with the Service DNS SANs for each; generate the sequencer, treasury and deployer keys, the replica id, the node bearer tokens, the identity service tokens and the identity provisioning call that mints the smoke test session for LAYERX_TEST_SOURCE_DID with its signer key; render and apply platform/hosted/node, identity and paxeer manifests before the existing ones; run deploy-contracts.sh; drop LAYERX_BETA_EXTERNAL_MANIFESTS and the EXTERNAL_SERVICES absence branch; export LAYERX_QUALIFICATION_NODE_URL, _AGENT_URL, _HUMAN_URL and _PAXEER_URL to the surfaces tools/qualification/beta_driver.py actually exercises, verified by reading its cases, and LAYERX_TEST_SOURCE_PUBLIC_KEY, _DESTINATION_DID, _ASSET and _AMOUNT from the minted identities."
@@ -652,7 +652,7 @@ reqs = ["14.8","7.1","7.2","7.5","7.7","12.5"]
 
 [task.6.8]
 title = "Provide the developer-plane internal services the webhooks and dashboard dial"
-status = "in_progress"
+status = "pending"
 wave = 7
 requires = ["6.5","6.3","6.4"]
 do_1 = "From platform/hosted/webhooks/src and platform/hosted/dashboard/src, enumerate every layerx-internal Service the developer plane dials - redis, kms, identity, component, authority, journeys, payments, approvals, programs - with the exact routes, bodies and readiness dependencies each imposes, and record the enumeration in spec/layerx-beta/qualification.kvx as an observation before implementing."
@@ -665,7 +665,7 @@ reqs = ["7.1","7.2","7.5"]
 
 [task.6.9]
 title = "Serve program simulation over the LNI if the boundary recorded the gap"
-status = "in_progress"
+status = "pending"
 wave = 7
 requires = ["6.4"]
 do_1 = "If task 6.4 recorded that the LNI advertises no simulation capability, add a Simulate capability to the LNI schema in agent/crates/layerx-client/src/lni/schema.rs and to cmd/layerxd/lxp_daemon_lni.c that executes a program call against the current head through the programs runtime without committing, returning the execution {activity_id, receipt, terminal_payload, call_graph} and simulation evidence {boundary_id, activity_id, previous_state_root, hypothetical_state_root, observed_sequence, observed_at, public_key} signed by the sequencer, and serve it from the agent boundary and the core boundary; otherwise close this task as no change needed with the evidence."
@@ -677,7 +677,7 @@ reqs = ["14.2","14.5"]
 
 [task.6.10]
 title = "Bind a real finality-authority verifier in layerxd so the sequencer bootstraps"
-status = "in_progress"
+status = "pending"
 wave = 6
 requires = ["3.6","6.11"]
 do_1 = "Add cmd/layerxd/lxp_daemon_finality_authority.c implementing lxp_daemon_finality_authority_verify_fn for the sequencer: hash the certificate checkpoint with lxp_checkpoint_certificate_hash and require it to equal the registration's checkpoint_id; require the certificate attestations' paxeer_chain_id and paxeer_settlement_contract to equal the registration and the daemon's configured LAYERX_NODE_PAXEER_CHAIN_ID and LAYERX_NODE_SETTLEMENT_CONTRACT; run lxp_checkpoint_finalisable against the evidence store's finalisation state, bonded set and requirements; then independently confirm the registration on the Paxeer chain through a loopback JSON-RPC endpoint LAYERX_NODE_PAXEER_RPC_ADDRESS/PORT (127.0.0.1 only, reusing the daemon's loopback HTTP client conventions) with eth_chainId, eth_getTransactionReceipt(transaction_id) - status 1, to equals the separately configured LAYERX_NODE_CHECKPOINT_REGISTRY, blockNumber equals observed_block_number, an exact CheckpointRegistered event from that registry carrying the checkpoint_id and matching certificate commitments; independently query the registry guarantorEligibility() and require it to equal LAYERX_NODE_SETTLEMENT_CONTRACT - and eth_blockNumber at or beyond the observed block; bind it in open_process with lxp_daemon_evidence_open so LXP_ERR_MODULE_DISABLED can no longer occur; no environment variable may disable verification."
@@ -690,7 +690,7 @@ reqs = ["14.1","14.2"]
 
 [task.6.11]
 title = "Version the receipt transition to commit the full account state without changing legacy receipts"
-status = "in_progress"
+status = "pending"
 wave = 6
 requires = ["3.6"]
 do_1 = "Add explicit protocol version 3 for the composite-state commitment transition. Preserve protocol versions 1 and 2 and their recorded receipt-root algorithms. Version 3 resulting_state_root is the exact post-commit composite state root calculated using the real prepared module context and journal preview; verify it against committed state before publication. Preserve receipt signatures, inclusion checks, owner authorization, fee checks, replay determinism and all existing account-proof equalities. Never substitute the receipt transition hash for the composite root or add an unsigned trust bridge. A protocol-3 SEND refusal binds attempted operation, asset and participants from the strictly decoded signed activity and actual account balances without claiming successful effects; undecodable SEND payloads are rejected before durable admission and never receive invented metadata."
@@ -754,40 +754,40 @@ status = "pending"
 
 [task.8.1]
 title = "Add the LXT721 non-fungible standard and reference program"
-status = "pending"
+status = "done"
 wave = 8
 requires = []
 do_1 = "Add programs/sdk/rust/src/lxt721.rs mirroring lxt20.rs, programs/crates/layerx-programs-registry/src/lxt721.rs with reference_interface, a reference guest at programs/sdk/rust/examples/nft-lxt721 built by the same script pattern as examples/escrow, fixtures under registry tests, and tests/lxt721_reference.rs."
 verify_cmd = "cd programs && cargo test --locked -p layerx-programs-registry --test lxt721_reference"
 symbols = ["lxt721::reference_interface"]
-touches = ["programs/sdk/rust/src/lxt721.rs","programs/sdk/rust/src/lib.rs","programs/sdk/rust/examples/nft-lxt721","programs/crates/layerx-programs-registry/src/lxt721.rs","programs/crates/layerx-programs-registry/src/lib.rs","programs/crates/layerx-programs-registry/tests/lxt721_reference.rs","programs/crates/layerx-programs-registry/tests/fixtures","Makefile"]
+touches = ["programs/sdk/rust/src/lxt721.rs","programs/sdk/rust/src/lib.rs","programs/sdk/rust/examples/nft-lxt721","programs/crates/layerx-programs-registry/src/lxt721.rs","programs/crates/layerx-programs-registry/src/lib.rs","programs/crates/layerx-programs-registry/tests/lxt721_reference.rs","programs/crates/layerx-programs-registry/tests/fixtures"]
 reqs = ["16.1"]
 
 [task.8.2]
 title = "Add multisig and timelock authority kinds"
-status = "pending"
+status = "done"
 wave = 8
 requires = []
 do_1 = "Extend lxp_authority_kind in include/layerx/lxp_authority.h with MULTISIG and TIMELOCK, add the k-of-n signer set and maturity fields to the grant scope as additive tail fields under a new grant encoding version, resolve both in lxp_authority_resolve, add typed refusals, and add tests/test_authority_multisig.c wired as make test-authority-multisig covering below-threshold refusal, threshold success, duplicate signer refusal, pre-maturity refusal, post-maturity success and byte-identical encoding of every pre-existing grant kind."
 verify_cmd = "make test-authority-multisig"
-symbols = ["LXP_AUTHORITY_KIND_MULTISIG","LXP_AUTHORITY_KIND_TIMELOCK","lxp_authority_resolve"]
-touches = ["include/layerx/lxp_authority.h","src/protocol/lxp_authority.c","tests/test_authority_multisig.c","Makefile"]
+symbols = ["authority_signer_set_check","lxp_authority_is_live","lxp_authority_resolve"]
+touches = ["include/layerx/lxp_authority.h","src/state/lxp_authority.c","tests/test_authority_multisig.c","Makefile"]
 reqs = ["16.2"]
 
 [task.8.3]
 title = "Add the naming registry reference program"
-status = "pending"
+status = "done"
 wave = 8
 requires = []
 do_1 = "Add programs/sdk/rust/examples/naming with register, transfer, renew, resolve, reverse_resolve; a registry reference interface at programs/crates/layerx-programs-registry/src/naming.rs; tests/naming_reference.rs; and a name resolver in human/apps/web explorer lookup that calls the program read path when a query matches the name grammar."
 verify_cmd = "cd programs && cargo test --locked -p layerx-programs-registry --test naming_reference"
 symbols = ["naming::reference_interface"]
-touches = ["programs/sdk/rust/examples/naming","programs/crates/layerx-programs-registry/src/naming.rs","programs/crates/layerx-programs-registry/src/lib.rs","programs/crates/layerx-programs-registry/tests/naming_reference.rs","human/apps/web/src/app/explorer/lookup","Makefile"]
+touches = ["programs/sdk/rust/examples/naming","programs/crates/layerx-programs-registry/src/naming.rs","programs/crates/layerx-programs-registry/src/lib.rs","programs/crates/layerx-programs-registry/tests/naming_reference.rs","human/apps/web/src/app/explorer/lookup"]
 reqs = ["16.3"]
 
 [task.8.4]
 title = "Expose the committed oracle observation to programs"
-status = "pending"
+status = "done"
 wave = 8
 requires = []
 do_1 = "Allocate guest ABI v3 and add oracle_read to its new ABI_MANIFEST layerx_v3 namespace in programs/crates/layerx-programs-runtime/src/lib.rs and validate.rs while the frozen v2 vector and checksum stay untouched, the C host binding in src/modules/programs reading lx_oracle_store, the Rust SDK wrapper in programs/sdk/rust/src/oracle.rs, and tests/test_programs_oracle_read.c wired as make test-programs-oracle-read proving a guest reads the observation the perps engine committed and gets a typed refusal for unknown and halted markets."
@@ -798,33 +798,33 @@ reqs = ["16.4"]
 
 [task.8.5]
 title = "Add the constant-product swap reference program"
-status = "pending"
+status = "done"
 wave = 8
 requires = []
 do_1 = "Add programs/sdk/rust/examples/swap-cpmm with add_liquidity, remove_liquidity, swap_exact_in, quote, reserves; LP shares as an embedded LXT20 program; registry reference interface at programs/crates/layerx-programs-registry/src/swap.rs; tests/swap_reference.rs; and a conservation case under programs/tests/conservation proving reserves plus fees equal inputs across a randomised sequence."
 verify_cmd = "cd programs && cargo test --locked -p layerx-programs-registry --test swap_reference"
 symbols = ["swap::reference_interface"]
-touches = ["programs/sdk/rust/examples/swap-cpmm","programs/crates/layerx-programs-registry/src/swap.rs","programs/crates/layerx-programs-registry/src/lib.rs","programs/crates/layerx-programs-registry/tests/swap_reference.rs","programs/tests/conservation","Makefile"]
+touches = ["programs/sdk/rust/examples/swap-cpmm","programs/crates/layerx-programs-registry/src/swap.rs","programs/crates/layerx-programs-registry/src/lib.rs","programs/crates/layerx-programs-registry/tests/swap_reference.rs","programs/tests/conservation"]
 reqs = ["16.5"]
 
 [task.8.6]
 title = "Raise the asset registry capacity to 1024 and paginate listing"
-status = "pending"
+status = "done"
 wave = 8
 requires = []
 do_1 = "Raise LX_ASSET_REGISTRY_CAPACITY to 1024 in include/layerx/lx_asset.h, fix every static array, state encoder, reserve attestation bound and genesis builder path sized from it, keep existing sub-64 fixtures byte-identical, and add cursor pagination to lx_listAssets in platform/hosted/gateway with the openrpc.json entry updated."
 verify_cmd = "make test-asset-registry && make test-asset-reserve"
-symbols = ["LX_ASSET_REGISTRY_CAPACITY","lx_asset_state"]
+symbols = ["lxp_module_committed_asset","lx_asset_state_root"]
 touches = ["include/layerx/lx_asset.h","src/modules/asset","cmd/layerx-genesis","platform/hosted/gateway/src","platform/hosted/gateway/openrpc.json"]
 reqs = ["16.6"]
 
 [task.8.7]
 title = "Make self-custody the default with a step-up key export ceremony"
-status = "pending"
+status = "done"
 wave = 8
 requires = []
 do_1 = "Add POST /v1/security/key-export/begin and /finish to human/schema/human-api/identity.kvx in the secret-reveal class, implement the ceremony in human/crates/layerx-human-service with the KMS returning the primary key once and flipping the identity to self-custodied so later signing refuses, add onboarding copy and route that offers export first and custody as opt-in, rewrite the no-key-export suite to assert the ceremony is the only route, and update spec/layerx-platform/spec.kvx [decision] custody and v1_scope."
 verify_cmd = "cd human && cargo test --locked -p layerx-human-service key_export"
-symbols = ["key_export","KeyExportCeremony"]
+symbols = ["execute_key_export_finish","KeyExportCeremony"]
 touches = ["human/schema/human-api/identity.kvx","human/crates/layerx-human-service/src","human/crates/layerx-human-kms/src","human/apps/web/src/app","spec/layerx-platform/spec.kvx"]
 reqs = ["16.7"]

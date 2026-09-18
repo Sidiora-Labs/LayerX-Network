@@ -1,0 +1,83 @@
+name: Jev PR advisory
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  jev-advisory:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Write pull request body
+        if: env.OPENROUTER_API_KEY != ''
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s' "$PR_BODY" > body.md
+      - name: Run Jev advisory check
+        if: env.OPENROUTER_API_KEY != ''
+        continue-on-error: true
+        run: |
+          python3 -m tools.jev pr \
+            --base "origin/$GITHUB_BASE_REF" \
+            --head HEAD \
+            --body body.md \
+            --commits \
+            --comment comment.md \
+            --out build/jev
+      - name: Upsert advisory comment
+        if: env.OPENROUTER_API_KEY != ''
+        continue-on-error: true
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('comment.md')) {
+              return;
+            }
+            const body = fs.readFileSync('comment.md', 'utf8');
+            const marker = 'Jev advisory (non-blocking)';
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = comments.find(({ body: text }) =>
+              (text || '').replace(/^[#\s]+/, '').startsWith(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              return;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+      - name: Upload advisory report
+        if: env.OPENROUTER_API_KEY != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: jev-pr-advisory
+          path: build/jev
+          if-no-files-found: ignore
