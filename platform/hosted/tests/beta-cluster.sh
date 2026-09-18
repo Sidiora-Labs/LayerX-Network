@@ -54,6 +54,7 @@
 #                                       x402, AP2, UCP, Visa TAP and fiat trust roots, none of which this
 #                                       repository can derive (interop/deploy/gateway/README.md)
 #   LAYERX_BETA_TESTNET_PORT            host ports of the testnet, gateway and faucet port-forwards
+#                                       (the human web application is published on the fixed host port 19457)
 #   LAYERX_BETA_GATEWAY_PORT            (defaults 19443, 19444, 19445)
 #   LAYERX_BETA_FAUCET_PORT
 #   LAYERX_BETA_TEST_AUTH_TOKEN_FILE    identity session token for the smoke source; when unset the bring-up
@@ -1540,6 +1541,7 @@ PYREG
     render_manifest "$REPO_ROOT/platform/hosted/registry/journal-pvc.yaml" "$MANIFESTS_DIR/registry-journal.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/registry/deployment.yaml" "$MANIFESTS_DIR/registry.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/human/deployment.yaml" "$MANIFESTS_DIR/human.yaml"
+    render_manifest "$REPO_ROOT/platform/hosted/human/web-deployment.yaml" "$MANIFESTS_DIR/human-web.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/internal/deployment.yaml" "$MANIFESTS_DIR/internal.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/webhooks/deployment.yaml" "$MANIFESTS_DIR/developer.yaml"
     render_manifest "$REPO_ROOT/platform/relay_archive/deployment.yaml" "$MANIFESTS_DIR/relay-archive.yaml"
@@ -1589,6 +1591,7 @@ trusted_boundary_apply() {
 
 manifests_apply() {
     kube apply -f "$MANIFESTS_DIR/human.yaml" > /dev/null
+    kube apply -f "$MANIFESTS_DIR/human-web.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/testnet.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/gateway.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/registry.yaml" > /dev/null
@@ -2604,7 +2607,7 @@ readyz() {
 }
 
 wait_ready() {
-    local deadline=$((SECONDS + READY_TIMEOUT)) body developer_ready internal_ready human_ready human_status
+    local deadline=$((SECONDS + READY_TIMEOUT)) body developer_ready internal_ready human_ready human_status human_web_status
     while :; do
         body=$(readyz "$TESTNET_URL") || body=""
         human_status=$(curl --silent --show-error --max-time 10 --cacert "$CA_DIR/ca.crt" \
@@ -2613,6 +2616,8 @@ wait_ready() {
         if [ "$human_status" = 200 ] && jq -e '.ready == true and all(.components[]; . == "ready")' "$WORK_DIR/human-readyz.json" >/dev/null 2>&1; then
             human_ready=true
         fi
+        human_web_status=$(curl --silent --show-error --max-time 10 \
+            --output "$WORK_DIR/human-web-root.html" --write-out '%{http_code}' "$HUMAN_WEB_URL/" 2>/dev/null) || human_web_status=unreachable
         developer_ready=$(kube -n "$DEVELOPER_NAMESPACE" get deployments -o json 2>/dev/null \
             | jq -r '[.items[] | select((.status.readyReplicas // 0) < .spec.replicas) | .metadata.name] | join(",")') \
             || developer_ready="namespace $DEVELOPER_NAMESPACE unreadable"
@@ -2620,7 +2625,7 @@ wait_ready() {
             | jq -r '[.items[] | select((.status.readyReplicas // 0) < .spec.replicas) | .metadata.name] | join(",")') \
             || internal_ready="namespace $INTERNAL_NAMESPACE unreadable"
         if [ -n "$body" ] && jq -e '.state == "ready" and all(.journeys[]; .ready == true)' <<<"$body" > /dev/null 2>&1 \
-            && jq -e 'all(.dependencies[]; .ready == true) and (.journeys | length) == 4' <<<"$body" > /dev/null 2>&1 && [ -z "$developer_ready" ] && [ -z "$internal_ready" ] && [ "$human_ready" = true ]; then
+            && jq -e 'all(.dependencies[]; .ready == true) and (.journeys | length) == 4' <<<"$body" > /dev/null 2>&1 && [ -z "$developer_ready" ] && [ -z "$internal_ready" ] && [ "$human_ready" = true ] && [ "$human_web_status" = 200 ]; then
             printf '%s' "$body" > "$WORK_DIR/readyz.json"
             return 0
         fi
@@ -2635,6 +2640,7 @@ wait_ready() {
                     printf 'beta-cluster: testnet /readyz unreachable at %s\n' "$TESTNET_URL"
                 fi
                 printf 'beta-cluster: Human /readyz HTTP status: %s\n' "$human_status"
+                printf 'beta-cluster: Human web application HTTP status at %s: %s\n' "$HUMAN_WEB_URL" "$human_web_status"
                 [ -z "$developer_ready" ] || printf 'beta-cluster: developer plane deployments not ready: %s\n' "$developer_ready"
                 [ -z "$internal_ready" ] || printf 'beta-cluster: internal workloads not ready: %s\n' "$internal_ready"
                 kube -n "$INTERNAL_NAMESPACE" get pods -o wide 2>/dev/null || true
@@ -2697,6 +2703,7 @@ env_write() {
         printf 'export LAYERX_PAXEER_SETTLEMENT_CONTRACT=%s\n' "$GUARANTOR_BOND"
         printf 'export LAYERX_PAXEER_CHECKPOINT_REGISTRY=%s\n' "$CHECKPOINT_REGISTRY"
         printf 'export LAYERX_PAXEER_DEPLOYMENT_RECORD=%s\n' "$WORK_DIR/paxeer/deployment.json"
+        printf 'export LAYERX_HUMAN_WEB_URL=%s\n' "$HUMAN_WEB_URL"
         printf 'export KUBECONFIG=%s\n' "$KUBECONFIG_FILE"
     } >> "$ENV_FILE"
     [ -s "$WORK_DIR/human-owner.env" ] || fail "human-owner.env missing after native owner production"
@@ -2964,6 +2971,7 @@ beta_cluster_up() {
     IDENTITY_URL="https://localhost:$IDENTITY_PORT"
     INTEROP_URL="https://localhost:$INTEROP_PORT"
     HUMAN_URL="https://localhost:19453"
+    HUMAN_WEB_URL="http://localhost:19457"
     wait_for_node_genesis
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ]; then
         apply_configmap "$TESTNET_NAMESPACE" layerx-node-settlement --from-file=settlement.env="$WORK_DIR/paxeer/settlement.env"
@@ -3022,6 +3030,7 @@ beta_cluster_up() {
     agentd_check
     mirror_ready
     relay_archive_apply
+    port_forward human-web "$TESTNET_NAMESPACE" layerx-human-web 19457 80
     module_registry_verify
     interop_gateway_apply
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then material_save; fi

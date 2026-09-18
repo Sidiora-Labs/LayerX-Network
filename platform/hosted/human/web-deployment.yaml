@@ -1,0 +1,149 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: layerx-human-web
+  namespace: layerx-testnet
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: layerx-human-web
+  template:
+    metadata:
+      labels:
+        app: layerx-human-web
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+      containers:
+        - name: web
+          image: ghcr.io/sidiora-labs/layerx-human-web:0.1.0
+          imagePullPolicy: Always
+          env:
+            - name: LAYERX_HUMAN_SERVICE_URL
+              value: https://layerx-human.layerx-testnet.svc:9443
+            - name: LAYERX_EXPLORER_API_ORIGIN
+              value: https://layerx-human.layerx-testnet.svc:9443
+            - name: LAYERX_HUMAN_WEB_ORIGIN
+              value: https://human.testnet.layerx.network
+            - name: NODE_EXTRA_CA_CERTS
+              value: /run/layerx/trust/ca.crt
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            timeoutSeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: trust
+              mountPath: /run/layerx/trust
+              readOnly: true
+            - name: render-cache
+              mountPath: /app/.next/cache
+            - name: temporary
+              mountPath: /tmp
+      volumes:
+        - name: trust
+          secret:
+            secretName: layerx-internal-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+        - name: render-cache
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: temporary
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: layerx-human-web
+  namespace: layerx-testnet
+spec:
+  selector:
+    app: layerx-human-web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: layerx-human-web
+  namespace: layerx-testnet
+spec:
+  podSelector:
+    matchLabels:
+      app: layerx-human-web
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress: []
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - to:
+    - podSelector:
+        matchLabels:
+          app: layerx-node
+    ports:
+    - protocol: TCP
+      port: 9447
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: layerx-human-web-upstream
+  namespace: layerx-testnet
+spec:
+  podSelector:
+    matchLabels:
+      app: layerx-node
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: layerx-human-web
+    ports:
+    - protocol: TCP
+      port: human-https
