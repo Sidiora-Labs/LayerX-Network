@@ -106,6 +106,7 @@ jobs:
     env:
       LAYERX_BETA_BUILDER_ENVIRONMENT_DIR: ${{ github.workspace }}/build/browser-builder/rootfs
       LAYERX_BETA_FOUNDRY_BIN: /home/runner/.foundry/bin
+      LAYERX_BETA_HUMAN_WEB_PORT: ""
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

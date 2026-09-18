@@ -50,6 +50,44 @@ class MaterialTests(unittest.TestCase):
                                          Path(directory) / 'output.json', 402, 31337)
             self.assertFalse((Path(directory) / 'output.json').exists())
 
+    def test_passkey_relying_party_follows_the_deployed_web_origin(self):
+        self.assertEqual(material.passkey_relying_party(''),
+                         ('human.testnet.layerx.network', 'https://human.testnet.layerx.network'))
+        self.assertEqual(material.passkey_relying_party('https://human.beta.layerx.example'),
+                         ('human.beta.layerx.example', 'https://human.beta.layerx.example'))
+        for refused in ('http://human.testnet.layerx.network', 'https://localhost:19457',
+                        'https://127.0.0.1', 'https://human.testnet.layerx.network/',
+                        'https://Human.Testnet.Layerx.Network', 'https://human.testnet.layerx.network?a=1'):
+            with self.assertRaises(ValueError):
+                material.passkey_relying_party(refused)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'human'
+            root.mkdir(mode=0o700)
+            for name in ('components', 'kms', 'config', 'agent-config'):
+                (root / name).mkdir(mode=0o700)
+            (root.parent / 'receipt-authority-replica-id').write_text('6c61796572782d626574612d726563656970742d617574686f726974792d3031')
+            subprocess.run([sys.executable, str(HERE / 'material.py'), str(root), '402', '31337', '',
+                            'https://human.beta.layerx.example'], check=True)
+            self.assertEqual((root / 'config/LAYERX_HUMAN_ORIGIN').read_text(), 'https://human.beta.layerx.example')
+            self.assertEqual((root / 'config/LAYERX_HUMAN_RP_ID').read_text(), 'human.beta.layerx.example')
+
+    def test_bring_up_publishes_the_web_origin_the_ceremony_configuration_uses(self):
+        cluster = (ROOT / 'platform/hosted/tests/beta-cluster.sh').read_text()
+        material_source = (ROOT / 'platform/hosted/human/material.sh').read_text()
+        self.assertIn('HUMAN_WEB_HOST=human.testnet.layerx.network\n', cluster)
+        self.assertIn('HUMAN_WEB_URL="https://$HUMAN_WEB_HOST"\n', cluster)
+        self.assertIn('"$LAYERX_BETA_HUMAN_POLICY_FILE" "${HUMAN_WEB_URL:-}"\n', material_source)
+        node = yaml.safe_load_all((ROOT / 'platform/hosted/node/deployment.yaml').read_text())
+        human = next(c for d in node if d['kind'] == 'StatefulSet'
+                     for c in d['spec']['template']['spec']['containers'] if c['name'] == 'human')
+        origin = next(e['value'] for e in human['env'] if e['name'] == 'LAYERX_HUMAN_WEB_ORIGIN')
+        self.assertEqual(origin, 'https://human.testnet.layerx.network')
+        web = next(c for d in yaml.safe_load_all((ROOT / 'platform/hosted/human/web-deployment.yaml').read_text())
+                   if d['kind'] == 'Deployment'
+                   for c in d['spec']['template']['spec']['containers'] if c['name'] == 'web')
+        self.assertEqual(next(e['value'] for e in web['env'] if e['name'] == 'LAYERX_HUMAN_WEB_ORIGIN'), origin)
+        self.assertEqual(material.passkey_relying_party(origin)[1], origin)
+
     def test_bootstrap_has_no_unpublished_human_secret_dependencies(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'node.yaml'

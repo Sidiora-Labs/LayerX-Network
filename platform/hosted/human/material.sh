@@ -61,7 +61,7 @@ human_policy_publish() {
         "$evidence" "$WORK_DIR/paxeer/deployment.json" "$SECRETS_DIR/module-registry.json" \
         "$LAYERX_BETA_HUMAN_POLICY_FILE" "$NODE_NETWORK_ID" "$PAXEER_CHAIN_ID"
     python3 "$REPO_ROOT/platform/hosted/human/material.py" "$SECRETS_DIR/human" \
-        "$NODE_NETWORK_ID" "$PAXEER_CHAIN_ID" "$LAYERX_BETA_HUMAN_POLICY_FILE"
+        "$NODE_NETWORK_ID" "$PAXEER_CHAIN_ID" "$LAYERX_BETA_HUMAN_POLICY_FILE" "${HUMAN_WEB_URL:-}"
     human_secrets_apply
 }
 

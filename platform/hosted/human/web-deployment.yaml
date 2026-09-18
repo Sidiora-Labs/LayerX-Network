@@ -1,0 +1,194 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: layerx-human-web
+  namespace: layerx-testnet
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: layerx-human-web
+  template:
+    metadata:
+      labels:
+        app: layerx-human-web
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+      containers:
+        - name: web
+          image: ghcr.io/sidiora-labs/layerx-human-web:0.1.0
+          imagePullPolicy: Always
+          env:
+            - name: LAYERX_HUMAN_SERVICE_URL
+              value: https://layerx-human.layerx-testnet.svc:9443
+            - name: LAYERX_EXPLORER_API_ORIGIN
+              value: https://layerx-human.layerx-testnet.svc:9443
+            - name: LAYERX_HUMAN_WEB_ORIGIN
+              value: https://human.testnet.layerx.network
+            - name: NODE_EXTRA_CA_CERTS
+              value: /run/layerx/trust/ca.crt
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            timeoutSeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: trust
+              mountPath: /run/layerx/trust
+              readOnly: true
+            - name: render-cache
+              mountPath: /app/.next/cache
+            - name: temporary
+              mountPath: /tmp
+        - name: web-boundary
+          image: ghcr.io/sidiora-labs/layerx-human-web:0.1.0
+          imagePullPolicy: Always
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              : "${LAYERX_HUMAN_WEB_TLS_PORT:?web boundary port is required}"
+              : "${LAYERX_HUMAN_WEB_PORT:?web application port is required}"
+              while ! socat -T 2 /dev/null "TCP:127.0.0.1:${LAYERX_HUMAN_WEB_PORT}" > /dev/null 2>&1; do sleep 1; done
+              exec socat -T 120 \
+                "OPENSSL-LISTEN:${LAYERX_HUMAN_WEB_TLS_PORT},bind=0.0.0.0,reuseaddr,fork,cert=/run/layerx/web-tls/tls.crt,key=/run/layerx/web-tls/tls.key,verify=0" \
+                "TCP:127.0.0.1:${LAYERX_HUMAN_WEB_PORT}"
+          env:
+            - {name: LAYERX_HUMAN_WEB_TLS_PORT, value: "9443"}
+            - {name: LAYERX_HUMAN_WEB_PORT, value: "3000"}
+          ports:
+            - name: https
+              containerPort: 9443
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /
+              port: https
+            timeoutSeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: web-tls
+              mountPath: /run/layerx/web-tls
+              readOnly: true
+      volumes:
+        - name: trust
+          secret:
+            secretName: layerx-internal-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+        - name: web-tls
+          secret:
+            secretName: layerx-human-web-tls
+        - name: render-cache
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: temporary
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: layerx-human-web
+  namespace: layerx-testnet
+spec:
+  selector:
+    app: layerx-human-web
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: layerx-human-web
+  namespace: layerx-testnet
+spec:
+  podSelector:
+    matchLabels:
+      app: layerx-human-web
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress: []
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - to:
+    - podSelector:
+        matchLabels:
+          app: layerx-node
+    ports:
+    - protocol: TCP
+      port: 9447
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: layerx-human-web-upstream
+  namespace: layerx-testnet
+spec:
+  podSelector:
+    matchLabels:
+      app: layerx-node
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: layerx-human-web
+    ports:
+    - protocol: TCP
+      port: human-https

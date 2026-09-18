@@ -1,0 +1,12 @@
+**/.git
+**/.env
+**/.env.*
+**/target
+**/.build
+**/.next
+**/node_modules
+build
+qual-logs
+STATUS.md
+NEEDS.md
+.codegraph

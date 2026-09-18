@@ -56,6 +56,15 @@
 #   LAYERX_BETA_TESTNET_PORT            host ports of the testnet, gateway and faucet port-forwards
 #   LAYERX_BETA_GATEWAY_PORT            (defaults 19443, 19444, 19445)
 #   LAYERX_BETA_FAUCET_PORT
+#   LAYERX_BETA_HUMAN_WEB_PORT          443 (default) or empty. The browser origin of the human web application
+#                                       is https://human.testnet.layerx.network and carries no port, so the
+#                                       passkey ceremony configuration, the human service allowed origin and
+#                                       human/apps/web/e2e/software-authenticator.ts only accept it on 443, and
+#                                       the owner adds `127.0.0.1 human.testnet.layerx.network` to /etc/hosts and
+#                                       trusts the beta internal CA. Set it empty on a host where
+#                                       human/apps/web/e2e/run-production-browser.sh serves that same origin from
+#                                       its own authbind listener, which leaves the forward and its readiness
+#                                       gate out; any other value is refused
 #   LAYERX_BETA_TEST_AUTH_TOKEN_FILE    identity session token for the smoke source; when unset the bring-up
 #                                       provisions a principal for the source DID in the identity service with
 #                                       a generated ed25519 signer key and mints its session
@@ -141,6 +150,7 @@ CLUSTER_NAME=${LAYERX_BETA_CLUSTER_NAME:-layerx-beta}
 FAUCET_HOST=${LAYERX_BETA_FAUCET_HOST:-faucet.testnet.layerx.network}
 DEVELOPER_HOST=${LAYERX_BETA_DEVELOPER_HOST:-developers.testnet.layerx.network}
 RELAY_HOST=${LAYERX_BETA_RELAY_HOST:-relay.testnet.layerx.network}
+HUMAN_WEB_HOST=human.testnet.layerx.network
 TESTNET_HOST=testnet.layerx.network
 GATEWAY_HOST=api.testnet.layerx.network
 KIND_CNI=${LAYERX_BETA_KIND_CNI:-calico}
@@ -150,6 +160,7 @@ IMAGE_MIN_FREE_GIB=${LAYERX_BETA_IMAGE_MIN_FREE_GIB:-$MIN_FREE_GIB}
 TESTNET_PORT=${LAYERX_BETA_TESTNET_PORT:-19443}
 GATEWAY_PORT=${LAYERX_BETA_GATEWAY_PORT:-19444}
 FAUCET_PORT=${LAYERX_BETA_FAUCET_PORT:-19445}
+HUMAN_WEB_PORT=${LAYERX_BETA_HUMAN_WEB_PORT-443}
 TESTNET_NAMESPACE=layerx-testnet
 DEVELOPER_NAMESPACE=layerx-developer
 IMAGE_LABEL=io.layerx.beta-cluster
@@ -504,6 +515,8 @@ ca_generate() {
         "DNS:layerx-gateway.$svc,DNS:layerx-gateway.$TESTNET_NAMESPACE.svc,DNS:layerx-gateway,DNS:$GATEWAY_HOST,DNS:localhost,IP:127.0.0.1"
     issue_cert human layerx-human serverAuth \
         "DNS:layerx-human.$svc,DNS:layerx-human.$TESTNET_NAMESPACE.svc,DNS:layerx-human,DNS:human.testnet.layerx.network,DNS:localhost,IP:127.0.0.1"
+    issue_cert human-web layerx-human-web serverAuth \
+        "DNS:layerx-human-web.$svc,DNS:layerx-human-web.$TESTNET_NAMESPACE.svc,DNS:layerx-human-web,DNS:human.testnet.layerx.network,DNS:localhost,IP:127.0.0.1"
     issue_cert faucet layerx-faucet serverAuth \
         "DNS:layerx-faucet-public.$svc,DNS:layerx-faucet-public,DNS:$FAUCET_HOST,DNS:localhost,IP:127.0.0.1"
     issue_cert registry layerx-program-registry serverAuth \
@@ -1047,6 +1060,7 @@ secrets_apply() {
     apply_secret "$ns" layerx-human-tls --from-file=server.crt.der="$c/human/cert.der" \
         --from-file=server.key.der="$c/human/key.der" --from-file=ca.crt="$c/ca.crt"
     apply_secret "$ns" layerx-internal-ca --from-file=ca.crt.der="$c/ca.der" --from-file=ca.crt="$c/ca.crt"
+    apply_secret "$ns" layerx-human-web-tls --from-file=tls.crt="$c/human-web/cert.pem" --from-file=tls.key="$c/human-web/key.pem"
     apply_secret "$ns" layerx-testnet-control-tls --from-file=server.crt.der="$c/testnet-control/cert.der" \
         --from-file=server.key.der="$c/testnet-control/key.der" --from-file=ca.crt.der="$c/ca.der" --from-file=ca.crt="$c/ca.crt"
     apply_secret "$ns" layerx-testnet-backend-admin --from-file=token="$s/backend-admin.token"
@@ -1575,6 +1589,7 @@ PYREG
     render_manifest "$REPO_ROOT/platform/hosted/registry/journal-pvc.yaml" "$MANIFESTS_DIR/registry-journal.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/registry/deployment.yaml" "$MANIFESTS_DIR/registry.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/human/deployment.yaml" "$MANIFESTS_DIR/human.yaml"
+    render_manifest "$REPO_ROOT/platform/hosted/human/web-deployment.yaml" "$MANIFESTS_DIR/human-web.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/internal/deployment.yaml" "$MANIFESTS_DIR/internal.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/webhooks/deployment.yaml" "$MANIFESTS_DIR/developer.yaml"
     render_manifest "$REPO_ROOT/platform/relay_archive/deployment.yaml" "$MANIFESTS_DIR/relay-archive.yaml"
@@ -1624,6 +1639,7 @@ trusted_boundary_apply() {
 
 manifests_apply() {
     kube apply -f "$MANIFESTS_DIR/human.yaml" > /dev/null
+    kube apply -f "$MANIFESTS_DIR/human-web.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/testnet.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/gateway.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/registry.yaml" > /dev/null
@@ -2665,7 +2681,7 @@ readyz() {
 }
 
 wait_ready() {
-    local deadline=$((SECONDS + READY_TIMEOUT)) body developer_ready internal_ready human_ready human_status
+    local deadline=$((SECONDS + READY_TIMEOUT)) body developer_ready internal_ready human_ready human_status human_web_status
     while :; do
         body=$(readyz "$TESTNET_URL") || body=""
         human_status=$(curl --silent --show-error --max-time 10 --cacert "$CA_DIR/ca.crt" \
@@ -2674,6 +2690,12 @@ wait_ready() {
         if [ "$human_status" = 200 ] && jq -e '.ready == true and all(.components[]; . == "ready")' "$WORK_DIR/human-readyz.json" >/dev/null 2>&1; then
             human_ready=true
         fi
+        human_web_status=served-by-the-production-browser-harness
+        if [ -n "$HUMAN_WEB_PORT" ]; then
+            human_web_status=$(curl --silent --show-error --max-time 10 --cacert "$CA_DIR/ca.crt" \
+                --resolve "$HUMAN_WEB_HOST:$HUMAN_WEB_PORT:127.0.0.1" \
+                --output "$WORK_DIR/human-web-root.html" --write-out '%{http_code}' "$HUMAN_WEB_URL/" 2>/dev/null) || human_web_status=unreachable
+        fi
         developer_ready=$(kube -n "$DEVELOPER_NAMESPACE" get deployments -o json 2>/dev/null \
             | jq -r '[.items[] | select((.status.readyReplicas // 0) < .spec.replicas) | .metadata.name] | join(",")') \
             || developer_ready="namespace $DEVELOPER_NAMESPACE unreadable"
@@ -2681,7 +2703,7 @@ wait_ready() {
             | jq -r '[.items[] | select((.status.readyReplicas // 0) < .spec.replicas) | .metadata.name] | join(",")') \
             || internal_ready="namespace $INTERNAL_NAMESPACE unreadable"
         if [ -n "$body" ] && jq -e '.state == "ready" and all(.journeys[]; .ready == true)' <<<"$body" > /dev/null 2>&1 \
-            && jq -e 'all(.dependencies[]; .ready == true) and (.journeys | length) == 4' <<<"$body" > /dev/null 2>&1 && [ -z "$developer_ready" ] && [ -z "$internal_ready" ] && [ "$human_ready" = true ]; then
+            && jq -e 'all(.dependencies[]; .ready == true) and (.journeys | length) == 4' <<<"$body" > /dev/null 2>&1 && [ -z "$developer_ready" ] && [ -z "$internal_ready" ] && [ "$human_ready" = true ] && { [ -z "$HUMAN_WEB_PORT" ] || [ "$human_web_status" = 200 ]; }; then
             printf '%s' "$body" > "$WORK_DIR/readyz.json"
             return 0
         fi
@@ -2696,6 +2718,7 @@ wait_ready() {
                     printf 'beta-cluster: testnet /readyz unreachable at %s\n' "$TESTNET_URL"
                 fi
                 printf 'beta-cluster: Human /readyz HTTP status: %s\n' "$human_status"
+                printf 'beta-cluster: Human web application HTTP status at %s: %s\n' "$HUMAN_WEB_URL" "$human_web_status"
                 [ -z "$developer_ready" ] || printf 'beta-cluster: developer plane deployments not ready: %s\n' "$developer_ready"
                 [ -z "$internal_ready" ] || printf 'beta-cluster: internal workloads not ready: %s\n' "$internal_ready"
                 kube -n "$INTERNAL_NAMESPACE" get pods -o wide 2>/dev/null || true
@@ -2758,6 +2781,7 @@ env_write() {
         printf 'export LAYERX_PAXEER_SETTLEMENT_CONTRACT=%s\n' "$GUARANTOR_BOND"
         printf 'export LAYERX_PAXEER_CHECKPOINT_REGISTRY=%s\n' "$CHECKPOINT_REGISTRY"
         printf 'export LAYERX_PAXEER_DEPLOYMENT_RECORD=%s\n' "$WORK_DIR/paxeer/deployment.json"
+        printf 'export LAYERX_HUMAN_WEB_URL=%s\n' "$HUMAN_WEB_URL"
         printf 'export KUBECONFIG=%s\n' "$KUBECONFIG_FILE"
     } >> "$ENV_FILE"
     [ -s "$WORK_DIR/human-owner.env" ] || fail "human-owner.env missing after native owner production"
@@ -3025,6 +3049,7 @@ beta_cluster_up() {
     IDENTITY_URL="https://localhost:$IDENTITY_PORT"
     INTEROP_URL="https://localhost:$INTEROP_PORT"
     HUMAN_URL="https://localhost:19453"
+    HUMAN_WEB_URL="https://$HUMAN_WEB_HOST"
     wait_for_node_genesis
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ]; then
         apply_configmap "$TESTNET_NAMESPACE" layerx-node-settlement --from-file=settlement.env="$WORK_DIR/paxeer/settlement.env"
@@ -3083,6 +3108,10 @@ beta_cluster_up() {
     agentd_check
     mirror_ready
     relay_archive_apply
+    if [ -n "$HUMAN_WEB_PORT" ]; then
+        [ "$HUMAN_WEB_PORT" = 443 ] || fail "LAYERX_BETA_HUMAN_WEB_PORT must be 443 or empty because the browser origin $HUMAN_WEB_URL carries no port"
+        port_forward human-web "$TESTNET_NAMESPACE" layerx-human-web "$HUMAN_WEB_PORT" 443
+    fi
     module_registry_verify
     interop_gateway_apply
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then material_save; fi
@@ -3091,6 +3120,7 @@ beta_cluster_up() {
     wait_ready || fail "beta cluster did not reach journey readiness; see the missing owner inputs above"
     log "every journey ready: $(jq -r '[.journeys[] | .journey] | join(",")' "$WORK_DIR/readyz.json")"
     log "environment exported to $ENV_FILE"
+    log "human web application: add '127.0.0.1 $HUMAN_WEB_HOST' to /etc/hosts, trust the beta internal CA at $CA_DIR/ca.crt, then open $HUMAN_WEB_URL"
     if [ "$run_boundary_checks" = 1 ]; then boundary_checks; fi
 }
 

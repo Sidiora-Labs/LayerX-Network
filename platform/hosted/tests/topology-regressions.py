@@ -69,21 +69,27 @@ HUMAN_EDGES = (
     'Deployment layerx-internal/approvals -> layerx-human.layerx-testnet.svc:9443 [env LAYERX_EVENTS_UPSTREAM_URL]',
 )
 
+HUMAN_WEB_EDGES = (
+    'Deployment layerx-testnet/layerx-human-web -> layerx-human.layerx-testnet.svc:9443 [env LAYERX_HUMAN_SERVICE_URL]',
+    'Deployment layerx-testnet/layerx-human-web -> layerx-human.layerx-testnet.svc:9443 [env LAYERX_EXPLORER_API_ORIGIN]',
+)
+
 SEPARATELY_OPERATED_EDGES = (
     'CronJob layerx-testnet/layerx-testnet-status-publisher -> status-publisher.layerx-status.svc.cluster.local:443 [env LAYERX_STATUS_PUBLISH_URL]',
 )
 
 BASELINE_EDGES = RESOLVED_EDGES + PRODUCER_EDGES
 
-COMPLETE_EDGES = BASELINE_EDGES + HUMAN_EDGES
+COMPLETE_EDGES = BASELINE_EDGES + HUMAN_EDGES + HUMAN_WEB_EDGES
 
 
 def load(parser):
     topology = module['Topology']()
     for name in paths:
-        path = (ROOT / 'platform/hosted') / name / 'deployment.yaml'
+        directory, _, filename = name.partition(':')
+        path = (ROOT / 'platform/hosted') / directory / (filename or 'deployment.yaml')
         for document in module[parser](path.read_text()):
-            topology.add(document, str(path), 'layerx-developer' if name == 'webhooks' else 'default')
+            topology.add(document, str(path), 'layerx-developer' if directory == 'webhooks' else 'default')
     return topology
 
 def failures(topology):
@@ -105,6 +111,7 @@ def named(rows, status, expected, description):
 def producer_edges():
     original = paths[:]
     paths.append('human')
+    paths.append('human:web-deployment.yaml')
     for parser in ('load_pyyaml', 'load_builtin'):
         topology = load(parser)
         assert not failures(topology), failures(topology)
@@ -196,6 +203,7 @@ assert all(workload['ns'] == 'layerx-developer' for workload in base.workloads i
 print('PASS explicit namespace precedence and kubectl apply fallback namespace')
 
 paths.append('human')
+paths.append('human:web-deployment.yaml')
 complete = load('load_pyyaml')
 assert not failures(complete), failures(complete)
 assert module['check'](complete) == module['check'](load('load_builtin'))
