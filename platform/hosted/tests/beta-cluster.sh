@@ -57,6 +57,35 @@
 #                                       variable as a missing owner input
 #   LAYERX_BETA_KEEP_TOOLS              set to 1 to keep the pinned kind/kubectl downloads on teardown
 #
+# Mirror publisher inputs (required: the bring-up publishes every LayerX batch archive to an EVM chain and
+# to Solana, and refuses to start the mirror step while any of them is unset):
+#   LAYERX_BETA_MIRROR_ETHEREUM_SIGNER_PUBLIC_KEY   compressed secp256k1 key of the mirror publisher; its
+#                                       address is the LayerXMirrorArchive constructor argument
+#   LAYERX_BETA_MIRROR_ETHEREUM_SIGNER_KEY_HANDLE   handle that key has in the owner signer
+#   LAYERX_BETA_MIRROR_ETHEREUM_SIGNER_SOCKET       signer socket file name inside LAYERX_BETA_MIRROR_SIGNER_HOST_DIR
+#   LAYERX_BETA_MIRROR_SOLANA_SIGNER_KEY_HANDLE     handle of the Ed25519 publisher key in the owner signer
+#   LAYERX_BETA_MIRROR_SOLANA_SIGNER_SOCKET         its signer socket file name in the same directory
+#   LAYERX_BETA_MIRROR_SIGNER_HOST_DIR  cluster-node directory holding the signer sockets of
+#                                       interop/deploy/mirror/signer-protocol.md
+#   LAYERX_BETA_MIRROR_NODE_LNI_HOST_DIR cluster-node directory holding the node LNI socket at
+#                                       node/layerxd.lni.sock
+#   LAYERX_BETA_MIRROR_SOLANA_RPC_URL   two independent Solana JSON-RPC backends the publisher reaches a
+#   LAYERX_BETA_MIRROR_SOLANA_RPC_URL_SECONDARY      strict majority across
+#   LAYERX_BETA_MIRROR_SOLANA_RPC_CA_FILE            PEM trust anchor for both Solana endpoints
+#   LAYERX_BETA_MIRROR_SOLANA_RPC_TOKEN_FILE         bearer token file of each Solana endpoint
+#   LAYERX_BETA_MIRROR_SOLANA_RPC_SECONDARY_TOKEN_FILE
+#   LAYERX_BETA_MIRROR_SOLANA_KEYPAIR_FILE           64-byte Solana keypair file of the publisher
+#   LAYERX_BETA_MIRROR_SOLANA_DEPLOYMENT_FILE        deployment record of the solana-mirror program carrying
+#                                       every field interop/deploy/mirror/solana-deployment.json requires
+#   LAYERX_BETA_MIRROR_ETHEREUM_RPC_URL when set, the mirror publishes to an owner EVM chain instead of the
+#                                       in-cluster Paxeer chain and additionally requires
+#                                       LAYERX_BETA_MIRROR_ETHEREUM_RPC_URL_SECONDARY,
+#                                       LAYERX_BETA_MIRROR_ETHEREUM_RPC_CA_FILE,
+#                                       LAYERX_BETA_MIRROR_ETHEREUM_RPC_TOKEN_FILE,
+#                                       LAYERX_BETA_MIRROR_ETHEREUM_RPC_SECONDARY_TOKEN_FILE,
+#                                       LAYERX_BETA_MIRROR_ETHEREUM_CHAIN_ID and
+#                                       LAYERX_BETA_MIRROR_ETHEREUM_DEPLOYER_KEY_FILE
+#
 # The trusted-boundary services (node with core boundary, receipt authority and agent boundary; identity;
 # Paxeer chain with its boundary) are built from the repository, applied before the testnet, gateway,
 # registry and developer manifests, and bound together in this order: the Paxeer chain starts with the
@@ -1893,6 +1922,157 @@ PY
     node_exec sh -ec 'for identity in 1 2; do install -m 0440 /var/lib/layerx/node/genesis/genesis.registration "/var/lib/layerx/guarantor-$identity/identity/genesis.registration"; done'
 }
 
+mirror_publish() {
+    local dir="$WORK_DIR/mirror" ns="$TESTNET_NAMESPACE" variable field
+    local ethereum_chain_id ethereum_primary ethereum_secondary publisher_address
+    local solana_public solana_program solana_program_data solana_loader solana_code_hash solana_genesis
+    local -a missing=()
+    for variable in LAYERX_BETA_MIRROR_ETHEREUM_SIGNER_SOCKET LAYERX_BETA_MIRROR_ETHEREUM_SIGNER_KEY_HANDLE \
+        LAYERX_BETA_MIRROR_ETHEREUM_SIGNER_PUBLIC_KEY LAYERX_BETA_MIRROR_SIGNER_HOST_DIR \
+        LAYERX_BETA_MIRROR_NODE_LNI_HOST_DIR LAYERX_BETA_MIRROR_SOLANA_RPC_URL \
+        LAYERX_BETA_MIRROR_SOLANA_RPC_URL_SECONDARY LAYERX_BETA_MIRROR_SOLANA_RPC_CA_FILE \
+        LAYERX_BETA_MIRROR_SOLANA_RPC_TOKEN_FILE LAYERX_BETA_MIRROR_SOLANA_RPC_SECONDARY_TOKEN_FILE \
+        LAYERX_BETA_MIRROR_SOLANA_KEYPAIR_FILE LAYERX_BETA_MIRROR_SOLANA_DEPLOYMENT_FILE \
+        LAYERX_BETA_MIRROR_SOLANA_SIGNER_SOCKET LAYERX_BETA_MIRROR_SOLANA_SIGNER_KEY_HANDLE; do
+        [ -n "${!variable:-}" ] || missing+=("$variable")
+    done
+    if [ -n "${LAYERX_BETA_MIRROR_ETHEREUM_RPC_URL:-}" ]; then
+        for variable in LAYERX_BETA_MIRROR_ETHEREUM_RPC_URL_SECONDARY LAYERX_BETA_MIRROR_ETHEREUM_RPC_CA_FILE \
+            LAYERX_BETA_MIRROR_ETHEREUM_RPC_TOKEN_FILE LAYERX_BETA_MIRROR_ETHEREUM_RPC_SECONDARY_TOKEN_FILE \
+            LAYERX_BETA_MIRROR_ETHEREUM_CHAIN_ID LAYERX_BETA_MIRROR_ETHEREUM_DEPLOYER_KEY_FILE; do
+            [ -n "${!variable:-}" ] || missing+=("$variable")
+        done
+    fi
+    [ "${#missing[@]}" -eq 0 ] \
+        || fail "the mirror publisher needs these owner inputs before the beta cluster can publish LayerX archives: ${missing[*]}"
+    for variable in LAYERX_BETA_MIRROR_SOLANA_RPC_CA_FILE LAYERX_BETA_MIRROR_SOLANA_RPC_TOKEN_FILE \
+        LAYERX_BETA_MIRROR_SOLANA_RPC_SECONDARY_TOKEN_FILE LAYERX_BETA_MIRROR_SOLANA_KEYPAIR_FILE \
+        LAYERX_BETA_MIRROR_SOLANA_DEPLOYMENT_FILE; do
+        [ -r "${!variable}" ] || fail "$variable=${!variable} is not readable"
+    done
+    mkdir -p "$dir/secrets"
+    chmod 0700 "$dir" "$dir/secrets"
+
+    for field in genesis_hash program_id publisher_ed25519_public_key program_data_account \
+        upgradeable_loader_id program_elf_sha256 deployment_signature rooted_slot; do
+        jq -er --arg field "$field" 'has($field) and (.[$field] | tostring | length > 0)' \
+            "$LAYERX_BETA_MIRROR_SOLANA_DEPLOYMENT_FILE" > /dev/null \
+            || fail "LAYERX_BETA_MIRROR_SOLANA_DEPLOYMENT_FILE records no $field; interop/deploy/mirror/solana-deployment.json lists every required post-deploy record"
+    done
+    solana_genesis=$(jq -r '.genesis_hash' "$LAYERX_BETA_MIRROR_SOLANA_DEPLOYMENT_FILE")
+    solana_program=$(jq -r '.program_id' "$LAYERX_BETA_MIRROR_SOLANA_DEPLOYMENT_FILE")
+    solana_program_data=$(jq -r '.program_data_account' "$LAYERX_BETA_MIRROR_SOLANA_DEPLOYMENT_FILE")
+    solana_loader=$(jq -r '.upgradeable_loader_id' "$LAYERX_BETA_MIRROR_SOLANA_DEPLOYMENT_FILE")
+    solana_code_hash=$(jq -r '.program_elf_sha256' "$LAYERX_BETA_MIRROR_SOLANA_DEPLOYMENT_FILE")
+    solana_public=$(python3 "$REPO_ROOT/platform/hosted/tests/mirror-identity.py" solana-public-key "$LAYERX_BETA_MIRROR_SOLANA_KEYPAIR_FILE") \
+        || fail "LAYERX_BETA_MIRROR_SOLANA_KEYPAIR_FILE is not a 64-byte Solana keypair"
+    [ "$solana_public" = "$(jq -r '.publisher_ed25519_public_key' "$LAYERX_BETA_MIRROR_SOLANA_DEPLOYMENT_FILE")" ] \
+        || fail "the Solana deployment record was produced for another publisher than LAYERX_BETA_MIRROR_SOLANA_KEYPAIR_FILE"
+
+    [[ ${LAYERX_BETA_MIRROR_ETHEREUM_SIGNER_PUBLIC_KEY#0x} =~ ^0[23][0-9a-fA-F]{64}$ ]] \
+        || fail "LAYERX_BETA_MIRROR_ETHEREUM_SIGNER_PUBLIC_KEY must be a compressed secp256k1 public key"
+    publisher_address=$(PATH="$FOUNDRY_BIN:$PATH" python3 "$REPO_ROOT/platform/hosted/paxeer/settlement-domain.py" \
+        signer "0x${LAYERX_BETA_MIRROR_ETHEREUM_SIGNER_PUBLIC_KEY#0x}") \
+        || fail "the mirror publisher address could not be derived from LAYERX_BETA_MIRROR_ETHEREUM_SIGNER_PUBLIC_KEY"
+
+    if [ -n "${LAYERX_BETA_MIRROR_ETHEREUM_RPC_URL:-}" ]; then
+        ethereum_chain_id=$LAYERX_BETA_MIRROR_ETHEREUM_CHAIN_ID
+        ethereum_primary=$LAYERX_BETA_MIRROR_ETHEREUM_RPC_URL
+        ethereum_secondary=$LAYERX_BETA_MIRROR_ETHEREUM_RPC_URL_SECONDARY
+        cp "$LAYERX_BETA_MIRROR_ETHEREUM_RPC_CA_FILE" "$dir/ethereum-ca.pem"
+        (umask 077; cp "$LAYERX_BETA_MIRROR_ETHEREUM_RPC_TOKEN_FILE" "$dir/secrets/ethereum-a.token")
+        (umask 077; cp "$LAYERX_BETA_MIRROR_ETHEREUM_RPC_SECONDARY_TOKEN_FILE" "$dir/secrets/ethereum-b.token")
+        log "mirror: publishing to the owner Ethereum chain $ethereum_chain_id at $ethereum_primary"
+        LAYERX_MIRROR_DEPLOYER_KEY_FILE=$LAYERX_BETA_MIRROR_ETHEREUM_DEPLOYER_KEY_FILE
+    else
+        [ "${LAYERX_BETA_FORBIDDEN_CHAIN_ID:-}" != "$PAXEER_CHAIN_ID" ] \
+            || fail "contract transactions on chain $PAXEER_CHAIN_ID are forbidden by LAYERX_BETA_FORBIDDEN_CHAIN_ID"
+        ethereum_chain_id=$PAXEER_CHAIN_ID
+        ethereum_primary="https://paxeer-boundary.$ns.svc.cluster.local:9443"
+        ethereum_secondary="https://paxeer-observer-boundary.$ns.svc.cluster.local:9443"
+        cp "$CA_DIR/ca.pem" "$dir/ethereum-ca.pem"
+        write_token "$dir/secrets/ethereum-a.token"
+        write_token "$dir/secrets/ethereum-b.token"
+        log "mirror: publishing to the in-cluster Paxeer EVM chain $PAXEER_CHAIN_ID"
+        LAYERX_MIRROR_DEPLOYER_KEY_FILE=$SECRETS_DIR/paxeer-deployer.key
+    fi
+    openssl x509 -in "$dir/ethereum-ca.pem" -outform DER -out "$dir/secrets/ethereum.ca.der"
+    openssl x509 -in "$LAYERX_BETA_MIRROR_SOLANA_RPC_CA_FILE" -outform DER -out "$dir/secrets/solana.ca.der"
+    (umask 077; cp "$LAYERX_BETA_MIRROR_SOLANA_RPC_TOKEN_FILE" "$dir/secrets/solana-a.token")
+    (umask 077; cp "$LAYERX_BETA_MIRROR_SOLANA_RPC_SECONDARY_TOKEN_FILE" "$dir/secrets/solana-b.token")
+
+    if ! LAYERX_MIRROR_RPC_URL="${LAYERX_BETA_MIRROR_ETHEREUM_RPC_URL:-$PAXEER_URL}" \
+        LAYERX_MIRROR_RPC_CA_PEM="$dir/ethereum-ca.pem" LAYERX_MIRROR_CHAIN_ID="$ethereum_chain_id" \
+        LAYERX_MIRROR_DEPLOYER_KEY_FILE="$LAYERX_MIRROR_DEPLOYER_KEY_FILE" \
+        LAYERX_MIRROR_PUBLISHER_ADDRESS="$publisher_address" \
+        LAYERX_MIRROR_DEPLOYMENT_RECORD="$dir/ethereum-deployment.json" \
+        LAYERX_MIRROR_FOUNDRY_BIN="$FOUNDRY_BIN" \
+        bash "$REPO_ROOT/interop/deploy/mirror/deploy-ethereum-mirror.sh" > "$LOG_DIR/mirror-deploy.log" 2>&1; then
+        tail -n 40 "$LOG_DIR/mirror-deploy.log" >&2
+        fail "the Ethereum mirror archive contract could not be deployed (log $LOG_DIR/mirror-deploy.log)"
+    fi
+
+    python3 "$REPO_ROOT/interop/deploy/mirror/render-config.py" \
+        --output "$dir/config.json" \
+        --state-directory /var/lib/layerx-mirror \
+        --first-batch-number 1 \
+        --status-listen 127.0.0.1:9091 \
+        --lni-socket /run/layerx/node/layerxd.lni.sock \
+        --network-id "$NODE_NETWORK_ID" \
+        --protocol-version 3 \
+        --ethereum-endpoint "$ethereum_primary,ethereum-a,/run/secrets/ethereum.ca.der,/run/secrets/ethereum-a.token" \
+        --ethereum-endpoint "$ethereum_secondary,ethereum-b,/run/secrets/ethereum.ca.der,/run/secrets/ethereum-b.token" \
+        --ethereum-chain-id "$ethereum_chain_id" \
+        --ethereum-genesis-hash "$(jq -r '.genesis_hash' "$dir/ethereum-deployment.json")" \
+        --ethereum-archive-contract "$(jq -r '.contract_address' "$dir/ethereum-deployment.json")" \
+        --ethereum-archive-code-hash "$(jq -r '.runtime_code_keccak256' "$dir/ethereum-deployment.json")" \
+        --ethereum-signer-key-handle "$LAYERX_BETA_MIRROR_ETHEREUM_SIGNER_KEY_HANDLE" \
+        --ethereum-signer-public-key "$LAYERX_BETA_MIRROR_ETHEREUM_SIGNER_PUBLIC_KEY" \
+        --ethereum-signer-socket "/run/signers/$(basename "$LAYERX_BETA_MIRROR_ETHEREUM_SIGNER_SOCKET")" \
+        --solana-endpoint "$LAYERX_BETA_MIRROR_SOLANA_RPC_URL,solana-a,/run/secrets/solana.ca.der,/run/secrets/solana-a.token" \
+        --solana-endpoint "$LAYERX_BETA_MIRROR_SOLANA_RPC_URL_SECONDARY,solana-b,/run/secrets/solana.ca.der,/run/secrets/solana-b.token" \
+        --solana-genesis-hash "$solana_genesis" \
+        --solana-archive-program "$solana_program" \
+        --solana-upgradeable-loader "$solana_loader" \
+        --solana-program-data-account "$solana_program_data" \
+        --solana-program-code-hash "$solana_code_hash" \
+        --solana-signer-key-handle "$LAYERX_BETA_MIRROR_SOLANA_SIGNER_KEY_HANDLE" \
+        --solana-signer-public-key "$solana_public" \
+        --solana-signer-socket "/run/signers/$(basename "$LAYERX_BETA_MIRROR_SOLANA_SIGNER_SOCKET")" \
+        || fail "the mirror publisher configuration could not be rendered from the deployed identities"
+
+    apply_secret "$ns" layerx-mirror-config --from-file=config.json="$dir/config.json"
+    apply_secret "$ns" layerx-mirror-rpc-credentials \
+        --from-file=ethereum.ca.der="$dir/secrets/ethereum.ca.der" \
+        --from-file=ethereum-a.token="$dir/secrets/ethereum-a.token" \
+        --from-file=ethereum-b.token="$dir/secrets/ethereum-b.token" \
+        --from-file=solana.ca.der="$dir/secrets/solana.ca.der" \
+        --from-file=solana-a.token="$dir/secrets/solana-a.token" \
+        --from-file=solana-b.token="$dir/secrets/solana-b.token"
+
+    render_manifest "$REPO_ROOT/interop/deploy/mirror/kubernetes.yaml" "$MANIFESTS_DIR/mirror.yaml"
+    python3 - "$MANIFESTS_DIR/mirror.yaml" "$LAYERX_BETA_MIRROR_NODE_LNI_HOST_DIR" \
+        "$LAYERX_BETA_MIRROR_SIGNER_HOST_DIR" <<'PYMIRROR'
+import sys
+import yaml
+path, lni, signers = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path) as source:
+    documents = list(yaml.safe_load_all(source))
+deployment = next(doc for doc in documents if doc['kind'] == 'Deployment')
+volumes = deployment['spec']['template']['spec']['volumes']
+for volume in volumes:
+    if volume['name'] == 'lni':
+        volume['hostPath']['path'] = lni
+    elif volume['name'] == 'signer-sockets':
+        volume['hostPath']['path'] = signers
+with open(path, 'w') as output:
+    yaml.safe_dump_all(documents, output, sort_keys=False)
+PYMIRROR
+    kube apply -f "$MANIFESTS_DIR/mirror.yaml" > /dev/null
+    wait_for_pod_ready "$ns" app=layerx-mirror-publisher "$READY_TIMEOUT"
+    log "mirror publisher ready: Ethereum $(jq -r '.contract_address' "$dir/ethereum-deployment.json") on chain $ethereum_chain_id, Solana program $solana_program"
+}
+
 wait_for_pod_ready() {
     # wait_for_pod_ready NAMESPACE SELECTOR SECONDS
     local namespace=$1 selector=$2 seconds=$3
@@ -2418,6 +2598,7 @@ beta_cluster_up() {
     port_forward agentd "$TESTNET_NAMESPACE" layerx-agentd 19456 9443
     wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-node 600
     agentd_check
+    mirror_publish
     module_registry_verify
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then material_save; fi
     env_write
@@ -2524,7 +2705,7 @@ main() {
         test-genesis-metadata) genesis_metadata_test ;;
         down) beta_cluster_down ;;
         render) beta_cluster_render ;;
-        *) sed -n '2,55p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 64 ;;
+        *) sed -n '2,87p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 64 ;;
     esac
 }
 

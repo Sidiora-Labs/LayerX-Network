@@ -18,6 +18,8 @@ const ETHEREUM_TX_TYPE: u8 = 2;
 const MAX_CALL_DATA_BYTES: usize = 128 * 1024;
 const MIN_CHUNK_BYTES: usize = 1024;
 const MAX_CHUNK_BYTES: usize = 24 * 1024;
+const MAX_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_ARCHIVE_CHUNKS: u32 = 65_536;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EthereumProductionConfig {
@@ -118,8 +120,7 @@ impl EthereumMirrorReader {
             return Ok(None);
         }
         let (length, chunks, digest, finalized) = decode_manifest(&metadata)?;
-        if !finalized || length == 0 || length > 64 * 1024 * 1024 || chunks == 0 || chunks > 65_536
-        {
+        if !manifest_within_bounds(length, chunks, finalized) {
             return Err(EthereumError::Retrieval);
         }
         let mut archive = Vec::with_capacity(length);
@@ -364,7 +365,7 @@ impl EthereumArchiveClient {
             return Ok(None);
         }
         let (length, chunks, digest, finalized) = decode_manifest(&metadata)?;
-        if !finalized || length == 0 || length > 64 * 1024 * 1024 || chunks == 0 {
+        if !manifest_within_bounds(length, chunks, finalized) {
             return Err(EthereumError::Retrieval);
         }
         let mut archive = Vec::with_capacity(length);
@@ -989,6 +990,18 @@ fn decode_manifest(bytes: &[u8]) -> Result<(usize, u32, [u8; 32], bool), Ethereu
     ))
 }
 
+/// Shared manifest acceptance bound for every retrieval path. It mirrors the
+/// `MAX_ARCHIVE_BYTES` and `MAX_CHUNKS` limits the contract itself enforces, so
+/// a manifest claiming more chunks than the contract can ever hold is refused
+/// before a single chunk call is issued.
+fn manifest_within_bounds(length: usize, chunks: u32, finalized: bool) -> bool {
+    finalized
+        && length != 0
+        && length <= MAX_ARCHIVE_BYTES
+        && chunks != 0
+        && chunks <= MAX_ARCHIVE_CHUNKS
+}
+
 fn decode_dynamic_bytes(bytes: &[u8], maximum: usize) -> Result<Vec<u8>, EthereumError> {
     if bytes.len() < 64 || word_u64(&bytes[..32])? != 32 {
         return Err(EthereumError::Retrieval);
@@ -1156,4 +1169,55 @@ fn hex(bytes: &[u8]) -> String {
         output.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_manifest, manifest_within_bounds, MAX_ARCHIVE_BYTES, MAX_ARCHIVE_CHUNKS};
+
+    fn manifest(length: u64, chunks: u64, finalized: bool) -> Vec<u8> {
+        let mut encoded = vec![0_u8; 128];
+        encoded[24..32].copy_from_slice(&length.to_be_bytes());
+        encoded[56..64].copy_from_slice(&chunks.to_be_bytes());
+        encoded[64..96].copy_from_slice(&[0x11; 32]);
+        encoded[127] = u8::from(finalized);
+        encoded
+    }
+
+    fn maximum_bytes() -> u64 {
+        u64::try_from(MAX_ARCHIVE_BYTES).unwrap_or_else(|error| panic!("archive bound: {error}"))
+    }
+
+    fn decoded(length: u64, chunks: u64, finalized: bool) -> (usize, u32, [u8; 32], bool) {
+        decode_manifest(&manifest(length, chunks, finalized))
+            .unwrap_or_else(|error| panic!("manifest decoding: {error:?}"))
+    }
+
+    #[test]
+    fn a_manifest_claiming_more_chunks_than_the_contract_holds_is_refused() {
+        let (length, chunks, _, finalized) =
+            decoded(maximum_bytes(), u64::from(MAX_ARCHIVE_CHUNKS) + 1, true);
+        assert_eq!(chunks, MAX_ARCHIVE_CHUNKS + 1);
+        assert!(!manifest_within_bounds(length, chunks, finalized));
+    }
+
+    #[test]
+    fn the_chunk_count_bound_accepts_exactly_the_contract_maximum() {
+        let (length, chunks, _, finalized) =
+            decoded(maximum_bytes(), u64::from(MAX_ARCHIVE_CHUNKS), true);
+        assert_eq!(chunks, MAX_ARCHIVE_CHUNKS);
+        assert!(manifest_within_bounds(length, chunks, finalized));
+    }
+
+    #[test]
+    fn a_zero_chunk_unfinalized_or_oversized_manifest_is_refused() {
+        let (length, chunks, _, finalized) = decoded(1024, 0, true);
+        assert!(!manifest_within_bounds(length, chunks, finalized));
+        let (length, chunks, _, finalized) = decoded(1024, 1, false);
+        assert!(!manifest_within_bounds(length, chunks, finalized));
+        let (length, chunks, _, finalized) = decoded(maximum_bytes() + 1, 1, true);
+        assert!(!manifest_within_bounds(length, chunks, finalized));
+        let (length, chunks, _, finalized) = decoded(0, 1, true);
+        assert!(!manifest_within_bounds(length, chunks, finalized));
+    }
 }
