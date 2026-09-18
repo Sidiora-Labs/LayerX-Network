@@ -36,17 +36,21 @@ contract CheckpointChallengeManager is Governed, ReentrancyLock, LayerXComponent
     error ChallengeWindowClosed();
     error ChallengePending();
     error TransferFailed();
+    error NoBondOwed();
 
     CheckpointRegistry public immutable registry;
     GuarantorBond public immutable guarantorBond;
     uint64 public immutable challengePeriod;
     uint128 public immutable minimumChallengeBond;
     mapping(bytes32 => Challenge) public challenge;
+    mapping(address => uint256) public owedBond;
 
     event ChallengeRaised(
         bytes32 indexed checkpointHash, address indexed challenger, Kind kind, bytes32 evidenceHash, uint256 bond
     );
     event ChallengeResolved(bytes32 indexed checkpointHash, bool upheld, uint256 guarantorsSlashed);
+    event BondOwed(bytes32 indexed checkpointHash, address indexed recipient, uint256 amount);
+    event BondWithdrawn(address indexed recipient, uint256 amount);
 
     constructor(
         CheckpointRegistry checkpointRegistry,
@@ -115,8 +119,17 @@ contract CheckpointChallengeManager is Governed, ReentrancyLock, LayerXComponent
         address recipient = upheld ? item.challenger : governance;
         uint256 amount = item.bond;
         item.bond = 0;
-        SafeCall.CallResult memory result = SafeCall.sendValue(recipient, amount, 100_000);
-        if (!result.success) revert TransferFailed();
+        owedBond[recipient] += amount;
+        emit BondOwed(checkpointHash, recipient, amount);
         emit ChallengeResolved(checkpointHash, upheld, upheld ? guarantors.length : 0);
+    }
+
+    function withdrawBond() external nonReentrant {
+        uint256 amount = owedBond[msg.sender];
+        if (amount == 0) revert NoBondOwed();
+        owedBond[msg.sender] = 0;
+        SafeCall.CallResult memory result = SafeCall.sendValue(msg.sender, amount, 100_000);
+        if (!result.success) revert TransferFailed();
+        emit BondWithdrawn(msg.sender, amount);
     }
 }
