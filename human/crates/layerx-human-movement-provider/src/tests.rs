@@ -1,15 +1,18 @@
 use std::error::Error as StdError;
 use std::fs::{self, DirBuilder};
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use k256::ecdsa::SigningKey;
+use layerx_client::lni::transport::{Limits, MutualTlsConfig};
+use layerx_human_service::custody::RemoteKmsProvider;
 use layerx_human_service::journeys::DepositRuntime;
 use layerx_human_service::server::movement_provider::{
     MovementProviderCodec, MovementProviderConfig, MovementProviderRequest as Request,
@@ -19,11 +22,15 @@ use layerx_human_service::server::movement_provider::{
 use layerx_human_service::store::{AgentTenantId, PrincipalId};
 use layerx_human_service::trace::TraceId;
 use layerx_paxeer_client::{
-    ChainSignal, CheckpointProof, DepositProofConfig, EndpointConfig, EndpointTransport,
+    raw_call, ChainSignal, CheckpointProof, DepositProofConfig, EndpointConfig, EndpointTransport,
     FinalityTracker, ProofFault, TrackerConfig, TransactionHash, WithdrawalAttestation,
     WithdrawalBoundary, WithdrawalConfig,
 };
 use layerx_types::intent::EvmAddress;
+use rustls::{
+    pki_types::{CertificateDer, PrivateKeyDer},
+    RootCertStore,
+};
 use sha2::{Digest, Sha256};
 use sha3::Keccak256;
 
@@ -74,7 +81,7 @@ fn listener_config(dir: &Directory) -> ListenerConfig {
         protocol: 2,
     }
 }
-fn config(dir: &Directory) -> Result<Config> {
+fn unreachable_endpoint() -> Result<EndpointConfig> {
     let closed = TcpListener::bind("127.0.0.1:0")?;
     let endpoint = EndpointConfig {
         url: format!("http://{}", closed.local_addr()?),
@@ -83,6 +90,16 @@ fn config(dir: &Directory) -> Result<Config> {
         expected_chain_id: 31337,
     };
     drop(closed);
+    Ok(endpoint)
+}
+fn config(dir: &Directory) -> Result<Config> {
+    config_for(dir, unreachable_endpoint()?, None)
+}
+fn config_for(
+    dir: &Directory,
+    endpoint: EndpointConfig,
+    executor: Option<Arc<RemoteKmsProvider>>,
+) -> Result<Config> {
     let evidence_root = dir.0.join("evidence");
     DirBuilder::new().mode(0o700).create(&evidence_root)?;
     Ok(Config {
@@ -113,7 +130,7 @@ fn config(dir: &Directory) -> Result<Config> {
         checkpoint_registry: EvmAddress::new([12; 20]),
         claims_contract: EvmAddress::new([7; 20]),
         exit_contract: EvmAddress::new([13; 20]),
-        executor: None,
+        executor,
         checkpoint_interval_seconds: 10,
         paxeer_block_seconds: 1,
         reminder_interval_seconds: 60,
@@ -847,5 +864,275 @@ fn probe_accepts_only_the_provider_ready_answer() -> Result {
         crate::probe::Outcome::NotReady
     );
     assert!(crate::probe::interpret(2, b"not a movement frame").is_err());
+    Ok(())
+}
+
+fn anvil_binary() -> PathBuf {
+    let foundry = PathBuf::from("/root/.foundry/bin/anvil");
+    if foundry.exists() {
+        foundry
+    } else {
+        PathBuf::from("anvil")
+    }
+}
+
+/// A real local Paxeer-compatible JSON-RPC origin, started for the readiness
+/// tests and stopped again so readiness can be observed on both sides of the
+/// origin going away.
+struct Anvil {
+    child: Child,
+    endpoint: EndpointConfig,
+}
+
+impl Anvil {
+    fn launch() -> Result<Self> {
+        for _ in 0..8 {
+            let reserved = TcpListener::bind("127.0.0.1:0")?;
+            let port = reserved.local_addr()?.port();
+            drop(reserved);
+            let child = Command::new(anvil_binary())
+                .arg("--port")
+                .arg(port.to_string())
+                .arg("--silent")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?;
+            let mut anvil = Self {
+                child,
+                endpoint: EndpointConfig {
+                    url: format!("http://127.0.0.1:{port}"),
+                    request_timeout: Duration::from_secs(2),
+                    transport: EndpointTransport::LocalEmulator,
+                    expected_chain_id: 31337,
+                },
+            };
+            if anvil.answers() {
+                return Ok(anvil);
+            }
+            anvil.halt();
+        }
+        Err("no local paxeer emulator became reachable".into())
+    }
+
+    fn answers(&self) -> bool {
+        for _ in 0..100 {
+            if raw_call(&self.endpoint, "eth_chainId", &[]).is_ok() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
+    fn halt(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        for _ in 0..100 {
+            if raw_call(&self.endpoint, "eth_chainId", &[]).is_err() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+impl Drop for Anvil {
+    fn drop(&mut self) {
+        self.halt();
+    }
+}
+
+fn openssl(root: &Path, arguments: &[&str]) -> Result<()> {
+    let result = Command::new("openssl")
+        .args(arguments)
+        .current_dir(root)
+        .output()?;
+    if !result.status.success() {
+        return Err(format!(
+            "openssl failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// Builds the same `RemoteKmsProvider` the movement mode builds from its
+/// environment, from freshly minted mutual-TLS material and a real local
+/// endpoint address.
+fn execution_authority(dir: &Directory) -> Result<Arc<RemoteKmsProvider>> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let root = dir.0.join("kms");
+    DirBuilder::new().mode(0o700).create(&root)?;
+    openssl(
+        &root,
+        &[
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            "ca.key",
+            "-out",
+            "ca.pem",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=movement provider test CA",
+            "-addext",
+            "basicConstraints=critical,CA:TRUE",
+        ],
+    )?;
+    openssl(
+        &root,
+        &[
+            "req",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            "client.key",
+            "-out",
+            "client.csr",
+            "-subj",
+            "/CN=movement-provider",
+        ],
+    )?;
+    fs::write(root.join("extensions"), "extendedKeyUsage=clientAuth\n")?;
+    openssl(
+        &root,
+        &[
+            "x509",
+            "-req",
+            "-in",
+            "client.csr",
+            "-CA",
+            "ca.pem",
+            "-CAkey",
+            "ca.key",
+            "-CAcreateserial",
+            "-out",
+            "client.pem",
+            "-days",
+            "1",
+            "-extfile",
+            "extensions",
+        ],
+    )?;
+    openssl(
+        &root,
+        &[
+            "x509",
+            "-in",
+            "client.pem",
+            "-outform",
+            "DER",
+            "-out",
+            "client.der",
+        ],
+    )?;
+    openssl(
+        &root,
+        &[
+            "pkcs8",
+            "-topk8",
+            "-nocrypt",
+            "-in",
+            "client.key",
+            "-outform",
+            "DER",
+            "-out",
+            "client-key.der",
+        ],
+    )?;
+    openssl(
+        &root,
+        &["x509", "-in", "ca.pem", "-outform", "DER", "-out", "ca.der"],
+    )?;
+    let mut roots = RootCertStore::empty();
+    checked(roots.add(CertificateDer::from(fs::read(root.join("ca.der"))?)))?;
+    let certificate = CertificateDer::from(fs::read(root.join("client.der"))?);
+    let key = checked(PrivateKeyDer::try_from(fs::read(
+        root.join("client-key.der"),
+    )?))?;
+    let tls = checked(MutualTlsConfig::new(roots, vec![certificate], key))?;
+    let reserved = TcpListener::bind("127.0.0.1:0")?;
+    let address: SocketAddr = reserved.local_addr()?;
+    drop(reserved);
+    Ok(Arc::new(checked(RemoteKmsProvider::new(
+        "movement-provider-test-kms",
+        address,
+        "localhost",
+        tls,
+        Limits {
+            maximum_frame_bytes: 2_097_152,
+            maximum_connections: 1,
+            maximum_streams: 1,
+            maximum_queued_bytes: 2_097_152,
+            deadline: Duration::from_secs(2),
+        },
+    ))?))
+}
+
+fn readiness_listener(dir: &Directory) -> ListenerConfig {
+    let mut policy = listener_config(dir);
+    policy.deadline = Duration::from_secs(10);
+    policy
+}
+
+#[test]
+fn readiness_is_ready_while_the_real_paxeer_origin_and_execution_authority_answer() -> Result {
+    let dir = Directory::new()?;
+    let paxeer = Anvil::launch()?;
+    let config = config_for(
+        &dir,
+        paxeer.endpoint.clone(),
+        Some(execution_authority(&dir)?),
+    )?;
+    let mut service = EvidenceService::new(&config, Journal::open(&config.state_root, 2)?)?;
+    let listener = Listener::bind(readiness_listener(&dir))?;
+    let client = client(&config)?;
+    let server = thread::spawn(move || listener.serve_next(&mut service));
+    assert!(client.ready());
+    server.join().map_err(|_| "server panicked")??;
+    let journal = Journal::open(&config.state_root, 2)?;
+    let key = hex_string(&Sha256::digest(checked(
+        NativeMovementCodec::new().encode_request(&Request::Readiness),
+    )?));
+    let recorded = journal
+        .record(&key)
+        .ok_or("missing readiness record")?
+        .response
+        .as_ref()
+        .ok_or("missing readiness response")?;
+    assert_eq!(
+        checked(NativeMovementCodec::new().decode_response(recorded))?,
+        Response::Ready
+    );
+    Ok(())
+}
+
+#[test]
+fn readiness_stops_being_ready_once_the_paxeer_origin_is_down() -> Result {
+    let dir = Directory::new()?;
+    let mut paxeer = Anvil::launch()?;
+    let config = config_for(
+        &dir,
+        paxeer.endpoint.clone(),
+        Some(execution_authority(&dir)?),
+    )?;
+    let mut service = EvidenceService::new(&config, Journal::open(&config.state_root, 2)?)?;
+    let listener = Listener::bind(readiness_listener(&dir))?;
+    let client = client(&config)?;
+    let server = thread::spawn(move || {
+        listener.serve_next(&mut service)?;
+        listener.serve_next(&mut service)
+    });
+    assert!(client.ready());
+    paxeer.halt();
+    assert!(!client.ready());
+    server.join().map_err(|_| "server panicked")??;
     Ok(())
 }

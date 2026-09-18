@@ -339,8 +339,55 @@ impl EvidenceService {
             Request::VerifyClaimSignature { request, signature } => self
                 .verify_signature(request, signature)
                 .unwrap_or(Response::Unavailable),
-            Request::Readiness => Response::Unavailable,
+            Request::Readiness => self.readiness(),
         }
+    }
+
+    /// Answers `Ready` only while every condition the executing paths depend on
+    /// currently holds, and logs the first condition that does not.
+    fn readiness(&self) -> Response {
+        match self.readiness_fault() {
+            None => Response::Ready,
+            Some(reason) => {
+                eprintln!("movement provider is not ready: {reason}");
+                Response::Unavailable
+            }
+        }
+    }
+
+    fn readiness_fault(&self) -> Option<&'static str> {
+        if self.journal.readable().is_err() {
+            return Some("the durable journal cannot be read");
+        }
+        if private_directory(&self.evidence_root).is_err() {
+            return Some("the evidence root is not a protected directory");
+        }
+        if self.executor.is_none() {
+            return Some("no movement execution authority is configured");
+        }
+        if self.agreeing_origins() < self.tracker_config.minimum_endpoint_agreement {
+            return Some("too few paxeer origins answer on the configured chain");
+        }
+        None
+    }
+
+    /// Counts configured origins that answer on `chain_id`, stopping as soon as
+    /// the configured agreement is met so a readiness gate cannot be stalled by
+    /// the slowest origin.
+    fn agreeing_origins(&self) -> usize {
+        let required = self.tracker_config.minimum_endpoint_agreement;
+        let mut agreeing = 0;
+        for endpoint in &self.tracker_config.endpoints {
+            if agreeing >= required {
+                break;
+            }
+            if endpoint.expected_chain_id == self.chain_id
+                && raw_call(endpoint, "eth_chainId", &[]).is_ok()
+            {
+                agreeing += 1;
+            }
+        }
+        agreeing
     }
 
     fn authorized_execution(

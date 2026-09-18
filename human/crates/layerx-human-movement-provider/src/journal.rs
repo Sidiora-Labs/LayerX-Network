@@ -201,6 +201,29 @@ impl Journal {
         self.records.get(key)
     }
 
+    /// Confirms the journal can still answer the reads the executing paths make:
+    /// the durable state is healthy and every recorded request and completed
+    /// response decodes under the configured protocol, exactly as
+    /// `authorized_plan` and `withdrawal_request` require.
+    pub fn readable(&self) -> Result<(), Error> {
+        if !self.healthy {
+            return Err(Error::Integrity);
+        }
+        let codec =
+            NativeMovementCodec::for_protocol(self.protocol).map_err(|_| Error::Integrity)?;
+        for record in self.records.values() {
+            codec
+                .decode_request(&record.request)
+                .map_err(|_| Error::Integrity)?;
+            if let Some(response) = &record.response {
+                codec
+                    .decode_response(response)
+                    .map_err(|_| Error::Integrity)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn authorized_plan(
         &self,
         identity: &layerx_human_service::journeys::MovementExecutionIdentity,
