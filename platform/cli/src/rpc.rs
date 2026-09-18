@@ -1,3 +1,4 @@
+use layerx_sdk::rpc::LIST_ASSETS_MAX_PAGE;
 use serde_json::{json, Value};
 
 use crate::http::Client;
@@ -79,7 +80,8 @@ pub fn request(method: &str, params: &Value) -> Result<Value, String> {
     match method {
         "lx_register" => registration_params(args)?,
         "lx_requestFunds" => faucet_params(args)?,
-        "lx_getNodeInfo" | "lx_listAssets" if args.is_empty() => {}
+        "lx_getNodeInfo" if args.is_empty() => {}
+        "lx_listAssets" => asset_page_params(args)?,
         "lx_getAsset"
         | "lx_getAccount"
         | "lx_getBalance"
@@ -164,6 +166,39 @@ pub fn request(method: &str, params: &Value) -> Result<Value, String> {
         }
     }
     Ok(json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}))
+}
+
+fn asset_page_params(args: &[Value]) -> Result<(), String> {
+    let (cursor, limit) = match args {
+        [] => (None, None),
+        [cursor] => (Some(cursor), None),
+        [cursor, limit] => (Some(cursor), Some(limit)),
+        _ => {
+            return Err(
+                "lx_listAssets accepts an optional cursor and an optional limit only".into(),
+            )
+        }
+    };
+    match cursor {
+        None | Some(Value::Null) => {}
+        Some(Value::String(cursor)) => id32(cursor)?,
+        Some(_) => {
+            return Err("lx_listAssets cursor must be a nonzero asset identifier or null".into())
+        }
+    }
+    let bounded = match limit {
+        None => true,
+        Some(Value::Number(limit)) => limit
+            .as_u64()
+            .is_some_and(|count| (1..=u64::from(LIST_ASSETS_MAX_PAGE)).contains(&count)),
+        Some(_) => false,
+    };
+    if !bounded {
+        return Err(format!(
+            "lx_listAssets limit must be an integer between 1 and {LIST_ASSETS_MAX_PAGE}"
+        ));
+    }
+    Ok(())
 }
 
 fn registration_params(args: &[Value]) -> Result<(), String> {
@@ -322,7 +357,36 @@ fn id32(value: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use layerx_sdk::rpc::{list_assets_params, AssetListSnapshot, LIST_ASSETS_DEFAULT_PAGE};
+
     use super::*;
+
+    fn asset_value(asset_id: &str) -> Value {
+        json!({
+            "asset_id": asset_id,
+            "symbol": "LXT",
+            "name": "LayerX Test",
+            "decimals": 6,
+            "custody_kind": 0,
+            "custody_reference": "",
+            "paused": false,
+            "supply_cap": "1000000",
+            "issuer_did": "22".repeat(32),
+            "issuer_kind": 1,
+            "total_units": "100",
+            "salt": "33".repeat(32)
+        })
+    }
+
+    fn asset_page(assets: Vec<Value>, next_cursor: Value) -> Value {
+        json!({
+            "assets": assets,
+            "next_cursor": next_cursor,
+            "observed_head_sequence": "9",
+            "state_root": "44".repeat(32),
+            "verification": "authenticated_committed_snapshot"
+        })
+    }
 
     fn assert_published_methods(methods: &[Value]) -> Result<(), String> {
         assert_eq!(
@@ -358,9 +422,60 @@ mod tests {
                 .and_then(|entry| entry["description"].as_str())
                 .ok_or_else(|| format!("{method} description missing"))
         };
+        let entry = |method: &str| -> Result<&Value, String> {
+            methods
+                .iter()
+                .find(|entry| entry["name"] == method)
+                .ok_or_else(|| format!("{method} contract missing"))
+        };
         assert!(description("lx_getBalances")?.contains("LNI minor 5"));
-        assert!(description("lx_listAssets")?.contains("bounded to 64 records"));
-        assert!(description("lx_getAsset")?.contains("authenticated_committed_snapshot"));
+        let listing = entry("lx_listAssets")?;
+        assert_eq!(listing["paramStructure"], "by-position");
+        assert_eq!(listing["params"][0]["name"], "cursor");
+        assert_eq!(listing["params"][0]["required"], json!(false));
+        assert_eq!(
+            listing["params"][0]["schema"]["type"],
+            json!(["string", "null"])
+        );
+        assert_eq!(
+            listing["params"][0]["schema"]["pattern"],
+            "^[0-9a-fA-F]{64}$"
+        );
+        assert_eq!(listing["params"][1]["name"], "limit");
+        assert_eq!(listing["params"][1]["required"], json!(false));
+        assert_eq!(
+            listing["params"][1]["schema"],
+            json!({"type":"integer","minimum":1,"maximum":LIST_ASSETS_MAX_PAGE})
+        );
+        assert_eq!(listing["params"][2], Value::Null);
+        let listing_description = description("lx_listAssets")?;
+        for phrase in [
+            "ordered by ascending asset_id".to_owned(),
+            "next_cursor".to_owned(),
+            "The native registry holds up to 1024 records".to_owned(),
+            "cursor is the exclusive asset_id to resume after".to_owned(),
+            format!("limit defaults to {LIST_ASSETS_DEFAULT_PAGE} and may not exceed {LIST_ASSETS_MAX_PAGE}"),
+            "next_cursor is null once the page is the last one".to_owned(),
+            "A malformed cursor or limit returns -32602".to_owned(),
+        ] {
+            assert!(
+                listing_description.contains(&phrase),
+                "lx_listAssets description lost: {phrase}"
+            );
+        }
+        let asset = entry("lx_getAsset")?;
+        assert_eq!(asset["params"][0]["name"], "asset_id");
+        assert_eq!(asset["params"][0]["required"], json!(true));
+        assert_eq!(asset["params"][0]["schema"]["pattern"], "^[0-9a-fA-F]{64}$");
+        assert_eq!(asset["params"][1], Value::Null);
+        let asset_description = description("lx_getAsset")?;
+        assert!(asset_description.contains("authenticated_committed_snapshot"));
+        assert!(asset_description.contains("Unknown assets or unavailable evidence return -32001"));
+        let fee = entry("lx_estimateFee")?;
+        assert_eq!(fee["params"][0]["name"], "canonical_hex");
+        assert_eq!(fee["params"][0]["schema"]["pattern"], "^([0-9a-fA-F]{2})+$");
+        assert_eq!(fee["params"][0]["schema"]["maxLength"], json!(1_048_576));
+        assert_eq!(fee["params"][1], Value::Null);
         let fee_description = description("lx_estimateFee")?;
         assert!(fee_description.contains("Asset 1/2/3/4/5/6/7/8/10/11"));
         assert!(fee_description.contains("Programs 1/2/3/5/6/7"));
@@ -435,6 +550,15 @@ mod tests {
         request("lx_getBalances", &json!(["did:layerx:alice"]))?;
         request("lx_getNodeInfo", &json!([]))?;
         request("lx_listAssets", &json!([]))?;
+        request("lx_listAssets", &json!([Value::Null]))?;
+        request("lx_listAssets", &json!([id]))?;
+        request("lx_listAssets", &json!([id.to_uppercase()]))?;
+        request("lx_listAssets", &json!([id, 1]))?;
+        request("lx_listAssets", &json!([id, LIST_ASSETS_MAX_PAGE]))?;
+        request(
+            "lx_listAssets",
+            &json!([Value::Null, LIST_ASSETS_DEFAULT_PAGE]),
+        )?;
         request("lx_estimateFee", &json!(["abcd"]))?;
         request("lx_subscribe", &json!(["receipts"]))?;
         request("lx_subscribe", &json!(["checkpoints"]))?;
@@ -468,8 +592,84 @@ mod tests {
             ("lx_unsubscribe", json!([1])),
             ("lx_unsubscribe", json!(["1", "2"])),
             ("lx_getAsset", json!([])),
+            ("lx_listAssets", json!([id, 0])),
+            (
+                "lx_listAssets",
+                json!([id, u64::from(LIST_ASSETS_MAX_PAGE) + 1]),
+            ),
+            ("lx_listAssets", json!([id, "64"])),
+            ("lx_listAssets", json!([id, -1])),
+            ("lx_listAssets", json!([id, LIST_ASSETS_DEFAULT_PAGE, id])),
+            ("lx_listAssets", json!(["00".repeat(32)])),
+            ("lx_listAssets", json!(["ab"])),
+            ("lx_listAssets", json!([1])),
+            ("lx_listAssets", json!([{"cursor":id}])),
         ] {
             assert!(request(method, &args).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn asset_pages_send_and_parse_the_published_cursor_contract() -> Result<(), String> {
+        let cursor = [0xab; 32];
+        let encoded = "ab".repeat(32);
+        assert_eq!(list_assets_params(None, None), json!([]));
+        assert_eq!(list_assets_params(Some(cursor), None), json!([encoded]));
+        assert_eq!(
+            list_assets_params(Some(cursor), Some(LIST_ASSETS_MAX_PAGE)),
+            json!([encoded, LIST_ASSETS_MAX_PAGE])
+        );
+        assert_eq!(
+            list_assets_params(None, Some(LIST_ASSETS_DEFAULT_PAGE)),
+            json!([Value::Null, LIST_ASSETS_DEFAULT_PAGE])
+        );
+        for params in [
+            list_assets_params(None, None),
+            list_assets_params(Some(cursor), None),
+            list_assets_params(Some(cursor), Some(1)),
+            list_assets_params(Some(cursor), Some(LIST_ASSETS_MAX_PAGE)),
+            list_assets_params(None, Some(LIST_ASSETS_DEFAULT_PAGE)),
+        ] {
+            assert_eq!(request("lx_listAssets", &params)?["params"], params);
+        }
+        let first = "11".repeat(32);
+        let second = "22".repeat(32);
+        let truncated = asset_page(
+            vec![asset_value(&first), asset_value(&second)],
+            json!(second),
+        );
+        let page =
+            AssetListSnapshot::try_from(truncated.clone()).map_err(|error| format!("{error:?}"))?;
+        assert_eq!(
+            page.assets
+                .iter()
+                .map(|asset| asset.asset_id)
+                .collect::<Vec<_>>(),
+            [[0x11; 32], [0x22; 32]]
+        );
+        assert_eq!(page.next_cursor, Some([0x22; 32]));
+        assert_eq!(page.into_value(), truncated);
+        let last = AssetListSnapshot::try_from(asset_page(vec![asset_value(&first)], Value::Null))
+            .map_err(|error| format!("{error:?}"))?;
+        assert_eq!(last.next_cursor, None);
+        assert_eq!(last.assets.len(), 1);
+        for refused in [
+            asset_page(
+                vec![asset_value(&first), asset_value(&second)],
+                json!(first),
+            ),
+            asset_page(vec![asset_value(&second), asset_value(&first)], Value::Null),
+            asset_page(Vec::new(), json!(first)),
+            asset_page(vec![asset_value(&first)], json!("2".repeat(63))),
+            json!({
+                "assets": [asset_value(&first)],
+                "observed_head_sequence": "9",
+                "state_root": "44".repeat(32),
+                "verification": "authenticated_committed_snapshot"
+            }),
+        ] {
+            assert!(AssetListSnapshot::try_from(refused).is_err());
         }
         Ok(())
     }

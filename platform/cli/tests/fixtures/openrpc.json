@@ -598,14 +598,35 @@
     {
       "name": "lx_listAssets",
       "paramStructure": "by-position",
-      "params": [],
+      "params": [
+        {
+          "name": "cursor",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-fA-F]{64}$"
+          }
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          }
+        }
+      ],
       "result": {
         "name": "result",
         "schema": {
           "type": "object"
         }
       },
-      "description": "Returns assets, observed_head_sequence, state_root and verification=authenticated_committed_snapshot from typed LNI minor-5 AssetRead. The complete native list is bounded to 64 records; unsupported or unavailable evidence returns -32001. Snapshot authentication is not an independent Merkle proof.",
+      "description": "Returns one page of assets ordered by ascending asset_id together with next_cursor, observed_head_sequence, state_root and verification=authenticated_committed_snapshot from typed LNI minor-5 AssetRead. The native registry holds up to 1024 records: cursor is the exclusive asset_id to resume after, limit defaults to 64 and may not exceed 256, and next_cursor is null once the page is the last one. A malformed cursor or limit returns -32602; unsupported or unavailable evidence returns -32001. Snapshot authentication is not an independent Merkle proof.",
       "errors": [
         {
           "code": -32602,
