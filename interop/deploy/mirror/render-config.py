@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Render the layerx-mirror publisher configuration from deployed identities.
 
-Every value is supplied by the caller from a real deployment: the renderer
-carries only the bounded operational constants of `config.example.json` and
-refuses any identity, endpoint or path whose shape the publisher's own
-configuration loader would reject.
+Every chain identity is supplied by the caller from a real deployment: the
+renderer carries only the bounded operational constants of
+`config.example.json`, the handles and socket of the layerx-mirror-signer
+container co-located with the publisher, and refuses any identity, endpoint or
+path whose shape the publisher's own configuration loader would reject. The
+signer handles and socket are overridable for a deployment that keeps the
+publisher keys in an external signer.
 """
 
 import argparse
@@ -24,6 +27,9 @@ SOLANA_CHUNK_BYTES = 640
 SOLANA_REQUIRED_ROOTED_SLOTS = 32
 SOLANA_MAXIMUM_ANCESTRY = 4096
 SIGNER_TIMEOUT_MS = 5000
+SIGNER_SOCKET = "/run/mirror-signer/signer.sock"
+ETHEREUM_KEY_HANDLE = "mirror/ethereum/beta"
+SOLANA_KEY_HANDLE = "mirror/solana/beta"
 POLL_INTERVAL_MS = 5000
 FRAME_BYTES = 67108864
 ARCHIVE_CHUNKS = 65536
@@ -139,24 +145,26 @@ def main(argv):
     parser.add_argument("--ethereum-genesis-hash", required=True)
     parser.add_argument("--ethereum-archive-contract", required=True)
     parser.add_argument("--ethereum-archive-code-hash", required=True)
-    parser.add_argument("--ethereum-signer-key-handle", required=True)
+    parser.add_argument("--ethereum-signer-key-handle", default=ETHEREUM_KEY_HANDLE)
     parser.add_argument("--ethereum-signer-public-key", required=True)
-    parser.add_argument("--ethereum-signer-socket", required=True)
+    parser.add_argument("--ethereum-signer-socket", default=SIGNER_SOCKET)
     parser.add_argument("--solana-endpoint", action="append", default=[])
     parser.add_argument("--solana-genesis-hash", required=True)
     parser.add_argument("--solana-archive-program", required=True)
     parser.add_argument("--solana-upgradeable-loader", required=True)
     parser.add_argument("--solana-program-data-account", required=True)
     parser.add_argument("--solana-program-code-hash", required=True)
-    parser.add_argument("--solana-signer-key-handle", required=True)
+    parser.add_argument("--solana-signer-key-handle", default=SOLANA_KEY_HANDLE)
     parser.add_argument("--solana-signer-public-key", required=True)
-    parser.add_argument("--solana-signer-socket", required=True)
+    parser.add_argument("--solana-signer-socket", default=SIGNER_SOCKET)
     arguments = parser.parse_args(argv)
 
     if arguments.first_batch_number < 1:
         refuse("--first-batch-number must be at least 1")
     if arguments.network_id < 1:
         refuse("--network-id must be a real LayerX network id")
+    if arguments.ethereum_signer_key_handle == arguments.solana_signer_key_handle:
+        refuse("the Ethereum and Solana signer key handles must differ")
     host, separator, port = arguments.status_listen.rpartition(":")
     if not separator or host not in ("127.0.0.1", "[::1]") or not port.isdigit() or int(port) == 0:
         refuse("--status-listen must be a loopback address with a port, got %r" % arguments.status_listen)
