@@ -201,7 +201,7 @@ fn corrupt_signature(presentation: &str) -> String {
 #[test]
 fn authentic_direct_vector_verifies_expected_values() {
     let spec = vector(
-        include_str!("vectors/direct/001-minimal-valid.json"),
+        include_str!("../../../specs/conformance/ap2/direct/001-minimal-valid.json"),
         "mandates::direct_pair",
     );
     let amount = u128::from(
@@ -239,7 +239,7 @@ fn authentic_direct_vector_verifies_expected_values() {
 #[test]
 fn authentic_autonomous_vector_verifies_key_binding_and_constraints() {
     let _spec = vector(
-        include_str!("vectors/autonomous/001-line-items.json"),
+        include_str!("../../../specs/conformance/ap2/autonomous/001-line-items.json"),
         "mandates::autonomous_pair",
     );
     let (checkout, payment) = autonomous_pair(15_000, 20_000);
@@ -255,7 +255,7 @@ fn authentic_autonomous_vector_verifies_key_binding_and_constraints() {
 #[test]
 fn authentic_signature_corruption_is_refused_cryptographically() {
     let _spec = vector(
-        include_str!("vectors/refusals/002-invalid-signature.json"),
+        include_str!("../../../specs/conformance/ap2/refusals/002-invalid-signature.json"),
         "mandates::direct_pair",
     );
     let (checkout, payment) = direct_pair(10_000);
@@ -268,7 +268,7 @@ fn authentic_signature_corruption_is_refused_cryptographically() {
 #[test]
 fn authentic_payment_binding_corruption_is_refused_after_signature_verification() {
     let _spec = vector(
-        include_str!("vectors/refusals/003-binding-mismatch.json"),
+        include_str!("../../../specs/conformance/ap2/refusals/003-binding-mismatch.json"),
         "mandates::direct_pair",
     );
     let checkout_jwt = merchant_checkout(10_000, "checkout-12345");
@@ -283,7 +283,7 @@ fn authentic_payment_binding_corruption_is_refused_after_signature_verification(
 #[test]
 fn authentic_expired_vector_is_refused_after_signature_verification() {
     let _spec = vector(
-        include_str!("vectors/refusals/001-expired.json"),
+        include_str!("../../../specs/conformance/ap2/refusals/001-expired.json"),
         "mandates::root",
     );
     let checkout_jwt = merchant_checkout(10_000, "checkout-12345");
@@ -302,7 +302,7 @@ fn authentic_expired_vector_is_refused_after_signature_verification() {
 #[test]
 fn authentic_amount_violation_reaches_constraint_evaluation() {
     let spec = vector(
-        include_str!("vectors/constraints/001-amount-range-exceeded.json"),
+        include_str!("../../../specs/conformance/ap2/constraints/001-amount-range-exceeded.json"),
         "mandates::autonomous_pair",
     );
     let amount = u128::from(

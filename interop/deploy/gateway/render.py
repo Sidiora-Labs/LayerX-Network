@@ -7,8 +7,16 @@ and refused by name when it is absent, so the bring-up needs no hand-authored
 document. `LAYERX_BETA_INTEROP_MANIFEST_FILE` stays available as an optional
 override that wins field by field.
 
-No conformance suite is synthesised: `interop/specs/vendor/CONFORMANCE.md`
-records which upstreams publish one.
+No conformance suite is synthesised. Where this repository carries an
+adapter's own vectors, `interop/specs/conformance/<adapter>` is the suite: the
+identifier, the vector count and the SHA-256 are derived from the same files the
+adapter's tests read, so the pinned suite is the exercised suite and the variable
+only overrides it. Where it carries none, the suite stays a deployment input and
+`interop/specs/vendor/CONFORMANCE.md` records which upstreams publish one.
+
+The trust roots whose counterparty is one of the testnet's own clients are the
+beta roots the bring-up generates and passes with `--beta-roots-file`; the
+variables override them with a real external counterparty.
 """
 
 import argparse
@@ -73,6 +81,18 @@ EVIDENCE = {
     "fiat": "external-settlement+layerx-receipt",
 }
 
+CONFORMANCE_DIRECTORY = "interop/specs/conformance"
+SUITE_NAME = "layerx-%s-conformance-v1"
+IN_CLUSTER_SOURCE = "in-cluster default"
+BETA_SOURCE = "testnet-generated beta trust root"
+BETA_AP2_USE_CASES = ("checkout-mandate", "payment-mandate", "merchant-checkout")
+BETA_MERCHANT_ID = "layerx-beta-merchant"
+BETA_MERCHANT_NAME = "LayerX Beta Testnet Merchant"
+BETA_MERCHANT_PATH = "/checkout"
+BETA_VISA_KEY_ID = "layerx-beta-tap-key-1"
+BETA_VISA_AGENT_ID = "layerx-beta-trusted-agent"
+BETA_FIAT_PROVIDER = "layerx-beta-fiat-provider"
+
 OVERRIDE_VARIABLE = "LAYERX_BETA_INTEROP_MANIFEST_FILE"
 CONFORMANCE_VARIABLE = {
     identifier: "LAYERX_BETA_INTEROP_CONFORMANCE_%s" % identifier.upper().replace("-", "_")
@@ -97,6 +117,9 @@ CONFORMANCE_FORM = "<suite-identifier>,<vector-count>,<suite-sha256>"
 SUITE_PATTERN = re.compile(r"^[a-z0-9_-]{1,64}$")
 DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 COUNT_PATTERN = re.compile(r"^[1-9][0-9]{0,11}$")
+SEC1_PATTERN = re.compile(r"^04[0-9a-f]{128}$")
+AUDIENCE_PATTERN = re.compile(r"^https://[a-z0-9][a-z0-9.-]*(:[1-9][0-9]{0,4})?$")
+CURRENCY_PATTERN = re.compile(r"^[A-Z]{3}$")
 
 
 class Refused(Exception):
@@ -117,6 +140,46 @@ def document_digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def first_party_suite(root, identifier):
+    """The adapter's own vectors in this repository, or None when it has none.
+
+    The count and the digest come from the very files the adapter's tests read,
+    so the configuration pins the suite that is actually exercised. A file
+    holding an array contributes one vector per record; any other file is one
+    vector.
+    """
+    directory = root / CONFORMANCE_DIRECTORY / identifier
+    if not directory.is_dir():
+        return None
+    files = sorted(
+        (path for path in directory.rglob("*.json") if path.is_file()),
+        key=lambda path: path.relative_to(directory).as_posix(),
+    )
+    if not files:
+        return None
+    digest = hashlib.sha256()
+    count = 0
+    for path in files:
+        data = path.read_bytes()
+        digest.update(path.relative_to(directory).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(data)
+        digest.update(b"\0")
+        try:
+            records = json.loads(data)
+        except ValueError as error:
+            raise Refused(
+                ["%s does not hold a conformance vector: %s" % (path.relative_to(root), error)]
+            )
+        if isinstance(records, list):
+            if not records:
+                raise Refused(["%s carries no vector" % path.relative_to(root)])
+            count += len(records)
+        else:
+            count += 1
+    return SUITE_NAME % identifier, count, digest.hexdigest()
+
+
 def derived(root):
     """Every configuration field this repository can compute for itself."""
     vendor = root / "interop/specs/vendor"
@@ -126,14 +189,26 @@ def derived(root):
             document = vendor / VENDORED_DOCUMENT[identifier]
         else:
             document = root / FIAT_DOCUMENT
+        suite = first_party_suite(root, identifier)
+        if suite is None:
+            conformance = {
+                field: (None, CONFORMANCE_VARIABLE[identifier])
+                for field in ("conformance_suite", "conformance_vectors", "conformance_sha256")
+            }
+        else:
+            name, count, suite_sha256 = suite
+            source = "%s/%s" % (CONFORMANCE_DIRECTORY, identifier)
+            conformance = {
+                "conformance_suite": (name, source),
+                "conformance_vectors": (count, source),
+                "conformance_sha256": (suite_sha256, source),
+            }
         adapters[identifier] = {
             "specification": (SPECIFICATION[identifier], "vendored specification"),
             "version": (VERSION[identifier], "vendored specification"),
             "specification_sha256": (document_digest(document), str(document.relative_to(root))),
-            "conformance_suite": (None, CONFORMANCE_VARIABLE[identifier]),
-            "conformance_vectors": (None, CONFORMANCE_VARIABLE[identifier]),
-            "conformance_sha256": (None, CONFORMANCE_VARIABLE[identifier]),
             "evidence_policy": (EVIDENCE[identifier], "adapter evidence policy"),
+            **conformance,
         }
     transports = {}
     for identifier in TRANSPORTS:
@@ -167,8 +242,122 @@ def conformance_variables(environ, adapters, transports, reasons):
             transports[identifier]["conformance_sha256"] = (declared, variable)
 
 
-def cluster_roots(environ, network_id, sequencer_public_key, reasons):
-    """The trust roots, defaulting to the cluster's own in-cluster identities."""
+def beta_roots(path, reasons):
+    """The trust roots the bring-up generates for the testnet's own clients.
+
+    The bring-up generates the key material and writes the cluster facts that
+    go with it; the shape of each root is built here so it is exercised by
+    `--self-test`. Every identifier says the root is testnet-generated.
+    """
+    try:
+        material = json.loads(pathlib.Path(path).read_text())
+    except (OSError, ValueError) as error:
+        reasons.append("the generated beta trust roots %s are unreadable: %s" % (path, error))
+        return None
+    if not isinstance(material, dict):
+        reasons.append("the generated beta trust roots %s must hold a JSON object" % path)
+        return None
+    problems = []
+
+    def hex32(name):
+        value = material.get(name)
+        if not isinstance(value, str) or not DIGEST_PATTERN.match(value):
+            problems.append("%s must be a 32-byte lowercase hexadecimal value" % name)
+            return None
+        return value
+
+    keys = material.get("ap2_keys")
+    if not isinstance(keys, dict) or sorted(keys) != sorted(BETA_AP2_USE_CASES):
+        problems.append("ap2_keys must hold one key per AP2 use case: %s" % ", ".join(BETA_AP2_USE_CASES))
+        keys = {}
+    for use_case, key in sorted(keys.items()):
+        if not isinstance(key, str) or not SEC1_PATTERN.match(key):
+            problems.append("the %s key must be an uncompressed SEC1 P-256 public key" % use_case)
+    audience = material.get("audience")
+    if not isinstance(audience, str) or not AUDIENCE_PATTERN.match(audience):
+        problems.append("audience must be the https origin the mandates are issued for")
+        audience = None
+    currency = material.get("currency")
+    if not isinstance(currency, str) or not CURRENCY_PATTERN.match(currency):
+        problems.append("currency must be the three-letter code of the cluster asset")
+    decimals = material.get("asset_decimals")
+    if not isinstance(decimals, int) or isinstance(decimals, bool) or not 0 <= decimals <= 38:
+        problems.append("asset_decimals must be the decimal exponent of the cluster asset")
+        decimals = None
+    expires_at = material.get("visa_agent_expires_at")
+    if not isinstance(expires_at, int) or isinstance(expires_at, bool) or expires_at <= 0:
+        problems.append("visa_agent_expires_at must be the expiry of the generated agent key")
+    agent_key = material.get("visa_agent_public_key")
+    if not isinstance(agent_key, str) or not DIGEST_PATTERN.match(agent_key):
+        problems.append("visa_agent_public_key must be a 32-byte ed25519 public key")
+    values = {name: hex32(name) for name in (
+        "principal_digest",
+        "layerx_agent",
+        "payer_account",
+        "payee_account",
+        "asset",
+        "fiat_provider_public_key",
+    )}
+    if problems:
+        reasons.extend(
+            "the generated beta trust roots %s are incomplete: %s" % (path, problem)
+            for problem in problems
+        )
+        return None
+    authority = audience[len("https://"):]
+    return {
+        "ap2_keys": [
+            {
+                "use_case": use_case,
+                "key_id": "layerx-beta-%s-key" % use_case,
+                "public_key_sec1": keys[use_case],
+            }
+            for use_case in BETA_AP2_USE_CASES
+        ],
+        "ap2_assets": [
+            {
+                "principal_digest": values["principal_digest"],
+                "audience": audience,
+                "currency": currency,
+                "minor_unit_exponent": 0,
+                "atomic_units_per_minor_unit": str(10 ** decimals),
+                "asset": values["asset"],
+                "payer_account": values["payer_account"],
+                "payee_account": values["payee_account"],
+                "payee_merchant_id": BETA_MERCHANT_ID,
+                "payee_merchant_name": BETA_MERCHANT_NAME,
+            }
+        ],
+        "visa_agents": [
+            {
+                "key_id": BETA_VISA_KEY_ID,
+                "agent_id": BETA_VISA_AGENT_ID,
+                "agent_domain": audience,
+                "layerx_agent": values["layerx_agent"],
+                "algorithm": "ed25519",
+                "public_key": agent_key,
+                "status": "active",
+                "expires_at": expires_at,
+            }
+        ],
+        "visa_targets": [
+            {
+                "principal_digest": values["principal_digest"],
+                "authority": authority,
+                "path": BETA_MERCHANT_PATH,
+            }
+        ],
+        "fiat_providers": [
+            {
+                "provider": BETA_FIAT_PROVIDER,
+                "public_key_ed25519": values["fiat_provider_public_key"],
+            }
+        ],
+    }
+
+
+def cluster_roots(environ, network_id, sequencer_public_key, beta, reasons):
+    """The trust roots, defaulting to the cluster's own generated identities."""
     roots = {}
     for root in ROOTS:
         variable = ROOT_VARIABLE[root]
@@ -182,9 +371,13 @@ def cluster_roots(environ, network_id, sequencer_public_key, reasons):
             roots[root] = (value, variable)
             continue
         if root in EXTERNAL_ROOTS:
+            if beta is not None:
+                roots[root] = (beta[root], BETA_SOURCE)
+            elif network_id is None:
+                roots[root] = (None, BETA_SOURCE)
             continue
         if network_id is None or sequencer_public_key is None:
-            roots[root] = (None, "in-cluster default")
+            roots[root] = (None, IN_CLUSTER_SOURCE)
             continue
         if root == "x402_supported":
             network = caip2(network_id, reasons)
@@ -196,7 +389,7 @@ def cluster_roots(environ, network_id, sequencer_public_key, reasons):
                     "extensions": [],
                     "signers": {network: ["did:layerx:%s" % sequencer_public_key]},
                 },
-                "in-cluster default",
+                IN_CLUSTER_SOURCE,
             )
         else:
             roots[root] = (
@@ -206,7 +399,7 @@ def cluster_roots(environ, network_id, sequencer_public_key, reasons):
                     "spec": "https://ucp.dev/%s/specification/checkout/" % UCP_REVISION,
                     "schema": "https://ucp.dev/%s/schemas/shopping/checkout.json" % UCP_REVISION,
                 },
-                "in-cluster default",
+                IN_CLUSTER_SOURCE,
             )
     return roots
 
@@ -266,7 +459,7 @@ def override(path, adapters, transports, roots, reasons):
             roots[root] = (document[root], "%s %s" % (source, root))
 
 
-def validated(adapters, transports, roots, check_only, reasons):
+def validated(adapters, transports, roots, check_only, reasons, sources=None):
     document = {"adapters": [], "transports": []}
     for identifier in ADAPTERS:
         entry = adapters[identifier]
@@ -275,9 +468,16 @@ def validated(adapters, transports, roots, check_only, reasons):
         digest, digest_source = entry["conformance_sha256"]
         if suite is None or count is None or digest is None:
             reasons.append(
-                "%s is required: the imported %s conformance suite as '%s' (no upstream suite is "
-                "vendorable, interop/specs/vendor/CONFORMANCE.md)"
-                % (CONFORMANCE_VARIABLE[identifier], identifier, CONFORMANCE_FORM)
+                "%s is required: the imported %s conformance suite as '%s'; this repository holds "
+                "no %s vectors under %s and no upstream suite is vendorable "
+                "(interop/specs/vendor/CONFORMANCE.md)"
+                % (
+                    CONFORMANCE_VARIABLE[identifier],
+                    identifier,
+                    CONFORMANCE_FORM,
+                    identifier,
+                    CONFORMANCE_DIRECTORY,
+                )
             )
             continue
         document["adapters"].append(
@@ -312,11 +512,12 @@ def validated(adapters, transports, roots, check_only, reasons):
         )
     for root in ROOTS:
         value, source = roots.get(root, (None, ROOT_VARIABLE[root]))
-        if value is None and check_only and source == "in-cluster default":
+        if value is None and check_only and source in (IN_CLUSTER_SOURCE, BETA_SOURCE):
             continue
         if value is None:
             reasons.append(
-                "%s is required: %s is a counterparty credential this cluster does not hold"
+                "%s is required: %s is a counterparty credential this cluster does not hold and "
+                "no generated beta root was supplied with --beta-roots-file"
                 % (ROOT_VARIABLE[root], root)
             )
             continue
@@ -327,6 +528,8 @@ def validated(adapters, transports, roots, check_only, reasons):
             )
             continue
         document[root] = value
+        if sources is not None:
+            sources[root] = source
     return document
 
 
@@ -370,16 +573,24 @@ def digest32(field, reasons):
     return value
 
 
-def render(root, environ, network_id=None, sequencer_public_key=None):
+def render(
+    root,
+    environ,
+    network_id=None,
+    sequencer_public_key=None,
+    beta_roots_file=None,
+    sources=None,
+):
     """Return the gateway configuration document or raise `Refused`."""
     reasons = []
     adapters, transports = derived(root)
     conformance_variables(environ, adapters, transports, reasons)
-    roots = cluster_roots(environ, network_id, sequencer_public_key, reasons)
+    beta = beta_roots(beta_roots_file, reasons) if beta_roots_file else None
+    roots = cluster_roots(environ, network_id, sequencer_public_key, beta, reasons)
     manifest = environ.get(OVERRIDE_VARIABLE, "").strip()
     if manifest:
         override(manifest, adapters, transports, roots, reasons)
-    document = validated(adapters, transports, roots, network_id is None, reasons)
+    document = validated(adapters, transports, roots, network_id is None, reasons, sources)
     if reasons:
         raise Refused(reasons)
     return document
@@ -398,6 +609,7 @@ def main(argv):
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--network-id")
     parser.add_argument("--sequencer-public-key-file")
+    parser.add_argument("--beta-roots-file")
     parser.add_argument("--out")
     parser.add_argument("--repo-root", default=str(repository_root()))
     arguments = parser.parse_args(argv)
@@ -410,11 +622,14 @@ def main(argv):
             return 0
         if not arguments.network_id or not arguments.sequencer_public_key_file or not arguments.out:
             parser.error("--network-id, --sequencer-public-key-file and --out are required")
+        sources = {}
         document = render(
             root,
             os.environ,
             arguments.network_id,
             sequencer_key(arguments.sequencer_public_key_file),
+            arguments.beta_roots_file,
+            sources,
         )
     except Refused as refusal:
         sys.stderr.write("the interop gateway configuration was refused:\n")
@@ -424,31 +639,46 @@ def main(argv):
     out = pathlib.Path(arguments.out)
     out.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
     out.chmod(0o600)
+    generated = sorted(name for name, source in sources.items() if source == BETA_SOURCE)
+    if generated:
+        sys.stdout.write(
+            "interop gateway trust roots generated for this testnet and named layerx-beta-*: %s\n"
+            % ", ".join(generated)
+        )
     return 0
 
 
 def self_test():
-    """Exercise the real render against the vendored documents in this checkout."""
+    """Exercise the real render against the documents and vectors in this checkout."""
+    import shutil
     import tempfile
 
     root = repository_root()
     vendor = root / "interop/specs/vendor"
     network, key = "layerx-testnet", "ab" * 32
+    first_party = {
+        identifier: first_party_suite(root, identifier)
+        for identifier in ADAPTERS
+        if first_party_suite(root, identifier) is not None
+    }
+    assert "x402" in first_party and "ap2" in first_party, sorted(first_party)
     suites = {
-        "x402": "x402-v2-vectors,64,%s" % ("11" * 32),
-        "ap2": "ap2-v1-vectors,48,%s" % ("22" * 32),
-        "ucp": "ucp-checkout-vectors,32,%s" % ("33" * 32),
-        "visa-tap": "visa-tap-vectors,24,%s" % ("44" * 32),
-        "fiat": "layerx-fiat-vectors,16,%s" % ("55" * 32),
+        identifier: "%s-owner-vectors,%d,%s" % (identifier.replace("-", "_"), 8, "33" * 32)
+        for identifier in ADAPTERS
+        if identifier not in first_party
     }
     complete = {CONFORMANCE_VARIABLE[identifier]: value for identifier, value in suites.items()}
-    complete.update(
-        {TRANSPORT_VARIABLE[identifier]: "66" * 32 for identifier in TRANSPORTS}
-    )
+    complete.update({TRANSPORT_VARIABLE[identifier]: "66" * 32 for identifier in TRANSPORTS})
     complete.update(
         {
             ROOT_VARIABLE["ap2_keys"]: json.dumps(
-                [{"use_case": "checkout-mandate", "key_id": "k1", "public_key_sec1": "04" + "ab" * 64}]
+                [
+                    {
+                        "use_case": "checkout-mandate",
+                        "key_id": "k1",
+                        "public_key_sec1": "04" + "ab" * 64,
+                    }
+                ]
             ),
             ROOT_VARIABLE["ap2_assets"]: json.dumps([{"principal_digest": "33" * 32}]),
             ROOT_VARIABLE["visa_agents"]: json.dumps([{"key_id": "tap-1"}]),
@@ -459,15 +689,20 @@ def self_test():
         }
     )
 
-    def refusal(environ, network_id=network, public_key=key):
+    def refusal(environ, network_id=network, public_key=key, beta_file=None):
         try:
-            render(root, environ, network_id, public_key)
+            render(root, environ, network_id, public_key, beta_file)
         except Refused as refused:
             return refused.reasons
         raise AssertionError("the render accepted %r" % sorted(environ))
 
     reasons = refusal({})
-    for variable in list(CONFORMANCE_VARIABLE.values()) + list(TRANSPORT_VARIABLE.values()):
+    for identifier in ADAPTERS:
+        variable = CONFORMANCE_VARIABLE[identifier]
+        named = any(reason.startswith(variable) for reason in reasons)
+        assert named == (identifier not in first_party), identifier
+    for identifier in TRANSPORTS:
+        variable = TRANSPORT_VARIABLE[identifier]
         assert any(reason.startswith(variable) for reason in reasons), variable
     for root_name in EXTERNAL_ROOTS:
         variable = ROOT_VARIABLE[root_name]
@@ -499,7 +734,52 @@ def self_test():
         assert adapters[identifier]["conformance_suite"] == suite
         assert adapters[identifier]["conformance_vectors"] == int(count)
         assert adapters[identifier]["conformance_sha256"] == digest
+    for identifier in ADAPTERS:
         assert adapters[identifier]["evidence_policy"] == EVIDENCE[identifier]
+
+    tests = {
+        "x402": (root / "interop/crates/layerx-x402/tests/vectors.rs").read_text(),
+        "ap2": (root / "interop/crates/layerx-ap2/tests/mandates.rs").read_text(),
+    }
+    for identifier, (name, count, digest) in first_party.items():
+        directory = root / CONFORMANCE_DIRECTORY / identifier
+        files = sorted(directory.rglob("*.json"))
+        assert name == SUITE_NAME % identifier and SUITE_PATTERN.match(name), name
+        assert adapters[identifier]["conformance_suite"] == name
+        assert adapters[identifier]["conformance_vectors"] == count
+        assert adapters[identifier]["conformance_sha256"] == digest
+        vector_records = 0
+        for vector_file in files:
+            records = json.loads(vector_file.read_text())
+            vector_records += len(records) if isinstance(records, list) else 1
+            included = 'include_str!("../../../specs/conformance/%s/%s")' % (
+                identifier,
+                vector_file.relative_to(directory).as_posix(),
+            )
+            assert included in tests[identifier], included
+        assert count == vector_records and count > 0, identifier
+        with tempfile.TemporaryDirectory() as directory_copy:
+            copy_root = pathlib.Path(directory_copy)
+            copied = copy_root / CONFORMANCE_DIRECTORY / identifier
+            shutil.copytree(directory, copied)
+            assert first_party_suite(copy_root, identifier) == (name, count, digest)
+            edited = sorted(copied.rglob("*.json"))[0]
+            edited.write_bytes(edited.read_bytes() + b" ")
+            assert first_party_suite(copy_root, identifier)[2] != digest
+    assert adapters["x402"]["conformance_vectors"] == 18
+    assert adapters["ap2"]["conformance_vectors"] == 6
+
+    overriding = dict(complete)
+    overriding[CONFORMANCE_VARIABLE["x402"]] = "owner-x402-suite,4,%s" % ("77" * 32)
+    overridden = {
+        entry["id"]: entry
+        for entry in render(root, overriding, network, key)["adapters"]
+    }
+    assert overridden["x402"]["conformance_suite"] == "owner-x402-suite"
+    assert overridden["x402"]["conformance_vectors"] == 4
+    assert overridden["x402"]["conformance_sha256"] == "77" * 32
+    assert overridden["ap2"]["conformance_sha256"] == first_party["ap2"][2]
+
     transports = {entry["id"]: entry for entry in document["transports"]}
     x402_provenance = (vendor / "x402/PROVENANCE.md").read_text()
     for identifier in TRANSPORTS:
@@ -548,12 +828,105 @@ def self_test():
         for reason in refusal(dict(complete), network_id="layerxtestnet")
     )
 
+    material = {
+        "ap2_keys": {use_case: "04" + "ab" * 64 for use_case in BETA_AP2_USE_CASES},
+        "visa_agent_public_key": "cc" * 32,
+        "visa_agent_expires_at": 1893456000,
+        "fiat_provider_public_key": "dd" * 32,
+        "principal_digest": "11" * 32,
+        "layerx_agent": "22" * 32,
+        "payer_account": "22" * 32,
+        "payee_account": "44" * 32,
+        "asset": "55" * 32,
+        "audience": "https://layerx-interop-gateway.layerx-testnet.svc.cluster.local:9443",
+        "currency": "LXT",
+        "asset_decimals": 18,
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        roots_file = pathlib.Path(directory) / "interop-beta-roots.json"
+        roots_file.write_text(json.dumps(material))
+        environ = {
+            variable: value
+            for variable, value in complete.items()
+            if variable not in {ROOT_VARIABLE[name] for name in EXTERNAL_ROOTS}
+        }
+        sources = {}
+        generated = render(root, dict(environ), network, key, str(roots_file), sources)
+        for name in EXTERNAL_ROOTS:
+            assert sources[name] == BETA_SOURCE, name
+        assert [pin["use_case"] for pin in generated["ap2_keys"]] == list(BETA_AP2_USE_CASES)
+        assert all(
+            pin["key_id"].startswith("layerx-beta-")
+            and pin["public_key_sec1"] == material["ap2_keys"][pin["use_case"]]
+            for pin in generated["ap2_keys"]
+        )
+        binding = generated["ap2_assets"][0]
+        assert binding["principal_digest"] == material["principal_digest"]
+        assert binding["audience"] == material["audience"] and binding["currency"] == "LXT"
+        assert binding["minor_unit_exponent"] == 0
+        assert binding["atomic_units_per_minor_unit"] == "1" + "0" * 18
+        assert int(binding["atomic_units_per_minor_unit"]) < 2**128
+        assert binding["asset"] == material["asset"]
+        assert binding["payer_account"] == material["payer_account"]
+        assert binding["payee_account"] == material["payee_account"]
+        assert binding["payee_merchant_id"] == BETA_MERCHANT_ID
+        agent = generated["visa_agents"][0]
+        assert agent["algorithm"] == "ed25519" and agent["status"] == "active"
+        assert agent["public_key"] == material["visa_agent_public_key"]
+        assert agent["layerx_agent"] != agent["public_key"]
+        assert agent["agent_domain"].startswith("https://") and agent["expires_at"] > 0
+        target = generated["visa_targets"][0]
+        assert target["authority"] == material["audience"][len("https://") :]
+        assert target["path"] == BETA_MERCHANT_PATH and "/" not in target["authority"]
+        assert generated["fiat_providers"] == [
+            {
+                "provider": BETA_FIAT_PROVIDER,
+                "public_key_ed25519": material["fiat_provider_public_key"],
+            }
+        ]
+        declared = dict(environ)
+        declared[ROOT_VARIABLE["fiat_providers"]] = complete[ROOT_VARIABLE["fiat_providers"]]
+        pinned = render(root, declared, network, key, str(roots_file))
+        assert pinned["fiat_providers"][0]["provider"] == "example-provider"
+        assert pinned["visa_agents"] == generated["visa_agents"]
+
+        for field, value, expected in (
+            ("ap2_keys", {"checkout-mandate": "04" + "ab" * 64}, "one key per AP2 use case"),
+            ("audience", "http://gateway.internal", "https origin"),
+            ("currency", "lxt", "three-letter code"),
+            ("asset_decimals", 39, "decimal exponent"),
+            ("visa_agent_expires_at", 0, "expiry of the generated agent key"),
+            ("visa_agent_public_key", "cc" * 31, "ed25519 public key"),
+            ("principal_digest", "not-hex", "32-byte lowercase hexadecimal"),
+        ):
+            broken_material = dict(material)
+            broken_material[field] = value
+            roots_file.write_text(json.dumps(broken_material))
+            reasons = refusal(dict(environ), beta_file=str(roots_file))
+            assert any(expected in reason for reason in reasons), (field, reasons)
+        broken_material = dict(material)
+        broken_material["ap2_keys"] = {
+            use_case: "ab" * 65 for use_case in BETA_AP2_USE_CASES
+        }
+        roots_file.write_text(json.dumps(broken_material))
+        assert any(
+            "uncompressed SEC1 P-256 public key" in reason
+            for reason in refusal(dict(environ), beta_file=str(roots_file))
+        )
+        roots_file.write_text("{")
+        assert any(
+            "are unreadable" in reason
+            for reason in refusal(dict(environ), beta_file=str(roots_file))
+        )
+
     with tempfile.TemporaryDirectory() as directory:
         manifest = pathlib.Path(directory) / "manifest.json"
         manifest.write_text(
             json.dumps(
                 {
-                    "adapters": {"ucp": {"conformance_suite": "owner-ucp-suite", "version": "20260409"}},
+                    "adapters": {
+                        "ucp": {"conformance_suite": "owner-ucp-suite", "version": "20260409"}
+                    },
                     "transports": {"mcp": {"conformance_sha256": "77" * 32}},
                     "ucp_payment_handler": {
                         "id": "owner-handler",
@@ -589,13 +962,18 @@ def self_test():
         manifest.write_text(json.dumps({"unexpected": 1}))
         assert any("unknown fields" in reason for reason in refusal(environ))
 
+    required = len(suites) + len(TRANSPORT_VARIABLE)
     sys.stdout.write(
         "interop gateway render: %d adapters and %d transports derived from the vendored "
-        "specifications; %d deployment variables refused by name when absent\n"
+        "specifications; %d first-party conformance suites derived from %s; %d deployment "
+        "variables refused by name when absent, %d optional overrides\n"
         % (
             len(ADAPTERS),
             len(TRANSPORTS),
-            len(CONFORMANCE_VARIABLE) + len(TRANSPORT_VARIABLE) + len(EXTERNAL_ROOTS),
+            len(first_party),
+            CONFORMANCE_DIRECTORY,
+            required,
+            len(first_party) + len(ROOTS) + 1,
         )
     )
     return 0

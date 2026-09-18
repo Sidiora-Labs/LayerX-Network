@@ -1,0 +1,60 @@
+[
+  {
+    "name": "successful_settlement",
+    "valid": true,
+    "document": {
+      "success": true,
+      "payer": "0x1212121212121212121212121212121212121212121212121212121212121212",
+      "transaction": "lxp:abababababababababababababababababababababababababababababababab",
+      "network": "layerx:mainnet",
+      "amount": "1000",
+      "extensions": {
+        "layerx": {
+          "receipt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "receiptDigest": "abababababababababababababababababababababababababababababababab",
+          "verificationLevel": "sequencer-signed"
+        }
+      }
+    }
+  },
+  {
+    "name": "pending_settlement",
+    "valid": true,
+    "document": {
+      "success": false,
+      "errorReason": "settlement_pending",
+      "transaction": "pending:ref-123",
+      "network": "layerx:testnet"
+    }
+  },
+  {
+    "name": "refused_settlement",
+    "valid": true,
+    "document": {
+      "success": false,
+      "errorReason": "insufficient_balance",
+      "transaction": "",
+      "network": "layerx:testnet"
+    }
+  },
+  {
+    "name": "settlement_success_with_error_reason",
+    "valid": false,
+    "document": {
+      "success": true,
+      "errorReason": "should-not-be-here",
+      "transaction": "lxp:abababababababababababababababababababababababababababababababab",
+      "network": "layerx:testnet",
+      "amount": "500"
+    }
+  },
+  {
+    "name": "settlement_failed_without_error_reason",
+    "valid": false,
+    "document": {
+      "success": false,
+      "transaction": "",
+      "network": "layerx:testnet"
+    }
+  }
+]

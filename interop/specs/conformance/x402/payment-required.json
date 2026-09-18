@@ -1,0 +1,174 @@
+[
+  {
+    "name": "minimal_valid_payment_required",
+    "valid": true,
+    "document": {
+      "x402Version": 2,
+      "resource": {
+        "url": "https://api.example.com/resource"
+      },
+      "accepts": [
+        {
+          "scheme": "exact",
+          "network": "layerx:testnet",
+          "amount": "1000",
+          "asset": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+          "payTo": "0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
+          "maxTimeoutSeconds": 120
+        }
+      ]
+    }
+  },
+  {
+    "name": "payment_required_with_all_optional_fields",
+    "valid": true,
+    "document": {
+      "x402Version": 2,
+      "error": "Unauthorized access",
+      "resource": {
+        "url": "https://api.example.com/resource",
+        "description": "Premium content",
+        "mimeType": "application/json",
+        "serviceName": "API Service",
+        "tags": [
+          "api",
+          "premium"
+        ],
+        "iconUrl": "https://api.example.com/icon.png"
+      },
+      "accepts": [
+        {
+          "scheme": "exact",
+          "network": "layerx:mainnet",
+          "amount": "5000",
+          "asset": "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+          "payTo": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+          "maxTimeoutSeconds": 300,
+          "extra": {
+            "customField": "value"
+          }
+        }
+      ],
+      "extensions": {}
+    }
+  },
+  {
+    "name": "payment_required_with_multiple_accepts",
+    "valid": true,
+    "document": {
+      "x402Version": 2,
+      "resource": {
+        "url": "https://service.example/data"
+      },
+      "accepts": [
+        {
+          "scheme": "exact",
+          "network": "layerx:testnet",
+          "amount": "100",
+          "asset": "0x1111111111111111111111111111111111111111111111111111111111111111",
+          "payTo": "0x2222222222222222222222222222222222222222222222222222222222222222",
+          "maxTimeoutSeconds": 60
+        },
+        {
+          "scheme": "402lxp",
+          "network": "layerx:mainnet",
+          "amount": "200",
+          "asset": "0x3333333333333333333333333333333333333333333333333333333333333333",
+          "payTo": "0x4444444444444444444444444444444444444444444444444444444444444444",
+          "maxTimeoutSeconds": 90
+        }
+      ]
+    }
+  },
+  {
+    "name": "payment_required_wrong_version",
+    "valid": false,
+    "document": {
+      "x402Version": 1,
+      "resource": {
+        "url": "https://api.example.com/resource"
+      },
+      "accepts": [
+        {
+          "scheme": "exact",
+          "network": "layerx:testnet",
+          "amount": "1000",
+          "asset": "0xabababababababababababababababababababababababababababababababab",
+          "payTo": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "maxTimeoutSeconds": 120
+        }
+      ]
+    }
+  },
+  {
+    "name": "payment_required_empty_accepts",
+    "valid": false,
+    "document": {
+      "x402Version": 2,
+      "resource": {
+        "url": "https://api.example.com/resource"
+      },
+      "accepts": []
+    }
+  },
+  {
+    "name": "payment_required_zero_amount",
+    "valid": false,
+    "document": {
+      "x402Version": 2,
+      "resource": {
+        "url": "https://api.example.com/resource"
+      },
+      "accepts": [
+        {
+          "scheme": "exact",
+          "network": "layerx:testnet",
+          "amount": "0",
+          "asset": "0xabababababababababababababababababababababababababababababababab",
+          "payTo": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "maxTimeoutSeconds": 120
+        }
+      ]
+    }
+  },
+  {
+    "name": "payment_required_negative_amount",
+    "valid": false,
+    "document": {
+      "x402Version": 2,
+      "resource": {
+        "url": "https://api.example.com/resource"
+      },
+      "accepts": [
+        {
+          "scheme": "exact",
+          "network": "layerx:testnet",
+          "amount": "-100",
+          "asset": "0xabababababababababababababababababababababababababababababababab",
+          "payTo": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "maxTimeoutSeconds": 120
+        }
+      ]
+    }
+  },
+  {
+    "name": "payment_required_empty_url",
+    "valid": false,
+    "document": {
+      "x402Version": 2,
+      "resource": {
+        "url": ""
+      },
+      "accepts": [
+        {
+          "scheme": "exact",
+          "network": "layerx:testnet",
+          "amount": "1000",
+          "asset": "0xabababababababababababababababababababababababababababababababab",
+          "payTo": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "maxTimeoutSeconds": 120
+        }
+      ]
+    }
+  }
+]
