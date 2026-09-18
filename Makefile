@@ -2397,6 +2397,40 @@ human-qualify:
 platform-qualify:
 	python3 tools/qualification/release_runner.py $@
 
+# LayerX beta: Jev advisory checks (non-blocking, they gate nothing)
+JEV_OUT ?= $(BUILD_DIR)/jev
+JEV_MODEL ?=
+JEV_BASE ?= origin/main
+JEV_HEAD ?= HEAD
+JEV_PR_BODY ?=
+JEV_LOGS ?= $(wildcard $(BUILD_DIR)/qualification/*/logs/*.log)
+JEV_FORMAT ?= auto
+JEV_WORKSPACES ?=
+JEV_RUN = python3 -m tools.jev
+JEV_COMMON = --out $(JEV_OUT) $(if $(JEV_MODEL),--model $(JEV_MODEL))
+
+.PHONY: jev-ledger jev-pr jev-failures jev-deps jev-docs jev-test
+
+jev-ledger:
+	$(JEV_RUN) ledger $(JEV_COMMON)
+
+jev-pr:
+	$(JEV_RUN) pr --base $(JEV_BASE) --head $(JEV_HEAD) --commits \
+		$(if $(JEV_PR_BODY),--body $(JEV_PR_BODY)) $(JEV_COMMON)
+
+jev-failures:
+	$(JEV_RUN) failures $(addprefix --log-file ,$(JEV_LOGS)) \
+		--format $(JEV_FORMAT) $(JEV_COMMON)
+
+jev-deps:
+	$(JEV_RUN) deps --run $(addprefix --workspace ,$(JEV_WORKSPACES)) $(JEV_COMMON)
+
+jev-docs:
+	$(JEV_RUN) docs $(JEV_COMMON)
+
+jev-test:
+	python3 -m unittest discover -s tools/jev/tests -t .
+
 PUBLIC_TLS_TEST_TARGET_DIR = $(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(CURDIR)/platform/target)
 PUBLIC_TLS_TEST_BOUNDARY = $(PUBLIC_TLS_TEST_TARGET_DIR)/debug/layerx-paxeer-boundary
 PUBLIC_TLS_TEST_CLOCK = $(PUBLIC_TLS_TEST_TARGET_DIR)/debug/layerx-runtime-clock
