@@ -9,13 +9,13 @@ use std::collections::BTreeMap;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use layerx_x402::model::{
-    AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements, ResourceInfo,
-    SettlementResponse, X402_VERSION,
+    account_identifiers, AtomicAmount, LayerXTerms, PaymentPayload, PaymentRequired,
+    PaymentRequirements, ResourceInfo, SettlementResponse, X402Error, X402_VERSION,
 };
 use layerx_x402::transport::{
     decode_payment_required, encode_payment_required, TransportKind, TransportValue,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 
 const PAYMENT_REQUIRED_SUITE: &str =
     include_str!("../../../specs/conformance/x402/payment-required.json");
@@ -23,6 +23,34 @@ const PAYMENT_PAYLOAD_SUITE: &str =
     include_str!("../../../specs/conformance/x402/payment-payload.json");
 const SETTLEMENT_RESPONSE_SUITE: &str =
     include_str!("../../../specs/conformance/x402/settlement-response.json");
+
+const PAYEE_ACCOUNT: &str = "agent:did:layerx:api-seller:main";
+const OTHER_ACCOUNT: &str = "agent:did:layerx:data-seller:main";
+const CURRENCY: &str = "LXP";
+
+fn account_id(account: &str, derivation: usize) -> [u8; 32] {
+    account_identifiers(account)
+        .unwrap_or_else(|error| panic!("{account} has account identifiers: {error}"))[derivation]
+}
+
+fn hex32(bytes: &[u8; 32]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(66);
+    text.push_str("0x");
+    for byte in bytes {
+        text.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    text
+}
+
+fn pay_to(account: &str) -> String {
+    hex32(&account_id(account, 0))
+}
+
+fn layerx_terms(account: &str) -> Value {
+    json!({"layerx": {"commitment": "executed", "account": account, "currency": CURRENCY}})
+}
 
 struct Vector {
     name: String,
@@ -249,9 +277,9 @@ fn payment_required_http_transport_encoding_is_base64_json() {
             network: "layerx:testnet".to_owned(),
             amount: AtomicAmount::from_u128(750),
             asset: "0x".to_owned() + &"aa".repeat(32),
-            pay_to: "0x".to_owned() + &"bb".repeat(32),
+            pay_to: pay_to(PAYEE_ACCOUNT),
             max_timeout_seconds: 100,
-            extra: None,
+            extra: Some(layerx_terms(PAYEE_ACCOUNT)),
         }],
         extensions: BTreeMap::new(),
     };
@@ -290,9 +318,9 @@ fn payment_required_mcp_transport_encoding_is_json() {
             network: "layerx:testnet".to_owned(),
             amount: AtomicAmount::from_u128(750),
             asset: "0x".to_owned() + &"aa".repeat(32),
-            pay_to: "0x".to_owned() + &"bb".repeat(32),
+            pay_to: pay_to(PAYEE_ACCOUNT),
             max_timeout_seconds: 100,
-            extra: None,
+            extra: Some(layerx_terms(PAYEE_ACCOUNT)),
         }],
         extensions: BTreeMap::new(),
     };
@@ -349,12 +377,19 @@ fn payment_requirements_validates_layerx_network_format() {
         network: "layerx:testnet".to_owned(),
         amount: AtomicAmount::from_u128(100),
         asset: "0x".to_owned() + &"ab".repeat(32),
-        pay_to: "0x".to_owned() + &"cd".repeat(32),
+        pay_to: pay_to(PAYEE_ACCOUNT),
         max_timeout_seconds: 60,
-        extra: None,
+        extra: Some(layerx_terms(PAYEE_ACCOUNT)),
     };
     assert!(valid.validate().is_ok());
     assert!(valid.layerx_facts().is_ok());
+    assert_eq!(
+        valid.layerx_terms(),
+        Ok(LayerXTerms {
+            account: PAYEE_ACCOUNT.to_owned(),
+            currency: CURRENCY.to_owned(),
+        })
+    );
 
     let wrong_namespace = PaymentRequirements {
         scheme: "exact".to_owned(),
@@ -398,9 +433,16 @@ fn wire_encoding_round_trip_preserves_all_fields() {
             network: "layerx:mainnet".to_owned(),
             amount: AtomicAmount::from_u128(12345),
             asset: "0x".to_owned() + &"ab".repeat(32),
-            pay_to: "0x".to_owned() + &"cd".repeat(32),
+            pay_to: pay_to(PAYEE_ACCOUNT),
             max_timeout_seconds: 300,
-            extra: Some(json!({"custom": "field"})),
+            extra: Some(json!({
+                "custom": "field",
+                "layerx": {
+                    "commitment": "executed",
+                    "account": PAYEE_ACCOUNT,
+                    "currency": CURRENCY
+                }
+            })),
         }],
         extensions: {
             let mut map = BTreeMap::new();
@@ -422,4 +464,113 @@ fn wire_encoding_round_trip_preserves_all_fields() {
             .unwrap_or_else(|error| panic!("decoding: {error:?}"));
         assert_eq!(decoded, original);
     }
+}
+
+fn layerx_offer(pay_to: String, extra: Option<Value>) -> PaymentRequirements {
+    PaymentRequirements {
+        scheme: "exact".to_owned(),
+        network: "layerx:testnet".to_owned(),
+        amount: AtomicAmount::from_u128(100),
+        asset: "0x".to_owned() + &"ab".repeat(32),
+        pay_to,
+        max_timeout_seconds: 60,
+        extra,
+    }
+}
+
+#[test]
+fn layerx_offer_without_quote_terms_is_refused() {
+    let missing = layerx_offer(pay_to(PAYEE_ACCOUNT), None);
+    assert_eq!(missing.validate(), Err(X402Error::ProfileMissing));
+    assert_eq!(missing.layerx_terms(), Err(X402Error::ProfileMissing));
+
+    let commitment_only = layerx_offer(
+        pay_to(PAYEE_ACCOUNT),
+        Some(json!({"layerx": {"commitment": "executed"}})),
+    );
+    assert_eq!(commitment_only.validate(), Err(X402Error::ProfileMissing));
+
+    let account_only = layerx_offer(
+        pay_to(PAYEE_ACCOUNT),
+        Some(json!({"layerx": {"account": PAYEE_ACCOUNT}})),
+    );
+    assert_eq!(account_only.validate(), Err(X402Error::ProfileMissing));
+
+    let currency_only = layerx_offer(
+        pay_to(PAYEE_ACCOUNT),
+        Some(json!({"layerx": {"currency": CURRENCY}})),
+    );
+    assert_eq!(currency_only.validate(), Err(X402Error::ProfileMissing));
+}
+
+#[test]
+fn layerx_pay_to_must_derive_from_the_advertised_account() {
+    for derivation in 0..2 {
+        let bound = layerx_offer(
+            hex32(&account_id(PAYEE_ACCOUNT, derivation)),
+            Some(layerx_terms(PAYEE_ACCOUNT)),
+        );
+        assert_eq!(bound.validate(), Ok(()));
+        assert_eq!(
+            bound.layerx_terms().map(|terms| terms.account),
+            Ok(PAYEE_ACCOUNT.to_owned())
+        );
+    }
+
+    let redirected = layerx_offer(pay_to(OTHER_ACCOUNT), Some(layerx_terms(PAYEE_ACCOUNT)));
+    assert_eq!(redirected.validate(), Err(X402Error::ProfileMismatch));
+    assert_eq!(redirected.layerx_terms(), Err(X402Error::ProfileMismatch));
+
+    let unbindable = layerx_offer(
+        "0x".to_owned() + &"cd".repeat(32),
+        Some(layerx_terms(PAYEE_ACCOUNT)),
+    );
+    assert_eq!(unbindable.validate(), Err(X402Error::ProfileMismatch));
+}
+
+#[test]
+fn layerx_quote_terms_follow_the_account_and_currency_grammar() {
+    let payee = pay_to(PAYEE_ACCOUNT);
+    let refused = [
+        json!({"layerx": {"account": "did:layerx:api-seller", "currency": CURRENCY}}),
+        json!({"layerx": {"account": "agent::main", "currency": CURRENCY}}),
+        json!({"layerx": {"account": "agent:did:layerx:api-seller:asset:lxp:main", "currency": CURRENCY}}),
+        json!({"layerx": {"account": "agent:DID:layerx:api-seller:main", "currency": CURRENCY}}),
+        json!({"layerx": {"account": PAYEE_ACCOUNT, "currency": "lxp"}}),
+        json!({"layerx": {"account": PAYEE_ACCOUNT, "currency": ""}}),
+        json!({"layerx": {"account": PAYEE_ACCOUNT, "currency": "LXP-TESTNET"}}),
+        json!({"layerx": {"account": PAYEE_ACCOUNT, "currency": 1}}),
+        json!({"layerx": {"account": 1, "currency": CURRENCY}}),
+        json!({"layerx": "terms"}),
+    ];
+    for extra in refused {
+        let offer = layerx_offer(payee.clone(), Some(extra.clone()));
+        assert_eq!(
+            offer.validate(),
+            Err(X402Error::ProfileMismatch),
+            "{extra} is not a layerx profile"
+        );
+    }
+}
+
+#[test]
+fn offers_outside_layerx_carry_no_quote_terms_but_keep_the_grammar() {
+    let external = PaymentRequirements {
+        scheme: "exact".to_owned(),
+        network: "eip155:84532".to_owned(),
+        amount: AtomicAmount::from_u128(10_000),
+        asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e".to_owned(),
+        pay_to: "0x209693Bc6afc0C5328bA36FaF03C514EF312287C".to_owned(),
+        max_timeout_seconds: 60,
+        extra: Some(json!({"name": "USDC", "version": "2"})),
+    };
+    assert_eq!(external.validate(), Ok(()));
+    assert_eq!(external.layerx_terms(), Err(X402Error::ProfileMissing));
+    assert_eq!(external.layerx_facts(), Err(X402Error::UnsupportedOffer));
+
+    let malformed = PaymentRequirements {
+        extra: Some(json!({"layerx": {"account": "agent:main", "currency": CURRENCY}})),
+        ..external
+    };
+    assert_eq!(malformed.validate(), Err(X402Error::ProfileMismatch));
 }

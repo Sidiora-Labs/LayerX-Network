@@ -22,8 +22,15 @@
           "network": "layerx:testnet",
           "amount": "25",
           "asset": "0505050505050505050505050505050505050505050505050505050505050505",
-          "payTo": "0707070707070707070707070707070707070707070707070707070707070707",
-          "maxTimeoutSeconds": 60
+          "payTo": "50ed0f69f4b8ad6a4a4722993ebba1107f34d9b04978a64038dc9d2a95a4ff2b",
+          "maxTimeoutSeconds": 60,
+          "extra": {
+            "layerx": {
+              "commitment": "executed",
+              "account": "agent:did:layerx:merchant:main",
+              "currency": "LXP"
+            }
+          }
         }
       ]
     }
@@ -44,8 +51,15 @@
         "network": "layerx:testnet",
         "amount": "25",
         "asset": "0505050505050505050505050505050505050505050505050505050505050505",
-        "payTo": "0707070707070707070707070707070707070707070707070707070707070707",
-        "maxTimeoutSeconds": 60
+        "payTo": "50ed0f69f4b8ad6a4a4722993ebba1107f34d9b04978a64038dc9d2a95a4ff2b",
+        "maxTimeoutSeconds": 60,
+        "extra": {
+          "layerx": {
+            "commitment": "executed",
+            "account": "agent:did:layerx:merchant:main",
+            "currency": "LXP"
+          }
+        }
       }
     }
   },
@@ -80,8 +94,15 @@
           "network": "layerx:testnet",
           "amount": "25",
           "asset": "0505050505050505050505050505050505050505050505050505050505050505",
-          "payTo": "0707070707070707070707070707070707070707070707070707070707070707",
-          "maxTimeoutSeconds": 60
+          "payTo": "50ed0f69f4b8ad6a4a4722993ebba1107f34d9b04978a64038dc9d2a95a4ff2b",
+          "maxTimeoutSeconds": 60,
+          "extra": {
+            "layerx": {
+              "commitment": "executed",
+              "account": "agent:did:layerx:merchant:main",
+              "currency": "LXP"
+            }
+          }
         }
       },
       "paymentRequirements": {
@@ -89,8 +110,15 @@
         "network": "layerx:testnet",
         "amount": "25",
         "asset": "0505050505050505050505050505050505050505050505050505050505050505",
-        "payTo": "0707070707070707070707070707070707070707070707070707070707070707",
-        "maxTimeoutSeconds": 60
+        "payTo": "50ed0f69f4b8ad6a4a4722993ebba1107f34d9b04978a64038dc9d2a95a4ff2b",
+        "maxTimeoutSeconds": 60,
+        "extra": {
+          "layerx": {
+            "commitment": "executed",
+            "account": "agent:did:layerx:merchant:main",
+            "currency": "LXP"
+          }
+        }
       }
     }
   },
@@ -167,8 +195,15 @@
           "network": "layerx:testnet",
           "amount": "25",
           "asset": "0505050505050505050505050505050505050505050505050505050505050505",
-          "payTo": "0707070707070707070707070707070707070707070707070707070707070707",
-          "maxTimeoutSeconds": 60
+          "payTo": "50ed0f69f4b8ad6a4a4722993ebba1107f34d9b04978a64038dc9d2a95a4ff2b",
+          "maxTimeoutSeconds": 60,
+          "extra": {
+            "layerx": {
+              "commitment": "executed",
+              "account": "agent:did:layerx:merchant:main",
+              "currency": "LXP"
+            }
+          }
         }
       ]
     }

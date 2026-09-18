@@ -7,12 +7,27 @@ use std::fmt::{Display, Formatter};
 use layerx_interop_gateway::error::GatewayError;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::Value;
+use serde_json::{Map, Value};
+use sha2::{Digest as _, Sha256};
 
 pub const X402_VERSION: u8 = 2;
 pub const PAYMENT_REQUIRED_HEADER: &str = "PAYMENT-REQUIRED";
 pub const PAYMENT_SIGNATURE_HEADER: &str = "PAYMENT-SIGNATURE";
 pub const PAYMENT_RESPONSE_HEADER: &str = "PAYMENT-RESPONSE";
+
+/// CAIP-2 namespace of every network that settles through a `LayerX` receipt.
+pub const LAYERX_NETWORK_NAMESPACE: &str = "layerx";
+/// Maximum byte length of an `extra.layerx.account` reference.
+pub const MAX_ACCOUNT_REFERENCE_BYTES: usize = 512;
+/// Maximum byte length of the identifier inside an account reference.
+pub const MAX_ACCOUNT_DID_BYTES: usize = 255;
+/// Maximum byte length of an `extra.layerx.currency` code.
+pub const MAX_CURRENCY_CODE_BYTES: usize = 16;
+
+/// Protocol 2 account-id domain, as derived by the Paxeer client.
+const LEGACY_ACCOUNT_ID_DOMAIN: &[u8] = b"LXP/v1/account-id\0";
+/// Protocol 3 account-id domain, as derived by `layerx-wire`.
+const NATIVE_ACCOUNT_ID_DOMAIN: &[u8] = b"LX:ACCOUNT:v1";
 
 const SHORT_TEXT_LIMIT: usize = 512;
 const URL_LIMIT: usize = 2_048;
@@ -148,7 +163,9 @@ pub struct PaymentRequirements {
 
 impl PaymentRequirements {
     /// # Errors
-    /// Returns an error for invalid scheme, network, asset, payee, amount or timeout.
+    /// Returns an error for invalid scheme, network, asset, payee, amount or
+    /// timeout, and for a `LayerX` offer whose `extra.layerx` profile is
+    /// absent, malformed, or not bound to `payTo`.
     pub fn validate(&self) -> Result<(), X402Error> {
         if !identifier(&self.scheme, 32)
             || !caip2(&self.network)
@@ -159,21 +176,155 @@ impl PaymentRequirements {
         {
             return Err(X402Error::InvalidRequirements);
         }
+        if self.is_layerx_network() {
+            self.layerx_terms()?;
+        } else {
+            layerx_profile(self.extra.as_ref())?;
+        }
         Ok(())
+    }
+
+    /// Whether this offer settles on a `LayerX` network.
+    #[must_use]
+    pub fn is_layerx_network(&self) -> bool {
+        self.network
+            .split_once(':')
+            .is_some_and(|(namespace, _)| namespace == LAYERX_NETWORK_NAMESPACE)
+    }
+
+    /// The quote terms a `LayerX` payer needs to reach the human API:
+    /// `extra.layerx.account` is the `agent:<did>:main` account reference that
+    /// `move.quote` takes as its destination and `extra.layerx.currency` is
+    /// the `CurrencyCode` its money carries. `payTo` must be the account id
+    /// derived from that reference, so the advertised terms can never redirect
+    /// a payment away from the payee this offer commits to.
+    ///
+    /// # Errors
+    /// Returns an error when the profile block is missing or malformed, and
+    /// when `payTo` is not an account id derived from `account`.
+    pub fn layerx_terms(&self) -> Result<LayerXTerms, X402Error> {
+        let profile = layerx_profile(self.extra.as_ref())?.ok_or(X402Error::ProfileMissing)?;
+        let (Some(account), Some(currency)) = (profile.account, profile.currency) else {
+            return Err(X402Error::ProfileMissing);
+        };
+        let payee = parse_hex32(&self.pay_to)?;
+        if !account_identifiers(&account)?.contains(&payee) {
+            return Err(X402Error::ProfileMismatch);
+        }
+        Ok(LayerXTerms { account, currency })
     }
 
     /// # Errors
     /// Returns an error for a non-`LayerX` network or invalid asset or payee encoding.
     pub fn layerx_facts(&self) -> Result<([u8; 32], [u8; 32]), X402Error> {
-        let (namespace, _) = self
-            .network
-            .split_once(':')
-            .ok_or(X402Error::InvalidRequirements)?;
-        if namespace != "layerx" {
+        if !self.is_layerx_network() {
             return Err(X402Error::UnsupportedOffer);
         }
         Ok((parse_hex32(&self.asset)?, parse_hex32(&self.pay_to)?))
     }
+}
+
+/// The `LayerX` quote terms an offer advertises under `extra.layerx`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LayerXTerms {
+    pub account: String,
+    pub currency: String,
+}
+
+/// Both account identifiers an `agent:<did>:main` reference can carry: the
+/// protocol 2 derivation `SHA256("LXP/v1/account-id\0" || name)` and the
+/// protocol 3 derivation `SHA256("LX:ACCOUNT:v1" || u32be(len) || name)`. A
+/// deployment runs one of them, so an offer binds under either.
+///
+/// # Errors
+/// Returns an error for a reference whose length does not fit the protocol 3
+/// length prefix.
+pub fn account_identifiers(account: &str) -> Result<[[u8; 32]; 2], X402Error> {
+    let name = account.as_bytes();
+    let length = u32::try_from(name.len())
+        .map_err(|_| X402Error::Bounds)?
+        .to_be_bytes();
+    Ok([
+        account_digest(&[LEGACY_ACCOUNT_ID_DOMAIN, name]),
+        account_digest(&[NATIVE_ACCOUNT_ID_DOMAIN, &length, name]),
+    ])
+}
+
+struct LayerXProfile {
+    account: Option<String>,
+    currency: Option<String>,
+}
+
+fn layerx_profile(extra: Option<&Value>) -> Result<Option<LayerXProfile>, X402Error> {
+    let Some(terms) = layerx_block(extra)? else {
+        return Ok(None);
+    };
+    Ok(Some(LayerXProfile {
+        account: account_reference(terms.get("account"))?,
+        currency: currency_code(terms.get("currency"))?,
+    }))
+}
+
+fn layerx_block(extra: Option<&Value>) -> Result<Option<&Map<String, Value>>, X402Error> {
+    let Some(Value::Object(extra)) = extra else {
+        return Ok(None);
+    };
+    match extra.get("layerx") {
+        None => Ok(None),
+        Some(Value::Object(terms)) => Ok(Some(terms)),
+        Some(_) => Err(X402Error::ProfileMismatch),
+    }
+}
+
+fn account_reference(value: Option<&Value>) -> Result<Option<String>, X402Error> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let account = value.as_str().ok_or(X402Error::ProfileMismatch)?;
+    if account.len() > MAX_ACCOUNT_REFERENCE_BYTES {
+        return Err(X402Error::ProfileMismatch);
+    }
+    let identifier = account
+        .strip_prefix("agent:")
+        .and_then(|rest| rest.strip_suffix(":main"))
+        .ok_or(X402Error::ProfileMismatch)?;
+    if identifier.is_empty()
+        || identifier.len() > MAX_ACCOUNT_DID_BYTES
+        || identifier.starts_with(':')
+        || identifier.ends_with(':')
+        || identifier.contains("::")
+        || identifier.contains(":asset:")
+        || !identifier
+            .bytes()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b':' | b'-'))
+    {
+        return Err(X402Error::ProfileMismatch);
+    }
+    Ok(Some(account.to_owned()))
+}
+
+fn currency_code(value: Option<&Value>) -> Result<Option<String>, X402Error> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let currency = value.as_str().ok_or(X402Error::ProfileMismatch)?;
+    if currency.is_empty()
+        || currency.len() > MAX_CURRENCY_CODE_BYTES
+        || !currency
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+    {
+        return Err(X402Error::ProfileMismatch);
+    }
+    Ok(Some(currency.to_owned()))
+}
+
+fn account_digest(parts: &[&[u8]]) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    for part in parts {
+        hash.update(part);
+    }
+    hash.finalize().into()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -303,6 +454,8 @@ pub enum X402Error {
     InvalidAmount,
     InvalidRequirements,
     InvalidPayload,
+    ProfileMissing,
+    ProfileMismatch,
     UnsupportedOffer,
     RequirementsMismatch,
     ExtensionsMismatch,
@@ -323,6 +476,11 @@ impl Display for X402Error {
             Self::InvalidAmount => formatter.write_str("x402 amount is not a canonical integer"),
             Self::InvalidRequirements => formatter.write_str("x402 requirements are invalid"),
             Self::InvalidPayload => formatter.write_str("x402 payment payload is invalid"),
+            Self::ProfileMissing => formatter
+                .write_str("layerx offer carries no extra.layerx account and currency terms"),
+            Self::ProfileMismatch => {
+                formatter.write_str("layerx offer terms are malformed or do not derive its payTo")
+            }
             Self::UnsupportedOffer => formatter.write_str("no supported x402 offer was found"),
             Self::RequirementsMismatch => {
                 formatter.write_str("payment payload does not match the issued requirements")

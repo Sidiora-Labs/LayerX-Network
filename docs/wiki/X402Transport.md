@@ -127,8 +127,21 @@ The accepted scheme set is `exact`, `metered`, and `subscription`
 `extra.layerx.commitment` is one of `executed`, `batched`, or `finalised`.
 For metered and subscription offers, `extra.layerx` also requires a nonzero
 64-hex `payer` and `purposeHash`. Subscription requires a positive decimal
-`windowSeconds` below `2^64`; metered forbids it. An exact offer may omit the
-LayerX extra, in which case its commitment is `executed`.
+`windowSeconds` below `2^64`; metered forbids it.
+
+Every offer on a `layerx:*` network also carries the quote terms a payer needs
+to reach the human API: `extra.layerx.account` is the `agent:<did>:main`
+account reference `move.quote` takes as its destination, and
+`extra.layerx.currency` is the `CurrencyCode` its money carries. `payTo` is not
+independent of them: it must be the account id derived from `account`, under
+either `SHA256("LXP/v1/account-id\0" || name)` or
+`SHA256("LX:ACCOUNT:v1" || u32be(len) || name)`, so advertised terms can never
+redirect a payment away from the payee the offer commits to. A payer refuses an
+offer that omits the block or whose `payTo` derives from another account
+(`platform/middleware/buyer/src/index.ts`;
+`interop/crates/layerx-x402/src/model.rs`), and so does the interop x402
+adapter, for offers it issues, decodes, verifies and settles on every transport
+binding.
 
 Exact payment carries the verified canonical receipt, its receipt digest, and
 `verificationLevel: "sequencer-signed"`. The seller recomputes the digest,

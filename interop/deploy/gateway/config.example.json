@@ -6,8 +6,8 @@
       "version": "2.0.0",
       "specification_sha256": "7d9be66cbcf51d3593e17ac51a623395f8ccb86fd3d76a27919419e4ce83efef",
       "conformance_suite": "layerx-x402-conformance-v1",
-      "conformance_vectors": 18,
-      "conformance_sha256": "9a8040d0e6c4a983815928ddb4f5b91b021851c64c779c28cad17a5e089c9d84",
+      "conformance_vectors": 22,
+      "conformance_sha256": "f43180174584858e9b644234b951ebec99aa192590c00dad3c02b8746f22eb9e",
       "evidence_policy": "layerx-receipt"
     },
     {
@@ -56,19 +56,19 @@
       "id": "http",
       "version": "2",
       "specification_sha256": "4f0298aaa23ac75de0eb49b1e96e6e67a5b910d7527b3a71c63e426b3bf5bdfb",
-      "conformance_sha256": "d53db11962dceb3e9b7f57e42688534df2217395ce815e3b04bee56fb7e9783e"
+      "conformance_sha256": "7ebe8013fdb2aca55ce28a5cd53cc1668f68267f85a4d5d89b13d90915f57157"
     },
     {
       "id": "mcp",
       "version": "2",
       "specification_sha256": "4f1e0bb50c60e3fe384142f589cd6323b8a9ec4432335ef29053d1220f9e2146",
-      "conformance_sha256": "18f4feefff6ed52cf8efc0b26ef549922204ee58f002ff034a301bb531bd7d5e"
+      "conformance_sha256": "082146b167f010c9f8345b7e244dc13cbadf06b8ff02011953bdda821a0da332"
     },
     {
       "id": "a2a",
       "version": "2",
       "specification_sha256": "bbf078363a2fc4eeeb8f6e9b66cf36033f5acfc3984c0e8f427143368979d878",
-      "conformance_sha256": "de13163d136e48db695242e66003a0fb554d9e0e1ec4b5fb0a6912c5c73747e9"
+      "conformance_sha256": "4ad786ebd8117fe72ce4156108b07d386a53d6585c0951cac854aff8f7cd6930"
     }
   ],
   "x402_supported": {
