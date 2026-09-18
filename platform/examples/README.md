@@ -23,7 +23,7 @@ The committed runner checks all four projects with `make platform-test-reference
 
 ## Running the whole journey
 
-`node platform/examples/run-reference-apps.mjs --scenario emulator` is self-contained on any host that has the `layerx` CLI built. It resolves the binary from the first of `$LAYERX_BIN`, `build/bin/layerx`, and `layerx` on `PATH`; runs `layerx emulator provision` into a scratch profile directory; creates four real signing keys with `layerx key create`; starts `layerx emulator up` on the loopback address the buyer profile names, prefunded against the published sequencer trust anchor; waits for `GET /healthz` to report `ready`; and terminates the emulator and deletes the scratch profile when the run ends, including on failure.
+`node platform/examples/run-reference-apps.mjs --scenario emulator` is self-contained on any host that has the `layerx` CLI built. It resolves the binary from the first of `$LAYERX_BIN`, `build/bin/layerx`, and `layerx` on `PATH`; runs `layerx emulator provision` into a scratch profile directory; creates four real signing keys with `layerx key create`; starts `layerx emulator up --protocol-version 3` (the protocol version production runs and `layerx program deploy` signs) on the loopback address the buyer profile names, prefunded against the published sequencer trust anchor; waits for `GET /healthz` to report `ready`; and terminates the emulator and deletes the scratch profile when the run ends, including on failure.
 
 Every `LAYERX_EMULATOR_*` input is then derived from that run instead of being hand-set:
 

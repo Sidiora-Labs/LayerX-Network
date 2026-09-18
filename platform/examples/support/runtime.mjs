@@ -99,6 +99,28 @@ export class ReceiptAuthorityClient {
   }
 }
 
+const DIAGNOSTIC_LIMIT = 1024;
+
+export function diagnosticText(value, secrets = [], limit = DIAGNOSTIC_LIMIT) {
+  if (!Number.isSafeInteger(limit) || limit < 32) throw new Error("invalid_diagnostic_limit");
+  let text = typeof value === "string" ? value : Buffer.from(value ?? []).toString("utf8");
+  for (const secret of secrets) {
+    if (typeof secret !== "string" || secret.length < 8) continue;
+    text = text.split(secret).join("[redacted]");
+  }
+  text = text.replaceAll(/[^\t\n\r\u0020-\u007e]+/gu, " ").replaceAll(/\s+/gu, " ").trim();
+  return text.length > limit ? `${text.slice(0, limit)} [truncated]` : text;
+}
+
+export function commandPath(arguments_) {
+  const path = [];
+  for (const part of arguments_) {
+    if (typeof part !== "string" || part.startsWith("-")) break;
+    path.push(part);
+  }
+  return path.length === 0 ? "layerx" : path.join(" ");
+}
+
 export function exactObject(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_application_data");
   return value;

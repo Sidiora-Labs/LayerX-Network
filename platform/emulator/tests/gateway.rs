@@ -1175,7 +1175,11 @@ struct MoveRace {
     winner_receipt_root: String,
 }
 fn move_setup() -> Result<MoveSetup, String> {
-    let address = boot()?;
+    move_setup_protocol(2)
+}
+
+fn move_setup_protocol(protocol_version: u16) -> Result<MoveSetup, String> {
+    let address = boot_protocol(protocol_version)?;
     let source_public = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED)
         .verifying_key()
         .to_bytes();
@@ -1980,6 +1984,213 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
     move_final_state(&setup, &roots)?;
     let race = move_competing_quotes(&setup, &payment)?;
     move_stale_quote(&setup, &race)?;
+    Ok(())
+}
+
+fn state_field(state: &serde_json::Value, name: &str) -> Result<String, String> {
+    state
+        .get(name)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("state omitted {name}"))
+}
+
+fn state_number(state: &serde_json::Value, name: &str) -> Result<u64, String> {
+    state
+        .get(name)
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| format!("state omitted {name}"))
+}
+
+fn published_authority(
+    document: &serde_json::Value,
+) -> Result<layerx_proof::receipt::AuthorizedBatch, String> {
+    let authority = document
+        .get("authority")
+        .ok_or("receipt read omitted authority")?;
+    let published = |name: &str| -> Result<[u8; 32], String> {
+        let value = authority
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("authority omitted {name}"))?;
+        hex_decode(value)?
+            .try_into()
+            .map_err(|_| format!("authority field {name} is not 32 bytes"))
+    };
+    Ok(layerx_proof::receipt::AuthorizedBatch::new(
+        published("batch_id")?,
+        published("asset")?,
+        published("previous_state_root")?,
+        published("resulting_state_root")?,
+        published("sequencer_public_key")?,
+    ))
+}
+
+#[test]
+fn move_receipts_bind_their_own_batch_after_the_maintenance_batch() -> Result<(), String> {
+    let setup = move_setup_protocol(3)?;
+    let address = &setup.address;
+    let before_batch = state_number(&setup.before_state, "batch_number")?;
+    let before_sequence = state_number(&setup.before_state, "next_sequence")?;
+    let payment = move_commit(&setup)?;
+    let receipt_path = payment
+        .committed_result
+        .pointer("/evidence/0/source_ref")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("move journey omitted receipt source_ref")?;
+    let read = request(address, "GET", receipt_path, "", &[])?;
+    assert_eq!(read.status, 200, "receipt read failed: {}", read.text());
+    let document = response_result(&read)?;
+    let receipt_bytes = hex_decode(
+        document
+            .get("receipt")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("receipt lookup omitted canonical bytes")?,
+    )?;
+    let decoded =
+        layerx_wire::receipt::decode(&receipt_bytes).map_err(|error| format!("{error:?}"))?;
+    let protocol = decoded
+        .protocol()
+        .ok_or("move receipt was not protocol receipt")?;
+    assert_eq!(protocol.protocol_version(), 3);
+    assert_eq!(protocol.amount(), 250);
+    assert_eq!(
+        protocol.previous_state_root().as_slice(),
+        hex_decode(&setup.before_receipt_root)?.as_slice(),
+        "the move batch does not continue from the pre-move boundary"
+    );
+    let after_reply = request(address, "GET", "/v1/state", "", &[])?;
+    let after = response_result(&after_reply)?;
+    assert_eq!(state_number(&after, "batch_number")?, before_batch + 1);
+    assert_eq!(state_number(&after, "next_sequence")?, before_sequence + 2);
+    let live_receipt_root: [u8; 32] = hex_decode(&state_field(&after, "receipt_state_root")?)?
+        .try_into()
+        .map_err(|_| "live receipt root is not 32 bytes".to_owned())?;
+    assert_ne!(
+        live_receipt_root,
+        protocol.resulting_state_root(),
+        "protocol 3 appends a maintenance batch after the move, so the live boundary must sit past the move receipt"
+    );
+    let own_batch = published_authority(&document)?;
+    assert_eq!(own_batch.batch_id(), protocol.batch_id());
+    assert_eq!(
+        own_batch.previous_state_root(),
+        protocol.previous_state_root()
+    );
+    assert_eq!(
+        own_batch.resulting_state_root(),
+        protocol.resulting_state_root()
+    );
+    layerx_proof::receipt::verify(&receipt_bytes, &own_batch)
+        .map_err(|error| format!("receipt did not verify against its own batch: {error:?}"))?;
+    let live_boundary = layerx_proof::receipt::AuthorizedBatch::new(
+        own_batch.batch_id(),
+        own_batch.asset(),
+        own_batch.previous_state_root(),
+        live_receipt_root,
+        own_batch.sequencer_public_key(),
+    );
+    assert_eq!(
+        layerx_proof::receipt::verify(&receipt_bytes, &live_boundary)
+            .err()
+            .map(|failure| failure.check),
+        Some(layerx_proof::receipt::ReceiptCheck::ResultingStateRoot),
+        "binding the move receipt to the live boundary instead of its own batch must be refused"
+    );
+    let wrong_previous = layerx_proof::receipt::AuthorizedBatch::new(
+        own_batch.batch_id(),
+        own_batch.asset(),
+        live_receipt_root,
+        own_batch.resulting_state_root(),
+        own_batch.sequencer_public_key(),
+    );
+    assert_eq!(
+        layerx_proof::receipt::verify(&receipt_bytes, &wrong_previous)
+            .err()
+            .map(|failure| failure.check),
+        Some(layerx_proof::receipt::ReceiptCheck::PreviousStateRoot),
+        "binding the move receipt to a previous root that is not its batch's must be refused"
+    );
+    let replayed = request_with_idempotency(
+        address,
+        "POST",
+        "/v1/moves",
+        "application/json",
+        payment.commit_body.as_bytes(),
+        Some(payment.idempotency),
+    )?;
+    assert_eq!(replayed.status, 200);
+    assert_eq!(replayed.body, payment.committed.body);
+    let accounts = after
+        .get("accounts")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("committed state omitted accounts")?;
+    let balance = |name: &str| -> Option<u64> {
+        accounts
+            .iter()
+            .find(|account| account.get("name").and_then(serde_json::Value::as_str) == Some(name))
+            .and_then(|account| account.get("balance_lo"))
+            .and_then(serde_json::Value::as_u64)
+    };
+    assert_eq!(balance(setup.source), Some(750));
+    assert_eq!(balance(setup.destination), Some(250));
+    Ok(())
+}
+
+#[test]
+fn move_receipts_that_do_not_verify_against_their_batch_are_refused() -> Result<(), String> {
+    let setup = move_setup_protocol(3)?;
+    let address = &setup.address;
+    let quote_body = format!(
+        "{{\"source\":\"{}\",\"destination\":\"{}\",\"money\":{{\"currency\":\"LXP\",\"amount\":\"250\"}}}}",
+        setup.source, setup.destination
+    );
+    let quote_reply = post_json(address, "/v1/moves/quote", &quote_body)?;
+    assert_eq!(
+        quote_reply.status,
+        200,
+        "quote failed: {}",
+        quote_reply.text()
+    );
+    let quote_id = response_result(&quote_reply)?
+        .get("quote_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("quote omitted quote_id")?
+        .to_owned();
+    assert_eq!(
+        post_json(
+            address,
+            "/__emulator/faults",
+            "{\"kind\":\"corrupt_receipt\",\"count\":1}"
+        )?
+        .status,
+        200
+    );
+    let commit_body = format!("{{\"quote_id\":\"{quote_id}\"}}");
+    let idempotency = "move-payment-corrupt-0001";
+    let refused = request_with_idempotency(
+        address,
+        "POST",
+        "/v1/moves",
+        "application/json",
+        commit_body.as_bytes(),
+        Some(idempotency),
+    )?;
+    assert_eq!(refused.status, 503, "{}", refused.text());
+    assert_eq!(
+        error_code(&refused).as_deref(),
+        Some("move_receipt_verification_failed")
+    );
+    let retained = request_with_idempotency(
+        address,
+        "POST",
+        "/v1/moves",
+        "application/json",
+        commit_body.as_bytes(),
+        Some(idempotency),
+    )?;
+    assert_eq!(retained.status, 503);
+    assert_eq!(retained.body, refused.body);
     Ok(())
 }
 

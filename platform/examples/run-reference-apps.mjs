@@ -21,6 +21,7 @@ if (manifest.version !== 1 || !Array.isArray(manifest.applications) || manifest.
   throw new Error("invalid_reference_application_manifest");
 }
 
+const EMULATOR_PROTOCOL_VERSION = "3";
 const EMULATOR_PREFUND = "1000000000";
 const EMULATOR_SEED_MOVE = "100000";
 const EMULATOR_DEFAULT_PRICE = "1000";
@@ -204,6 +205,8 @@ async function startEmulator() {
     listen,
     "--network-id",
     "402",
+    "--protocol-version",
+    EMULATOR_PROTOCOL_VERSION,
     "--time-ms",
     Date.now().toString(),
     ...prefunds.flatMap((value) => ["--prefund", value]),

@@ -1,4 +1,4 @@
 schema = 1
 kind = "program"
-abi = 1
+abi = 2
 environment = "emulator"

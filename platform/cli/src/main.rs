@@ -462,6 +462,8 @@ struct EmulatorUpArgs {
     #[arg(long)]
     network_id: Option<u32>,
     #[arg(long)]
+    protocol_version: Option<u16>,
+    #[arg(long)]
     time_ms: Option<u64>,
     #[arg(long)]
     prefund: Vec<String>,
@@ -1506,6 +1508,7 @@ fn emulator_arguments(arguments: EmulatorUpArgs) -> Vec<String> {
     let EmulatorUpArgs {
         listen,
         network_id,
+        protocol_version,
         time_ms,
         prefund,
         sequencer_seed_file,
@@ -1516,6 +1519,9 @@ fn emulator_arguments(arguments: EmulatorUpArgs) -> Vec<String> {
     }
     if let Some(value) = network_id {
         arguments.extend(["--network-id".into(), value.to_string()]);
+    }
+    if let Some(value) = protocol_version {
+        arguments.extend(["--protocol-version".into(), value.to_string()]);
     }
     if let Some(value) = time_ms {
         arguments.extend(["--time-ms".into(), value.to_string()]);
