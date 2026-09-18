@@ -112,6 +112,7 @@ NODE_MANIFEST="$REPO_ROOT/platform/hosted/node/deployment.yaml"
 NODE_NETWORK_ID=$(sed -n 's/^  network-id: "\([0-9]*\)"$/\1/p' "$NODE_MANIFEST")
 NODE_ASSET_ID=$(sed -n 's/^  asset-id: "\([0-9a-f]*\)"$/\1/p' "$NODE_MANIFEST")
 PAXEER_RELAY_PORT=$(sed -n 's/^  paxeer-relay-port: "\([0-9]*\)"$/\1/p' "$NODE_MANIFEST")
+GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE=$(sed -n 's/^ *- {name: LAYERX_GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE, value: \([^}]*\)}$/\1/p' "$NODE_MANIFEST" | sort -u)
 
 log() { printf 'beta-cluster: %s\n' "$*" >&2; }
 fail() { printf 'beta-cluster: error: %s\n' "$*" >&2; exit 1; }
@@ -1395,14 +1396,30 @@ wait_for_node_genesis() {
     [[ $NODE_GUARANTOR_PUBLIC_KEY =~ ^0[23][0-9a-f]{64}$ ]] || fail "node.env carries no compressed genesis guarantor public key"
     [ "$NODE_SEQUENCER_ID" = "$SEQUENCER_ID" ] || fail "the node derived sequencer id $NODE_SEQUENCER_ID but the registry trust history carries $SEQUENCER_ID"
     [ "$NODE_SEQUENCER_PUBLIC_KEY" = "$(cat "$CA_DIR/sequencer.pub.hex")" ] || fail "the node sequencer public key differs from the generated sequencer key"
+    [ "$GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE" = /var/lib/guarantor-submitter/checkpoint-authority.pem ] \
+        || fail "the node manifest no longer binds every guarantor to one checkpoint authority key file"
     kube -n "$TESTNET_NAMESPACE" exec layerx-node-0 -c guarantor-1 -- \
         /opt/layerx/guarantor.sh --checkpoint-authority-public \
-        /var/lib/guarantor-submitter/checkpoint-authority.pem > "$WORK_DIR/genesis/checkpoint-authority.public.hex"
+        "$GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE" > "$WORK_DIR/genesis/checkpoint-authority.public.hex"
     local checkpoint_authority
-    checkpoint_authority=$(cat "$WORK_DIR/genesis/checkpoint-authority.public.hex")
-    [[ $checkpoint_authority =~ ^0x[0-9a-f]{64}$ ]] || fail "invalid checkpoint authority public key"
+    checkpoint_authority=$(deposit_root_authority "$WORK_DIR/genesis")
     apply_secret "$TESTNET_NAMESPACE" layerx-guarantor-checkpoint-authority \
         --from-file=public.hex="$WORK_DIR/genesis/checkpoint-authority.public.hex"
+    log "guarantor checkpoint authority $checkpoint_authority signs the deposit roots of this cluster"
+}
+
+# The guarantor that publishes a checkpoint signs its deposit-root registration with the Ed25519 key at
+# $GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE: cmd/layerx-guarantor/authorization.py signs with the policy
+# field deposit_authority_key_file, which platform/hosted/tests/publication-policy.py sets to that path,
+# and every guarantor container mounts it from the one shared guarantor-submitter volume subpath. The
+# vault deposit-root authority must therefore be that key's public half.
+deposit_root_authority() {
+    local source="$1/checkpoint-authority.public.hex" key
+    [ -r "$source" ] || fail "the guarantor checkpoint authority public key is unavailable at $source"
+    key=$(tr -d '[:space:]' < "$source")
+    [[ $key =~ ^0x[0-9a-f]{64}$ ]] || fail "the guarantor checkpoint authority public key at $source is not a 32-byte Ed25519 key"
+    [ "$key" != "0x$(printf '%064d' 0)" ] || fail "the deposit-root authority public key must be nonzero"
+    printf '%s\n' "$key"
 }
 
 guarantor_set_render() {
@@ -1444,10 +1461,46 @@ guarantor_sequence_test() (
     done
 )
 
+deposit_root_authority_test() (
+    set -euo pipefail
+    local dir key der expected policy scenario
+    dir=$(mktemp -d)
+    trap 'rm -rf "$dir"' EXIT
+    umask 077
+    mkdir -p "$dir/genesis"
+    bash "$REPO_ROOT/platform/hosted/node/guarantor.sh" --checkpoint-authority-public \
+        "$dir/checkpoint-authority.pem" > "$dir/genesis/checkpoint-authority.public.hex"
+    key=$(deposit_root_authority "$dir/genesis")
+    [[ $key =~ ^0x[0-9a-fA-F]{64}$ ]] || fail "the extracted deposit-root authority is not a 32-byte key"
+    [ "$key" != "0x$(printf '%064d' 0)" ] || fail "the extracted deposit-root authority is zero"
+    der=$(openssl pkey -in "$dir/checkpoint-authority.pem" -pubout -outform DER | od -An -v -tx1 | tr -d ' \n')
+    [ "${#der}" -eq 88 ] && [ "${der:0:24}" = 302a300506032b6570032100 ] \
+        || fail "the guarantor checkpoint authority key is not Ed25519"
+    expected="0x${der:24}"
+    [ "$key" = "$expected" ] || fail "the deposit-root authority $key differs from the signing key public half $expected"
+    policy="$dir/authorization.json"
+    python3 "$REPO_ROOT/platform/hosted/tests/publication-policy.py" authorization "$policy" \
+        "$NODE_NETWORK_ID" "$PAXEER_CHAIN_ID" 0x"$(printf '%040d' 1)" 0x"$(printf '%040d' 2)" \
+        0x"$(printf '%040d' 3)" "$(printf '%064d' 4)" "$NODE_ASSET_ID" "$(printf '%040d' 5)"
+    [ "$(jq -r '.deposit_authority_key_file' "$policy")" = "$GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE" ] \
+        || fail "the guarantor publication policy signs deposit roots with a different key file than the bring-up reads"
+    for scenario in missing malformed zero; do
+        case "$scenario" in
+            missing) rm -f "$dir/genesis/checkpoint-authority.public.hex" ;;
+            malformed) printf '0x%s\n' "${key:2:62}" > "$dir/genesis/checkpoint-authority.public.hex" ;;
+            zero) printf '0x%064d\n' 0 > "$dir/genesis/checkpoint-authority.public.hex" ;;
+        esac
+        if (deposit_root_authority "$dir/genesis") > "$dir/refusal.log" 2>&1; then
+            fail "a $scenario deposit-root authority was accepted"
+        fi
+    done
+    log "deposit-root authority $key extracted from the guarantor checkpoint authority key with three refusals"
+)
+
 paxeer_contracts_deploy() {
     [ "${LAYERX_BETA_FORBIDDEN_CHAIN_ID:-}" != "$PAXEER_CHAIN_ID" ] \
         || fail "contract transactions on chain $PAXEER_CHAIN_ID are forbidden by LAYERX_BETA_FORBIDDEN_CHAIN_ID"
-    local dir="$WORK_DIR/paxeer" signer bond_amount count index id public controller previous_id=""
+    local dir="$WORK_DIR/paxeer" signer bond_amount count index id public controller previous_id="" authority
     mkdir -p "$dir/guarantor-keys"
     chmod 0700 "$dir/guarantor-keys"
     count=$(sed -n 's/^LAYERX_NODE_GENESIS_GUARANTOR_COUNT=//p' "$WORK_DIR/genesis/node.env")
@@ -1481,7 +1534,8 @@ paxeer_contracts_deploy() {
         '. + {protocol_version: 3, final_proposer: $proposer, final_executor: $executor, emergency_council: $council}' \
         "$REPO_ROOT/platform/hosted/paxeer/deployment-input.beta.json" > "$dir/deployment-input.json"
     cp "$REPO_ROOT/contracts/config/checkpoint-settlement.json" "$dir/checkpoint-settlement.json"
-    log "deploying the settlement contracts from the node genesis through the Paxeer boundary"
+    authority=$(deposit_root_authority "$WORK_DIR/genesis")
+    log "deploying the settlement contracts from the node genesis through the Paxeer boundary with deposit-root authority $authority"
     if ! LAYERX_PAXEER_BOUNDARY_URL="$PAXEER_URL" LAYERX_PAXEER_BOUNDARY_CA_DER="$CA_DIR/ca.der" LAYERX_PAXEER_CHAIN_ID="$PAXEER_CHAIN_ID" \
         LAYERX_PAXEER_CHECKPOINT_SUBMITTER_KEY_FILE="$SECRETS_DIR/paxeer-checkpoint-submitter.key" \
         LAYERX_PAXEER_DEPLOYER_KEY_FILE="$SECRETS_DIR/paxeer-deployer.key" LAYERX_PAXEER_GENESIS_DIR="$WORK_DIR/genesis" \
@@ -1489,7 +1543,7 @@ paxeer_contracts_deploy() {
         LAYERX_PAXEER_GUARANTOR_KEYS_DIR="$dir/guarantor-keys" LAYERX_PAXEER_DEPLOYMENT_RECORD="$dir/deployment.json" \
         LAYERX_PAXEER_SETTLEMENT_JSON="$dir/checkpoint-settlement.json" LAYERX_PAXEER_SETTLEMENT_DOMAIN=beta \
         LAYERX_PAXEER_FOUNDRY_BIN="$FOUNDRY_BIN" \
-        bash "$REPO_ROOT/platform/hosted/paxeer/deploy-contracts.sh" bootstrap > "$LOG_DIR/deploy-contracts.log" 2>&1; then
+        bash "$REPO_ROOT/platform/hosted/paxeer/deploy-contracts.sh" bootstrap "$authority" > "$LOG_DIR/deploy-contracts.log" 2>&1; then
         tail -n 40 "$LOG_DIR/deploy-contracts.log" >&2
         fail "deploy-contracts.sh bootstrap failed (log $LOG_DIR/deploy-contracts.log)"
     fi
@@ -1497,6 +1551,8 @@ paxeer_contracts_deploy() {
     CHECKPOINT_REGISTRY=$(jq -r '.addresses.checkpoint_registry' "$dir/deployment.json")
     [[ $GUARANTOR_BOND =~ ^0x[0-9a-fA-F]{40}$ ]] && [[ $CHECKPOINT_REGISTRY =~ ^0x[0-9a-fA-F]{40}$ ]] || fail "the deployment record lacks the GuarantorBond and CheckpointRegistry addresses"
     [ "$(jq -r '.network_id' "$dir/deployment.json")" = "$NODE_NETWORK_ID" ] || fail "the deployed CheckpointRegistry network id differs from the node network id $NODE_NETWORK_ID"
+    jq -e --arg authority "$authority" '.deposit_root_authority.public_key == $authority and .deposit_root_authority.executed == true' \
+        "$dir/deployment.json" > /dev/null || fail "the deployment record does not carry the executed guarantor deposit-root authority $authority"
     log "settlement contracts deployed: GuarantorBond $GUARANTOR_BOND, CheckpointRegistry $CHECKPOINT_REGISTRY"
 }
 
@@ -2165,6 +2221,7 @@ main() {
             ;;
         test-retained-material) retained_material_test ;;
         test-guarantor-sequences) guarantor_sequence_test ;;
+        test-deposit-root-authority) deposit_root_authority_test ;;
         down) beta_cluster_down ;;
         render) beta_cluster_render ;;
         *) sed -n '2,53p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 64 ;;
