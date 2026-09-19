@@ -18,8 +18,9 @@ use std::time::Duration;
 
 use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_proof::program::{
-    verify_authorized_program_execution, verify_program_execution,
-    AuthorizedProgramExecutionExpectation, ProgramExecutionExpectation, VerifiedProgramExecution,
+    verify_authorized_program_execution_with_payers, verify_program_execution_with_payers,
+    AuthorizedProgramExecutionExpectation, OccupancyPayer, ProgramExecutionExpectation,
+    VerifiedProgramExecution,
 };
 use layerx_proof::receipt::{
     verify as verify_receipt, verify_sequencer_signature, AuthorizedBatch,
@@ -1872,6 +1873,44 @@ fn verified_program_document(
     Ok(document)
 }
 
+/// Offers every registered account as an occupancy payer. The verifier only
+/// uses an account it derives from the DID for a payer the settlement names.
+fn registered_occupancy_payers(emulator: &Emulator) -> Vec<OccupancyPayer<'_>> {
+    emulator
+        .accounts
+        .values()
+        .map(|account| OccupancyPayer {
+            did: account.did.as_bytes(),
+            account: Some(account.id),
+        })
+        .collect()
+}
+
+/// Names the DID behind every payment account the verified occupancy transfer
+/// root commits, so a client can prove the same accounts from the DID.
+fn occupancy_payers_json(
+    emulator: &Emulator,
+    verified: &VerifiedProgramExecution,
+) -> Option<serde_json::Value> {
+    let payers: Vec<serde_json::Value> = verified
+        .occupancy_payment_accounts()
+        .iter()
+        .filter_map(|proven| {
+            emulator
+                .accounts
+                .values()
+                .find(|account| account.id == proven.account())
+                .map(|account| {
+                    serde_json::json!({
+                        "did": account.did,
+                        "account_id": hex_encode(&proven.account()),
+                    })
+                })
+        })
+        .collect();
+    (!payers.is_empty()).then_some(serde_json::Value::Array(payers))
+}
+
 fn stored_program_operation_response(trace: u64, operation: &ProgramOperation) -> Response {
     let public = lifecycle_public_response(operation).unwrap_or_else(|| operation.response.clone());
     let mut response = success(trace, &public);
@@ -3322,7 +3361,7 @@ fn program_simulate(emulator: &mut Emulator, request: &Request, trace: u64) -> R
         Ok(material) => material,
         Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
     };
-    let verified = match verify_program_execution(
+    let verified = match verify_program_execution_with_payers(
         &material.receipt,
         &material.terminal_payload,
         &material.call_graph,
@@ -3334,6 +3373,7 @@ fn program_simulate(emulator: &mut Emulator, request: &Request, trace: u64) -> R
             program_id,
             guest_abi_version: head.abi_version,
         },
+        &registered_occupancy_payers(emulator),
     ) {
         Ok(verified)
             if verified
@@ -5046,7 +5086,7 @@ fn retain_program_execution(
             "call requires a verified program head",
         );
     };
-    let verified = match verify_authorized_program_execution(
+    let verified = match verify_authorized_program_execution_with_payers(
         &material.receipt,
         &material.terminal_payload,
         &material.call_graph,
@@ -5057,6 +5097,7 @@ fn retain_program_execution(
             program_id,
             guest_abi_version: head.abi_version,
         },
+        &registered_occupancy_payers(emulator),
     ) {
         Ok(verified)
             if verified
@@ -5093,6 +5134,12 @@ fn retain_program_execution(
         Ok(document) => document,
         Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
     };
+    if let (Some(payers), Some(object)) = (
+        occupancy_payers_json(emulator, &verified),
+        document.as_object_mut(),
+    ) {
+        object.insert("occupancy_payers".to_owned(), payers);
+    }
     document["retained_signed_activity"] = serde_json::Value::String(hex_encode(&decoded.signed));
     let response = document.to_string();
     let receipt_hex = hex_encode(&material.receipt);

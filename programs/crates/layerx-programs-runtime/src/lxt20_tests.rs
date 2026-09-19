@@ -90,6 +90,7 @@ pub(super) fn invoke_guest(
                     .unwrap_or_else(|e| panic!("{e:?}")),
             ),
             crate::AccessDeclaration::absent(),
+            None,
         )
         .unwrap_or_else(|e| panic!("execute {name}: {e}"))
 }

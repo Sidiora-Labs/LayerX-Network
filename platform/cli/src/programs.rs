@@ -10,11 +10,13 @@ use layerx_programs_runtime::terminal::{
     TerminalDetail,
 };
 use layerx_programs_runtime::{
-    BudgetMeterRefusal, BudgetResourceKind, OccupancySettlement, WasmEngine,
+    BudgetMeterRefusal, BudgetResourceKind, OccupancyPaymentAccount, OccupancySettlement,
+    WasmEngine, MAX_OCCUPANCY_PAYERS,
 };
 use layerx_programs_runtime::{Capability, CapabilitySet};
 use layerx_proof::program::{
-    verify_authorized_program_execution, AuthorizedProgramExecutionExpectation,
+    verify_authorized_program_execution_with_payers, AuthorizedProgramExecutionExpectation,
+    OccupancyPayer,
 };
 use layerx_proof::receipt::{verify_program_outcome_at_root, AuthorizedBatch};
 use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
@@ -1427,7 +1429,16 @@ fn render_call_result(
             .as_str()
             .ok_or_else(|| "program response omitted authenticated call graph".to_owned())?,
     )?;
-    let execution = verify_authorized_program_execution(
+    let hinted_payers = occupancy_payer_hints(result)?;
+    let mut occupancy_payers = vec![OccupancyPayer {
+        did: activity.actor_did(),
+        account: None,
+    }];
+    occupancy_payers.extend(hinted_payers.iter().map(|(did, account)| OccupancyPayer {
+        did,
+        account: Some(*account),
+    }));
+    let execution = verify_authorized_program_execution_with_payers(
         &receipt_bytes,
         &terminal_payload,
         &call_graph,
@@ -1439,10 +1450,17 @@ fn render_call_result(
             program_id: fixed_hex("program id", request.program_id)?,
             guest_abi_version: head.abi_version,
         },
+        &occupancy_payers,
     )
     .map_err(|error| format!("program execution verification: {error:?}"))?;
     let detail = execution.terminal();
-    verify_terminal_commitments(detail, &call_graph, protocol.protocol_version(), program)?;
+    verify_terminal_commitments_with_accounts(
+        detail,
+        &call_graph,
+        protocol.protocol_version(),
+        program,
+        execution.occupancy_payment_accounts(),
+    )?;
     let outcome = render_terminal(&detail.detail, request.program_id, program, result_code)?;
     Ok(json!({
         "program_id": request.program_id,
@@ -1601,11 +1619,58 @@ fn verify_terminal_graph(
     Ok(())
 }
 
+/// Reads the occupancy payers a gateway names beside a state-commitment
+/// receipt. They are untrusted: the verifier only uses an account it derives
+/// from the named DID for a payer the signed settlement evidence names.
+fn occupancy_payer_hints(result: &Value) -> Result<Vec<(Vec<u8>, [u8; 32])>, String> {
+    let Some(hints) = result.get("occupancy_payers") else {
+        return Ok(Vec::new());
+    };
+    let hints = hints
+        .as_array()
+        .filter(|hints| hints.len() <= MAX_OCCUPANCY_PAYERS)
+        .ok_or_else(|| {
+            "program response carries an out-of-bound occupancy payer list".to_owned()
+        })?;
+    hints
+        .iter()
+        .map(|hint| {
+            let did = hint["did"]
+                .as_str()
+                .ok_or_else(|| "occupancy payer omitted its DID".to_owned())?;
+            let account = hint["account_id"]
+                .as_str()
+                .ok_or_else(|| "occupancy payer omitted its payment account".to_owned())?;
+            Ok((
+                did.as_bytes().to_vec(),
+                fixed_hex("occupancy payment account", account)?,
+            ))
+        })
+        .collect()
+}
+
+#[cfg(test)]
 fn verify_terminal_commitments(
     detail: &layerx_programs_runtime::terminal::DecodedTerminal,
     available_graph: &[u8],
     protocol_version: u16,
     receipt: &layerx_wire::receipt::ProgramOutcome,
+) -> Result<(), String> {
+    verify_terminal_commitments_with_accounts(
+        detail,
+        available_graph,
+        protocol_version,
+        receipt,
+        &[],
+    )
+}
+
+fn verify_terminal_commitments_with_accounts(
+    detail: &layerx_programs_runtime::terminal::DecodedTerminal,
+    available_graph: &[u8],
+    protocol_version: u16,
+    receipt: &layerx_wire::receipt::ProgramOutcome,
+    occupancy_payment_accounts: &[OccupancyPaymentAccount],
 ) -> Result<(), String> {
     verify_terminal_graph(detail, available_graph, receipt)?;
     let candidate = matches!(
@@ -1663,9 +1728,13 @@ fn verify_terminal_commitments(
                 if settlement.usage().byte_batches != receipt.occupancy_byte_batches()
                     || settlement.usage().fee_units != receipt.occupancy_fee_units()
                     || settlement
-                        .transfer_root(receipt.occupancy_asset_id())
-                        .map_err(|_| "occupancy transfer evidence is invalid".to_owned())?
-                        != receipt.occupancy_transfer_root()
+                        .verify_transfer_root(
+                            protocol_version,
+                            receipt.occupancy_asset_id(),
+                            occupancy_payment_accounts,
+                            receipt.occupancy_transfer_root(),
+                        )
+                        .is_err()
                 {
                     return Err(
                         "occupancy evidence disagrees with signed count, fee, or transfer root"
