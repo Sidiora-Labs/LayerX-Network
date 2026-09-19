@@ -24,9 +24,10 @@ account_sequence=$(jq -er '.data.next_sequence // .data.account_sequence' <<<"$a
 not_before_ms=$(jq -er '.data.observed_at' <<<"$discovery")
 expires_at_ms=$((not_before_ms + 300000))
 nonce=$(printf '%s:%s:%s' "$program_id" "$account_sequence" "$not_before_ms" | sha256sum | cut -d' ' -f1)
+fee_limit=50000000
 call_nonce=$(printf 'call:%s' "$nonce" | sha256sum | cut -d' ' -f1)
 
-simulation=$(layerx --json program simulate "$program_id" --fuel 1000000 --fee-limit 0 \
+simulation=$(layerx --json program simulate "$program_id" --fuel 1000000 --fee-limit "$fee_limit" \
   --idempotency-key "$nonce" --account-sequence "$account_sequence" \
   --not-before-ms "$not_before_ms" --expires-at-ms "$expires_at_ms")
 [[ $(jq -r '.data.committed' <<<"$simulation") == false ]]
@@ -40,7 +41,7 @@ fi
 call_output=$(mktemp)
 call_error=$(mktemp)
 trap 'rm -f "$call_output" "$call_error"' EXIT
-if ! layerx --json program call "$program_id" --fuel 1000000 --fee-limit 0 \
+if ! layerx --json program call "$program_id" --fuel 1000000 --fee-limit "$fee_limit" \
   --idempotency-key "$call_nonce" --account-sequence "$account_sequence" \
   --not-before-ms "$not_before_ms" --expires-at-ms "$expires_at_ms" >"$call_output" 2>"$call_error"; then
   failure=$(<"$call_error")
