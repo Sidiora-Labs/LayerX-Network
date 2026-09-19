@@ -109,7 +109,7 @@ export function marketplaceCallRequest({ action, listingId, asset, seller, price
         Buffer.from(hex32(seller)),
         Buffer.from(u128(price)),
       ]),
-      capabilities: Object.freeze(["storage-read", "storage-write", "emit-event"]),
+      capabilities: Object.freeze(["shared-storage-read", "shared-storage-write", "emit-event"]),
     });
   }
   if (action !== "buy") throw new LayerXApplicationStateError("refused", "unsupported_marketplace_action");
@@ -118,8 +118,8 @@ export function marketplaceCallRequest({ action, listingId, asset, seller, price
   return Object.freeze({
     calldata: Buffer.concat([Buffer.from([BUY_OPERATION]), listing, Buffer.from(hex32(receiptDigest))]),
     capabilities: Object.freeze([
-      "storage-read",
-      "storage-write",
+      "shared-storage-read",
+      "shared-storage-write",
       "emit-event",
       `receipt-read:${digest}`,
       `transfer402:${Buffer.from(hex32(asset)).toString("hex")}:${Buffer.from(hex32(seller)).toString("hex")}:${price}`,

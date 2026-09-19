@@ -58,7 +58,7 @@ assert.equal(listRequest.calldata.subarray(1, 33).toString("hex"), listingId);
 assert.equal(listRequest.calldata.subarray(33, 65).toString("hex"), asset);
 assert.equal(listRequest.calldata.subarray(65, 97).toString("hex"), seller);
 assert.equal(listRequest.calldata.subarray(97).readBigUInt64BE(8), 2500n);
-assert.deepEqual([...listRequest.capabilities], ["storage-read", "storage-write", "emit-event"]);
+assert.deepEqual([...listRequest.capabilities], ["shared-storage-read", "shared-storage-write", "emit-event"]);
 
 const buyRequest = marketplaceCallRequest({ action: "buy", listingId, asset, seller, price: "2500", receiptDigest });
 assert.equal(buyRequest.calldata.length, 1 + 32 + 32);
@@ -66,8 +66,8 @@ assert.equal(buyRequest.calldata[0], BUY_OPERATION);
 assert.equal(buyRequest.calldata.subarray(1, 33).toString("hex"), listingId);
 assert.equal(buyRequest.calldata.subarray(33).toString("hex"), receiptDigest);
 assert.deepEqual([...buyRequest.capabilities], [
-  "storage-read",
-  "storage-write",
+  "shared-storage-read",
+  "shared-storage-write",
   "emit-event",
   `receipt-read:${receiptDigest}`,
   `transfer402:${asset}:${seller}:2500`,
