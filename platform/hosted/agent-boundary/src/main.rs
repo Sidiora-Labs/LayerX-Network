@@ -12,7 +12,7 @@ use layerx_client::lni::program_read::{
 };
 use layerx_client::lni::schema::{encode_envelope, Capability, Envelope, Version};
 use layerx_client::lni::simulate::{simulate, SimulateContext, SimulateError};
-use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
+use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, TransportError, Uds};
 use layerx_client::receipt::{
     lookup_authenticated, AuthenticatedLookup, AuthenticatedLookupContext, ReceiptError,
     ReceiptWaitMode,
@@ -287,11 +287,12 @@ struct Response {
 enum LniFailure {
     Unavailable(String),
     Transport(String),
+    Undelivered(String),
 }
 
 impl LniFailure {
     const fn retires_session(&self) -> bool {
-        matches!(self, Self::Transport(_))
+        matches!(self, Self::Transport(_) | Self::Undelivered(_))
     }
 
     fn response(&self) -> Response {
@@ -300,11 +301,30 @@ impl LniFailure {
                 eprintln!("{SERVICE}: node unavailable: {detail}");
                 refusal(503, "node_unavailable", Some(5))
             }
-            Self::Transport(detail) => {
+            Self::Transport(detail) | Self::Undelivered(detail) => {
                 eprintln!("{SERVICE}: node transport lost: {detail}");
                 refusal(503, "node_transport_lost", Some(5))
             }
         }
+    }
+}
+
+struct SubmissionTransport<'a> {
+    inner: &'a mut Uds,
+    send_failure: Option<TransportError>,
+}
+
+impl FrameTransport for SubmissionTransport<'_> {
+    fn send(&mut self, canonical_envelope: &[u8]) -> Result<(), TransportError> {
+        let sent = self.inner.send(canonical_envelope);
+        if let Err(error) = sent {
+            self.send_failure = Some(error);
+        }
+        sent
+    }
+
+    fn receive(&mut self) -> Result<Vec<u8>, TransportError> {
+        self.inner.receive()
     }
 }
 
@@ -793,7 +813,13 @@ fn submit_activity(
         signer_public_key: decoded.signer_public_key,
         attempt,
     };
-    match submit_signed(&mut session.transport, &config.registry, context, signed) {
+    let mut transport = SubmissionTransport {
+        inner: &mut session.transport,
+        send_failure: None,
+    };
+    let submission = submit_signed(&mut transport, &config.registry, context, signed);
+    let send_failure = transport.send_failure;
+    match submission {
         Ok(Submission::Acknowledged(acknowledgement)) => {
             if acknowledgement.activity_id() != decoded.activity_id {
                 return Err(LniFailure::Transport(
@@ -802,8 +828,13 @@ fn submit_activity(
             }
             Ok(SubmitOutcome::Acknowledged)
         }
-        Ok(Submission::Unknown(_)) => Err(LniFailure::Transport(
-            "submission outcome is indeterminate".to_owned(),
+        Ok(Submission::Unknown(_)) => Err(send_failure.map_or_else(
+            || LniFailure::Transport("submission outcome is indeterminate".to_owned()),
+            |error| {
+                LniFailure::Undelivered(format!(
+                    "submission frame was not written to the node: {error:?}"
+                ))
+            },
         )),
         Err(SubmitError::CoreRefusal { result, .. }) => {
             Ok(SubmitOutcome::Refused(result_refusal(result)))
@@ -1386,7 +1417,9 @@ fn resolve_record(
             refusal_response(&stored)
         }
         Err(LniFailure::Transport(_)) => unknown_response(&record.activity_id),
-        Err(failure @ LniFailure::Unavailable(_)) => failure.response(),
+        Err(failure @ (LniFailure::Unavailable(_) | LniFailure::Undelivered(_))) => {
+            failure.response()
+        }
     }
 }
 
