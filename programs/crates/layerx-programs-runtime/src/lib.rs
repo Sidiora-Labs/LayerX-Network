@@ -188,8 +188,9 @@ pub use meter::{
 };
 pub use occupancy::{
     OccupancyCharge, OccupancyDisposition, OccupancyError, OccupancyLedger,
-    OccupancyResponsibility, OccupancySettlement, OccupancyUsage, PreparedOccupancySettlement,
-    MAX_OCCUPANCY_EVIDENCE_BYTES, MAX_OCCUPANCY_LEDGER_BYTES, MAX_OCCUPANCY_POSITIONS,
+    OccupancyPaymentAccount, OccupancyResponsibility, OccupancySettlement, OccupancyUsage,
+    PreparedOccupancySettlement, MAX_OCCUPANCY_EVIDENCE_BYTES, MAX_OCCUPANCY_LEDGER_BYTES,
+    MAX_OCCUPANCY_PAYERS, MAX_OCCUPANCY_POSITIONS,
 };
 pub use qualification::{
     programs_differential_gate, programs_differential_gate_versioned, programs_fuzz_observation,

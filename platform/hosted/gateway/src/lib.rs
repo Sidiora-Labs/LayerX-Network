@@ -9,8 +9,9 @@ pub mod store;
 use layerx_crypto::disclosure::{bind as bind_disclosure, AmountRole, CounterpartyRole};
 use layerx_crypto::{ed25519, SignatureMessage};
 use layerx_proof::program::{
-    verify_authorized_program_execution, verify_program_execution,
-    AuthorizedProgramExecutionExpectation, ProgramExecutionExpectation, VerifiedProgramExecution,
+    verify_authorized_program_execution_with_payers, verify_program_execution_with_payers,
+    AuthorizedProgramExecutionExpectation, OccupancyPayer, ProgramExecutionExpectation,
+    VerifiedProgramExecution,
 };
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck};
 use layerx_types::intent::{ProgramCallFailure, ProgramCallOutcome, ProgramLegacyValue};
@@ -590,11 +591,12 @@ pub fn verify_activity_operation(
 }
 
 #[derive(Clone, Copy)]
-pub struct ProgramExpectation {
+pub struct ProgramExpectation<'a> {
     pub payload_hash: [u8; 32],
     pub activity_id: [u8; 32],
     pub program_id: [u8; 32],
     pub guest_abi_version: u16,
+    pub actor_did: &'a [u8],
 }
 
 /// Verifies a committed Programs receipt together with its authenticated
@@ -610,7 +612,7 @@ pub fn verify_program_operation(
     call_graph: &[u8],
     authority: AuthorityFacts,
     trusted_sequencer_key: &[u8; 32],
-    expected: ProgramExpectation,
+    expected: ProgramExpectation<'_>,
 ) -> Result<VerifiedOperation, GatewayError> {
     if authority
         .sequencer_public_key()
@@ -620,7 +622,7 @@ pub fn verify_program_operation(
     {
         return Err(GatewayError::UntrustedSequencer);
     }
-    let verified = verify_authorized_program_execution(
+    let verified = verify_authorized_program_execution_with_payers(
         receipt_bytes,
         terminal_payload,
         call_graph,
@@ -631,6 +633,10 @@ pub fn verify_program_operation(
             program_id: expected.program_id,
             guest_abi_version: expected.guest_abi_version,
         },
+        &[OccupancyPayer {
+            did: expected.actor_did,
+            account: None,
+        }],
     )
     .map_err(|_| GatewayError::VerificationRequired)?;
     render_verified_program_operation(
@@ -657,9 +663,9 @@ pub fn verify_program_simulation_operation(
     call_graph: &[u8],
     trusted_previous_state_root: [u8; 32],
     trusted_sequencer_key: [u8; 32],
-    expected: ProgramExpectation,
+    expected: ProgramExpectation<'_>,
 ) -> Result<VerifiedOperation, GatewayError> {
-    let verified = verify_program_execution(
+    let verified = verify_program_execution_with_payers(
         receipt_bytes,
         terminal_payload,
         call_graph,
@@ -671,6 +677,10 @@ pub fn verify_program_simulation_operation(
             program_id: expected.program_id,
             guest_abi_version: expected.guest_abi_version,
         },
+        &[OccupancyPayer {
+            did: expected.actor_did,
+            account: None,
+        }],
     )
     .map_err(|_| GatewayError::VerificationRequired)?;
     render_verified_program_operation(

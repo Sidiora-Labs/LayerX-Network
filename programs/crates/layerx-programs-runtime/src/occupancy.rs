@@ -19,6 +19,13 @@ const LEDGER_DOMAIN: &[u8] = b"LXP/storage-occupancy-ledger/v2\0";
 const MANDATE_DOMAIN: &[u8] = b"LXP/storage-occupancy-mandate/v1\0";
 
 pub const MAX_OCCUPANCY_POSITIONS: usize = 256;
+pub const MAX_OCCUPANCY_PAYERS: usize = 256;
+const STATE_COMMITMENT_PROTOCOL_VERSION: u16 = 3;
+const MAX_PAYER_DID_BYTES: usize = 255;
+const ACCOUNT_IDENTIFIER_DOMAIN: &[u8] = b"LX:ACCOUNT:v1";
+const DID_IDENTIFIER_DOMAIN: &[u8] = b"LXP/v1/did-id\0";
+const TRANSFER_LEAF_DOMAIN: &[u8] = b"LXP/v1/merkle-leaf\0";
+const TRANSFER_INTERNAL_DOMAIN: &[u8] = b"LXP/v1/merkle-internal\0";
 pub const MAX_OCCUPANCY_LEDGER_BYTES: usize = 60_000;
 pub const MAX_OCCUPANCY_EVIDENCE_BYTES: usize = 65_536;
 
@@ -436,47 +443,96 @@ impl OccupancySettlement {
     ///
     /// Returns a refusal for a zero asset identity or overflowing payer dispositions.
     pub fn transfer_root(&self, asset: [u8; 32]) -> Result<[u8; 32], OccupancyError> {
-        const LEAF: &[u8] = b"LXP/v1/merkle-leaf\0";
-        const INTERNAL: &[u8] = b"LXP/v1/merkle-internal\0";
         if asset == [0; 32] {
             return Err(OccupancyError::MalformedEvidence);
         }
-        let mut treasury_preimage = b"LX:ACCOUNT:v1".to_vec();
-        treasury_preimage.extend_from_slice(&11_u32.to_be_bytes());
-        treasury_preimage.extend_from_slice(b"system:fees");
-        let treasury: [u8; 32] = Sha256::digest(treasury_preimage).into();
-        let payers = self.payer_dispositions()?;
+        let treasury = account_identifier(b"system:fees")?;
         let mut level = Vec::new();
-        for (payer, (_, paid, _, _)) in payers {
+        for (payer, (_, paid, _, _)) in self.payer_dispositions()? {
             if paid == 0 {
                 continue;
             }
-            let mut leg = Vec::with_capacity(115);
-            leg.push(0);
-            leg.extend_from_slice(&payer.bytes());
-            leg.extend_from_slice(&treasury);
-            leg.extend_from_slice(&asset);
-            leg.extend_from_slice(&paid.to_be_bytes());
-            leg.extend_from_slice(&23_u16.to_be_bytes());
-            let mut leaf = LEAF.to_vec();
-            leaf.extend_from_slice(&leg);
-            level.push(<[u8; 32]>::from(Sha256::digest(leaf)));
+            level.push(transfer_leaf(payer.bytes(), treasury, asset, paid));
         }
-        if level.is_empty() {
-            return Ok([0; 32]);
+        Ok(transfer_merkle_root(level))
+    }
+
+    /// Checks the receipt-committed occupancy transfer root for the receipt's
+    /// protocol version and returns the payment accounts that root commits.
+    ///
+    /// Before the state-commitment protocol an account identifier equals its
+    /// principal, so the root is rebuilt from the evidence alone. Under the
+    /// state-commitment protocol the kernel debits the payer's asset payment
+    /// account, so every paying payer needs an account proven from its DID.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a zero asset, a paying payer without a proven payment account,
+    /// more candidate roots than the payer bound, and a root that no proven
+    /// account selection reproduces.
+    pub fn verify_transfer_root(
+        &self,
+        protocol_version: u16,
+        asset: [u8; 32],
+        accounts: &[OccupancyPaymentAccount],
+        committed_root: [u8; 32],
+    ) -> Result<Vec<OccupancyPaymentAccount>, OccupancyError> {
+        if protocol_version != STATE_COMMITMENT_PROTOCOL_VERSION {
+            return if self.transfer_root(asset)? == committed_root {
+                Ok(Vec::new())
+            } else {
+                Err(OccupancyError::TransferRootMismatch)
+            };
         }
-        while level.len() > 1 {
-            let mut next = Vec::with_capacity(level.len().div_ceil(2));
-            for pair in level.chunks(2) {
-                let right = pair.get(1).unwrap_or(&pair[0]);
-                let mut preimage = INTERNAL.to_vec();
-                preimage.extend_from_slice(&pair[0]);
-                preimage.extend_from_slice(right);
-                next.push(<[u8; 32]>::from(Sha256::digest(preimage)));
+        if asset == [0; 32] {
+            return Err(OccupancyError::MalformedEvidence);
+        }
+        if accounts.len() > 2 * MAX_OCCUPANCY_PAYERS {
+            return Err(OccupancyError::LengthLimit);
+        }
+        let mut payers = Vec::new();
+        let mut selections = 1_usize;
+        for (payer, (_, paid, _, _)) in self.payer_dispositions()? {
+            if paid == 0 {
+                continue;
             }
-            level = next;
+            let mut proven: Vec<OccupancyPaymentAccount> = Vec::new();
+            for account in accounts {
+                if account.payer == payer
+                    && account.asset == asset
+                    && !proven.iter().any(|known| known.account == account.account)
+                {
+                    proven.push(*account);
+                }
+            }
+            if proven.is_empty() {
+                return Err(OccupancyError::UnprovenPaymentAccount);
+            }
+            selections = selections
+                .checked_mul(proven.len())
+                .filter(|count| *count <= MAX_OCCUPANCY_PAYERS)
+                .ok_or(OccupancyError::LengthLimit)?;
+            payers.push((paid, proven));
         }
-        Ok(level[0])
+        if payers.len() > MAX_OCCUPANCY_PAYERS {
+            return Err(OccupancyError::LengthLimit);
+        }
+        let treasury = account_identifier(b"system:fees")?;
+        for selection in 0..selections {
+            let mut remaining = selection;
+            let mut chosen = Vec::with_capacity(payers.len());
+            let mut level = Vec::with_capacity(payers.len());
+            for (paid, proven) in &payers {
+                let account = proven[remaining % proven.len()];
+                remaining /= proven.len();
+                level.push(transfer_leaf(account.account, treasury, asset, *paid));
+                chosen.push(account);
+            }
+            if transfer_merkle_root(level) == committed_root {
+                return Ok(chosen);
+            }
+        }
+        Err(OccupancyError::TransferRootMismatch)
     }
 
     ///
@@ -597,6 +653,138 @@ impl OccupancySettlement {
     }
 }
 
+/// A payer's state-commitment payment account, proven from the payer's DID.
+///
+/// The kernel debits the unique `agent:<did>:main` or
+/// `agent:<did>:asset:<asset>` account owned by the payer's DID that holds the
+/// occupancy asset. A value of this type exists only for an account identifier
+/// that is one of those two derivations, bound to the DID identifier the
+/// settlement evidence names as the payer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OccupancyPaymentAccount {
+    payer: PrincipalId,
+    asset: [u8; 32],
+    account: [u8; 32],
+}
+
+impl OccupancyPaymentAccount {
+    /// Derives the DID's main account as the payment account for `asset`.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an empty or over-long DID and a zero asset identity.
+    pub fn main(did: &[u8], asset: [u8; 32]) -> Result<Self, OccupancyError> {
+        let payer = payer_principal(did, asset)?;
+        let mut name = Vec::with_capacity(11 + did.len());
+        name.extend_from_slice(b"agent:");
+        name.extend_from_slice(did);
+        name.extend_from_slice(b":main");
+        Ok(Self {
+            payer,
+            asset,
+            account: account_identifier(&name)?,
+        })
+    }
+
+    /// Derives the DID's asset account as the payment account for `asset`.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an empty or over-long DID and a zero asset identity.
+    pub fn asset(did: &[u8], asset: [u8; 32]) -> Result<Self, OccupancyError> {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let payer = payer_principal(did, asset)?;
+        let mut name = Vec::with_capacity(77 + did.len());
+        name.extend_from_slice(b"agent:");
+        name.extend_from_slice(did);
+        name.extend_from_slice(b":asset:");
+        for byte in asset {
+            name.push(HEX[usize::from(byte >> 4)]);
+            name.push(HEX[usize::from(byte & 15)]);
+        }
+        Ok(Self {
+            payer,
+            asset,
+            account: account_identifier(&name)?,
+        })
+    }
+
+    /// Proves a supplied account identifier is one of the two payment
+    /// accounts derivable from the DID and asset.
+    ///
+    /// # Errors
+    ///
+    /// Refuses every identifier that neither derivation produces.
+    pub fn prove(did: &[u8], asset: [u8; 32], account: [u8; 32]) -> Result<Self, OccupancyError> {
+        [Self::main(did, asset)?, Self::asset(did, asset)?]
+            .into_iter()
+            .find(|candidate| candidate.account == account)
+            .ok_or(OccupancyError::UnprovenPaymentAccount)
+    }
+
+    #[must_use]
+    pub const fn payer(&self) -> PrincipalId {
+        self.payer
+    }
+    #[must_use]
+    pub const fn asset_id(&self) -> [u8; 32] {
+        self.asset
+    }
+    #[must_use]
+    pub const fn account(&self) -> [u8; 32] {
+        self.account
+    }
+}
+
+fn payer_principal(did: &[u8], asset: [u8; 32]) -> Result<PrincipalId, OccupancyError> {
+    if did.is_empty() || did.len() > MAX_PAYER_DID_BYTES || asset == [0; 32] {
+        return Err(OccupancyError::UnprovenPaymentAccount);
+    }
+    let length = u16::try_from(did.len()).map_err(|_| OccupancyError::LengthLimit)?;
+    let mut preimage = DID_IDENTIFIER_DOMAIN.to_vec();
+    preimage.extend_from_slice(&length.to_be_bytes());
+    preimage.extend_from_slice(did);
+    PrincipalId::new(Sha256::digest(preimage).into())
+        .map_err(|_| OccupancyError::UnprovenPaymentAccount)
+}
+
+fn account_identifier(name: &[u8]) -> Result<[u8; 32], OccupancyError> {
+    let length = u32::try_from(name.len()).map_err(|_| OccupancyError::LengthLimit)?;
+    let mut preimage = ACCOUNT_IDENTIFIER_DOMAIN.to_vec();
+    preimage.extend_from_slice(&length.to_be_bytes());
+    preimage.extend_from_slice(name);
+    Ok(Sha256::digest(preimage).into())
+}
+
+fn transfer_leaf(from: [u8; 32], treasury: [u8; 32], asset: [u8; 32], paid: u128) -> [u8; 32] {
+    let mut leaf = TRANSFER_LEAF_DOMAIN.to_vec();
+    leaf.push(0);
+    leaf.extend_from_slice(&from);
+    leaf.extend_from_slice(&treasury);
+    leaf.extend_from_slice(&asset);
+    leaf.extend_from_slice(&paid.to_be_bytes());
+    leaf.extend_from_slice(&23_u16.to_be_bytes());
+    Sha256::digest(leaf).into()
+}
+
+fn transfer_merkle_root(mut level: Vec<[u8; 32]>) -> [u8; 32] {
+    if level.is_empty() {
+        return [0; 32];
+    }
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        for pair in level.chunks(2) {
+            let right = pair.get(1).unwrap_or(&pair[0]);
+            let mut preimage = TRANSFER_INTERNAL_DOMAIN.to_vec();
+            preimage.extend_from_slice(&pair[0]);
+            preimage.extend_from_slice(right);
+            next.push(<[u8; 32]>::from(Sha256::digest(preimage)));
+        }
+        level = next;
+    }
+    level[0]
+}
+
 #[derive(Clone, Debug)]
 pub struct PreparedOccupancySettlement {
     settlement: OccupancySettlement,
@@ -672,6 +860,8 @@ pub enum OccupancyError {
     ArithmeticOverflow,
     LengthLimit,
     MalformedEvidence,
+    UnprovenPaymentAccount,
+    TransferRootMismatch,
     Storage(StorageError),
 }
 
@@ -707,6 +897,12 @@ impl Display for OccupancyError {
             Self::ArithmeticOverflow => formatter.write_str("occupancy arithmetic overflow"),
             Self::LengthLimit => formatter.write_str("occupancy state exceeds protocol bounds"),
             Self::MalformedEvidence => formatter.write_str("malformed occupancy evidence"),
+            Self::UnprovenPaymentAccount => {
+                formatter.write_str("occupancy payer has no proven payment account")
+            }
+            Self::TransferRootMismatch => {
+                formatter.write_str("occupancy transfer root is not the committed root")
+            }
             Self::Storage(error) => write!(formatter, "occupancy storage refusal: {error}"),
         }
     }
@@ -2033,5 +2229,240 @@ mod tests {
                 assert_eq!(after.settlement().usage(), OccupancyUsage::default());
             }
         }
+    }
+
+    const SELLER_DID: &[u8] =
+        b"did:layerx:c4420d73f7b2e56599e25f99790d680f84348adf420eed89b2484b2ece345e64";
+
+    fn digest(text: &str) -> [u8; 32] {
+        let mut bytes = [0_u8; 32];
+        for (index, pair) in text.as_bytes().chunks_exact(2).enumerate() {
+            let pair = std::str::from_utf8(pair).unwrap_or_else(|error| panic!("{error}"));
+            bytes[index] = u8::from_str_radix(pair, 16).unwrap_or_else(|error| panic!("{error}"));
+        }
+        bytes
+    }
+
+    fn native_asset() -> [u8; 32] {
+        let mut asset = [0_u8; 32];
+        asset[0] = 1;
+        asset
+    }
+
+    fn paid_settlement(payers: &[PrincipalId]) -> OccupancySettlement {
+        let mut storage = Storage::new();
+        let mut responsibilities = Vec::new();
+        for payer in payers {
+            let namespace = namespace(*payer);
+            let mut transaction = storage.transaction(namespace);
+            transaction
+                .write(b"k", &[1; 118])
+                .unwrap_or_else(|error| panic!("bounded write: {error:?}"));
+            assert_eq!(transaction.commit(), 1);
+            let authority = OccupancyAuthority {
+                payer: *payer,
+                root_program: crate::ProgramId::new([7; 32])
+                    .unwrap_or_else(|error| panic!("nonzero program: {error:?}")),
+                activity_binding: [9; 32],
+                occupancy_fee_ceiling: 1_000_000,
+                maximum_price: 60,
+            };
+            responsibilities.push(
+                authority
+                    .authorize(namespace, 119, 1_000_000)
+                    .unwrap_or_else(|error| panic!("signed occupancy mandate: {error:?}")),
+            );
+        }
+        let mut ledger = OccupancyLedger::new();
+        let prepared = ledger
+            .prepare_batch(1, &storage, responsibilities, schedule(1, 60))
+            .unwrap_or_else(|error| panic!("initial position: {error:?}"));
+        ledger
+            .commit_after_debits(prepared, &storage)
+            .unwrap_or_else(|error| panic!("initial position commit: {error:?}"));
+        let prepared = ledger
+            .prepare_unchanged_batch(1, schedule(1, 60))
+            .unwrap_or_else(|error| panic!("first terminal transition: {error:?}"));
+        ledger
+            .commit_unchanged_after_debits(prepared)
+            .unwrap_or_else(|error| panic!("first terminal commit: {error:?}"));
+        ledger
+            .prepare_unchanged_batch(2, schedule(1, 60))
+            .unwrap_or_else(|error| panic!("paid interval: {error:?}"))
+            .settlement()
+            .clone()
+    }
+
+    #[test]
+    fn state_commitment_root_commits_the_proven_payment_account() {
+        let asset = native_asset();
+        let payer = PrincipalId::new(digest(
+            "b3ae288574ffc1a59920de3c7e8b7f5bc79463a205a4df3fae8e7dc516ee4fb3",
+        ))
+        .unwrap_or_else(|error| panic!("nonzero principal: {error:?}"));
+        let kernel_root =
+            digest("ba040b25be4b4328ea29a6169b560c80da57d207405258c372787f3ca938cfaa");
+        let principal_root =
+            digest("554eb383946c1aea69e6fb7523097d7d51c7b19739289be622e8e4c0694886ff");
+        let settlement = paid_settlement(&[payer]);
+        let dispositions = settlement
+            .payer_dispositions()
+            .unwrap_or_else(|error| panic!("bounded payer totals: {error:?}"));
+        assert_eq!(dispositions[&payer], (7140, 7140, 0, false));
+
+        let main = OccupancyPaymentAccount::main(SELLER_DID, asset)
+            .unwrap_or_else(|error| panic!("main account: {error:?}"));
+        let asset_account = OccupancyPaymentAccount::asset(SELLER_DID, asset)
+            .unwrap_or_else(|error| panic!("asset account: {error:?}"));
+        assert_eq!(main.payer(), payer);
+        assert_eq!(asset_account.payer(), payer);
+        assert_eq!(
+            main.account(),
+            digest("1673e7832a44e5fa42c263e256728b61d28245a6ae13d160dda1954b7a1f2a79")
+        );
+        assert_eq!(
+            asset_account.account(),
+            digest("fe200a1277cc137963ae36b5971010476f653250ef6b737cb0948758622b99bb")
+        );
+
+        assert_eq!(settlement.transfer_root(asset), Ok(principal_root));
+        assert_eq!(
+            settlement.verify_transfer_root(2, asset, &[], principal_root),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            settlement.verify_transfer_root(2, asset, &[main], kernel_root),
+            Err(OccupancyError::TransferRootMismatch)
+        );
+        assert_eq!(
+            settlement.verify_transfer_root(3, asset, &[main], kernel_root),
+            Ok(vec![main])
+        );
+        assert_eq!(
+            settlement.verify_transfer_root(3, asset, &[asset_account, main], kernel_root),
+            Ok(vec![main])
+        );
+        assert_eq!(
+            settlement.verify_transfer_root(3, asset, &[main], principal_root),
+            Err(OccupancyError::TransferRootMismatch)
+        );
+        assert_eq!(
+            settlement.verify_transfer_root(3, asset, &[asset_account], kernel_root),
+            Err(OccupancyError::TransferRootMismatch)
+        );
+        assert_eq!(
+            settlement.verify_transfer_root(3, asset, &[], principal_root),
+            Err(OccupancyError::UnprovenPaymentAccount)
+        );
+        assert_eq!(
+            settlement.verify_transfer_root(3, [0; 32], &[main], kernel_root),
+            Err(OccupancyError::MalformedEvidence)
+        );
+    }
+
+    #[test]
+    fn state_commitment_root_refuses_accounts_the_payer_does_not_derive() {
+        let asset = native_asset();
+        let payer = PrincipalId::new(digest(
+            "b3ae288574ffc1a59920de3c7e8b7f5bc79463a205a4df3fae8e7dc516ee4fb3",
+        ))
+        .unwrap_or_else(|error| panic!("nonzero principal: {error:?}"));
+        let settlement = paid_settlement(&[payer]);
+        let stranger_did: &[u8] = b"did:layerx:stranger";
+        let stranger = OccupancyPaymentAccount::main(stranger_did, asset)
+            .unwrap_or_else(|error| panic!("stranger account: {error:?}"));
+        assert_ne!(stranger.payer(), payer);
+        let treasury = account_identifier(b"system:fees")
+            .unwrap_or_else(|error| panic!("treasury: {error:?}"));
+        let stranger_root = transfer_merkle_root(vec![transfer_leaf(
+            stranger.account(),
+            treasury,
+            asset,
+            7140,
+        )]);
+        assert_eq!(
+            settlement.verify_transfer_root(3, asset, &[stranger], stranger_root),
+            Err(OccupancyError::UnprovenPaymentAccount)
+        );
+        assert_eq!(
+            OccupancyPaymentAccount::prove(SELLER_DID, asset, stranger.account()),
+            Err(OccupancyError::UnprovenPaymentAccount)
+        );
+        assert_eq!(
+            OccupancyPaymentAccount::prove(SELLER_DID, asset, payer.bytes()),
+            Err(OccupancyError::UnprovenPaymentAccount)
+        );
+        let other_asset = [0x81; 32];
+        let wrong_asset = OccupancyPaymentAccount::main(SELLER_DID, other_asset)
+            .unwrap_or_else(|error| panic!("other asset account: {error:?}"));
+        let kernel_root =
+            digest("ba040b25be4b4328ea29a6169b560c80da57d207405258c372787f3ca938cfaa");
+        assert_eq!(
+            settlement.verify_transfer_root(3, asset, &[wrong_asset], kernel_root),
+            Err(OccupancyError::UnprovenPaymentAccount)
+        );
+        assert_eq!(
+            OccupancyPaymentAccount::main(b"", asset),
+            Err(OccupancyError::UnprovenPaymentAccount)
+        );
+        assert_eq!(
+            OccupancyPaymentAccount::main(&[b'a'; 256], asset),
+            Err(OccupancyError::UnprovenPaymentAccount)
+        );
+    }
+
+    #[test]
+    fn state_commitment_root_selects_one_account_per_payer_within_the_bound() {
+        let asset = native_asset();
+        let dids: Vec<Vec<u8>> = (0..9_u8)
+            .map(|index| format!("did:layerx:payer{index}").into_bytes())
+            .collect();
+        let mut accounts = Vec::new();
+        let mut payers = Vec::new();
+        for did in &dids {
+            let main = OccupancyPaymentAccount::main(did, asset)
+                .unwrap_or_else(|error| panic!("main account: {error:?}"));
+            let asset_account = OccupancyPaymentAccount::asset(did, asset)
+                .unwrap_or_else(|error| panic!("asset account: {error:?}"));
+            payers.push(main.payer());
+            accounts.push(main);
+            accounts.push(asset_account);
+        }
+        let treasury = account_identifier(b"system:fees")
+            .unwrap_or_else(|error| panic!("treasury: {error:?}"));
+
+        let pair = paid_settlement(&payers[..2]);
+        let mut ordered: Vec<_> = accounts[..4].chunks(2).collect();
+        ordered.sort_by_key(|candidates| candidates[0].payer());
+        let committed = vec![ordered[0][1], ordered[1][0]];
+        let root = transfer_merkle_root(
+            committed
+                .iter()
+                .map(|account| transfer_leaf(account.account(), treasury, asset, 7140))
+                .collect(),
+        );
+        assert_eq!(
+            pair.verify_transfer_root(3, asset, &accounts[..4], root),
+            Ok(committed)
+        );
+
+        let nine = paid_settlement(&payers);
+        assert_eq!(
+            nine.verify_transfer_root(3, asset, &accounts, root),
+            Err(OccupancyError::LengthLimit)
+        );
+        let exact: Vec<_> = accounts.iter().copied().step_by(2).collect();
+        let mut leaves: Vec<_> = exact.clone();
+        leaves.sort_by_key(OccupancyPaymentAccount::payer);
+        let nine_root = transfer_merkle_root(
+            leaves
+                .iter()
+                .map(|account| transfer_leaf(account.account(), treasury, asset, 7140))
+                .collect(),
+        );
+        assert_eq!(
+            nine.verify_transfer_root(3, asset, &exact, nine_root),
+            Ok(leaves)
+        );
     }
 }

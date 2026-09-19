@@ -4,11 +4,14 @@ use layerx_programs_runtime::terminal::{
     decode_terminal_payload, CandidateTerminalOutcome, DecodedTerminal, ExecutionTerminal,
     FailureTerminal, PreRuntimeFailure, TerminalDetail, EMPTY_CALL_GRAPH, PRE_RUNTIME_FAILURE,
 };
-use layerx_programs_runtime::{BudgetMeterRefusal, OccupancySettlement, ProgramFailure};
+use layerx_programs_runtime::{
+    BudgetMeterRefusal, OccupancyPaymentAccount, OccupancySettlement, ProgramFailure,
+    MAX_OCCUPANCY_PAYERS,
+};
 use layerx_types::intent::{
     ProgramCallOutcome, ProgramCallResponse, ProgramLegacyCallResponse, ProgramLegacyValue,
 };
-use layerx_wire::limits::protocol_version_uses_occupancy;
+use layerx_wire::limits::{protocol_version_uses_occupancy, STATE_COMMITMENT_PROTOCOL_VERSION};
 use layerx_wire::receipt::ProgramOutcome;
 use sha2::{Digest as _, Sha256};
 
@@ -58,8 +61,71 @@ pub struct AuthorizedProgramExecutionExpectation {
     pub guest_abi_version: u16,
 }
 
+/// A DID offered as an occupancy payer of a state-commitment receipt.
+///
+/// The DID and the optional account identifier are untrusted input. The
+/// verifier only uses an account it derives from the DID, for a payer whose
+/// signed settlement identifier is the DID's identifier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OccupancyPayer<'a> {
+    pub did: &'a [u8],
+    pub account: Option<[u8; 32]>,
+}
+
+/// Proves one offered payer against the receipt's occupancy asset: the named
+/// account when one is offered, otherwise both accounts the DID derives.
+///
+/// # Errors
+///
+/// Refuses a DID that derives no payer and every account identifier that is
+/// not derivable from the DID and the asset.
+pub fn prove_occupancy_payer(
+    payer: &OccupancyPayer<'_>,
+    asset: [u8; 32],
+) -> Result<Vec<OccupancyPaymentAccount>, ProgramExecutionVerificationFailure> {
+    let failure = |_| ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Occupancy);
+    match payer.account {
+        Some(account) => Ok(vec![OccupancyPaymentAccount::prove(
+            payer.did, asset, account,
+        )
+        .map_err(failure)?]),
+        None => Ok(vec![
+            OccupancyPaymentAccount::main(payer.did, asset).map_err(failure)?,
+            OccupancyPaymentAccount::asset(payer.did, asset).map_err(failure)?,
+        ]),
+    }
+}
+
+fn proven_paying_accounts(
+    settlement: &OccupancySettlement,
+    payers: &[OccupancyPayer<'_>],
+    asset: [u8; 32],
+) -> Result<Vec<OccupancyPaymentAccount>, ProgramExecutionVerificationFailure> {
+    let paying: Vec<[u8; 32]> = settlement
+        .payer_dispositions()
+        .map_err(|_| ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Occupancy))?
+        .into_iter()
+        .filter(|(_, (_, paid, _, _))| *paid != 0)
+        .map(|(payer, _)| payer.bytes())
+        .collect();
+    let mut accounts = Vec::new();
+    if paying.is_empty() || paying.len() > MAX_OCCUPANCY_PAYERS {
+        return Ok(accounts);
+    }
+    for payer in payers {
+        let Ok(main) = OccupancyPaymentAccount::main(payer.did, asset) else {
+            continue;
+        };
+        if paying.contains(&main.payer().bytes()) {
+            accounts.extend(prove_occupancy_payer(payer, asset)?);
+        }
+    }
+    Ok(accounts)
+}
+
 pub struct VerifiedProgramExecution {
     receipt: VerifiedReceipt,
+    occupancy_payment_accounts: Vec<OccupancyPaymentAccount>,
     result_code: i32,
     fee_units: u128,
     cpu_fuel: u64,
@@ -151,6 +217,12 @@ impl VerifiedProgramExecution {
     pub fn call_graph(&self) -> &[u8] {
         &self.call_graph
     }
+
+    /// The proven payment accounts the signed occupancy transfer root commits.
+    #[must_use]
+    pub fn occupancy_payment_accounts(&self) -> &[OccupancyPaymentAccount] {
+        &self.occupancy_payment_accounts
+    }
 }
 
 /// Verifies the sequencer receipt, signed activity identity, terminal payload,
@@ -164,6 +236,22 @@ pub fn verify_program_execution(
     terminal_payload: &[u8],
     call_graph: &[u8],
     expected: ProgramExecutionExpectation,
+) -> Result<VerifiedProgramExecution, ProgramExecutionVerificationFailure> {
+    verify_program_execution_with_payers(receipt, terminal_payload, call_graph, expected, &[])
+}
+
+/// Verifies like [`verify_program_execution`] and proves the offered occupancy
+/// payers, which a state-commitment receipt with a paid charge requires.
+///
+/// # Errors
+///
+/// Returns the first failed proof boundary without returning a partial outcome.
+pub fn verify_program_execution_with_payers(
+    receipt: &[u8],
+    terminal_payload: &[u8],
+    call_graph: &[u8],
+    expected: ProgramExecutionExpectation,
+    occupancy_payers: &[OccupancyPayer<'_>],
 ) -> Result<VerifiedProgramExecution, ProgramExecutionVerificationFailure> {
     let verified = verify_program_outcome_at_root(
         receipt,
@@ -179,6 +267,7 @@ pub fn verify_program_execution(
         expected.payload_hash,
         expected.program_id,
         expected.guest_abi_version,
+        occupancy_payers,
     )
 }
 
@@ -194,6 +283,29 @@ pub fn verify_authorized_program_execution(
     call_graph: &[u8],
     expected: &AuthorizedProgramExecutionExpectation,
 ) -> Result<VerifiedProgramExecution, ProgramExecutionVerificationFailure> {
+    verify_authorized_program_execution_with_payers(
+        receipt,
+        terminal_payload,
+        call_graph,
+        expected,
+        &[],
+    )
+}
+
+/// Verifies like [`verify_authorized_program_execution`] and proves the offered
+/// occupancy payers, which a state-commitment receipt with a paid charge
+/// requires.
+///
+/// # Errors
+///
+/// Returns the first failed receipt or terminal proof boundary.
+pub fn verify_authorized_program_execution_with_payers(
+    receipt: &[u8],
+    terminal_payload: &[u8],
+    call_graph: &[u8],
+    expected: &AuthorizedProgramExecutionExpectation,
+    occupancy_payers: &[OccupancyPayer<'_>],
+) -> Result<VerifiedProgramExecution, ProgramExecutionVerificationFailure> {
     let verified = verify_program_outcome(receipt, &expected.authority)
         .map_err(|_| ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Receipt))?;
     verify_program_execution_receipt(
@@ -204,6 +316,7 @@ pub fn verify_authorized_program_execution(
         expected.payload_hash,
         expected.program_id,
         expected.guest_abi_version,
+        occupancy_payers,
     )
 }
 
@@ -215,6 +328,7 @@ fn verify_program_execution_receipt(
     expected_payload_hash: [u8; 32],
     expected_program_id: [u8; 32],
     expected_guest_abi_version: u16,
+    occupancy_payers: &[OccupancyPayer<'_>],
 ) -> Result<VerifiedProgramExecution, ProgramExecutionVerificationFailure> {
     let protocol = verified
         .receipt()
@@ -273,10 +387,17 @@ fn verify_program_execution_receipt(
         }
         verify_pre_runtime(failure, protocol, expected_payload_hash, call_graph)?;
     }
-    verify_terminal_commitments(&terminal, call_graph, protocol.protocol_version(), outcome)?;
+    let occupancy_payment_accounts = verify_terminal_commitments(
+        &terminal,
+        call_graph,
+        protocol.protocol_version(),
+        outcome,
+        occupancy_payers,
+    )?;
     let (typed_outcome, authenticated_failure, authenticated_resource) =
         verified_terminal_outcome(&terminal, terminal_payload, expected_program_id, outcome)?;
     Ok(VerifiedProgramExecution {
+        occupancy_payment_accounts,
         result_code: outcome.result_code(),
         fee_units: outcome.fee_units(),
         cpu_fuel: outcome.cpu_fuel(),
@@ -496,7 +617,8 @@ fn verify_terminal_commitments(
     available_graph: &[u8],
     protocol_version: u16,
     outcome: &ProgramOutcome,
-) -> Result<(), ProgramExecutionVerificationFailure> {
+    occupancy_payers: &[OccupancyPayer<'_>],
+) -> Result<Vec<OccupancyPaymentAccount>, ProgramExecutionVerificationFailure> {
     if available_graph.is_empty()
         || <[u8; 32]>::from(Sha256::digest(available_graph)) != outcome.call_graph_root()
     {
@@ -537,6 +659,7 @@ fn verify_terminal_commitments(
         protocol_version_uses_occupancy(protocol_version) && successful_execution;
     let mut occupancy_seen = false;
     let mut occupancy_present = false;
+    let mut occupancy_payment_accounts = Vec::new();
     let authority_required = candidate || outcome.encoding_version() == 4 && successful_execution;
     let mut authority_seen = false;
     for attachment in &terminal.attachments {
@@ -548,7 +671,12 @@ fn verify_terminal_commitments(
                     ));
                 }
                 occupancy_seen = true;
-                occupancy_present = verify_occupancy_attachment(bytes, outcome)?;
+                if let Some(accounts) =
+                    verify_occupancy_attachment(bytes, protocol_version, outcome, occupancy_payers)?
+                {
+                    occupancy_present = true;
+                    occupancy_payment_accounts = accounts;
+                }
             }
             layerx_programs_runtime::terminal::TerminalAttachment::TransferAuthority {
                 authorization,
@@ -576,13 +704,15 @@ fn verify_terminal_commitments(
             ProgramExecutionCheck::TransferAuthority,
         ));
     }
-    Ok(())
+    Ok(occupancy_payment_accounts)
 }
 
 fn verify_occupancy_attachment(
     bytes: &[u8],
+    protocol_version: u16,
     outcome: &ProgramOutcome,
-) -> Result<bool, ProgramExecutionVerificationFailure> {
+    occupancy_payers: &[OccupancyPayer<'_>],
+) -> Result<Option<Vec<OccupancyPaymentAccount>>, ProgramExecutionVerificationFailure> {
     let occupancy_failure =
         || ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Occupancy);
     if bytes.is_empty() {
@@ -593,7 +723,7 @@ fn verify_occupancy_attachment(
         {
             return Err(occupancy_failure());
         }
-        return Ok(false);
+        return Ok(None);
     }
     if <[u8; 32]>::from(Sha256::digest(bytes)) != outcome.occupancy_evidence_digest() {
         return Err(occupancy_failure());
@@ -602,14 +732,23 @@ fn verify_occupancy_attachment(
         OccupancySettlement::canonical_decode(bytes).map_err(|_| occupancy_failure())?;
     if settlement.usage().byte_batches != outcome.occupancy_byte_batches()
         || settlement.usage().fee_units != outcome.occupancy_fee_units()
-        || settlement
-            .transfer_root(outcome.occupancy_asset_id())
-            .map_err(|_| occupancy_failure())?
-            != outcome.occupancy_transfer_root()
     {
         return Err(occupancy_failure());
     }
-    Ok(true)
+    let accounts = if protocol_version == STATE_COMMITMENT_PROTOCOL_VERSION {
+        proven_paying_accounts(&settlement, occupancy_payers, outcome.occupancy_asset_id())?
+    } else {
+        Vec::new()
+    };
+    settlement
+        .verify_transfer_root(
+            protocol_version,
+            outcome.occupancy_asset_id(),
+            &accounts,
+            outcome.occupancy_transfer_root(),
+        )
+        .map(Some)
+        .map_err(|_| occupancy_failure())
 }
 
 fn verify_transfer_authority_attachment(
@@ -722,6 +861,113 @@ mod terminal_binding_tests {
                 .err()
                 .map(|error| error.check),
             Some(ProgramExecutionCheck::Terminal)
+        );
+    }
+}
+
+#[cfg(test)]
+mod occupancy_payer_tests {
+    use super::*;
+    use layerx_types::account::AccountId;
+    use layerx_types::ids::Did;
+
+    const SELLER_DID: &str =
+        "did:layerx:c4420d73f7b2e56599e25f99790d680f84348adf420eed89b2484b2ece345e64";
+
+    fn native_asset() -> [u8; 32] {
+        let mut asset = [0_u8; 32];
+        asset[0] = 1;
+        asset
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    #[test]
+    fn proven_payment_accounts_are_the_wire_derivations_of_the_payer_did() {
+        let asset = native_asset();
+        let did = Did::new(SELLER_DID.as_bytes()).unwrap_or_else(|error| panic!("{error:?}"));
+        let payer = layerx_wire::hash::did_id_for_protocol(&did, STATE_COMMITMENT_PROTOCOL_VERSION)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(
+            hex(&payer),
+            "b3ae288574ffc1a59920de3c7e8b7f5bc79463a205a4df3fae8e7dc516ee4fb3"
+        );
+        let names = [
+            format!("agent:{SELLER_DID}:main"),
+            format!("agent:{SELLER_DID}:asset:{}", hex(&asset)),
+        ];
+        let accounts = prove_occupancy_payer(
+            &OccupancyPayer {
+                did: SELLER_DID.as_bytes(),
+                account: None,
+            },
+            asset,
+        )
+        .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(accounts.len(), 2);
+        for (account, name) in accounts.iter().zip(&names) {
+            let parsed = AccountId::parse(name).unwrap_or_else(|error| panic!("{error:?}"));
+            let expected = layerx_wire::hash::account_id_for_protocol(
+                &parsed,
+                STATE_COMMITMENT_PROTOCOL_VERSION,
+            )
+            .unwrap_or_else(|error| panic!("{error:?}"));
+            assert_eq!(account.account(), expected);
+            assert_eq!(account.payer().bytes(), payer);
+        }
+        assert_eq!(
+            hex(&accounts[0].account()),
+            "1673e7832a44e5fa42c263e256728b61d28245a6ae13d160dda1954b7a1f2a79"
+        );
+        let explicit = prove_occupancy_payer(
+            &OccupancyPayer {
+                did: SELLER_DID.as_bytes(),
+                account: Some(accounts[0].account()),
+            },
+            asset,
+        )
+        .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(explicit, vec![accounts[0]]);
+    }
+
+    #[test]
+    fn unrelated_account_identifiers_are_refused_before_use() {
+        let asset = native_asset();
+        let stranger = prove_occupancy_payer(
+            &OccupancyPayer {
+                did: b"did:layerx:stranger",
+                account: None,
+            },
+            asset,
+        )
+        .unwrap_or_else(|error| panic!("{error:?}"));
+        for account in [stranger[0].account(), [0x44; 32]] {
+            assert_eq!(
+                prove_occupancy_payer(
+                    &OccupancyPayer {
+                        did: SELLER_DID.as_bytes(),
+                        account: Some(account),
+                    },
+                    asset,
+                )
+                .err()
+                .map(|error| error.check),
+                Some(ProgramExecutionCheck::Occupancy)
+            );
+        }
+        assert_eq!(
+            prove_occupancy_payer(
+                &OccupancyPayer {
+                    did: SELLER_DID.as_bytes(),
+                    account: None,
+                },
+                [0; 32],
+            )
+            .err()
+            .map(|error| error.check),
+            Some(ProgramExecutionCheck::Occupancy)
         );
     }
 }
