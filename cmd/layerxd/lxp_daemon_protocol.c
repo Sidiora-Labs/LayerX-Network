@@ -465,16 +465,24 @@ static lxp_result pending_artifacts_route(
     const uint8_t receipt_digest[32], json_writer *writer, bool *present)
 {
     lxp_result status = LXP_ERR_UNKNOWN_ACTIVITY;
-    uint8_t scratch_bytes[LXP_STATE_MAX_RECEIPT_BYTES];
+    uint8_t *scratch_bytes;
     lxp_arena scratch;
     size_t index;
     if (owner == NULL || activity_id == NULL || receipt_digest == NULL ||
         writer == NULL || present == NULL)
         return LXP_ERR_NON_CANONICAL;
     *present = false;
-    status = lxp_arena_init(&scratch, scratch_bytes, sizeof(scratch_bytes));
-    if (status != LXP_OK) return status;
-    if (pthread_mutex_lock(&owner->receipt_mutex) != 0) return LXP_ERR_IO;
+    scratch_bytes = (uint8_t *)malloc(LXP_MAX_ACTIVITY_BYTES);
+    if (scratch_bytes == NULL) return LXP_ERR_IO;
+    status = lxp_arena_init(&scratch, scratch_bytes, LXP_MAX_ACTIVITY_BYTES);
+    if (status != LXP_OK) {
+        free(scratch_bytes);
+        return status;
+    }
+    if (pthread_mutex_lock(&owner->receipt_mutex) != 0) {
+        free(scratch_bytes);
+        return LXP_ERR_IO;
+    }
     for (index = 0U; index < owner->pending_receipt_count; ++index) {
         const lxp_daemon_pending_receipt *pending =
             &owner->pending_receipts[index];
@@ -516,6 +524,7 @@ static lxp_result pending_artifacts_route(
     if (!*present && status == LXP_ERR_UNKNOWN_ACTIVITY) status = LXP_OK;
     if (pthread_mutex_unlock(&owner->receipt_mutex) != 0 && status == LXP_OK)
         status = LXP_FATAL_INVARIANT;
+    free(scratch_bytes);
     return status;
 }
 
