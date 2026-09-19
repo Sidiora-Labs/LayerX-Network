@@ -4,10 +4,10 @@ use std::path::PathBuf;
 
 use ed25519_dalek::{SigningKey, Verifier as _};
 use layerx_explorer_index::reads::{
-    build_resolve_read, decode_record, interpret_answer, is_naming_reference_interface,
-    parse_answer, resolve_calldata, resolved_json, validate_name, verify_resolve_answer,
-    ReadAnswer, ReadEndpoint, ReadError, ReadPrincipal, ReadScope, ResolveFailure, ResolveOutcome,
-    READINESS_PROBE_NAME,
+    build_resolve_read, decode_record, interpret_answer, interpret_sequence,
+    is_naming_reference_interface, parse_answer, resolve_calldata, resolved_json, validate_name,
+    verify_resolve_answer, ReadAnswer, ReadEndpoint, ReadError, ReadPrincipal, ReadScope,
+    ResolveFailure, ResolveOutcome, READINESS_PROBE_NAME,
 };
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_types::program_call::NativeProgramCall;
@@ -21,7 +21,7 @@ const PROGRAM: [u8; 32] = [0x5a; 32];
 const SCOPE: ReadScope = ReadScope {
     network_id: 1_280_070_740,
     protocol_version: 3,
-    fee_limit: 0,
+    fee_limit: 50_000_000,
 };
 
 fn must<T, E: std::fmt::Debug>(result: Result<T, E>, what: &str) -> Result<T, Box<dyn Error>> {
@@ -96,7 +96,7 @@ fn the_signed_read_is_the_principals_own_resolve_call() -> Result<(), Box<dyn Er
         )
     );
     let now = 1_800_000_000_000;
-    let read = build_resolve_read(&principal, SCOPE, PROGRAM, 2, "alice", now)?;
+    let read = build_resolve_read(&principal, SCOPE, PROGRAM, 2, "alice", 1, now)?;
     let activity = must(
         decode_signed(&read.signed_activity, &registry()?),
         "signed read",
@@ -104,8 +104,8 @@ fn the_signed_read_is_the_principals_own_resolve_call() -> Result<(), Box<dyn Er
     assert_eq!(activity.protocol_version(), 3);
     assert_eq!(activity.network_id(), SCOPE.network_id);
     assert_eq!(activity.actor_did(), principal.did().as_bytes());
-    assert_eq!(activity.account_sequence(), 0);
-    assert_eq!(activity.fee_limit(), 0);
+    assert_eq!(activity.account_sequence(), 1);
+    assert_eq!(activity.fee_limit(), SCOPE.fee_limit);
     assert_eq!(
         must(layerx_wire::hash::activity_id(&activity), "activity id")?,
         read.activity_id
@@ -125,8 +125,92 @@ fn the_signed_read_is_the_principals_own_resolve_call() -> Result<(), Box<dyn Er
     let signature =
         ed25519_dalek::Signature::from_slice(activity.signature().ok_or("read is unsigned")?)?;
     verifying.verify(&preimage.finalize(), &signature)?;
-    let again = build_resolve_read(&principal, SCOPE, PROGRAM, 2, "alice", now)?;
+    let again = build_resolve_read(&principal, SCOPE, PROGRAM, 2, "alice", 1, now)?;
     assert_ne!(again.activity_id, read.activity_id);
+    let unfunded = build_resolve_read(&principal, SCOPE, PROGRAM, 2, "alice", 0, now)?;
+    assert_eq!(
+        must(
+            decode_signed(&unfunded.signed_activity, &registry()?),
+            "signed read",
+        )?
+        .account_sequence(),
+        0
+    );
+    Ok(())
+}
+
+#[test]
+fn the_read_sequence_is_the_principals_own_sequence_document() -> Result<(), Box<dyn Error>> {
+    let principal = ReadPrincipal::from_seed_hex(&seed_hex())?;
+    let document = |did: &str, sequence: serde_json::Value| ReadAnswer {
+        status: 200,
+        body: json!({"ok": true, "result": {"did": did, "next_sequence": sequence,
+            "observed_head_sequence": "9", "state_root": "00".repeat(32),
+            "verification": "authenticated_node_snapshot"}, "trace": "core-1"})
+        .to_string()
+        .into_bytes(),
+    };
+    assert_eq!(
+        interpret_sequence(&principal, &document(principal.did(), json!("1"))),
+        Ok(1)
+    );
+    assert_eq!(
+        interpret_sequence(
+            &principal,
+            &document(principal.did(), json!("18446744073709551615"))
+        ),
+        Ok(u64::MAX)
+    );
+    assert_eq!(
+        interpret_sequence(&principal, &document("did:layerx:other", json!("1"))),
+        Err(ResolveFailure::Unverified(ReadError::Unbound))
+    );
+    for sequence in [
+        json!(1),
+        json!("01"),
+        json!("+1"),
+        json!("-1"),
+        json!(""),
+        json!("18446744073709551616"),
+        json!(null),
+    ] {
+        assert_eq!(
+            interpret_sequence(&principal, &document(principal.did(), sequence)),
+            Err(ResolveFailure::Unverified(ReadError::MalformedAnswer))
+        );
+    }
+    let refused = ReadAnswer {
+        status: 503,
+        body: json!({"error": {"code": "sequence_unavailable", "retry": "after",
+            "retry_after_seconds": 5}})
+        .to_string()
+        .into_bytes(),
+    };
+    assert_eq!(
+        interpret_sequence(&principal, &refused),
+        Err(ResolveFailure::Refused {
+            status: 503,
+            code: "sequence_unavailable".to_owned()
+        })
+    );
+    let unacknowledged = ReadAnswer {
+        status: 200,
+        body: json!({"ok": false, "result": {"did": principal.did(), "next_sequence": "1"}})
+            .to_string()
+            .into_bytes(),
+    };
+    assert_eq!(
+        interpret_sequence(&principal, &unacknowledged),
+        Err(ResolveFailure::Unverified(ReadError::MalformedAnswer))
+    );
+    let unframed = ReadAnswer {
+        status: 200,
+        body: b"not json".to_vec(),
+    };
+    assert_eq!(
+        interpret_sequence(&principal, &unframed),
+        Err(ResolveFailure::Unverified(ReadError::MalformedAnswer))
+    );
     Ok(())
 }
 
@@ -192,7 +276,7 @@ fn records_decode_into_the_web_contract() -> Result<(), Box<dyn Error>> {
 #[test]
 fn answers_without_sequencer_evidence_fail_closed() -> Result<(), Box<dyn Error>> {
     let principal = ReadPrincipal::from_seed_hex(&seed_hex())?;
-    let read = build_resolve_read(&principal, SCOPE, PROGRAM, 2, "alice", 1_800_000_000_000)?;
+    let read = build_resolve_read(&principal, SCOPE, PROGRAM, 2, "alice", 1, 1_800_000_000_000)?;
     let sequencer = SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes();
     let hex = layerx_programs::hex::encode;
     assert_eq!(
