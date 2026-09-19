@@ -24,6 +24,17 @@ Version 1.6 adds `program_read` and an explicit durable-or-published receipt
 wait mode. Program reads reuse the existing signed simulation result and proof
 shape while binding execution to caller-supplied minimum-sequence and optional
 canonical-state-root constraints.
+Version 1.7 adds `program_head_attest`. `ProgramHeadAttestRequest` names one
+registered program and a staleness bound; the sequencer answers with the head
+it serves as its current account-state head (scanned-through sequence, head
+receipt timestamp as `observed_at`, `valid_through` = `observed_at` plus the
+requested bound, committed state root, head receipt digest) together with the
+program's registered version, code hash and ABI at that head, and signs the
+`LayerX/program-discovery-proof/v1` digest over those fields under the
+authorised sequencer key. The signature is the discovery proof the hosted
+program registry publishes as `discovery_public_key`/`discovery_signature`; a
+node that is not the authorised signing sequencer does not advertise the
+capability and refuses the request.
 
 ## Authenticated durable submission
 
@@ -101,6 +112,8 @@ authentication-and-durability guarantee only when
 | 37 | `SessionFeeStateResponse` | response | `session_fee_state` |
 | 38 | `ProgramReadRequest` | request | `program_read` |
 | 39 | `ProgramReadResponse` | response | `program_read` |
+| 40 | `ProgramHeadAttestRequest` | request | `program_head_attest` |
+| 41 | `ProgramHeadAttestResponse` | response | `program_head_attest` |
 
 AvailabilityFetchRequest carries only the canonical selector and empty proof material. AvailabilityChunk carries exact chunk bytes and inclusion metadata. AvailabilityEnd has empty canonical payload and empty proof material.
 

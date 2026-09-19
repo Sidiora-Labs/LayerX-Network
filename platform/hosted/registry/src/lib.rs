@@ -7,6 +7,7 @@ mod auth;
 mod builder;
 pub mod deployment;
 pub mod event_producer;
+pub mod head_attestation;
 mod http;
 mod journal;
 mod mirror;
@@ -28,7 +29,7 @@ pub use journal::{
     WriteStep,
 };
 pub use mirror::{MirrorRefusal, MirroredSource, SourceMirror};
-pub use node_state::{NodeProgramStateSource, ProgramStateCursor};
+pub use node_state::{HeadAuthority, NodeProgramStateSource, ProgramStateCursor};
 pub use program_state::FileProgramStateJournal;
 pub use routes::{refusal, Registrar, Request, Response};
 pub use verified::{VerifiedSource, VerifiedSourceStore};

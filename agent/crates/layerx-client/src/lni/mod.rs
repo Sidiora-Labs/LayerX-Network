@@ -4,6 +4,7 @@ pub mod abi;
 pub mod capabilities;
 pub mod framing;
 pub mod handshake;
+pub mod head_attestation;
 pub mod preparation;
 pub mod program_read;
 pub mod refusal;

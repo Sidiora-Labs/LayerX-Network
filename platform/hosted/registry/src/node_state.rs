@@ -57,6 +57,16 @@ pub struct ProgramStateRecord {
     pub receipt: AccountStateHead,
 }
 
+/// The independently verified authority the current head was checked under:
+/// the sequencer key proven by the batch header signature and the chain
+/// identity the header carries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HeadAuthority {
+    pub sequencer_public_key: [u8; 32],
+    pub protocol_version: u16,
+    pub network_id: u32,
+}
+
 pub struct NodeProgramStateSource {
     agent: ureq::Agent,
     endpoint: String,
@@ -221,6 +231,11 @@ impl NodeProgramStateSource {
     }
 
     #[must_use]
+    pub fn request_deadline(&self) -> Option<Instant> {
+        self.request_deadline.get()
+    }
+
+    #[must_use]
     pub fn request_deadline_expired(&self) -> bool {
         self.request_deadline
             .get()
@@ -257,6 +272,18 @@ impl NodeProgramStateSource {
     /// Refuses unavailable node or replica responses and invalid, unverified or stale head evidence.
     pub fn current_head(&self, now_ms: u64) -> Result<AccountStateHead, String> {
         self.parse_head(&self.get("/v1/protocol/account-state/head")?, Some(now_ms))
+    }
+
+    /// Reads the current head together with the independently verified
+    /// sequencer key and chain identity it was checked under.
+    ///
+    /// # Errors
+    /// Refuses unavailable node or replica responses and invalid, unverified or stale head evidence.
+    pub fn current_head_authority(
+        &self,
+        now_ms: u64,
+    ) -> Result<(AccountStateHead, HeadAuthority), String> {
+        self.parse_head_authority(&self.get("/v1/protocol/account-state/head")?, Some(now_ms))
     }
 
     /// Reads the current head, distinguishing a network that has not yet
@@ -523,6 +550,15 @@ impl NodeProgramStateSource {
     }
 
     fn parse_head(&self, value: &Value, now_ms: Option<u64>) -> Result<AccountStateHead, String> {
+        self.parse_head_authority(value, now_ms)
+            .map(|(head, _)| head)
+    }
+
+    fn parse_head_authority(
+        &self,
+        value: &Value,
+        now_ms: Option<u64>,
+    ) -> Result<(AccountStateHead, HeadAuthority), String> {
         let current = value["current"]
             .as_bool()
             .ok_or_else(|| "node account-state response omitted current".to_owned())?;
@@ -568,7 +604,16 @@ impl NodeProgramStateSource {
         {
             return Err("node account-state claims disagree with the verified receipt".to_owned());
         }
-        Ok(head)
+        let header = layerx_wire::receipt::decode_batch_header(&independent_evidence.header)
+            .map_err(|error| format!("independent batch header decoding failed: {error:?}"))?;
+        Ok((
+            head,
+            HeadAuthority {
+                sequencer_public_key: sequencer_key,
+                protocol_version: header.protocol_version(),
+                network_id: header.network_id(),
+            },
+        ))
     }
 
     fn verify_head(

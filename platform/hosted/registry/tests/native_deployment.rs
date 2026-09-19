@@ -1047,6 +1047,153 @@ fn real_deployment_produces_verified_canonical_journal_pair() {
     assert_human_materialization(&cluster);
 }
 
+fn attested_head(
+    cluster: &Cluster,
+    program_id: [u8; 32],
+    staleness_ms: u64,
+    authority: &layerx_platform_registry::HeadAuthority,
+) -> layerx_client::lni::head_attestation::ProgramHeadAttestation {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        match layerx_platform_registry::head_attestation::request_head_attestation(
+            &cluster.lni_socket,
+            program_id,
+            staleness_ms,
+            authority,
+            Instant::now() + Duration::from_secs(5),
+        ) {
+            Ok(attestation) => return attestation,
+            Err(error) if error.contains("HeadStale") && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => panic!("real head attestation: {error}"),
+        }
+    }
+}
+
+#[test]
+fn sequencer_signs_the_discovery_proof_for_the_deployed_program_head() {
+    use ed25519_dalek::{Signature as DalekSignature, VerifyingKey};
+    use layerx_client::lni::head_attestation::{
+        program_discovery_proof_digest, PROGRAM_DISCOVERY_PROOF_DOMAIN,
+    };
+    use layerx_platform_registry::head_attestation::{
+        attach_discovery_proof, discovery_proof_fields, request_head_attestation,
+        ExpectedDiscoveryHead,
+    };
+    use layerx_platform_registry::HeadAuthority;
+    const STALENESS_MS: u64 = 60_000;
+    let (cluster, proof) = executed_deployment();
+    let record = &proof.state.program_record;
+    assert_eq!(record.key.len(), 40);
+    assert_eq!(record.value.len(), 71);
+    let program_id: [u8; 32] = must(record.key[8..].try_into(), "program id");
+    let code_hash: [u8; 32] = must(record.value[33..65].try_into(), "code hash");
+    let abi_version = u16::from_be_bytes(must(record.value[65..67].try_into(), "ABI"));
+    let version = u32::from_be_bytes(must(record.value[67..71].try_into(), "version"));
+    let header = must(
+        layerx_wire::receipt::decode_batch_header(&proof.state.header),
+        "header",
+    );
+    let authority = HeadAuthority {
+        sequencer_public_key: cluster.sequencer_key,
+        protocol_version: PROTOCOL_VERSION,
+        network_id: NETWORK_ID,
+    };
+    let attestation = attested_head(&cluster, program_id, STALENESS_MS, &authority);
+    let head = attestation.head;
+    assert_eq!(head.program_id, program_id);
+    assert_eq!(head.version, version);
+    assert_eq!(head.code_hash, code_hash);
+    assert_eq!(head.abi_version, abi_version);
+    assert!(head.observed_sequence >= header.last_sequence());
+    if head.observed_sequence == header.last_sequence() {
+        assert_eq!(head.state_root, header.resulting_state_root());
+        assert_eq!(head.observed_at, header.timestamp_ms());
+    }
+    assert_eq!(head.valid_through, head.observed_at + STALENESS_MS);
+    assert_eq!(attestation.public_key, cluster.sequencer_key);
+
+    let mut preimage = PROGRAM_DISCOVERY_PROOF_DOMAIN.to_vec();
+    preimage.extend_from_slice(&program_id);
+    preimage.push(1);
+    preimage.extend_from_slice(&version.to_be_bytes());
+    preimage.extend_from_slice(&code_hash);
+    preimage.extend_from_slice(&abi_version.to_be_bytes());
+    preimage.extend_from_slice(&head.observed_sequence.to_be_bytes());
+    preimage.extend_from_slice(&head.observed_at.to_be_bytes());
+    preimage.extend_from_slice(&head.valid_through.to_be_bytes());
+    preimage.extend_from_slice(&head.state_root);
+    let digest = sha256(&[&preimage]);
+    assert_eq!(attestation.digest, digest);
+    assert_eq!(program_discovery_proof_digest(&head), digest);
+    let verifying_key = must(
+        VerifyingKey::from_bytes(&cluster.sequencer_key),
+        "sequencer key",
+    );
+    must(
+        verifying_key.verify_strict(&digest, &DalekSignature::from_bytes(&attestation.signature)),
+        "sequencer discovery signature",
+    );
+
+    let expected = ExpectedDiscoveryHead {
+        head,
+        head_receipt_digest: attestation.head_receipt_digest,
+    };
+    let fields = must(
+        discovery_proof_fields(&attestation, &expected, &authority),
+        "publishable proof fields",
+    );
+    let mut document = serde_json::json!({"program_id": hex_encode(&program_id)});
+    must(
+        attach_discovery_proof(&mut document, &fields),
+        "proof attachment",
+    );
+    assert_eq!(document["receipt_digest"], hex_encode(&digest));
+    assert_eq!(
+        document["discovery_public_key"],
+        hex_encode(&cluster.sequencer_key)
+    );
+    assert_eq!(
+        document["discovery_signature"],
+        hex_encode(&attestation.signature)
+    );
+    let mut tampered = expected;
+    tampered.head.state_root[0] ^= 1;
+    assert!(discovery_proof_fields(&attestation, &tampered, &authority).is_err());
+    let mut tampered = expected;
+    tampered.head.observed_sequence += 1;
+    assert!(discovery_proof_fields(&attestation, &tampered, &authority).is_err());
+
+    let foreign = HeadAuthority {
+        sequencer_public_key: SigningKey::from_bytes(&random32())
+            .verifying_key()
+            .to_bytes(),
+        ..authority
+    };
+    assert!(request_head_attestation(
+        &cluster.lni_socket,
+        program_id,
+        STALENESS_MS,
+        &foreign,
+        Instant::now() + Duration::from_secs(5),
+    )
+    .is_err());
+    let unknown = must(
+        request_head_attestation(
+            &cluster.lni_socket,
+            random32(),
+            STALENESS_MS,
+            &authority,
+            Instant::now() + Duration::from_secs(5),
+        )
+        .err()
+        .ok_or("an unregistered program was attested"),
+        "unregistered program refusal",
+    );
+    assert!(unknown.contains("UnknownProgram"), "{unknown}");
+}
+
 fn assert_human_materialization(cluster: &Cluster) {
     let consumer = Command::new("python3")
         .args([

@@ -20,6 +20,7 @@
 #include "lxp_daemon_lni_internal.h"
 #include "lxp_daemon_lni_account.h"
 #include "lxp_daemon_deployment.h"
+#include "lxp_daemon_lni_head_attestation.h"
 
 #include <openssl/evp.h>
 
@@ -46,7 +47,7 @@ static uint64_t pay_timing_us(void)
 
 enum {
     LNI_VERSION_MAJOR = 1,
-    LNI_VERSION_MINOR = 6,
+    LNI_VERSION_MINOR = 7,
     LNI_NODE_INFO_REQUEST = 1,
     LNI_NODE_INFO_RESPONSE = 2,
     LNI_SUBMIT_REQUEST = 3,
@@ -82,6 +83,8 @@ enum {
     LNI_SESSION_FEE_STATE_RESPONSE = 37,
     LNI_PROGRAM_READ_REQUEST = 38,
     LNI_PROGRAM_READ_RESPONSE = 39,
+    LNI_PROGRAM_HEAD_ATTEST_REQUEST = 40,
+    LNI_PROGRAM_HEAD_ATTEST_RESPONSE = 41,
     LNI_ENVELOPE_FIXED_BYTES = 22,
     LNI_NODE_INFO_FIXED_BYTES = 93,
     LNI_PREPARATION_STATE_MAX_BYTES = 4096,
@@ -90,6 +93,7 @@ enum {
     LNI_SIMULATION_FIXED_BYTES = 2 + 32 + 4 + 4 + 4,
     LNI_SIMULATION_EVIDENCE_BYTES = 2 + 32 * 4 + 8 + 8 + 32 + 64,
     LNI_PROGRAM_READ_PREFIX_BYTES = 2 + 8 + 1 + 32 + 4,
+    LNI_PROGRAM_HEAD_ATTEST_REQUEST_BYTES = 2 + 32 + 8,
     LNI_BACKLOG = 16,
     LNI_RESPONSE_BUDGET_MS = 100,
     LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES = 32,
@@ -1415,6 +1419,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
         "account_read", "asset_read", "batch_header", "checkpoint", "fee_estimate", "historical_proofs", "history_range",
         "node_info", "proof_bundle", "receipt_lookup", "session_fee_state"
     };
+    static const char program_head_attest_capability[] = "program_head_attest";
     static const char program_read_capability[] = "program_read";
     static const char simulate_capability[] = "simulate";
     bool evidence_available = server->owner->evidence_store != NULL;
@@ -1451,15 +1456,21 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
                     sizeof(reader_capabilities[0]));
     size_t capability_count = 0U;
     bool program_read = simulation_available(server);
+    bool program_head_attest = program_read;
     bool simulate = program_read;
     lxp_result status = LXP_OK;
-    if (base_count + 3U > sizeof(capabilities) / sizeof(capabilities[0]))
+    if (base_count + 4U > sizeof(capabilities) / sizeof(capabilities[0]))
         return LXP_ERR_LENGTH_LIMIT;
     for (index = 0U; index < base_count; ++index) {
         if (server->owner->protocol_version !=
                 LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
             strcmp(base_capabilities[index], "account_read") == 0)
             continue;
+        if (program_head_attest && strcmp(base_capabilities[index],
+                                          program_head_attest_capability) > 0) {
+            capabilities[capability_count++] = program_head_attest_capability;
+            program_head_attest = false;
+        }
         if (program_read && strcmp(base_capabilities[index],
                                    program_read_capability) > 0) {
             capabilities[capability_count++] = program_read_capability;
@@ -1472,6 +1483,8 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
         }
         capabilities[capability_count++] = base_capabilities[index];
     }
+    if (program_head_attest)
+        capabilities[capability_count++] = program_head_attest_capability;
     if (program_read)
         capabilities[capability_count++] = program_read_capability;
     if (simulate) capabilities[capability_count++] = simulate_capability;
@@ -3482,6 +3495,128 @@ static lxp_result send_program_read(
     return status;
 }
 
+static lxp_result lni_program_head_attest_execute(
+    lxp_daemon_protocol_owner *owner,
+    const uint8_t sequencer_private_key[32],
+    const uint8_t program_id[32], uint64_t staleness_ms,
+    lxp_daemon_head_attestation *attestation,
+    uint8_t public_key[32], uint8_t signature[64])
+{
+    static const uint8_t record_prefix[8] =
+        { 'p', 'r', 'o', 'g', 'r', 'a', 'm', 0 };
+    uint8_t record_key[40];
+    const uint8_t *record = NULL;
+    size_t record_length = 0U;
+    lxp_module_ctx context;
+    size_t mark;
+    lxp_result status;
+    if (owner == NULL || sequencer_private_key == NULL || program_id == NULL ||
+        attestation == NULL || public_key == NULL || signature == NULL)
+        return LXP_ERR_MALFORMED_ENVELOPE;
+    if (owner->kernel == NULL || owner->scratch == NULL)
+        return LXP_ERR_MODULE_DISABLED;
+    status = sequencer_public_key_derive(sequencer_private_key, public_key);
+    if (status != LXP_OK) return status;
+    status = lni_read_lock(owner);
+    if (status != LXP_OK) return status;
+    if (owner->feed_store.scanned_through_sequence == 0U ||
+        owner->feed_store.head_timestamp == 0U ||
+        lxp_ct_is_zero(owner->feed_store.head_receipt_digest, 32U) ||
+        lxp_ct_memcmp(owner->feed_store.head_state_root,
+                      owner->kernel->current_state_root, 32U) != 0)
+        return lni_read_unlock(owner, LXP_ERR_PROJECTION_STALE);
+    if (staleness_ms > UINT64_MAX - owner->feed_store.head_timestamp)
+        return lni_read_unlock(owner, LXP_ERR_LENGTH_LIMIT);
+    mark = lxp_arena_mark(owner->scratch);
+    status = lxp_module_ctx_init(
+        &context, owner->kernel, LXP_MODULE_PROGRAMS,
+        owner->feed_store.head_timestamp, owner->kernel->epoch,
+        owner->feed_store.scanned_through_sequence, UINT64_MAX,
+        owner->scratch, false);
+    (void)memcpy(record_key, record_prefix, sizeof(record_prefix));
+    (void)memcpy(record_key + sizeof(record_prefix), program_id, 32U);
+    if (status == LXP_OK)
+        status = lxp_ctx_kv_get(&context, record_key, sizeof(record_key),
+                                &record, &record_length);
+    if (status == LXP_OK && record_length != 71U) status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK) {
+        (void)memset(attestation, 0, sizeof(*attestation));
+        (void)memcpy(attestation->program_id, program_id, 32U);
+        (void)memcpy(attestation->code_hash, record + 33U, 32U);
+        attestation->abi_version = load_u16(record + 65U);
+        attestation->version = load_u32(record + 67U);
+        attestation->observed_sequence =
+            owner->feed_store.scanned_through_sequence;
+        attestation->observed_at = owner->feed_store.head_timestamp;
+        attestation->valid_through =
+            owner->feed_store.head_timestamp + staleness_ms;
+        (void)memcpy(attestation->state_root,
+                     owner->feed_store.head_state_root, 32U);
+        (void)memcpy(attestation->head_receipt_digest,
+                     owner->feed_store.head_receipt_digest, 32U);
+        status = lxp_daemon_head_attestation_sign(
+            sequencer_private_key, public_key, attestation, signature);
+    }
+    if (lxp_arena_reset(owner->scratch, mark) != LXP_OK && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    return lni_read_unlock(owner, status);
+}
+
+static lxp_result send_program_head_attest(
+    lxp_daemon_lni_server *server, int descriptor,
+    const lni_envelope *request, int64_t deadline)
+{
+    lxp_daemon_head_attestation attestation;
+    uint8_t payload[LXP_DAEMON_HEAD_ATTESTATION_PAYLOAD_BYTES];
+    uint8_t proof[LXP_DAEMON_HEAD_ATTESTATION_PROOF_BYTES];
+    const uint8_t *program_id;
+    uint64_t staleness_ms;
+    lxp_result status;
+    if (request->minor < 7U)
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 3U,
+                            LXP_ERR_VERSION_UNSUPPORTED, deadline);
+    if (request->correlation_id == 0U || request->proof_length != 0U ||
+        request->payload_length != LNI_PROGRAM_HEAD_ATTEST_REQUEST_BYTES ||
+        load_u16(request->payload) != 1U)
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 1U,
+                            LXP_ERR_MALFORMED_ENVELOPE, deadline);
+    program_id = request->payload + 2U;
+    staleness_ms = load_u64(request->payload + 34U);
+    if (lxp_ct_is_zero(program_id, 32U) || staleness_ms == 0U)
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 1U,
+                            LXP_ERR_MALFORMED_ENVELOPE, deadline);
+    if (!simulation_available(server))
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 3U,
+                            LXP_ERR_MODULE_DISABLED, deadline);
+    status = lni_program_head_attest_execute(
+        server->owner, server->sequencer_private_key, program_id,
+        staleness_ms, &attestation, proof, proof + 32U);
+    if (status == LXP_OK)
+        status = lxp_daemon_head_attestation_encode(&attestation, payload);
+    if (status == LXP_OK)
+        status = send_envelope(descriptor, server->frame_bytes,
+                               LNI_PROGRAM_HEAD_ATTEST_RESPONSE,
+                               request->correlation_id, payload,
+                               sizeof(payload), proof, sizeof(proof),
+                               deadline);
+    else if (status == LXP_ERR_IO || status == LXP_FATAL_INVARIANT)
+        status = send_refusal(descriptor, server->frame_bytes,
+                              request->correlation_id, 4U,
+                              LXP_ERR_MODULE_DISABLED, deadline);
+    else
+        status = send_refusal(descriptor, server->frame_bytes,
+                              request->correlation_id,
+                              status == LXP_ERR_LENGTH_LIMIT ||
+                                      status == LXP_ERR_MALFORMED_ENVELOPE ?
+                                  1U : 4U,
+                              status, deadline);
+    return status;
+}
+
 static lxp_result evidence_refusal(
     lxp_daemon_lni_server *server, int descriptor,
     uint64_t correlation_id, lxp_result status, int64_t deadline)
@@ -4228,6 +4363,9 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
             status = send_simulate(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_PROGRAM_READ_REQUEST) {
             status = send_program_read(
+                server, descriptor, &request, deadline);
+        } else if (request.tag == LNI_PROGRAM_HEAD_ATTEST_REQUEST) {
+            status = send_program_head_attest(
                 server, descriptor, &request, deadline);
         } else {
             status = send_refusal(descriptor, server->frame_bytes,
