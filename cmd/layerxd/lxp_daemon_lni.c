@@ -3136,7 +3136,7 @@ static lxp_result lni_program_read_execute(
     uint8_t principal_id[32];
     uint8_t batch_id[32] = {0};
     uint8_t previous_state_root[32];
-    uint8_t receipt_scratch_bytes[LXP_STATE_MAX_RECEIPT_BYTES];
+    uint8_t *receipt_scratch_bytes = NULL;
     lxp_arena receipt_scratch;
     lxp_u128 fee_balance = {0U, 0U};
     uint32_t parameter_version = 0U;
@@ -3314,9 +3314,13 @@ capture_done:
          lxp_ct_memcmp(receipts[0].previous_state_root,
                        previous_state_root, 32U) != 0))
         status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK) {
+        receipt_scratch_bytes = (uint8_t *)malloc(LXP_MAX_ACTIVITY_BYTES);
+        if (receipt_scratch_bytes == NULL) status = LXP_ERR_IO;
+    }
     if (status == LXP_OK)
         status = lxp_arena_init(&receipt_scratch, receipt_scratch_bytes,
-                                sizeof(receipt_scratch_bytes));
+                                LXP_MAX_ACTIVITY_BYTES);
     if (status == LXP_OK)
         status = lxp_receipt_encode(&receipts[0], true, &receipt_scratch,
                                     &encoded_receipt);
@@ -3332,6 +3336,7 @@ capture_done:
     if (status == LXP_OK) *evidence_length = LNI_SIMULATION_EVIDENCE_BYTES;
     lxp_kernel_prepared_batch_destroy(prepared);
     lxp_kernel_batch_snapshot_destroy(snapshot);
+    free(receipt_scratch_bytes);
     if (status != LXP_OK) {
         *response_length = 0U;
         *evidence_length = 0U;
