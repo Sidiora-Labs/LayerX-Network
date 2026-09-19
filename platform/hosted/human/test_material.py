@@ -88,6 +88,168 @@ class MaterialTests(unittest.TestCase):
         self.assertEqual(next(e['value'] for e in web['env'] if e['name'] == 'LAYERX_HUMAN_WEB_ORIGIN'), origin)
         self.assertEqual(material.passkey_relying_party(origin)[1], origin)
 
+    def test_explorer_read_principal_is_generated_admitted_and_published(self):
+        cluster = (ROOT / 'platform/hosted/tests/beta-cluster.sh').read_text()
+        provision = (ROOT / 'platform/hosted/human/provision.sh').read_text()
+        self.assertEqual(cluster.count('    explorer_read_principal_generate "$d"\n'), 1)
+        self.assertIn('openssl genpkey -algorithm ed25519 -out "$d/explorer-read.key"', cluster)
+        self.assertNotIn('LAYERX_BETA_EXPLORER_READ', cluster)
+        self.assertNotIn('LAYERX_BETA_EXPLORER_READ', provision)
+        published = next(line + following for line, following in zip(cluster.splitlines(), cluster.splitlines()[1:])
+                         if 'apply_secret "$ns" layerx-explorer-index ' in line)
+        self.assertIn('--from-file=program-token="$s/explorer-program.token"', published)
+        self.assertIn('--from-file=read-key="$s/explorer-read.seed.hex"', published)
+        self.assertIn('--from-file=sequencer-public-key="$s/sequencer-public-key"', published)
+        self.assertIn('explorer_did="did:layerx:$explorer_public"\n', provision)
+        self.assertIn('cat "$input/owner-admission.txt" > "$input/genesis-admission.txt"\n', provision)
+        self.assertIn("    ' < \"$input/genesis-admission.txt\"\n", provision)
+        self.assertNotIn("' < \"$input/owner-admission.txt\"", provision)
+        self.assertIn('--actor "$explorer_did"', provision)
+        self.assertIn('fail "explorer-read.pub.hex: the explorer read principal key is missing from $SECRETS_DIR"', provision)
+        registry = list(yaml.safe_load_all((ROOT / 'platform/hosted/registry/deployment.yaml').read_text()))
+        pod = next(d for d in registry if d['kind'] == 'StatefulSet')['spec']['template']['spec']
+        index = next(c for c in pod['containers'] if c['name'] == 'explorer-index')
+        env = {e['name']: e for e in index['env']}
+        mount = next(m for m in index['volumeMounts'] if m['name'] == 'explorer-read')
+        self.assertTrue(mount['readOnly'])
+        volume = next(v for v in pod['volumes'] if v['name'] == 'explorer-read')['secret']
+        self.assertEqual(volume['secretName'], 'layerx-explorer-index')
+        self.assertNotIn('optional', volume)
+        self.assertEqual({item['key'] for item in volume['items']}, {'read-key', 'sequencer-public-key'})
+        paths = {mount['mountPath'] + '/' + item['path'] for item in volume['items']}
+        self.assertEqual({env['LAYERX_EXPLORER_READ_KEY_FILE']['value'],
+                          env['LAYERX_EXPLORER_READ_SEQUENCER_PUBLIC_KEY_FILE']['value']}, paths)
+        self.assertEqual(env['LAYERX_EXPLORER_READ_ENDPOINT']['value'],
+                         'https://layerx-pending-core.layerx-testnet.svc.cluster.local:9443')
+        self.assertEqual(env['LAYERX_EXPLORER_READ_CA_DER']['value'], env['LAYERX_EXPLORER_AUTHORITY_CA_DER']['value'])
+        self.assertEqual(env['LAYERX_EXPLORER_READ_NETWORK_ID']['valueFrom']['configMapKeyRef'],
+                         {'name': 'layerx-node-config', 'key': 'network-id'})
+        self.assertEqual(env['LAYERX_EXPLORER_READ_FEE_LIMIT']['value'], '50000000')
+        self.assertIn('[ -s "$LAYERX_EXPLORER_OBSERVATION_DIR/naming-program" ]', index['args'][0])
+        self.assertIn('export LAYERX_EXPLORER_NAMING_PROGRAM\n', index['args'][0])
+        bridge = next(d for d in registry if d['kind'] == 'NetworkPolicy' and d['metadata']['name'] == 'layerx-registry-lni-bridge')
+        self.assertEqual(bridge['spec']['podSelector'], {'matchLabels': {'app': 'layerx-node'}})
+        self.assertIn({'protocol': 'TCP', 'port': 9443}, bridge['spec']['ingress'][0]['ports'])
+
+    def test_explorer_read_principal_is_funded_to_cover_its_signed_fee_limit(self):
+        import re
+        provision = (ROOT / 'platform/hosted/human/provision.sh').read_text()
+        reads = (ROOT / 'human/crates/layerx-explorer-index/src/reads.rs').read_text()
+        bootstrap = (ROOT / 'platform/hosted/node/bootstrap.sh').read_text()
+        resources = [int(value.replace('_', '')) for value in re.search(
+            r'const READ_RESOURCES: \[u64; 7\] = \[([0-9_,\s]+)\];', reads).group(1).split(',') if value.strip()]
+        prices = [int(value) for value in re.search(r'for price in ((?:[0-9]+ ?){7}); do', bootstrap).group(1).split()]
+        self.assertEqual((len(resources), len(prices)), (7, 7))
+        ceiling = sum(resource * price for resource, price in zip(resources[:6], prices[:6]))
+        self.assertEqual(ceiling, 25117312)
+        registry = list(yaml.safe_load_all((ROOT / 'platform/hosted/registry/deployment.yaml').read_text()))
+        pod = next(d for d in registry if d['kind'] == 'StatefulSet')['spec']['template']['spec']
+        index = next(c for c in pod['containers'] if c['name'] == 'explorer-index')
+        fee_limit = int(next(e['value'] for e in index['env'] if e['name'] == 'LAYERX_EXPLORER_READ_FEE_LIMIT'))
+        units = int(re.search(r'^EXPLORER_READ_FUNDING_UNITS=([0-9]+)$', provision, re.M).group(1))
+        self.assertGreaterEqual(fee_limit, ceiling)
+        self.assertGreaterEqual(units, fee_limit)
+        self.assertLessEqual(units, 1000000000)
+        self.assertNotIn('LAYERX_BETA_EXPLORER', provision)
+        body = provision.split('human_evidence_provision() (', 1)[1].split('\n)\n', 1)[0]
+        self.assertGreater(body.index('    explorer_read_principal_fund\n'), body.index('    human_native_provision\n'))
+        fund = provision.split('explorer_read_principal_fund() (', 1)[1].split('\n)\n', 1)[0]
+        steps = ['--prepare-explorer-read-funding', 'human_custody_step deposit "$funding" --amount "$EXPLORER_READ_FUNDING_UNITS"',
+                 'layerxctl read-state', '--sign-explorer-read-credit', '-c owner-producer -- sh -ec',
+                 '--submit-explorer-read-credit', 'credit-result.json" "$EXPLORER_READ_FUNDING_UNITS"']
+        positions = [fund.index(step) for step in steps]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn('[ ! -e "$funding" ] || fail', fund)
+        self.assertNotIn('seed', fund)
+        custody = provision.split('human_custody_step() (', 1)[1].split('\n)\n', 1)[0]
+        self.assertIn('local mode=$1 work=${2:-$WORK_DIR}\n', custody)
+        self.assertIn('--work-dir "$work" ', custody)
+        self.assertIn('human_custody_step deposit\n', provision)
+
+    def test_explorer_read_principal_signs_its_own_custody_credit(self):
+        import hashlib
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        sys.path.insert(0, str(HERE))
+        import owner_native
+        import provision
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory).resolve() / 'work'
+            secrets = Path(directory).resolve() / 'secrets'
+            source = work / 'human-evidence-input'
+            for path in (work, secrets, source):
+                path.mkdir(mode=0o700)
+            seed = bytes(range(1, 33))
+            public = Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+            did = b'did:layerx:' + public.hex().encode()
+            account = hashlib.sha256(b'LX:ACCOUNT:v1' + owner_native.span(b'agent:' + did + b':main')).digest()
+            owner_native.protected_write(secrets / 'explorer-read.seed.hex', seed.hex().encode())
+            (secrets / 'explorer-read.pub.hex').write_text(public.hex())
+            asset = '11' * 32
+            custody = dict(vault='0x' + '22' * 20, token='0x' + '33' * 20, registry='0x' + '44' * 20,
+                           timelock='0x' + '55' * 20, asset=asset, runtime_sha256='66' * 32, payer='0x' + '77' * 20)
+            provision.write_json(source / 'owner-custody.json', custody)
+            profile = b'LXBC2' + bytes(92) + bytes.fromhex(asset) + bytes(78)
+            owner_native.protected_write(source / 'custody.profile', profile)
+            provision.explorer_read_funding(provision._explorer_read_funding_prepare, work, secrets)
+            funding = work / 'explorer-read-funding/human-evidence-input'
+            self.assertEqual(provision.protected_json(funding / 'owner-admission.json'),
+                             dict(did=did.decode(), public_key=public.hex(), owner_account=account.hex()))
+            self.assertEqual(provision.protected_json(funding / 'owner-custody.json'), custody)
+            self.assertEqual(provision.protected_bytes(funding / 'custody.profile', 207), profile)
+            self.assertEqual((work / 'explorer-read-funding').stat().st_mode & 0o777, 0o700)
+            with self.assertRaises(provision.Refused):
+                provision.explorer_read_funding(provision._explorer_read_funding_prepare, work, secrets)
+            deposit = bytes(range(32, 64))
+            units = 1000000000
+            credit = bytearray(427)
+            credit[:5] = b'LXDC2'
+            credit[43:75] = deposit
+            credit[75:107] = bytes.fromhex(asset)
+            credit[107:139] = account
+            credit[139:171] = public
+            credit[191:207] = units.to_bytes(16, 'big')
+            state = work / 'explorer-read-funding/read-state.json'
+            provision.write_json(state, dict(network_id=402, protocol_version=3, global_sequence=9, account_sequence=0))
+            foreign = bytearray(credit)
+            foreign[107:139] = bytes(32)
+            owner_native.protected_write(funding / 'custody-credit.bin', bytes(foreign))
+            with self.assertRaises(provision.Refused):
+                provision.explorer_read_funding(provision._explorer_read_credit_sign, work, secrets, 402, state,
+                                                work / 'explorer-read-funding/credit-request.json')
+            (funding / 'custody-credit.bin').unlink()
+            owner_native.protected_write(funding / 'custody-credit.bin', bytes(credit))
+            output = work / 'explorer-read-funding/credit-request.json'
+            provision.explorer_read_funding(provision._explorer_read_credit_sign, work, secrets, 402, state, output)
+            request = provision.protected_json(output)
+            self.assertEqual({name: request[name] for name in ('did', 'public_key', 'account', 'amount')},
+                             dict(did=did.decode(), public_key=public.hex(), account=account.hex(), amount=units))
+            signed = bytes.fromhex(request['activity'])
+            reader = owner_native.Reader(signed, output)
+            self.assertEqual(reader.take(5), b'\0\3\x10\1\14')
+            self.assertEqual((reader.take(1), reader.number(2)), (b'\1', 3))
+            self.assertEqual((reader.take(1), reader.number(4)), (b'\2', 402))
+            self.assertEqual((reader.take(1), reader.number(4)), (b'\3', (8 << 16) | 1))
+            self.assertEqual((reader.take(1), reader.span(255)), (b'\4', did))
+            self.assertEqual((reader.take(1), reader.span(32)), (b'\5', public))
+            self.assertEqual((reader.take(1), reader.number(8)), (b'\6', 0))
+            self.assertEqual(reader.take(1), b'\7')
+            not_before, expires = reader.number(8), reader.number(8)
+            self.assertEqual(expires - not_before, 300000)
+            self.assertEqual((reader.take(1), reader.span(32)),
+                             (b'\10', hashlib.sha256(b'LX:DEPOSIT:NULLIFIER:v1' + deposit).digest()))
+            self.assertEqual((reader.take(1), reader.number(16)), (b'\11', 0))
+            self.assertEqual((reader.take(1), reader.span(32)),
+                             (b'\12', owner_native.digest(b'payload-hash', bytes(credit))))
+            self.assertEqual((reader.take(1), reader.span(427)), (b'\13', bytes(credit)))
+            unsigned = b'\0\3\x10\1\13' + signed[5:reader.offset]
+            self.assertEqual(reader.take(1), b'\14')
+            signature = reader.span(64)
+            reader.finish()
+            Ed25519PublicKey.from_public_bytes(public).verify(
+                signature, owner_native.digest(b'signature-preimage', unsigned))
+            self.assertNotIn(seed.hex(), output.read_text())
+
     def test_bootstrap_has_no_unpublished_human_secret_dependencies(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'node.yaml'

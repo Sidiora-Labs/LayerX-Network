@@ -114,6 +114,7 @@ spec:
               until [ -s "$LAYERX_EXPLORER_DEPLOYMENT_JOURNAL/head" ] \
                   && ls "$LAYERX_EXPLORER_DEPLOYMENT_JOURNAL"/*.admission > /dev/null 2>&1 \
                   && [ -s "$LAYERX_EXPLORER_OBSERVATION_DIR/probe-program" ] \
+                  && [ -s "$LAYERX_EXPLORER_OBSERVATION_DIR/naming-program" ] \
                   && [ -s "$LAYERX_EXPLORER_OBSERVATION_DIR/observed-sealed-batch" ] \
                   && [ -s "$LAYERX_EXPLORER_OBSERVATION_DIR/finalised-checkpoint" ]; do
                   sleep 5
@@ -121,7 +122,9 @@ spec:
               LAYERX_EXPLORER_PROGRAM_PROBE_ID=$(tr -d '\r\n' < "$LAYERX_EXPLORER_OBSERVATION_DIR/probe-program")
               LAYERX_EXPLORER_OBSERVED_SEALED_BATCH=$(tr -d '\r\n' < "$LAYERX_EXPLORER_OBSERVATION_DIR/observed-sealed-batch")
               LAYERX_EXPLORER_FINALISED_CHECKPOINT=$(tr -d '\r\n' < "$LAYERX_EXPLORER_OBSERVATION_DIR/finalised-checkpoint")
+              LAYERX_EXPLORER_NAMING_PROGRAM=$(tr -d '\r\n' < "$LAYERX_EXPLORER_OBSERVATION_DIR/naming-program")
               export LAYERX_EXPLORER_PROGRAM_PROBE_ID LAYERX_EXPLORER_OBSERVED_SEALED_BATCH LAYERX_EXPLORER_FINALISED_CHECKPOINT
+              export LAYERX_EXPLORER_NAMING_PROGRAM
               exec /usr/local/bin/layerx-runtime-clock --runtime-dir /run/layerx/explorer-clock -- /usr/local/bin/layerx-explorer-index
           env:
             - {name: LAYERX_EXPLORER_OBSERVATION_DIR, value: /run/layerx/explorer-observation}
@@ -137,6 +140,12 @@ spec:
             - {name: LAYERX_EXPLORER_SEQUENCER_TRUST_HISTORY, value: /run/layerx/trust/history}
             - {name: LAYERX_EXPLORER_DEPLOYMENT_JOURNAL, value: /var/lib/layerx-registry-journal}
             - {name: LAYERX_EXPLORER_VERIFIED_SOURCE_STORE, value: /var/lib/layerx-registry-verified}
+            - {name: LAYERX_EXPLORER_READ_KEY_FILE, value: /run/layerx/explorer-read/read-key}
+            - {name: LAYERX_EXPLORER_READ_ENDPOINT, value: "https://layerx-pending-core.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_EXPLORER_READ_CA_DER, value: /run/layerx/client-ca/ca.crt.der}
+            - {name: LAYERX_EXPLORER_READ_SEQUENCER_PUBLIC_KEY_FILE, value: /run/layerx/explorer-read/sequencer-public-key}
+            - {name: LAYERX_EXPLORER_READ_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-id}}}
+            - {name: LAYERX_EXPLORER_READ_FEE_LIMIT, value: "50000000"}
           resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
           securityContext: {runAsUser: 4030, runAsGroup: 4030, runAsNonRoot: true, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
           volumeMounts:
@@ -145,6 +154,7 @@ spec:
             - {name: client-ca, mountPath: /run/layerx/client-ca, readOnly: true}
             - {name: trust, mountPath: /run/layerx/trust, readOnly: true}
             - {name: explorer-observation, mountPath: /run/layerx/explorer-observation, readOnly: true}
+            - {name: explorer-read, mountPath: /run/layerx/explorer-read, readOnly: true}
             - {name: explorer-clock, mountPath: /run/layerx/explorer-clock}
         - name: explorer-boundary
           image: ghcr.io/sidiora-labs/layerx-node:0.1.0
@@ -180,6 +190,7 @@ spec:
         - {name: quota, hostPath: {path: /var/lib/layerx-program-registry-builds, type: Directory}}
         - {name: explorer-tls, secret: {secretName: layerx-explorer-index-tls, defaultMode: 0440}}
         - {name: explorer-observation, configMap: {name: layerx-explorer-index, optional: true, defaultMode: 0444}}
+        - {name: explorer-read, secret: {secretName: layerx-explorer-index, defaultMode: 0440, items: [{key: read-key, path: read-key}, {key: sequencer-public-key, path: sequencer-public-key}]}}
         - {name: explorer-clock, emptyDir: {medium: Memory, sizeLimit: 1Mi}}
   volumeClaimTemplates:
     - metadata: {name: state}

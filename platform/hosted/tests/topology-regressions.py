@@ -34,6 +34,7 @@ RESOLVED_EDGES = (
     'StatefulSet layerx-testnet/layerx-program-registry -> layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443 [env LAYERX_REGISTRY_RECEIPT_AUTHORITY_ENDPOINT]',
     'StatefulSet layerx-testnet/layerx-program-registry -> layerx-agent-boundary.layerx-testnet.svc.cluster.local:9443 [env LAYERX_EXPLORER_NODE_ENDPOINT]',
     'StatefulSet layerx-testnet/layerx-program-registry -> layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443 [env LAYERX_EXPLORER_AUTHORITY_ENDPOINT]',
+    'StatefulSet layerx-testnet/layerx-program-registry -> layerx-pending-core.layerx-testnet.svc.cluster.local:9443 [env LAYERX_EXPLORER_READ_ENDPOINT]',
     'Deployment layerx-internal/payments -> layerx-gateway.layerx-testnet.svc:443 [env LAYERX_EVENTS_UPSTREAM_URL]',
     'Deployment layerx-internal/programs -> layerx-gateway.layerx-testnet.svc:443 [env LAYERX_EVENTS_UPSTREAM_URL]',
     'Deployment layerx-developer/layerx-webhooks -> layerx-agent-boundary.layerx-testnet.svc:9443 [env LAYERX_WEBHOOKS_COMPONENT_URL]',
