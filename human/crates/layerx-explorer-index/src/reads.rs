@@ -204,7 +204,8 @@ pub fn resolve_calldata(name: &str) -> Result<Vec<u8>, ReadError> {
         .map_err(|_| ReadError::InvalidName)
 }
 
-/// Builds and signs one noncommitting `resolve` read.
+/// Builds and signs one noncommitting `resolve` read at the principal's next
+/// account sequence: the node admits a read only at that exact sequence.
 ///
 /// # Errors
 /// Refuses an invalid name and any part the canonical encoders refuse.
@@ -214,6 +215,7 @@ pub fn build_resolve_read(
     program: [u8; 32],
     guest_abi: u16,
     name: &str,
+    account_sequence: u64,
     now_ms: u64,
 ) -> Result<ResolveRead, ReadError> {
     let label = Name::new(name.as_bytes()).map_err(|_| ReadError::InvalidName)?;
@@ -263,7 +265,7 @@ pub fn build_resolve_read(
         .and_then(|value| value.activity_type(activity_type))
         .and_then(|value| value.actor_did(actor))
         .and_then(|value| value.authority(authority))
-        .and_then(|value| value.account_sequence(0))
+        .and_then(|value| value.account_sequence(account_sequence))
         .and_then(|value| value.timestamp_bound(bound))
         .and_then(|value| value.idempotency_key(IdempotencyKey::new(idempotency)))
         .and_then(|value| value.fee_limit(Amount::from_u128(scope.fee_limit)))
@@ -559,6 +561,31 @@ impl ReadEndpoint {
     /// # Errors
     /// Reports connection, TLS and HTTP framing failures.
     pub fn program_read(&self, signed_activity: &[u8]) -> Result<ReadAnswer, String> {
+        let head = format!(
+            "POST /v1/programs/read HTTP/1.1\r\nHost: {}:{}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            self.host,
+            self.port,
+            signed_activity.len()
+        );
+        self.exchange(&head, signed_activity)
+    }
+
+    /// Reads the principal's sequence document from
+    /// `GET /v1/dids/<did>/sequence`.
+    ///
+    /// # Errors
+    /// Reports connection, TLS and HTTP framing failures.
+    pub fn account_sequence(&self, principal: &ReadPrincipal) -> Result<ReadAnswer, String> {
+        let head = format!(
+            "GET /v1/dids/{}/sequence HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\n\r\n",
+            principal.did(),
+            self.host,
+            self.port
+        );
+        self.exchange(&head, &[])
+    }
+
+    fn exchange(&self, head: &str, body: &[u8]) -> Result<ReadAnswer, String> {
         let certificate = native_tls::Certificate::from_der(&self.ca_der)
             .map_err(|error| format!("read endpoint trust root is invalid: {error}"))?;
         let connector = native_tls::TlsConnector::builder()
@@ -588,15 +615,9 @@ impl ReadEndpoint {
         let mut stream = connector
             .connect(&self.host, stream)
             .map_err(|error| format!("read endpoint TLS handshake failed: {error}"))?;
-        let header = format!(
-            "POST /v1/programs/read HTTP/1.1\r\nHost: {}:{}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            self.host,
-            self.port,
-            signed_activity.len()
-        );
         stream
-            .write_all(header.as_bytes())
-            .and_then(|()| stream.write_all(signed_activity))
+            .write_all(head.as_bytes())
+            .and_then(|()| stream.write_all(body))
             .and_then(|()| stream.flush())
             .map_err(|error| format!("read endpoint request failed: {error}"))?;
         let mut answer = Vec::new();
@@ -699,7 +720,45 @@ pub fn interpret_answer(
     verify_resolve_answer(read, sequencer_public_key, &document).map_err(ResolveFailure::Unverified)
 }
 
-/// Signs, posts and verifies one resolve.
+/// Interprets the core boundary's sequence document for `principal`, failing
+/// closed. The value only selects the sequence the read is signed at: a wrong
+/// value makes the node refuse the read, it can never make an answer verify.
+///
+/// # Errors
+/// Reports a typed boundary refusal, a document for another identity, or a
+/// sequence that is not a canonical decimal.
+pub fn interpret_sequence(
+    principal: &ReadPrincipal,
+    answer: &ReadAnswer,
+) -> Result<u64, ResolveFailure> {
+    let document: Value = serde_json::from_slice(&answer.body)
+        .map_err(|_| ResolveFailure::Unverified(ReadError::MalformedAnswer))?;
+    if answer.status != 200 {
+        return Err(ResolveFailure::Refused {
+            status: answer.status,
+            code: document["error"]["code"]
+                .as_str()
+                .unwrap_or("unspecified")
+                .to_owned(),
+        });
+    }
+    if document["ok"] != Value::Bool(true) {
+        return Err(ResolveFailure::Unverified(ReadError::MalformedAnswer));
+    }
+    let result = &document["result"];
+    if result["did"].as_str() != Some(principal.did()) {
+        return Err(ResolveFailure::Unverified(ReadError::Unbound));
+    }
+    let sequence = text(result, "next_sequence").map_err(ResolveFailure::Unverified)?;
+    sequence
+        .parse::<u64>()
+        .ok()
+        .filter(|value| value.to_string() == sequence)
+        .ok_or(ResolveFailure::Unverified(ReadError::MalformedAnswer))
+}
+
+/// Reads the principal's next sequence, then signs, posts and verifies one
+/// resolve at it.
 ///
 /// # Errors
 /// Reports the first construction, transport, refusal or verification failure.
@@ -712,7 +771,11 @@ pub fn resolve(
     name: &str,
     now_ms: u64,
 ) -> Result<ResolveOutcome, ResolveFailure> {
-    let read = build_resolve_read(principal, scope, target.0, target.1, name, now_ms)
+    let sequence = endpoint
+        .account_sequence(principal)
+        .map_err(ResolveFailure::Transport)
+        .and_then(|answer| interpret_sequence(principal, &answer))?;
+    let read = build_resolve_read(principal, scope, target.0, target.1, name, sequence, now_ms)
         .map_err(ResolveFailure::Unverified)?;
     let answer = endpoint
         .program_read(&read.signed_activity)

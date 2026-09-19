@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import base64
+import hashlib
 import shutil
 import tempfile
 import subprocess
@@ -9,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import struct
 import unicodedata
 import time
 
@@ -616,6 +618,130 @@ def qualify_generated_set(work_dir, registry_path, secrets_dir, network, chain):
     subprocess.run(['python3', str(Path(__file__).with_name('test_material.py'))], check=True)
 
 
+EXPLORER_READ_FUNDING = 'explorer-read-funding'
+EXPLORER_READ_CREDIT_VALIDITY_MS = 300000
+
+
+def explorer_read_identity(secrets_dir):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    seed_path = Path(secrets_dir) / 'explorer-read.seed.hex'
+    seed = protected_bytes(seed_path, 65).decode('ascii').strip()
+    require(re.fullmatch('[0-9a-f]{64}', seed) is not None, seed_path, 'explorer read principal seed')
+    signer = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(seed))
+    public = signer.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    published = Path(secrets_dir) / 'explorer-read.pub.hex'
+    with open(published, 'rb') as source:
+        require(source.read(130).decode('ascii').strip() == public.hex(), published,
+                'explorer read principal public key binding')
+    did = b'did:layerx:' + public.hex().encode('ascii')
+    name = b'agent:' + did + b':main'
+    account = hashlib.sha256(b'LX:ACCOUNT:v1' + struct.pack('>I', len(name)) + name).digest()
+    return signer, public, did, account
+
+
+def native_owner_activity(signer, public, did, network, module, ordinal, sequence, not_before, idempotency, fee_limit, payload):
+    from owner_native import digest, span
+    body = (b'\1' + struct.pack('>H', 3) + b'\2' + struct.pack('>I', network)
+        + b'\3' + struct.pack('>I', (module << 16) | ordinal) + b'\4' + span(did)
+        + b'\5' + span(public) + b'\6' + struct.pack('>Q', sequence)
+        + b'\7' + struct.pack('>QQ', not_before, not_before + EXPLORER_READ_CREDIT_VALIDITY_MS)
+        + b'\10' + span(idempotency) + b'\11' + fee_limit.to_bytes(16, 'big')
+        + b'\12' + span(digest(b'payload-hash', payload)) + b'\13' + span(payload))
+    unsigned = b'\0\3\x10\1\13' + body
+    return b'\0\3\x10\1\14' + body + b'\14' + span(signer.sign(digest(b'signature-preimage', unsigned)))
+
+
+def _explorer_read_funding_prepare(work_dir, secrets_dir):
+    from owner_native import protected_write
+    _, public, did, account = explorer_read_identity(secrets_dir)
+    source = Path(work_dir) / 'human-evidence-input'
+    custody_path = source / 'owner-custody.json'
+    custody = protected_json(custody_path)
+    fields(custody, 'vault token registry timelock asset runtime_sha256 payer', custody_path, 'custody deployment')
+    profile = protected_bytes(source / 'custody.profile', 207)
+    require(len(profile) == 207 and profile[:5] in (b'LXBC1', b'LXBC2')
+            and profile[97:129].hex() == custody['asset'], source / 'custody.profile', 'custody profile asset binding')
+    root = Path(work_dir) / EXPLORER_READ_FUNDING
+    root.mkdir(mode=0o700)
+    target = root / 'human-evidence-input'
+    target.mkdir(mode=0o700)
+    write_json(target / 'owner-admission.json',
+               dict(did=did.decode('ascii'), public_key=public.hex(), owner_account=account.hex()))
+    write_json(target / 'owner-custody.json', custody)
+    protected_write(target / 'custody.profile', profile)
+
+
+def _explorer_read_credit_sign(work_dir, secrets_dir, network, state_path, output):
+    signer, public, did, account = explorer_read_identity(secrets_dir)
+    uint(network, 32, work_dir, 'network id', 1)
+    credit_path = Path(work_dir) / EXPLORER_READ_FUNDING / 'human-evidence-input/custody-credit.bin'
+    credit = protected_bytes(credit_path, 427)
+    require(len(credit) == 427 and credit[:5] in (b'LXDC1', b'LXDC2') and credit[107:139] == account
+            and credit[139:171] == public, credit_path, 'explorer read principal custody credit binding')
+    amount = int.from_bytes(credit[191:207], 'big')
+    require(amount > 0, credit_path, 'custody credit amount')
+    state = protected_json(state_path)
+    require(type(state) is dict, state_path, 'node read state')
+    uint(state.get('account_sequence'), 64, state_path, 'account_sequence')
+    activity = native_owner_activity(signer, public, did, network, 8, 1, state['account_sequence'],
+        time.time_ns() // 1000000, hashlib.sha256(b'LX:DEPOSIT:NULLIFIER:v1' + credit[43:75]).digest(), 0, credit)
+    write_json(output, dict(did=did.decode('ascii'), public_key=public.hex(), account=account.hex(),
+                            amount=amount, activity=activity.hex()))
+
+
+def _explorer_read_credit_submit(work_dir, request_path, output):
+    from owner_native import digest, protected_write, receipt, receipt_fields
+    config_path = Path(work_dir) / 'human-evidence-input/owner-native.json'
+    config = protected_json(config_path)
+    require(type(config) is dict, config_path, 'native producer configuration')
+    for name in ('node_socket', 'layerxctl'):
+        text(config.get(name), config_path, name)
+        require(Path(config[name]).is_absolute(), config_path, name)
+    uint(config.get('network_id'), 32, config_path, 'network_id', 1)
+    h32(config.get('sequencer_public_key'), config_path, 'sequencer_public_key')
+    request = protected_json(request_path)
+    fields(request, 'did public_key account amount activity', request_path, 'explorer read principal credit request')
+    text(request['did'], request_path, 'did')
+    h32(request['public_key'], request_path, 'public_key')
+    h32(request['account'], request_path, 'account')
+    uint(request['amount'], 128, request_path, 'amount', 1)
+    require(type(request['activity']) is str and re.fullmatch('(?:[0-9a-f]{2}){1,4096}', request['activity']) is not None,
+            request_path, 'signed credit activity')
+    signed = bytes.fromhex(request['activity'])
+    activity_id = digest(b'activity-id', signed)
+    activity_path = Path(request_path).with_name('explorer-read-credit.activity')
+    protected_write(activity_path, signed)
+    completed = subprocess.run([config['layerxctl'], 'submit', '--public-key', request['public_key'],
+        '--activity', str(activity_path), '--socket', config['node_socket'], '--network-id', str(config['network_id']),
+        '--protocol-version', '3', '--actor', request['did']], capture_output=True)
+    if completed.returncode != 0:
+        protected_write(Path(request_path).with_name('layerxctl-refusal.txt'), completed.stderr)
+    require(completed.returncode == 0, activity_path, 'submission; layerxctl refused or the outcome is unknown')
+    acknowledgement = json.loads(completed.stdout)
+    require(acknowledgement['activity_id'] == activity_id.hex() and acknowledgement['state'] == 'acknowledged',
+            activity_path, 'durable acknowledgement')
+    raw = receipt(config['node_socket'], activity_id)
+    receipt_path = Path(request_path).with_name('explorer-read-credit.receipt')
+    protected_write(receipt_path, raw)
+    result = receipt_fields(raw, bytes.fromhex(config['sequencer_public_key']), receipt_path)
+    require(result['activity_id'] == activity_id.hex() and result['module'] == 8 and result['version'] == 1
+            and result['target'] == request['account'] and result['amount'] == request['amount'],
+            receipt_path, 'committed explorer read principal credit')
+    write_json(output, dict(activity_id=result['activity_id'], receipt_digest=result['receipt_digest'],
+                            sequence=result['sequence'], account=result['target'], amount=result['amount']))
+
+
+def explorer_read_funding(step, work_dir, *arguments):
+    try:
+        step(work_dir, *arguments)
+    except Refused:
+        raise
+    except (OSError, ValueError, KeyError, TypeError, OverflowError) as error:
+        raise Refused(f'{Path(work_dir) / EXPLORER_READ_FUNDING}: explorer read principal funding refused; '
+                      'preserve the directory and reconcile the custody deposit before retry') from error
+
+
 def main():
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -633,6 +759,9 @@ def main():
     mode.add_argument('--validate-job-input', action='store_true')
     mode.add_argument('--validate-owner-result', action='store_true')
     mode.add_argument('--preserve-binding', action='store_true')
+    mode.add_argument('--prepare-explorer-read-funding', action='store_true')
+    mode.add_argument('--sign-explorer-read-credit', action='store_true')
+    mode.add_argument('--submit-explorer-read-credit', action='store_true')
     parser.add_argument('--registry', type=Path)
     parser.add_argument('--treasury', type=Path)
     parser.add_argument('--sequencer', type=Path)
@@ -686,6 +815,17 @@ def main():
     elif args.preserve_binding:
         require(all((args.request, args.response, args.output)), args.work_dir, 'binding arguments')
         preserve_binding(args.request, args.response, args.output)
+    elif args.prepare_explorer_read_funding:
+        require(args.secrets_dir is not None, args.work_dir, 'secrets directory')
+        explorer_read_funding(_explorer_read_funding_prepare, args.work_dir, args.secrets_dir)
+    elif args.sign_explorer_read_credit:
+        require(all((args.secrets_dir, args.network, args.request, args.output)), args.work_dir,
+                'explorer read principal credit arguments')
+        explorer_read_funding(_explorer_read_credit_sign, args.work_dir, args.secrets_dir, args.network,
+                              args.request, args.output)
+    elif args.submit_explorer_read_credit:
+        require(all((args.request, args.output)), args.work_dir, 'explorer read principal credit arguments')
+        explorer_read_funding(_explorer_read_credit_submit, args.work_dir, args.request, args.output)
     else:
         owner_registration(args.work_dir)
 
