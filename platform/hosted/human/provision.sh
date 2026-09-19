@@ -251,6 +251,15 @@ human_native_provision() (
     local input="$WORK_DIR/human-evidence-input" state="$WORK_DIR/human-native-statefulset.json"
     local manifest="$WORK_DIR/human-native-producer.json" status=0
     [ ! -e "$input/owner-native.started" ] || fail 'owner-native.started: reconcile the retained native outcome before retry'
+    local explorer_public explorer_did
+    [ -s "$SECRETS_DIR/explorer-read.pub.hex" ] \
+        || fail "explorer-read.pub.hex: the explorer read principal key is missing from $SECRETS_DIR"
+    explorer_public=$(tr -d '\r\n' < "$SECRETS_DIR/explorer-read.pub.hex")
+    [[ $explorer_public =~ ^[0-9a-f]{64}$ ]] || fail 'explorer-read.pub.hex: the explorer read principal key is not an ed25519 public key'
+    explorer_did="did:layerx:$explorer_public"
+    cat "$input/owner-admission.txt" > "$input/genesis-admission.txt"
+    printf '%s:%s:0\n' "$(printf '%s' "$explorer_did" | od -An -v -tx1 | tr -d ' \n')" "$explorer_public" \
+        >> "$input/genesis-admission.txt"
     kube -n "$TESTNET_NAMESPACE" exec -i layerx-node-0 -c layerxd -- sh -ec '
         set -eu
         umask 077
@@ -265,7 +274,7 @@ human_native_provision() (
             install -m 0440 "$target" "$destination.owner-pending"
             mv "$destination.owner-pending" "$destination"
         done
-    ' < "$input/owner-admission.txt"
+    ' < "$input/genesis-admission.txt"
     local did admitted=0 attempt
     did=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["did"])' "$input/owner-admission.json")
     for attempt in $(seq 1 100); do
@@ -283,6 +292,17 @@ import json, sys
 state = json.load(open(sys.argv[1]))
 if state['account_sequence'] != 0 or state['global_sequence'] != 0:
     raise SystemExit('owner admission requires a fresh native genesis head')
+PY
+    kube -n "$TESTNET_NAMESPACE" exec layerx-node-0 -c registry-check -- \
+        /usr/local/bin/layerxctl read-state --socket /run/layerx/node/layerxd.lni.sock \
+        --network-id "$NODE_NETWORK_ID" --protocol-version 3 --actor "$explorer_did" \
+        > "$input/explorer-read-admission-state.json" 2>/dev/null \
+        || fail "genesis-admission.txt: the node did not admit the explorer read principal $explorer_did; preserve identity files"
+    python3 - "$input/explorer-read-admission-state.json" <<'PY'
+import json, sys
+state = json.load(open(sys.argv[1]))
+if state['account_sequence'] != 0 or state['global_sequence'] != 0:
+    raise SystemExit('explorer read principal admission requires a fresh native genesis head')
 PY
     kube -n "$TESTNET_NAMESPACE" get statefulset layerx-node -o json > "$state"
     python3 "$REPO_ROOT/platform/hosted/human/native_manifest.py" "$WORK_DIR" "$NODE_NETWORK_ID" \

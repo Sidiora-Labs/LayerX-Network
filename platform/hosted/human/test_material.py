@@ -88,6 +88,49 @@ class MaterialTests(unittest.TestCase):
         self.assertEqual(next(e['value'] for e in web['env'] if e['name'] == 'LAYERX_HUMAN_WEB_ORIGIN'), origin)
         self.assertEqual(material.passkey_relying_party(origin)[1], origin)
 
+    def test_explorer_read_principal_is_generated_admitted_and_published(self):
+        cluster = (ROOT / 'platform/hosted/tests/beta-cluster.sh').read_text()
+        provision = (ROOT / 'platform/hosted/human/provision.sh').read_text()
+        self.assertEqual(cluster.count('    explorer_read_principal_generate "$d"\n'), 1)
+        self.assertIn('openssl genpkey -algorithm ed25519 -out "$d/explorer-read.key"', cluster)
+        self.assertNotIn('LAYERX_BETA_EXPLORER_READ', cluster)
+        self.assertNotIn('LAYERX_BETA_EXPLORER_READ', provision)
+        published = next(line + following for line, following in zip(cluster.splitlines(), cluster.splitlines()[1:])
+                         if 'apply_secret "$ns" layerx-explorer-index ' in line)
+        self.assertIn('--from-file=program-token="$s/explorer-program.token"', published)
+        self.assertIn('--from-file=read-key="$s/explorer-read.seed.hex"', published)
+        self.assertIn('--from-file=sequencer-public-key="$s/sequencer-public-key"', published)
+        self.assertIn('explorer_did="did:layerx:$explorer_public"\n', provision)
+        self.assertIn('cat "$input/owner-admission.txt" > "$input/genesis-admission.txt"\n', provision)
+        self.assertIn("    ' < \"$input/genesis-admission.txt\"\n", provision)
+        self.assertNotIn("' < \"$input/owner-admission.txt\"", provision)
+        self.assertIn('--actor "$explorer_did"', provision)
+        self.assertIn('fail "explorer-read.pub.hex: the explorer read principal key is missing from $SECRETS_DIR"', provision)
+        registry = list(yaml.safe_load_all((ROOT / 'platform/hosted/registry/deployment.yaml').read_text()))
+        pod = next(d for d in registry if d['kind'] == 'StatefulSet')['spec']['template']['spec']
+        index = next(c for c in pod['containers'] if c['name'] == 'explorer-index')
+        env = {e['name']: e for e in index['env']}
+        mount = next(m for m in index['volumeMounts'] if m['name'] == 'explorer-read')
+        self.assertTrue(mount['readOnly'])
+        volume = next(v for v in pod['volumes'] if v['name'] == 'explorer-read')['secret']
+        self.assertEqual(volume['secretName'], 'layerx-explorer-index')
+        self.assertNotIn('optional', volume)
+        self.assertEqual({item['key'] for item in volume['items']}, {'read-key', 'sequencer-public-key'})
+        paths = {mount['mountPath'] + '/' + item['path'] for item in volume['items']}
+        self.assertEqual({env['LAYERX_EXPLORER_READ_KEY_FILE']['value'],
+                          env['LAYERX_EXPLORER_READ_SEQUENCER_PUBLIC_KEY_FILE']['value']}, paths)
+        self.assertEqual(env['LAYERX_EXPLORER_READ_ENDPOINT']['value'],
+                         'https://layerx-pending-core.layerx-testnet.svc.cluster.local:9443')
+        self.assertEqual(env['LAYERX_EXPLORER_READ_CA_DER']['value'], env['LAYERX_EXPLORER_AUTHORITY_CA_DER']['value'])
+        self.assertEqual(env['LAYERX_EXPLORER_READ_NETWORK_ID']['valueFrom']['configMapKeyRef'],
+                         {'name': 'layerx-node-config', 'key': 'network-id'})
+        self.assertEqual(env['LAYERX_EXPLORER_READ_FEE_LIMIT']['value'], '0')
+        self.assertIn('[ -s "$LAYERX_EXPLORER_OBSERVATION_DIR/naming-program" ]', index['args'][0])
+        self.assertIn('export LAYERX_EXPLORER_NAMING_PROGRAM\n', index['args'][0])
+        bridge = next(d for d in registry if d['kind'] == 'NetworkPolicy' and d['metadata']['name'] == 'layerx-registry-lni-bridge')
+        self.assertEqual(bridge['spec']['podSelector'], {'matchLabels': {'app': 'layerx-node'}})
+        self.assertIn({'protocol': 'TCP', 'port': 9443}, bridge['spec']['ingress'][0]['ports'])
+
     def test_bootstrap_has_no_unpublished_human_secret_dependencies(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'node.yaml'

@@ -12,6 +12,9 @@ use std::time::Duration;
 use layerx_agentd::read::{LayerxdProgramBalanceReader, ProgramAuthority};
 use layerx_client::head::Head;
 use layerx_explorer_index::programs::{ExplorerProgram, VerifiedProgramInterfaceMetadata};
+use layerx_explorer_index::reads::{
+    self, ReadEndpoint, ReadPrincipal, ReadScope, ResolveFailure, ResolveOutcome,
+};
 use layerx_explorer_index::{Indexer, ProtocolProgramIngestor};
 use layerx_programs::{
     hex, BuildPlan, DeploymentJournal, DeploymentProof, DeploymentRecord, JournalReadAuthority,
@@ -22,6 +25,7 @@ use serde_json::Value;
 
 const HEADER_LIMIT: usize = 16 * 1024;
 const CA_LIMIT: u64 = 64 * 1024;
+const KEY_FILE_LIMIT: u64 = 256;
 
 #[derive(Clone)]
 struct FileJournal {
@@ -71,6 +75,15 @@ struct Config {
     probe_program: ProgramId,
     observed_sealed_batch: u64,
     finalised_checkpoint: [u8; 32],
+    name_reads: NameReads,
+}
+
+struct NameReads {
+    principal: ReadPrincipal,
+    endpoint: ReadEndpoint,
+    sequencer_public_key: [u8; 32],
+    scope: ReadScope,
+    naming_program: ProgramId,
 }
 
 fn required(name: &str) -> Result<String, String> {
@@ -105,6 +118,57 @@ fn read_ca(name: &str) -> Result<Vec<u8>, String> {
     native_tls::Certificate::from_der(&bytes)
         .map_err(|_| format!("{name} must contain a DER certificate"))?;
     Ok(bytes)
+}
+
+fn read_key_file(name: &str) -> Result<String, String> {
+    let file = fs::File::open(required(name)?).map_err(|_| format!("{name} is unreadable"))?;
+    let mut text = String::new();
+    file.take(KEY_FILE_LIMIT + 1)
+        .read_to_string(&mut text)
+        .map_err(|_| format!("{name} is unreadable"))?;
+    if text.trim().is_empty() {
+        return Err(format!("{name} is empty"));
+    }
+    if u64::try_from(text.len()).map_or(true, |length| length > KEY_FILE_LIMIT) {
+        return Err(format!("{name} exceeds the key file size limit"));
+    }
+    Ok(text)
+}
+
+fn name_reads() -> Result<NameReads, String> {
+    let key_file = "LAYERX_EXPLORER_READ_KEY_FILE";
+    let principal = ReadPrincipal::from_seed_hex(&read_key_file(key_file)?)
+        .map_err(|_| format!("{key_file} must contain a hexadecimal ed25519 seed"))?;
+    let endpoint_name = "LAYERX_EXPLORER_READ_ENDPOINT";
+    let endpoint_text = required(endpoint_name)?;
+    let endpoint = ReadEndpoint::parse(&endpoint_text, read_ca("LAYERX_EXPLORER_READ_CA_DER")?)
+        .map_err(|_| format!("{endpoint_name} must be https://<host>:<port>"))?;
+    let sequencer_file = "LAYERX_EXPLORER_READ_SEQUENCER_PUBLIC_KEY_FILE";
+    let sequencer_public_key = hex::decode_digest(read_key_file(sequencer_file)?.trim())
+        .map_err(|error| format!("{sequencer_file} is invalid: {error}"))?;
+    let network_name = "LAYERX_EXPLORER_READ_NETWORK_ID";
+    let network_id = required(network_name)?
+        .parse::<u32>()
+        .ok()
+        .filter(|value| *value != 0)
+        .ok_or_else(|| format!("{network_name} must be a nonzero unsigned integer"))?;
+    let fee_name = "LAYERX_EXPLORER_READ_FEE_LIMIT";
+    let fee_limit = required(fee_name)?
+        .parse::<u128>()
+        .map_err(|_| format!("{fee_name} must be an unsigned integer"))?;
+    let naming_name = "LAYERX_EXPLORER_NAMING_PROGRAM";
+    Ok(NameReads {
+        principal,
+        endpoint,
+        sequencer_public_key,
+        scope: ReadScope {
+            network_id,
+            protocol_version: layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION,
+            fee_limit,
+        },
+        naming_program: ProgramId::new(parse_digest(naming_name)?)
+            .map_err(|error| format!("{naming_name} is invalid: {error}"))?,
+    })
 }
 
 fn config() -> Result<Config, String> {
@@ -146,12 +210,23 @@ fn config() -> Result<Config, String> {
             .map_err(|error| format!("LAYERX_EXPLORER_PROGRAM_PROBE_ID is invalid: {error}"))?,
         observed_sealed_batch: parse_u64("LAYERX_EXPLORER_OBSERVED_SEALED_BATCH")?,
         finalised_checkpoint: parse_digest("LAYERX_EXPLORER_FINALISED_CHECKPOINT")?,
+        name_reads: name_reads()?,
     })
 }
 
 struct LoadedRegistry {
     registry: Registry,
     interfaces: Vec<VerifiedProgramInterfaceMetadata>,
+    resolve_targets: Vec<ResolveTarget>,
+}
+
+/// The latest verified deployment facts a `resolve` read is signed against.
+#[derive(Clone, Copy)]
+struct ResolveTarget {
+    program: ProgramId,
+    guest_abi: u16,
+    /// Whether a published interface is the naming reference interface.
+    naming_interface: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -217,10 +292,20 @@ fn load_registry(
         deployments.push(evidence);
     }
     deployments.sort_by_key(|evidence| (evidence.program().bytes(), evidence.version()));
+    let mut resolve_targets: Vec<ResolveTarget> = Vec::new();
     for evidence in deployments {
         if let Some(interface) = VerifiedProgramInterfaceMetadata::from_deployment(&evidence) {
             interfaces.push(interface);
         }
+        let target = ResolveTarget {
+            program: evidence.program(),
+            guest_abi: evidence.abi_version(),
+            naming_interface: evidence.interface().map(|interface| {
+                reads::is_naming_reference_interface(evidence.program().bytes(), interface)
+            }),
+        };
+        resolve_targets.retain(|known| known.program != target.program);
+        resolve_targets.push(target);
         registry
             .record_verified_deployment(&evidence)
             .map_err(|error| format!("verified deployment replay failed: {error}"))?;
@@ -232,6 +317,7 @@ fn load_registry(
     Ok(LoadedRegistry {
         registry,
         interfaces,
+        resolve_targets,
     })
 }
 
@@ -485,6 +571,135 @@ fn refresh_program(
     Ok(())
 }
 
+enum ResolveRefusal {
+    UnknownProgram,
+    NotNamingProgram,
+    Unavailable(String),
+}
+
+fn resolve_target(config: &Config, program: ProgramId) -> Result<ResolveTarget, ResolveRefusal> {
+    let verifier = ProtocolDeploymentVerifier::from_protected_history(
+        &config.sequencer_trust_history,
+        config.staleness_ms,
+    )
+    .map_err(|error| {
+        ResolveRefusal::Unavailable(format!("explorer deployment verifier is invalid: {error}"))
+    })?;
+    let loaded = load_registry(
+        &config.journal.root,
+        &config.verified_source_store,
+        &verifier,
+    )
+    .map_err(ResolveRefusal::Unavailable)?;
+    let target = loaded
+        .resolve_targets
+        .iter()
+        .find(|target| target.program == program)
+        .copied()
+        .ok_or(ResolveRefusal::UnknownProgram)?;
+    match target.naming_interface {
+        Some(true) => Ok(target),
+        None if program == config.name_reads.naming_program => Ok(target),
+        Some(false) | None => Err(ResolveRefusal::NotNamingProgram),
+    }
+}
+
+fn resolve_name(
+    config: &Config,
+    target: ResolveTarget,
+    name: &str,
+    now: u64,
+) -> Result<ResolveOutcome, ResolveFailure> {
+    reads::resolve(
+        &config.name_reads.endpoint,
+        &config.name_reads.principal,
+        config.name_reads.scope,
+        config.name_reads.sequencer_public_key,
+        (target.program.bytes(), target.guest_abi),
+        name,
+        now,
+    )
+}
+
+/// Proves the read principal is registered: only an admitted identity's signed
+/// read returns evidence that verifies against the trusted sequencer key.
+fn probe_name_reads(config: &Config, now: u64) -> Result<(), String> {
+    let naming_name = "LAYERX_EXPLORER_NAMING_PROGRAM";
+    let target =
+        resolve_target(config, config.name_reads.naming_program).map_err(
+            |refusal| match refusal {
+                ResolveRefusal::UnknownProgram => {
+                    format!("{naming_name} is not a registered program")
+                }
+                ResolveRefusal::NotNamingProgram => {
+                    format!("{naming_name} does not publish the naming reference interface")
+                }
+                ResolveRefusal::Unavailable(error) => error,
+            },
+        )?;
+    match resolve_name(config, target, reads::READINESS_PROBE_NAME, now) {
+        Ok(_) => Ok(()),
+        Err(ResolveFailure::Transport(error)) => Err(error),
+        Err(ResolveFailure::Refused { status, code }) => Err(format!(
+            "read principal {} was refused with {status} {code}; its identity must be registered on chain",
+            config.name_reads.principal.did()
+        )),
+        Err(ResolveFailure::Unverified(error)) => {
+            Err(format!("read endpoint answer is unverified: {error:?}"))
+        }
+    }
+}
+
+fn resolve_route(remainder: &str) -> Option<(&str, &str)> {
+    let (route, query) = remainder.split_once('?').unwrap_or((remainder, ""));
+    route
+        .strip_suffix("/reads/resolve")
+        .map(|program| (program, query))
+}
+
+fn serve_resolve(
+    stream: &mut TcpStream,
+    config: &Config,
+    program_text: &str,
+    query: &str,
+    clock: &dyn Clock,
+) -> Result<(), String> {
+    let program = hex::decode_digest(program_text)
+        .ok()
+        .and_then(|bytes| ProgramId::new(bytes).ok());
+    let Some(program) = program else {
+        return response(stream, 400, "{\"error\":\"invalid_program\"}");
+    };
+    let Some(name) = query
+        .strip_prefix("name=")
+        .filter(|name| reads::validate_name(name).is_ok())
+    else {
+        return response(stream, 400, "{\"error\":\"invalid_name\"}");
+    };
+    let target = match resolve_target(config, program) {
+        Ok(target) => target,
+        Err(ResolveRefusal::UnknownProgram) => {
+            return response(stream, 404, "{\"error\":\"not_found\"}");
+        }
+        Err(ResolveRefusal::NotNamingProgram) => {
+            return response(stream, 422, "{\"error\":\"not_naming_program\"}");
+        }
+        Err(ResolveRefusal::Unavailable(_)) => {
+            return response(stream, 503, "{\"error\":\"program_state_unavailable\"}");
+        }
+    };
+    match resolve_name(config, target, name, now_ms(clock)?) {
+        Ok(ResolveOutcome::Resolved { did, expiry }) => {
+            response(stream, 200, &reads::resolved_json(name, did, expiry))
+        }
+        Ok(ResolveOutcome::NotFound) => response(stream, 404, "{\"error\":\"not_found\"}"),
+        Ok(ResolveOutcome::Refused { .. }) => {
+            response(stream, 503, "{\"error\":\"name_read_refused\"}")
+        }
+        Err(_) => response(stream, 503, "{\"error\":\"name_read_unavailable\"}"),
+    }
+}
+
 fn serve_connection(
     stream: &mut TcpStream,
     config: &Config,
@@ -526,14 +741,21 @@ fn serve_connection(
         return response(stream, 401, "{\"error\":\"unauthorized\"}");
     }
     if path == "/healthz" {
-        return match refresh_program(config, index, config.probe_program, now_ms(clock)?) {
-            Ok(()) => response(stream, 200, "{\"ready\":true}"),
-            Err(_) => response(stream, 503, "{\"ready\":false}"),
+        let now = now_ms(clock)?;
+        let ready = refresh_program(config, index, config.probe_program, now).is_ok()
+            && probe_name_reads(config, now).is_ok();
+        return if ready {
+            response(stream, 200, "{\"ready\":true}")
+        } else {
+            response(stream, 503, "{\"ready\":false}")
         };
     }
     let Some(program_text) = path.strip_prefix("/v1/programs/") else {
         return response(stream, 404, "{\"error\":\"not_found\"}");
     };
+    if let Some((program_text, query)) = resolve_route(program_text) {
+        return serve_resolve(stream, config, program_text, query, clock);
+    }
     let program = hex::decode_digest(program_text)
         .ok()
         .and_then(|bytes| ProgramId::new(bytes).ok());
@@ -566,8 +788,11 @@ fn serve(config: &Config, clock: &dyn Clock) -> Result<(), String> {
         sealed_batch: config.observed_sealed_batch,
         finalised_checkpoint: config.finalised_checkpoint,
     });
-    refresh_program(config, &mut index, config.probe_program, now_ms(clock)?)
+    let now = now_ms(clock)?;
+    refresh_program(config, &mut index, config.probe_program, now)
         .map_err(|error| format!("explorer protocol probe failed: {error}"))?;
+    probe_name_reads(config, now)
+        .map_err(|error| format!("explorer name read probe failed: {error}"))?;
     let listener = TcpListener::bind(&config.listen)
         .map_err(|error| format!("explorer program listener failed: {error}"))?;
     for incoming in listener.incoming() {

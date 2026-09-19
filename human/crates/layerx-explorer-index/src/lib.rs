@@ -4,6 +4,7 @@ mod freshness;
 pub mod mirror;
 pub mod programs;
 mod query;
+pub mod reads;
 pub mod verify;
 
 use std::collections::{BTreeMap, BTreeSet};

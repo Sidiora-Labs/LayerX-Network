@@ -8,6 +8,10 @@ The program projection borrows verified balances; it preserves the proof checks 
 
 The program service requires `LAYERX_EXPLORER_AUTHORITY_CA_DER` to name a readable DER certificate file, at most 64 KiB. This CA authenticates both HTTPS endpoints configured by `LAYERX_EXPLORER_NODE_ENDPOINT` and `LAYERX_EXPLORER_AUTHORITY_ENDPOINT`. The authority endpoint must identify a separate replica, bound by `LAYERX_EXPLORER_AUTHORITY_REPLICA_ID`; the CA does not replace the signed protocol evidence or sequencer trust history. Missing, empty, oversized or malformed CA input refuses startup.
 
+`GET /v1/programs/<id>/reads/resolve?name=<name>` resolves a name through the naming reference program. The service signs one noncommitting `resolve` program read as its own chain-registered identity, posts it to `POST /v1/programs/read` on the core boundary, and answers only when the returned receipt, terminal payload, call graph and simulation evidence verify against the trusted sequencer key and bind to that request. A resolved name answers `{"name","did","expiry"}` with a 64-character lowercase hexadecimal `did` and a decimal string `expiry`; a name the program refuses as absent or expired answers `404`; a registered program that does not publish the naming reference interface answers `422 not_naming_program`; an invalid name answers `400 invalid_name`; any other verified refusal or any unverifiable answer answers `503`.
+
+Name reads require `LAYERX_EXPLORER_READ_KEY_FILE` (a file holding the hexadecimal ed25519 seed of the read principal), `LAYERX_EXPLORER_READ_ENDPOINT` (`https://<host>:<port>` of the core boundary), `LAYERX_EXPLORER_READ_CA_DER`, `LAYERX_EXPLORER_READ_SEQUENCER_PUBLIC_KEY_FILE`, `LAYERX_EXPLORER_READ_NETWORK_ID`, `LAYERX_EXPLORER_READ_FEE_LIMIT` and `LAYERX_EXPLORER_NAMING_PROGRAM`. Each missing, unreadable or malformed input refuses startup by name. Startup and `/healthz` sign one read of a probe name against the naming program and report ready only when the answer carries sequencer-signed evidence for that read, which a node returns only for a registered identity.
+
 Qualification commands from the repository root:
 
 ```sh
