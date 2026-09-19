@@ -11,7 +11,7 @@
 #include <time.h>
 #include <unistd.h>
 
-enum { LNI_INTERFACE_MAJOR = 1, LNI_INTERFACE_MINOR = 5 };
+enum { LNI_INTERFACE_MAJOR = 1, LNI_INTERFACE_MINOR = 7 };
 
 static uint64_t get(const uint8_t *p, size_t n)
 {

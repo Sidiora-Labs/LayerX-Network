@@ -49,7 +49,7 @@
 enum {
     NETWORK_ID = 77,
     LNI_MAJOR = 1,
-    LNI_MINOR = 5,
+    LNI_MINOR = 7,
     NODE_INFO_REQUEST = 1,
     NODE_INFO_RESPONSE = 2,
     SUBMIT_REQUEST = 3,
@@ -482,7 +482,7 @@ static int typed_read_version_gate(int descriptor)
                          fee_estimate, sizeof(fee_estimate)) == 0);
     REQUIRE(expect_typed_read(descriptor, 65U, FEE_ESTIMATE_RESPONSE, 64U) == 0);
     puts("typed committed reads refuse a below-5 minor as unsupported, refuse a"
-         " malformed payload as non-canonical and answer at minor 5");
+         " malformed payload as non-canonical and answer at the negotiated minor");
     return 0;
 }
 
@@ -501,7 +501,7 @@ static int simulate_call(int descriptor, const signer *key)
         1000000U, 16777216U, 1048576U, 1048576U, 64U, 1048576U, 4096U
     };
     uint8_t payload[118U + sizeof(access)] = {1U};
-    uint8_t encoded[ACTIVITY_CAPACITY], activity_id[32], query[33] = {1U};
+    uint8_t encoded[ACTIVITY_CAPACITY], activity_id[32], query[34] = {1U};
     uint8_t digest_input[sizeof(domain) + 145U], digest[32];
     wire_envelope response;
     lxp_receipt receipt;
@@ -570,7 +570,7 @@ static int simulate_call(int descriptor, const signer *key)
 
 static int checked_receipt(int descriptor, uint64_t sequence, const uint8_t *activity_id, bool success)
 {
-    uint8_t query[9] = {3U};
+    uint8_t query[10] = {3U};
     signer sequencer;
     static uint8_t storage[2U * LXP_MAX_ACTIVITY_BYTES];
     lxp_arena arena;
@@ -775,7 +775,7 @@ static int maintenance_admission(int *descriptor, const signer *key, bool recove
 static int availability_batches(int *descriptor, const signer *key)
 {
     uint8_t deploy[112] = {1U};
-    uint8_t encoded[ACTIVITY_CAPACITY], activity_id[32], query[33] = {1U};
+    uint8_t encoded[ACTIVITY_CAPACITY], activity_id[32], query[34] = {1U};
     size_t length;
     store_u16(deploy + 32U, 1U);
     store_u32(deploy + 100U, 8U);
@@ -827,7 +827,7 @@ static int availability_batches(int *descriptor, const signer *key)
 static int governance_registration(int descriptor, const signer *key)
 {
     uint8_t payload[86] = {0x71U, 1U, 0U, 2U};
-    uint8_t encoded[ACTIVITY_CAPACITY], activity_id[32], query[33] = {1U};
+    uint8_t encoded[ACTIVITY_CAPACITY], activity_id[32], query[34] = {1U};
     uint8_t root[32];
     size_t length;
     signer guardian;
@@ -1020,7 +1020,7 @@ int main(int argc, char **argv)
     struct sockaddr_un address = {0};
     uint8_t malformed[32] = {1U};
     uint8_t deploy[112] = {1U};
-    uint8_t encoded[ACTIVITY_CAPACITY], activity_id[32], query[33] = {1U};
+    uint8_t encoded[ACTIVITY_CAPACITY], activity_id[32], query[34] = {1U};
     size_t length;
     int descriptor;
     static const char digits[] = "0123456789abcdef";

@@ -226,7 +226,7 @@ static int metered_transfer(const lxp_receipt *receipt, lxp_result expected)
 static int metered_receipt(int descriptor, const uint8_t id[32],
                              lxp_result expected, lxp_receipt *receipt)
 {
-    uint8_t query[33] = {1U};
+    uint8_t query[34] = {1U};
     (void)memcpy(query + 1U, id, 32U);
     for (unsigned attempt = 0U; attempt < 200U; ++attempt) {
         wire_envelope response;
@@ -453,7 +453,7 @@ static int metered_simulate(int descriptor, const signer *delegate, metered_run 
     static const uint8_t domain[] = "LayerX/agent/program-simulation-evidence/v1";
     static const uint8_t boundary_domain[] = "LayerX/emulator/simulation-boundary/v1";
     uint8_t preparation[79], encoded[ACTIVITY_CAPACITY], id[32], root[32];
-    uint8_t digest_input[sizeof(domain) + 145U], digest[32], query[33] = {1U};
+    uint8_t digest_input[sizeof(domain) + 145U], digest[32], query[34] = {1U};
     uint8_t boundary_input[sizeof(boundary_domain) + 32U];
     uint8_t receipt_storage[2U * LXP_MAX_ACTIVITY_BYTES];
     wire_envelope response;
@@ -690,7 +690,7 @@ static int metered_session_read_refusals(int descriptor, const uint8_t authentic
     REQUIRE(send_request(descriptor, LNI_MINOR, 36U, 636U, request, sizeof(request)) == 0);
     REQUIRE(expect_error(descriptor, 636U, 1U, LXP_ERR_NON_CANONICAL) == 0);
     (void)memcpy(request + 2U, authentication_id, 32U);
-    REQUIRE(send_request(descriptor, LNI_MINOR - 1U, 36U, 637U, request, sizeof(request)) == 0);
+    REQUIRE(send_request(descriptor, TYPED_READ_MINOR - 1U, 36U, 637U, request, sizeof(request)) == 0);
     REQUIRE(expect_error(descriptor, 637U, 1U, LXP_ERR_NON_CANONICAL) == 0);
     REQUIRE(send_request(descriptor, LNI_MINOR, 36U, 638U, request, sizeof(request) - 1U) == 0);
     REQUIRE(expect_error(descriptor, 638U, 1U, LXP_ERR_NON_CANONICAL) == 0);

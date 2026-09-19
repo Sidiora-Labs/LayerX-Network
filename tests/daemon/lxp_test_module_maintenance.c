@@ -57,7 +57,7 @@
 enum {
     NETWORK_ID = 77,
     LNI_MAJOR = 1,
-    LNI_MINOR = 5,
+    LNI_MINOR = 7,
     NODE_INFO_REQUEST = 1,
     NODE_INFO_RESPONSE = 2,
     SUBMIT_REQUEST = 3,

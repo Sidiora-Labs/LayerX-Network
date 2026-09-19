@@ -8,6 +8,9 @@ client=$root/agent/crates/layerx-client/src/lni/schema.rs
 native_program=$root/tests/daemon/lxp_test_program_admission.c
 native_admission=$root/tests/test_daemon_lni_admission.c
 native_pay=$root/tests/daemon/lxp_test_pay1.c
+native_maintenance=$root/tests/daemon/lxp_test_module_maintenance.c
+native_codec=$root/cmd/layerx-archive-codec/main.c
+native_guarantor=$root/cmd/layerx-guarantor/lni.c
 
 fail() {
     printf 'LNI version parity: %s\n' "$1" >&2
@@ -15,7 +18,8 @@ fail() {
 }
 
 for file in "$schema" "$daemon" "$client" "$native_program" \
-        "$native_admission" "$native_pay"; do
+        "$native_admission" "$native_pay" "$native_maintenance" \
+        "$native_codec" "$native_guarantor"; do
     [ -f "$file" ] || fail "$file does not exist"
 done
 
@@ -62,6 +66,21 @@ check_pair "$native_admission" \
     's/^[[:space:]]*LNI_MINOR = \([0-9][0-9]*\)U*,$/\1/p' \
     'the native LNI admission client interface version'
 
+check_pair "$native_maintenance" \
+    's/^[[:space:]]*LNI_MAJOR = \([0-9][0-9]*\)U*,$/\1/p' \
+    's/^[[:space:]]*LNI_MINOR = \([0-9][0-9]*\)U*,$/\1/p' \
+    'the native module maintenance client interface version'
+
+check_pair "$native_codec" \
+    's/^[[:space:]]*CODEC_LNI_MAJOR = \([0-9][0-9]*\)U*,$/\1/p' \
+    's/^[[:space:]]*CODEC_LNI_MINOR = \([0-9][0-9]*\)U*,$/\1/p' \
+    'the archive codec interface version'
+
+check_pair "$native_guarantor" \
+    's/^enum { LNI_INTERFACE_MAJOR = \([0-9][0-9]*\)U*,.*$/\1/p' \
+    's/^enum {.*LNI_INTERFACE_MINOR = \([0-9][0-9]*\)U* };$/\1/p' \
+    'the guarantor interface version'
+
 one_value "$native_pay" \
     's/.*response\.minor == \([0-9][0-9]*\)U.*/\1/p' \
     'the native payment client response minor'
@@ -94,6 +113,7 @@ expected=$(printf '%s' "$expected" | grep '[^[:space:]]' | sort)
 [ "$declared" = "$expected" ] || fail \
 "the client crate declares the revisions $(printf '%s' "$declared" | tr '\n' ' ') but the schema declares $schema_major.$schema_minor, which requires $(printf '%s' "$expected" | tr '\n' ' ')"
 
-printf 'LNI version parity: %s.%s in %s, %s, %s, %s, %s and %s\n' \
+printf 'LNI version parity: %s.%s in %s, %s, %s, %s, %s, %s, %s, %s and %s\n' \
     "$schema_major" "$schema_minor" "$schema" "$daemon" "$client" \
-    "$native_program" "$native_admission" "$native_pay"
+    "$native_program" "$native_admission" "$native_pay" \
+    "$native_maintenance" "$native_codec" "$native_guarantor"
