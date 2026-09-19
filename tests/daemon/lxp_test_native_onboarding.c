@@ -101,7 +101,7 @@ static int onboard_file(size_t index, const char *suffix, const uint8_t *bytes, 
 static int onboard_receipt(int descriptor, const uint8_t id[32], lxp_result expected,
     size_t index, bool retain, lxp_receipt *receipt)
 {
-    uint8_t query[33] = {1U};
+    uint8_t query[34] = {1U};
     (void)memcpy(query + 1U, id, 32U);
     for (unsigned attempt = 0U; attempt < 200U; ++attempt) {
         wire_envelope response;

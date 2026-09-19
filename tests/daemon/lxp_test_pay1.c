@@ -123,7 +123,7 @@ int main(int argc, char **argv)
     REQUIRE(descriptor >= 0 && connect(descriptor, (struct sockaddr *)&address, sizeof(address)) == 0);
     wire_envelope response;
     REQUIRE(send_request(descriptor, 0U, 1U, 0U, NULL, 0U) == 0);
-    REQUIRE(receive_envelope(descriptor, &response) == 0 && response.tag == 2U && response.minor == 5U);
+    REQUIRE(receive_envelope(descriptor, &response) == 0 && response.tag == 2U && response.minor == 7U);
     release_envelope(&response);
     memcpy(grant.from, from, 32U); memcpy(grant.recipient, to, 32U); memcpy(grant.asset, asset, 32U);
     grant.per_draw_maximum.lo = 2U; grant.allowance.lo = 10U; grant.expiration = UINT64_MAX;

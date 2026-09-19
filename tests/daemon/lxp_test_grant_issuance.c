@@ -107,7 +107,7 @@ static int execute_grant_activity(int descriptor, const signer *key, grant_run *
                                    size_t payload_length, lxp_result expected,
                                    lxp_receipt *receipt)
 {
-    uint8_t encoded[ACTIVITY_CAPACITY], activity_id[32], query[33] = {1U};
+    uint8_t encoded[ACTIVITY_CAPACITY], activity_id[32], query[34] = {1U};
     size_t length;
     REQUIRE(build_activity(key, run->account_sequence, 0x00070000U | ordinal, 0U,
                             payload, payload_length, encoded, sizeof(encoded), &length) == 0);
