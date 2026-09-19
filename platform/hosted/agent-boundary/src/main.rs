@@ -1,5 +1,8 @@
 mod artifacts;
 mod deployment;
+mod head_attestation;
+#[cfg(test)]
+mod head_attestation_tests;
 #[cfg(test)]
 mod lifecycle_tests;
 
@@ -602,7 +605,7 @@ fn open_session(
     let mut transport = Uds::connect(&config.lni_socket, &config.gate, lni_limits(config, slot))
         .map_err(|error| LniFailure::Unavailable(format!("{error:?}")))?;
     let expected = HandshakeConfig {
-        built_interface_version: Version::V1_6,
+        built_interface_version: Version::V1_7,
         expected_protocol_version: PROTOCOL_VERSION,
         expected_network_id: config.protocol_network_id,
     };
@@ -2091,6 +2094,9 @@ fn route(config: &Config, request: &Request) -> Response {
         Err(response) => return response,
     };
     if let Some(response) = deployment::route(config, request, path, query, plane) {
+        return response;
+    }
+    if let Some(response) = head_attestation::route(config, request, path, query, plane) {
         return response;
     }
     if relay_path_allowed(path, query) {

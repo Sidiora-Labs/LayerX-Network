@@ -801,7 +801,7 @@ fn serve(config: &Config) -> Result<(), String> {
     let listener = TcpListener::bind(&config.listen).map_err(|error| error.to_string())?;
     if config.deployment_lni_socket.is_none() {
         eprintln!(
-            "layerx-program-registry: LAYERX_REGISTRY_LNI_SOCKET is not set; program discovery documents are published without the sequencer discovery proof"
+            "layerx-program-registry: LAYERX_REGISTRY_LNI_SOCKET is not set; the sequencer discovery proof is requested through the node boundary at LAYERX_REGISTRY_NODE_ENDPOINT"
         );
     }
     eprintln!(

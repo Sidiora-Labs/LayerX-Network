@@ -1,6 +1,7 @@
 //! Sequencer-signed program discovery proof for the hosted registry document.
 //!
-//! The registry asks the sequencer node, over its LNI socket, to attest the
+//! The registry asks the sequencer node, over its LNI socket or through the
+//! node boundary's registry-plane relay of the same LNI messages, to attest the
 //! program's current head under the sequencer key the independently verified
 //! batch header already proved. The proof fields are attached to the registry
 //! document only when every attested fact equals the fact the registry verified
@@ -13,15 +14,16 @@ use std::time::Instant;
 
 use layerx_client::lni::handshake::{perform, HandshakeConfig};
 use layerx_client::lni::head_attestation::{
-    attest_program_head, program_discovery_proof_digest, ProgramDiscoveryHead,
-    ProgramHeadAttestContext, ProgramHeadAttestation,
+    attest_program_head, decode_program_head_attestation, program_discovery_proof_digest,
+    ProgramDiscoveryHead, ProgramHeadAttestContext, ProgramHeadAttestation,
+    PROGRAM_HEAD_ATTEST_PAYLOAD_BYTES, PROGRAM_HEAD_ATTEST_PROOF_BYTES,
 };
 use layerx_client::lni::schema::{Capability, Version};
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
 use layerx_programs::hex;
 use serde_json::Value;
 
-use crate::node_state::HeadAuthority;
+use crate::node_state::{HeadAuthority, NodeProgramStateSource};
 
 const FRAME_BYTES: usize = 1_212_416;
 const CORRELATION_ID: u64 = 1;
@@ -99,6 +101,73 @@ pub fn request_head_attestation(
         },
     )
     .map_err(|error| format!("head attestation refused: {error:?}"))
+}
+
+/// Decodes one attestation the node boundary relayed from the sequencer and
+/// verifies it under the independently verified sequencer key. The boundary
+/// carries the node's LNI response bytes and holds no signing key, so a
+/// document it altered or invented fails this verification.
+///
+/// # Errors
+/// Refuses a malformed relay document, a different program or freshness
+/// bound, a key other than the verified sequencer key and a signature that
+/// does not verify over the recomputed discovery proof digest.
+pub fn decode_relayed_head_attestation(
+    document: &Value,
+    program_id: [u8; 32],
+    staleness_ms: u64,
+    authority: &HeadAuthority,
+) -> Result<ProgramHeadAttestation, String> {
+    let part = |name: &str, length: usize| {
+        let text = document[name]
+            .as_str()
+            .filter(|text| text.len() == length * 2)
+            .ok_or_else(|| format!("relayed head attestation omitted {name}"))?;
+        hex::decode(text).map_err(|error| format!("relayed head attestation {name}: {error}"))
+    };
+    let payload = part("payload_hex", PROGRAM_HEAD_ATTEST_PAYLOAD_BYTES)?;
+    let proof = part("proof_hex", PROGRAM_HEAD_ATTEST_PROOF_BYTES)?;
+    decode_program_head_attestation(
+        &payload,
+        &proof,
+        &program_id,
+        staleness_ms,
+        &authority.sequencer_public_key,
+    )
+    .map_err(|error| format!("relayed head attestation refused: {error:?}"))
+}
+
+/// Requests the sequencer's attestation of the verified head over the local
+/// LNI socket when one is configured and through the node boundary's
+/// registry-plane relay otherwise, then derives the publishable proof fields.
+///
+/// # Errors
+/// Refuses an unavailable node or boundary, every attestation refusal and
+/// every attested fact that differs from what the registry verified.
+pub fn verified_discovery_proof(
+    socket: Option<&Path>,
+    node_state: &NodeProgramStateSource,
+    expected: &ExpectedDiscoveryHead,
+    staleness_ms: u64,
+    authority: &HeadAuthority,
+) -> Result<DiscoveryProofFields, String> {
+    let attestation = match socket {
+        Some(socket) => request_head_attestation(
+            socket,
+            expected.head.program_id,
+            staleness_ms,
+            authority,
+            node_state
+                .request_deadline()
+                .ok_or_else(|| "the registry request deadline is unavailable".to_owned())?,
+        )?,
+        None => node_state.relayed_head_attestation(
+            expected.head.program_id,
+            staleness_ms,
+            authority,
+        )?,
+    };
+    discovery_proof_fields(&attestation, expected, authority)
 }
 
 /// Derives the publishable proof fields from one attestation, refusing any

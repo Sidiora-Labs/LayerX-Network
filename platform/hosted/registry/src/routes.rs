@@ -25,8 +25,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::builder::{HermeticBuilder, HermeticBuilderConfig};
 use crate::head_attestation::{
-    attach_discovery_proof, discovery_proof_fields, request_head_attestation, DiscoveryProofFields,
-    ExpectedDiscoveryHead,
+    attach_discovery_proof, verified_discovery_proof, DiscoveryProofFields, ExpectedDiscoveryHead,
 };
 use crate::journal::{FileDeploymentJournal, QuarantinedUnit};
 use crate::mirror::{MirrorRefusal, SourceMirror};
@@ -632,17 +631,9 @@ impl Registrar {
         head: AccountStateHead,
         valid_through: u64,
     ) -> Result<DiscoveryProofFields, String> {
-        let socket = self
-            .deployment_lni_socket
-            .as_deref()
-            .ok_or_else(|| "LAYERX_REGISTRY_LNI_SOCKET is not set".to_owned())?;
         let authority = self
             .head_authority
             .ok_or_else(|| "the verified head authority is unavailable".to_owned())?;
-        let deadline = self
-            .node_state
-            .request_deadline()
-            .ok_or_else(|| "the registry request deadline is unavailable".to_owned())?;
         let version = read
             .entry
             .versions
@@ -661,14 +652,13 @@ impl Registrar {
             },
             head_receipt_digest: head.receipt_digest,
         };
-        let attestation = request_head_attestation(
-            socket,
-            expected.head.program_id,
+        verified_discovery_proof(
+            self.deployment_lni_socket.as_deref(),
+            &self.node_state,
+            &expected,
             self.staleness_ms,
             &authority,
-            deadline,
-        )?;
-        discovery_proof_fields(&attestation, &expected, &authority)
+        )
     }
 
     fn read_interface(&mut self, program: &str, now: u64) -> Response {

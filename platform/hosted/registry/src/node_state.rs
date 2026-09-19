@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::time::{Duration, Instant};
 
+use layerx_client::lni::head_attestation::ProgramHeadAttestation;
 use layerx_programs::{
     hex, AccountStateHead, DeploymentProof, ProgramId, ProtocolDeploymentVerifier,
     ProtocolHeadMaintenanceProof, ProtocolHeadProof, VerifiedDeploymentEvidence,
@@ -388,6 +389,39 @@ impl NodeProgramStateSource {
             bytes,
             receipt,
         })
+    }
+
+    /// Requests the sequencer's attestation of one program head through the
+    /// node boundary, which relays LNI messages 40 and 41 on the registry plane
+    /// under the same endpoint, CA and bearer credential as every other node
+    /// read of this source.
+    ///
+    /// # Errors
+    /// Refuses an unavailable boundary or node, every boundary refusal and
+    /// every attestation that does not verify under the verified sequencer key.
+    pub fn relayed_head_attestation(
+        &self,
+        program_id: [u8; 32],
+        staleness_ms: u64,
+        authority: &HeadAuthority,
+    ) -> Result<ProgramHeadAttestation, String> {
+        let path = format!(
+            "/internal/v1/programs/{}/head-attestation?staleness_ms={staleness_ms}",
+            hex::encode(&program_id)
+        );
+        let (status, document) = self.fetch_from(&self.endpoint, &self.authorization, &path)?;
+        if status != 200 {
+            return Err(format!(
+                "node boundary head attestation relay returned HTTP {status} ({})",
+                document["error"]["code"].as_str().unwrap_or("unspecified")
+            ));
+        }
+        crate::head_attestation::decode_relayed_head_attestation(
+            &document,
+            program_id,
+            staleness_ms,
+            authority,
+        )
     }
 
     ///
