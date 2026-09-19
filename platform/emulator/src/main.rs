@@ -120,6 +120,34 @@ struct CoreProgram {
     observed_sequence: c_ulonglong,
 }
 
+/// The frozen ABI version that owns program value accounts
+/// (`LX_PROGRAMS_ACCOUNT_ABI_VERSION`).
+const PROGRAM_ACCOUNT_ABI_VERSION: u16 = 2;
+
+/// The number of program value accounts one registry read renders. A program
+/// holding more refuses the read instead of publishing a partial balance set.
+const PROGRAM_VALUE_ACCOUNT_CAPACITY: usize = 256;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CoreValueAccount {
+    account_id: [u8; 32],
+    asset_id: [u8; 32],
+    balance_hi: c_ulonglong,
+    balance_lo: c_ulonglong,
+    frozen: u8,
+}
+
+#[repr(C)]
+struct CoreValueAccountProof {
+    receipt_digest: [u8; 32],
+    state_root: [u8; 32],
+    observed_sequence: c_ulonglong,
+    observed_at: c_ulonglong,
+    abi_version: u16,
+    count: usize,
+}
+
 unsafe extern "C" {
     fn platform_emulator_create_for_protocol(
         network_id: c_uint,
@@ -162,6 +190,13 @@ unsafe extern "C" {
         emulator: *mut c_void,
         program_id: *const c_uchar,
         program: *mut CoreProgram,
+    ) -> c_int;
+    fn platform_emulator_program_value_accounts(
+        emulator: *mut c_void,
+        program_id: *const c_uchar,
+        accounts: *mut CoreValueAccount,
+        capacity: usize,
+        proof: *mut CoreValueAccountProof,
     ) -> c_int;
     fn platform_emulator_cell(
         emulator: *const c_void,
@@ -3220,6 +3255,14 @@ fn program_registry_read(
     let Some(valid_through) = live.timestamp_ms.checked_add(300_000) else {
         return refusal(trace, 503, "core_invalid_output", "freshness overflow");
     };
+    let value_accounts = if interface_only {
+        None
+    } else {
+        match program_value_accounts(emulator, &program, trace) {
+            Ok(value) => Some(value),
+            Err(refused) => return refused,
+        }
+    };
     program_registry_document(
         &program,
         &live,
@@ -3227,6 +3270,7 @@ fn program_registry_read(
         interface_only,
         trace,
         &emulator.signing_key,
+        value_accounts.as_ref(),
     )
 }
 
@@ -4326,6 +4370,114 @@ fn parse_request_line(request_line: &str) -> Result<(&str, &str), String> {
     Ok((method, target))
 }
 
+fn program_lifecycle_name(lifecycle: u8) -> Option<&'static str> {
+    match lifecycle {
+        1 => Some("active"),
+        2 => Some("deprecated"),
+        3 => Some("tombstoned"),
+        _ => None,
+    }
+}
+
+/// Reads the program's receipt-proven value accounts out of the core and
+/// renders them in the hosted registry's `value_accounts` shape
+/// (`platform/hosted/registry/src/routes.rs`): the frozen ABI-one programs that
+/// cannot own accounts publish the account-incapable block, and an ABI-two
+/// program publishes its own balances under the account-primary and state proof
+/// the core verified against the current head.
+fn program_value_accounts(
+    emulator: &mut Emulator,
+    program: &CoreProgram,
+    trace: u64,
+) -> Result<serde_json::Value, Response> {
+    let mut accounts = [CoreValueAccount {
+        account_id: [0; 32],
+        asset_id: [0; 32],
+        balance_hi: 0,
+        balance_lo: 0,
+        frozen: 0,
+    }; PROGRAM_VALUE_ACCOUNT_CAPACITY];
+    let mut proof = CoreValueAccountProof {
+        receipt_digest: [0; 32],
+        state_root: [0; 32],
+        observed_sequence: 0,
+        observed_at: 0,
+        abi_version: 0,
+        count: 0,
+    };
+    let code = unsafe {
+        platform_emulator_program_value_accounts(
+            emulator.core,
+            program.program_id.as_ptr(),
+            accounts.as_mut_ptr(),
+            accounts.len(),
+            &raw mut proof,
+        )
+    };
+    if code != 0 {
+        return Err(refusal(
+            trace,
+            503,
+            "balance_read_unavailable",
+            &format!(
+                "the core refused a receipt-proven program balance read: {}",
+                core_error(code)
+            ),
+        ));
+    }
+    if proof.abi_version == 1 && proof.count == 0 {
+        return Ok(serde_json::json!({
+            "status":"account-incapable-abi1",
+            "accounts":[],
+        }));
+    }
+    if proof.abi_version != PROGRAM_ACCOUNT_ABI_VERSION {
+        return Err(refusal(
+            trace,
+            502,
+            "balance_protocol_unsupported",
+            "program value accounts require the frozen ABI-two account protocol",
+        ));
+    }
+    let Some(lifecycle) = program_lifecycle_name(program.lifecycle) else {
+        return Err(refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "program lifecycle is invalid",
+        ));
+    };
+    if proof.observed_sequence == 0
+        || proof.observed_at == 0
+        || proof.receipt_digest == [0; 32]
+        || proof.state_root == [0; 32]
+    {
+        return Err(refusal(
+            trace,
+            503,
+            "balance_read_unavailable",
+            "the program balance proof is not current at the observed head",
+        ));
+    }
+    Ok(serde_json::json!({
+        "status":"current",
+        "lifecycle":lifecycle,
+        "accounts":accounts[..proof.count].iter().map(|account| serde_json::json!({
+            "account_id":hex_encode(&account.account_id),
+            "asset_id":hex_encode(&account.asset_id),
+            "balance":((u128::from(account.balance_hi) << 64) | u128::from(account.balance_lo)).to_string(),
+            "frozen":account.frozen == 1,
+        })).collect::<Vec<serde_json::Value>>(),
+        "receipt":{
+            "receipt_digest":hex_encode(&proof.receipt_digest),
+            "state_root":hex_encode(&proof.state_root),
+            "observed_sequence":proof.observed_sequence.to_string(),
+            "observed_at":proof.observed_at.to_string(),
+            "verification":"account-primary-and-state-proof-verified",
+        },
+    }))
+}
+
 fn program_registry_document(
     program: &CoreProgram,
     live: &CoreState,
@@ -4333,19 +4485,15 @@ fn program_registry_document(
     interface_only: bool,
     trace: u64,
     signing_key: &SigningKey,
+    value_accounts: Option<&serde_json::Value>,
 ) -> Response {
-    let lifecycle = match program.lifecycle {
-        1 => "active",
-        2 => "deprecated",
-        3 => "tombstoned",
-        _ => {
-            return refusal(
-                trace,
-                503,
-                "core_invalid_output",
-                "program lifecycle is invalid",
-            )
-        }
+    let Some(lifecycle) = program_lifecycle_name(program.lifecycle) else {
+        return refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "program lifecycle is invalid",
+        );
     };
     if !interface_only {
         let head = ProgramDiscoveryHead {
@@ -4359,7 +4507,7 @@ fn program_registry_document(
             state_root: program.state_root,
         };
         let (proof_digest, proof_signature) = sign_program_discovery(signing_key, &head);
-        let discovery = serde_json::json!({
+        let mut discovery = serde_json::json!({
             "program_id":hex_encode(&program.program_id),
             "lifecycle":lifecycle,
             "version":program.version,
@@ -4375,6 +4523,16 @@ fn program_registry_document(
             "valid_through":valid_through.to_string(),
             "verification":"registry-receipt-and-current-head-verified",
         });
+        let (Some(value_accounts), Some(object)) = (value_accounts, discovery.as_object_mut())
+        else {
+            return refusal(
+                trace,
+                503,
+                "balance_read_unavailable",
+                "a current receipt-proven program balance read is not available",
+            );
+        };
+        object.insert("value_accounts".to_owned(), value_accounts.clone());
         return success(trace, &discovery.to_string());
     }
     if program.has_interface == 0 {

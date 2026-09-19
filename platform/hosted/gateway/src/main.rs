@@ -526,6 +526,16 @@ fn program_head(
     config: &Config,
     expected_program: [u8; 32],
 ) -> Result<ProgramHead, OutgoingResponse> {
+    program_registry_upstream(config, expected_program).map(|(head, _)| head)
+}
+
+/// Reads the upstream registry document and verifies it into a `ProgramHead`,
+/// returning the verified document beside the head so the registry read can
+/// forward upstream-only blocks of it without re-deriving them.
+fn program_registry_upstream(
+    config: &Config,
+    expected_program: [u8; 32],
+) -> Result<(ProgramHead, serde_json::Value), OutgoingResponse> {
     let program = hex(&expected_program);
     let upstream = config
         .client
@@ -557,12 +567,23 @@ fn program_head(
     }
     let document: serde_json::Value = serde_json::from_slice(&upstream.body)
         .map_err(|_| response(503, "program_registry_invalid", Some(5)))?;
-    parse_program_head(
+    let head = parse_program_head(
         &document,
         expected_program,
         &program,
         &config.sequencer_authorization.public_key(),
-    )
+    )?;
+    Ok((head, document))
+}
+
+/// Returns the upstream registry document's `value_accounts` block exactly as
+/// the registry served it, or `None` when the upstream document omits it.
+fn upstream_value_accounts(document: &serde_json::Value) -> Option<serde_json::Value> {
+    document
+        .get("result")
+        .unwrap_or(document)
+        .get("value_accounts")
+        .cloned()
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -3756,7 +3777,7 @@ fn read_program_registry(config: &Config, program: &str, trace_id: &str) -> Outg
     let Ok(expected) = parse_hex32(program) else {
         return response(400, "invalid_program_id", None);
     };
-    let head = match program_head(config, expected) {
+    let (head, document) = match program_registry_upstream(config, expected) {
         Ok(value) => value,
         Err(error) => return error,
     };
@@ -3791,6 +3812,11 @@ fn read_program_registry(config: &Config, program: &str, trace_id: &str) -> Outg
             "discovery_signature".to_owned(),
             serde_json::Value::String(hex(&proof.signature)),
         );
+    }
+    if let (Some(value_accounts), Some(object)) =
+        (upstream_value_accounts(&document), result.as_object_mut())
+    {
+        object.insert("value_accounts".to_owned(), value_accounts);
     }
     json_response(
         200,
@@ -4473,7 +4499,8 @@ mod programs_wire_tests {
         agent_error_class, agent_response, hex, json_response, now_millis, parse_program_head,
         pending_program_response, program_activity_selector, program_discovery_proof_digest,
         program_head_is_current, program_receipt_selector, program_selector,
-        program_source_publication, programs_request_path, response, ProgramDiscoveryHead,
+        program_source_publication, programs_request_path, response, upstream_value_accounts,
+        ProgramDiscoveryHead,
     };
     use ed25519_dalek::{Signer as _, SigningKey};
     use layerx_platform_gateway::http::IncomingRequest;
@@ -4524,6 +4551,48 @@ mod programs_wire_tests {
             "discovery_signature": hex(&signature),
             "receipt": {"verification": "receipt-verified"},
         })
+    }
+
+    #[test]
+    fn registry_read_forwards_the_upstream_value_accounts_block_byte_for_byte() {
+        let observed_at = now_millis().unwrap_or_else(|error| panic!("{error}")) - 1_000;
+        let mut document = signed_registry_document(observed_at, observed_at + 300_000);
+        assert!(
+            upstream_value_accounts(&document).is_none(),
+            "a registry document without balances must not grow one"
+        );
+        let block = serde_json::json!({
+            "status": "current",
+            "lifecycle": "active",
+            "accounts": [{
+                "account_id": hex(&[0x61; 32]),
+                "asset_id": hex(&[0x62; 32]),
+                "balance": "340282366920938463463374607431768211455",
+                "frozen": false,
+            }],
+            "receipt": {
+                "receipt_digest": hex(&[0x63; 32]),
+                "state_root": hex(&[0x64; 32]),
+                "observed_sequence": 77,
+                "observed_at": observed_at,
+                "verification": "account-primary-and-state-proof-verified",
+            },
+        });
+        if let Some(object) = document.as_object_mut() {
+            object.insert("value_accounts".to_owned(), block.clone());
+        }
+        let body = document.to_string();
+        let upstream = serde_json::from_str::<serde_json::Value>(&body)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let forwarded = upstream_value_accounts(&upstream)
+            .unwrap_or_else(|| panic!("the upstream balance block was dropped"));
+        assert_eq!(forwarded, block);
+        assert!(
+            body.contains(&forwarded.to_string()),
+            "the forwarded block is not the upstream bytes: {forwarded}"
+        );
+        let wrapped = serde_json::json!({"result": upstream});
+        assert_eq!(upstream_value_accounts(&wrapped), Some(block));
     }
 
     #[test]

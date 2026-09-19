@@ -64,6 +64,26 @@ typedef struct platform_snapshot_header {
     uint8_t wrapper_digest[32];
 } platform_snapshot_header;
 
+enum { PLATFORM_EMULATOR_PROGRAM_VALUE_ACCOUNTS = 32 };
+enum { PLATFORM_EMULATOR_BALANCE_STALENESS_MS = 300000 };
+
+/* One program's receipt-proven value accounts, captured at the sequence its
+ * own activity receipt proves. The hosted registry keeps the same kind of
+ * separately verified balance read beside the registry head
+ * (platform/hosted/registry/src/routes.rs render_read) and refuses it once it
+ * falls outside the read freshness window. */
+typedef struct platform_emulator_balance_snapshot {
+    uint8_t receipt_digest[32];
+    uint8_t state_root[32];
+    uint64_t observed_sequence;
+    uint64_t observed_at;
+    uint16_t count;
+    uint16_t abi_version;
+    uint8_t proven;
+    platform_emulator_value_account
+        accounts[PLATFORM_EMULATOR_PROGRAM_VALUE_ACCOUNTS];
+} platform_emulator_balance_snapshot;
+
 struct platform_emulator {
     uint32_t network_id;
     uint16_t protocol_version;
@@ -107,6 +127,9 @@ struct platform_emulator {
     uint8_t program_ids[1024][32];
     uint8_t program_receipt_digests[1024][32];
     size_t program_count;
+    lxp_verified_receipt_index verified_receipts;
+    uint8_t latest_receipt_digest[32];
+    platform_emulator_balance_snapshot *program_balances;
 };
 
 static uint8_t emulator_fee_token;
@@ -502,6 +525,132 @@ int32_t platform_emulator_program_read(platform_emulator *emulator,
     return status;
 }
 
+typedef struct value_account_collection {
+    platform_emulator_value_account *accounts;
+    size_t capacity;
+    size_t count;
+} value_account_collection;
+
+static lxp_result collect_value_account(
+    const lx_programs_value_account_view *view, void *user)
+{
+    value_account_collection *state = (value_account_collection *)user;
+    platform_emulator_value_account *entry;
+    if (view == NULL || state == NULL) return LXP_ERR_NON_CANONICAL;
+    if (state->count == state->capacity) return LXP_ERR_LENGTH_LIMIT;
+    entry = &state->accounts[state->count];
+    (void)memcpy(entry->account_id, view->binding.account_id, 32U);
+    (void)memcpy(entry->asset_id, view->binding.asset_id, 32U);
+    entry->balance_hi = view->balance.hi;
+    entry->balance_lo = view->balance.lo;
+    entry->frozen = (uint8_t)(view->frozen ? 1U : 0U);
+    ++state->count;
+    return LXP_OK;
+}
+
+/* Captures every known program's receipt-proven value accounts at the head the
+ * committed activity receipt proves, before the batch maintenance transition
+ * moves the sequence past it. */
+static void capture_program_balances(platform_emulator *emulator)
+{
+    size_t index;
+    for (index = 0U; index < emulator->program_count; ++index) {
+        platform_emulator_balance_snapshot *slot =
+            &emulator->program_balances[index];
+        lx_programs_account_state_head head;
+        value_account_collection collection;
+        lxp_module_ctx ctx;
+        uint16_t abi_version = 0U;
+        lxp_result status;
+        (void)memset(slot, 0, sizeof(*slot));
+        status = lxp_arena_reset(&emulator->arena, 0U);
+        if (status == LXP_OK)
+            status = lxp_module_ctx_init(&ctx, &emulator->kernel,
+                LXP_MODULE_PROGRAMS, emulator->timestamp_ms, 0U,
+                emulator->global_sequence, UINT64_MAX, &emulator->arena,
+                false);
+        if (status == LXP_OK) {
+            ctx.protocol_version = emulator->protocol_version;
+            status = lxp_programs_program_abi(&ctx,
+                emulator->program_ids[index], &abi_version);
+        }
+        if (status != LXP_OK) continue;
+        slot->abi_version = abi_version;
+        if (abi_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION) continue;
+        ctx.verified_receipts = &emulator->verified_receipts;
+        status = lxp_programs_account_state_head_read(&ctx,
+            emulator->program_ids[index], emulator->latest_receipt_digest,
+            &head);
+        collection.accounts = slot->accounts;
+        collection.capacity = PLATFORM_EMULATOR_PROGRAM_VALUE_ACCOUNTS;
+        collection.count = 0U;
+        if (status == LXP_OK)
+            status = lxp_programs_value_account_iter(&ctx,
+                emulator->program_ids[index],
+                emulator->latest_receipt_digest, collect_value_account,
+                &collection);
+        if (status != LXP_OK) {
+            (void)memset(slot, 0, sizeof(*slot));
+            slot->abi_version = abi_version;
+            continue;
+        }
+        (void)memcpy(slot->receipt_digest, head.receipt_digest, 32U);
+        (void)memcpy(slot->state_root, head.state_root, 32U);
+        slot->observed_sequence = head.observed_sequence;
+        slot->observed_at = head.observed_at;
+        slot->count = (uint16_t)collection.count;
+        slot->proven = 1U;
+    }
+}
+
+int32_t platform_emulator_program_value_accounts(
+    platform_emulator *emulator, const uint8_t program_id[32],
+    platform_emulator_value_account *accounts, size_t capacity,
+    platform_emulator_value_account_proof *proof)
+{
+    const platform_emulator_balance_snapshot *captured;
+    size_t program_index;
+    lxp_module_ctx ctx;
+    uint16_t abi_version;
+    lxp_result status;
+    if (emulator == NULL || program_id == NULL || accounts == NULL ||
+        capacity == 0U || proof == NULL) return LXP_ERR_NON_CANONICAL;
+    (void)memset(proof, 0, sizeof(*proof));
+    status = lxp_arena_reset(&emulator->arena, 0U);
+    if (status == LXP_OK)
+        status = lxp_module_ctx_init(&ctx, &emulator->kernel,
+            LXP_MODULE_PROGRAMS, emulator->timestamp_ms, 0U,
+            emulator->global_sequence, UINT64_MAX, &emulator->arena, false);
+    if (status == LXP_OK) {
+        ctx.protocol_version = emulator->protocol_version;
+        status = lxp_programs_program_abi(&ctx, program_id, &abi_version);
+    }
+    if (status != LXP_OK) return status;
+    proof->abi_version = abi_version;
+    if (abi_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION) return LXP_OK;
+    for (program_index = 0U; program_index < emulator->program_count;
+         ++program_index)
+        if (lxp_ct_memcmp(emulator->program_ids[program_index], program_id,
+                          32U) == 0)
+            break;
+    if (program_index == emulator->program_count) return LXP_FATAL_INVARIANT;
+    captured = &emulator->program_balances[program_index];
+    if (captured->proven != 1U || captured->count > capacity)
+        return LXP_ERR_UNKNOWN_FIELD;
+    if (captured->observed_at > emulator->timestamp_ms ||
+        emulator->timestamp_ms - captured->observed_at >
+            PLATFORM_EMULATOR_BALANCE_STALENESS_MS)
+        return LXP_ERR_PROJECTION_STALE;
+    (void)memcpy(accounts, captured->accounts,
+                 (size_t)captured->count * sizeof(*accounts));
+    (void)memcpy(proof->receipt_digest, captured->receipt_digest, 32U);
+    (void)memcpy(proof->state_root, captured->state_root, 32U);
+    proof->observed_sequence = captured->observed_sequence;
+    proof->observed_at = captured->observed_at;
+    proof->count = captured->count;
+    return LXP_OK;
+}
+
 static lxp_result batch_identifier(const platform_emulator *emulator,
                                    uint8_t batch_id[32])
 {
@@ -542,7 +691,10 @@ platform_emulator *platform_emulator_create_for_protocol(
     emulator->canonical_log.descriptor = -1;
     emulator->arena_bytes = malloc(PLATFORM_EMULATOR_ARENA_BYTES);
     emulator->snapshot_bytes = malloc(PLATFORM_EMULATOR_SNAPSHOT_BYTES);
-    if (emulator->arena_bytes == NULL || emulator->snapshot_bytes == NULL) {
+    emulator->program_balances = calloc(1024U,
+        sizeof(*emulator->program_balances));
+    if (emulator->arena_bytes == NULL || emulator->snapshot_bytes == NULL ||
+        emulator->program_balances == NULL) {
         platform_emulator_destroy(emulator);
         return NULL;
     }
@@ -565,6 +717,11 @@ platform_emulator *platform_emulator_create_for_protocol(
             return NULL;
         }
         EVP_PKEY_free(key);
+    }
+    if (lxp_verified_receipt_index_init(&emulator->verified_receipts) !=
+        LXP_OK) {
+        platform_emulator_destroy(emulator);
+        return NULL;
     }
     emulator->fee_parameters.version = 1U;
     emulator->fee_parameters.multiplier_basis_points = 10000U;
@@ -674,6 +831,7 @@ void platform_emulator_destroy(platform_emulator *emulator)
     }
     free(emulator->arena_bytes);
     free(emulator->snapshot_bytes);
+    free(emulator->program_balances);
     free(emulator);
 }
 
@@ -951,6 +1109,14 @@ int32_t platform_emulator_execute(platform_emulator *emulator,
          activity.activity_type == LX_PROGRAMS_UPGRADE))
         status = lxp_receipt_digest(&receipt, &emulator->arena,
                                     deployment_receipt_digest);
+    if (status == LXP_OK && receipt.result_code == LXP_OK) {
+        status = lxp_receipt_digest(&receipt, &emulator->arena,
+                                    emulator->latest_receipt_digest);
+        if (status == LXP_OK)
+            status = lxp_verified_receipt_index_add(
+                &emulator->verified_receipts, &receipt,
+                emulator->sequencer_public_key, &emulator->arena);
+    }
     if (status != LXP_OK || canonical_receipt.length >
         sizeof(emulator->receipt_bytes))
         return status != LXP_OK ? status : LXP_ERR_LENGTH_LIMIT;
@@ -1013,6 +1179,7 @@ int32_t platform_emulator_execute(platform_emulator *emulator,
         (void)memcpy(emulator->program_receipt_digests[program_index],
                      deployment_receipt_digest, 32U);
     }
+    if (receipt.result_code == LXP_OK) capture_program_balances(emulator);
     if (emulator->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
         lxp_programs_occupancy_receipt maintenance;
         lxp_byte_span encoded;

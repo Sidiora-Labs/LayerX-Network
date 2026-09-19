@@ -3181,6 +3181,28 @@ mod registry_read_tests {
     }
 
     #[test]
+    fn registry_read_refuses_a_document_without_receipt_proven_balances() {
+        let mut document = registry_document();
+        if let Some(object) = document.as_object_mut() {
+            object.remove("value_accounts");
+        }
+        assert_eq!(
+            registry_program_document(&wrapped(document), PROGRAM_ID),
+            Err("registry response omitted receipt-proven program balances".to_owned())
+        );
+    }
+
+    #[test]
+    fn registry_read_accepts_the_account_incapable_abi_one_block() {
+        let mut document = registry_document();
+        document["value_accounts"] = json!({"status": "account-incapable-abi1", "accounts": []});
+        let Ok(parsed) = registry_program_document(&wrapped(document.clone()), PROGRAM_ID) else {
+            panic!("the account-incapable registry read was refused");
+        };
+        assert_eq!(parsed, document);
+    }
+
+    #[test]
     fn registry_read_refuses_the_bare_result_shape() {
         assert_eq!(
             registry_program_document(&json!({"result": registry_document()}), PROGRAM_ID),

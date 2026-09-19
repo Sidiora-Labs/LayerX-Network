@@ -73,6 +73,23 @@ typedef struct platform_emulator_program {
     uint64_t observed_sequence;
 } platform_emulator_program;
 
+typedef struct platform_emulator_value_account {
+    uint8_t account_id[32];
+    uint8_t asset_id[32];
+    uint64_t balance_hi;
+    uint64_t balance_lo;
+    uint8_t frozen;
+} platform_emulator_value_account;
+
+typedef struct platform_emulator_value_account_proof {
+    uint8_t receipt_digest[32];
+    uint8_t state_root[32];
+    uint64_t observed_sequence;
+    uint64_t observed_at;
+    uint16_t abi_version;
+    size_t count;
+} platform_emulator_value_account_proof;
+
 platform_emulator *platform_emulator_create(uint32_t network_id,
                                              uint64_t timestamp_ms,
                                              const uint8_t sequencer_seed[32]);
@@ -106,6 +123,10 @@ int32_t platform_emulator_resolve_authority(
 int32_t platform_emulator_program_read(platform_emulator *emulator,
                                        const uint8_t program_id[32],
                                        platform_emulator_program *program);
+int32_t platform_emulator_program_value_accounts(
+    platform_emulator *emulator, const uint8_t program_id[32],
+    platform_emulator_value_account *accounts, size_t capacity,
+    platform_emulator_value_account_proof *proof);
 size_t platform_emulator_program_count(const platform_emulator *emulator);
 int32_t platform_emulator_program_at(const platform_emulator *emulator,
                                      size_t index, uint8_t program_id[32]);
