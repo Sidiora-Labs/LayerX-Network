@@ -33,6 +33,9 @@ impl Version {
     /// Additive snapshot-pinned program reads and durable receipt waiting.
     pub const V1_6: Self = Self { major: 1, minor: 6 };
 
+    /// Additive sequencer-signed program head attestation.
+    pub const V1_7: Self = Self { major: 1, minor: 7 };
+
     /// Returns whether the two peers can interpret the same stable message set.
     #[must_use]
     pub const fn is_compatible_with(self, peer: Self) -> bool {
@@ -73,6 +76,7 @@ pub enum Capability {
     FeeEstimate,
     SessionFeeState,
     ProgramRead,
+    ProgramHeadAttest,
 }
 
 impl Capability {
@@ -99,6 +103,7 @@ impl Capability {
             Self::FeeEstimate => "fee_estimate",
             Self::SessionFeeState => "session_fee_state",
             Self::ProgramRead => "program_read",
+            Self::ProgramHeadAttest => "program_head_attest",
         }
     }
 }
@@ -122,7 +127,7 @@ pub struct Schema {
     pub capabilities: &'static [Capability],
 }
 
-const CAPABILITIES: [Capability; 19] = [
+const CAPABILITIES: [Capability; 20] = [
     Capability::NodeInfo,
     Capability::Submit,
     Capability::AuthenticatedDurableSubmit,
@@ -142,6 +147,7 @@ const CAPABILITIES: [Capability; 19] = [
     Capability::FeeEstimate,
     Capability::SessionFeeState,
     Capability::ProgramRead,
+    Capability::ProgramHeadAttest,
 ];
 
 const fn message(
@@ -162,7 +168,7 @@ const fn message(
     }
 }
 
-const MESSAGES: [MessageDescriptor; 39] = [
+const MESSAGES: [MessageDescriptor; 41] = [
     message(
         "NodeInfoRequest",
         1,
@@ -475,10 +481,26 @@ const MESSAGES: [MessageDescriptor; 39] = [
         true,
         true,
     ),
+    message(
+        "ProgramHeadAttestRequest",
+        40,
+        MessageKind::Request,
+        Capability::ProgramHeadAttest,
+        true,
+        false,
+    ),
+    message(
+        "ProgramHeadAttestResponse",
+        41,
+        MessageKind::Response,
+        Capability::ProgramHeadAttest,
+        true,
+        true,
+    ),
 ];
 
 const SCHEMA: Schema = Schema {
-    version: Version::V1_6,
+    version: Version::V1_7,
     messages: &MESSAGES,
     capabilities: &CAPABILITIES,
 };
@@ -501,7 +523,7 @@ pub struct GoldenVector {
 const NO_PROOF: &[u8] = &[];
 const PROOF: &[u8] = &[0xa5];
 
-const GOLDENS: [GoldenVector; 39] = [
+const GOLDENS: [GoldenVector; 41] = [
     GoldenVector {
         message: "NodeInfoRequest",
         payload: &[1],
@@ -736,13 +758,27 @@ const GOLDENS: [GoldenVector; 39] = [
         proof_material: PROOF,
         encoded_hex: "0001000600270000000000000000000000012700000001a5",
     },
+    GoldenVector {
+        message: "ProgramHeadAttestRequest",
+        payload: &[40],
+        proof_material: NO_PROOF,
+        encoded_hex: "0001000700280000000000000000000000012800000000",
+    },
+    GoldenVector {
+        message: "ProgramHeadAttestResponse",
+        payload: &[41],
+        proof_material: PROOF,
+        encoded_hex: "0001000700290000000000000000000000012900000001a5",
+    },
 ];
 
 impl GoldenVector {
     /// Interface revision frozen into this literal vector.
     #[must_use]
     pub const fn version(self) -> Version {
-        if self.payload[0] >= 38 {
+        if self.payload[0] >= 40 {
+            Version::V1_7
+        } else if self.payload[0] >= 38 {
             Version::V1_6
         } else if self.payload[0] >= 32 {
             Version::V1_5

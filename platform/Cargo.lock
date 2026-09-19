@@ -1567,6 +1567,7 @@ version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
  "layerx-client",
+ "layerx-crypto",
  "layerx-platform-gateway",
  "layerx-platform-internal",
  "layerx-programs-protocol-adapter",

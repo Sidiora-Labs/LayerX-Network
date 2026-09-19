@@ -279,7 +279,7 @@ test-harness: $(BUILD_DIR)/tests/lxp_test_harness
 list-tests: $(BUILD_DIR)/tests/lxp_test_harness
 	$(BUILD_DIR)/tests/lxp_test_harness --list
 
-test: test-state-diff test-da-verified test-result test-protocol test-state-commitment-transition test-program-artifacts test-daemon-maintenance-protocol test-daemon-lni-account test-daemon-lni-module test-daemon-allowance test-arena test-harness test-codec \
+test: test-state-diff test-da-verified test-result test-protocol test-state-commitment-transition test-program-artifacts test-daemon-maintenance-protocol test-daemon-lni-account test-daemon-lni-module test-daemon-lni-head-attestation test-daemon-allowance test-arena test-harness test-codec \
 	test-codec-limits test-codec-version test-codec-vectors fuzz-codec-smoke \
 	test-crypto-suite test-arith-u128 test-arith-u256 test-arith-rounding \
 	test-arith-property test-arith-nofloat test-log test-log-durability \
@@ -3706,6 +3706,18 @@ test-daemon-lni-module: $(BUILD_DIR)/tests/lxp_test_lni_module
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_lni_module
 	$(BUILD_DIR)/tests/lxp_test_lni_module --vector > $(BUILD_DIR)/tests/native-module-evidence.json
 	cmp $(BUILD_DIR)/tests/native-module-evidence.json tests/vectors/native-module-evidence.json
+
+.PHONY: test-daemon-lni-head-attestation
+$(BUILD_DIR)/tests/lxp_test_lni_head_attestation: tests/daemon/lxp_test_lni_head_attestation.c \
+        cmd/layerxd/lxp_daemon_lni_head_attestation.h $(LIBRARY)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) tests/daemon/lxp_test_lni_head_attestation.c \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
+
+test-daemon-lni-head-attestation: $(BUILD_DIR)/tests/lxp_test_lni_head_attestation
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_lni_head_attestation
+	$(BUILD_DIR)/tests/lxp_test_lni_head_attestation --vector > $(BUILD_DIR)/tests/native-head-attestation.json
+	cmp $(BUILD_DIR)/tests/native-head-attestation.json tests/vectors/native-head-attestation.json
 
 .PHONY: test-daemon-allowance
 $(BUILD_DIR)/tests/lxp_test_daemon_allowance: tests/daemon/lxp_test_daemon_allowance.c \

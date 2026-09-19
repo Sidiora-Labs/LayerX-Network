@@ -1,11 +1,11 @@
-# LayerX Node Interface (LNI) v1.6
+# LayerX Node Interface (LNI) v1.7
 
 LNI is the stable node boundary. Protocol bytes stay opaque: LNI does not
 invent an activity, receipt, or checkpoint layout
 (`agent/schema/lni/v1.kvx`, `spec/.beta/layerx-agent-interface/spec.kvx`
 requirement 2).
 
-Schema: major 1, minor 6. Frame:
+Schema: major 1, minor 7. Frame:
 
 ```text
 major:u16be || minor:u16be || message_tag:u16be
@@ -49,6 +49,7 @@ Sources: `agent/schema/lni/v1.kvx`, `agent/schema/lni/README.md`.
 | `fee_estimate` | 1.5 (tags 34–35) |
 | `session_fee_state` | 1.5 (tags 36–37) |
 | `program_read` | 1.6 (tags 38–39) |
+| `program_head_attest` | 1.7 (tags 40–41) |
 
 `authenticated_durable_submit` means Submit authenticates and `fdatasync`s
 the admission record before the acknowledgement. Authentication failures
@@ -63,6 +64,13 @@ and does not commit the durable log, sequence, or occupancy ledger.
 minimum sequence plus an optional canonical state root. Receipt lookup
 trailing `wait_publication:u8=1` is 1.5. Activity-id `wait_mode:u8` is 1.6:
 0 immediate, 1 published, 2 durable-or-published.
+
+`program_head_attest` names one registered program and a staleness bound. The
+authorised signing sequencer answers with its current account-state head, the
+program's registered version, code hash and ABI at that head, and an Ed25519
+signature over the `LayerX/program-discovery-proof/v1` digest of those facts.
+The hosted program registry publishes that signature as
+`discovery_public_key`/`discovery_signature`.
 
 ---
 
@@ -109,6 +117,8 @@ trailing `wait_publication:u8=1` is 1.5. Activity-id `wait_mode:u8` is 1.6:
 | 37 | SessionFeeStateResponse | response | `session_fee_state` |
 | 38 | ProgramReadRequest | request | `program_read` |
 | 39 | ProgramReadResponse | response | `program_read` |
+| 40 | ProgramHeadAttestRequest | request | `program_head_attest` |
+| 41 | ProgramHeadAttestResponse | response | `program_head_attest` |
 
 Payload semantics for each tag are the `[message.N]` blocks in
 `agent/schema/lni/v1.kvx`.

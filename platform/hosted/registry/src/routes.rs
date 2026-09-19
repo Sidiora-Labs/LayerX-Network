@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Instant;
 
+use layerx_client::lni::head_attestation::ProgramDiscoveryHead;
 use layerx_programs::{
     hex, programs_source_verification, AccountStateHead, BuildPlan, BuildRefusal,
     JournalReadAuthority, LifecycleReceipt, ObservedHead, ProgramId, ProgramInterface,
@@ -23,9 +24,13 @@ use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
 use crate::builder::{HermeticBuilder, HermeticBuilderConfig};
+use crate::head_attestation::{
+    attach_discovery_proof, discovery_proof_fields, request_head_attestation, DiscoveryProofFields,
+    ExpectedDiscoveryHead,
+};
 use crate::journal::{FileDeploymentJournal, QuarantinedUnit};
 use crate::mirror::{MirrorRefusal, SourceMirror};
-use crate::node_state::{NodeProgramStateSource, ProgramStateCursor};
+use crate::node_state::{HeadAuthority, NodeProgramStateSource, ProgramStateCursor};
 use crate::program_state::FileProgramStateJournal;
 use crate::verified::{VerifiedSource, VerifiedSourceStore};
 use crate::{Authorization, Config};
@@ -78,6 +83,7 @@ pub struct Registrar {
     balance_reads: BTreeMap<ProgramId, VerifiedProgramBalanceRead>,
     interfaces: BTreeMap<(ProgramId, u32), ProgramInterface>,
     current_head: Option<AccountStateHead>,
+    head_authority: Option<HeadAuthority>,
     idempotency: BTreeMap<String, Completed>,
     quarantined: Vec<QuarantinedUnit>,
 }
@@ -154,6 +160,7 @@ impl Registrar {
             balance_reads: BTreeMap::new(),
             interfaces: BTreeMap::new(),
             current_head: None,
+            head_authority: None,
             idempotency: BTreeMap::new(),
             quarantined: Vec::new(),
         };
@@ -358,7 +365,7 @@ impl Registrar {
         if let Some(program) = requested {
             programs.insert(program);
         }
-        let current_head = self.node_state.current_head(now)?;
+        let (current_head, head_authority) = self.node_state.current_head_authority(now)?;
         if complete.sequence > feed_head || feed_head > current_head.freshness.observed_sequence {
             return Err(
                 "program-state feed is ahead of the independently verified head".to_owned(),
@@ -409,6 +416,7 @@ impl Registrar {
         self.registry = registry;
         self.balance_reads = balance_reads;
         self.current_head = Some(current_head);
+        self.head_authority = Some(head_authority);
         Ok(())
     }
 
@@ -531,7 +539,14 @@ impl Registrar {
         if abi == Some(1) && read.entry.value_accounts.is_empty() {
             return Response {
                 status: 200,
-                body: registry_read_json(read, None, head, valid_through).to_string(),
+                body: self
+                    .with_discovery_proof(
+                        registry_read_json(read, None, head, valid_through),
+                        read,
+                        head,
+                        valid_through,
+                    )
+                    .to_string(),
             };
         }
         if abi != Some(2) {
@@ -578,8 +593,82 @@ impl Registrar {
         }
         Response {
             status: 200,
-            body: registry_read_json(read, Some(balances), head, valid_through).to_string(),
+            body: self
+                .with_discovery_proof(
+                    registry_read_json(read, Some(balances), head, valid_through),
+                    read,
+                    head,
+                    valid_through,
+                )
+                .to_string(),
         }
+    }
+
+    /// Attaches the sequencer's discovery proof when the node attests exactly
+    /// the head and latest version this read verified. Every other outcome
+    /// publishes the document without the proof fields.
+    fn with_discovery_proof(
+        &self,
+        mut document: Value,
+        read: &VerifiedRegistryRead,
+        head: AccountStateHead,
+        valid_through: u64,
+    ) -> Value {
+        if let Err(error) = self
+            .discovery_proof(read, head, valid_through)
+            .and_then(|fields| attach_discovery_proof(&mut document, &fields))
+        {
+            eprintln!(
+                "layerx-program-registry: program {} published without discovery proof: {error}",
+                hex::encode(&read.entry.program.bytes())
+            );
+        }
+        document
+    }
+
+    fn discovery_proof(
+        &self,
+        read: &VerifiedRegistryRead,
+        head: AccountStateHead,
+        valid_through: u64,
+    ) -> Result<DiscoveryProofFields, String> {
+        let socket = self
+            .deployment_lni_socket
+            .as_deref()
+            .ok_or_else(|| "LAYERX_REGISTRY_LNI_SOCKET is not set".to_owned())?;
+        let authority = self
+            .head_authority
+            .ok_or_else(|| "the verified head authority is unavailable".to_owned())?;
+        let deadline = self
+            .node_state
+            .request_deadline()
+            .ok_or_else(|| "the registry request deadline is unavailable".to_owned())?;
+        let version = read
+            .entry
+            .versions
+            .last()
+            .ok_or_else(|| "program has no verified version".to_owned())?;
+        let expected = ExpectedDiscoveryHead {
+            head: ProgramDiscoveryHead {
+                program_id: read.entry.program.bytes(),
+                version: version.number,
+                code_hash: version.code_hash,
+                abi_version: version.abi_version,
+                observed_sequence: head.freshness.observed_sequence,
+                observed_at: head.freshness.observed_at,
+                valid_through,
+                state_root: head.state_root,
+            },
+            head_receipt_digest: head.receipt_digest,
+        };
+        let attestation = request_head_attestation(
+            socket,
+            expected.head.program_id,
+            self.staleness_ms,
+            &authority,
+            deadline,
+        )?;
+        discovery_proof_fields(&attestation, &expected, &authority)
     }
 
     fn read_interface(&mut self, program: &str, now: u64) -> Response {
@@ -910,6 +999,7 @@ impl Registrar {
         self.balance_reads.clear();
         self.interfaces = interfaces;
         self.current_head = None;
+        self.head_authority = None;
         self.quarantined = loaded.quarantined;
         Ok(())
     }
