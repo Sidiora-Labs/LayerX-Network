@@ -13,7 +13,10 @@ use layerx_programs_runtime::{
     BudgetMeterRefusal, BudgetResourceKind, OccupancySettlement, WasmEngine,
 };
 use layerx_programs_runtime::{Capability, CapabilitySet};
-use layerx_proof::receipt::verify_program_outcome_at_root;
+use layerx_proof::program::{
+    verify_authorized_program_execution, AuthorizedProgramExecutionExpectation,
+};
+use layerx_proof::receipt::{verify_program_outcome_at_root, AuthorizedBatch};
 use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
 use layerx_types::amount::Amount;
 use layerx_types::ids::{Did, IdempotencyKey};
@@ -1382,12 +1385,16 @@ fn render_call_result(
         .receipt()
         .protocol()
         .ok_or_else(|| "verified program receipt omitted protocol facts".to_owned())?;
-    if protocol.activity_id() != expected_activity
-        || protocol.protocol_version() != 3
-        || protocol.module_version() != 4
-    {
+    if protocol.protocol_version() != layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION {
+        return Err(
+            "program receipt protocol version differs from the configured protocol version"
+                .to_owned(),
+        );
+    }
+    if protocol.activity_id() != expected_activity || protocol.module_version() != 4 {
         return Err("program receipt names a different signed activity".to_owned());
     }
+    let authority = verify_receipt_batch_authority(result, head, protocol)?;
     let receipt_digest = verified
         .evidence()
         .receipt_digest()
@@ -1420,13 +1427,12 @@ fn render_call_result(
             .as_str()
             .ok_or_else(|| "program response omitted authenticated call graph".to_owned())?,
     )?;
-    let execution = layerx_proof::program::verify_program_execution(
+    let execution = verify_authorized_program_execution(
         &receipt_bytes,
         &terminal_payload,
         &call_graph,
-        layerx_proof::program::ProgramExecutionExpectation {
-            sequencer_public_key: head.sequencer_public_key,
-            previous_state_root: head.state_root,
+        &AuthorizedProgramExecutionExpectation {
+            authority,
             activity_id: expected_activity,
             payload_hash: layerx_wire::hash::payload_hash(&activity)
                 .map_err(|error| format!("program payload hash: {error:?}"))?,
@@ -1617,10 +1623,12 @@ fn verify_terminal_commitments(
                     }
             )
         );
-    let occupancy_required = protocol_version == 2 && successful_execution;
-    if !matches!(protocol_version, 1 | 2) {
+    let occupancy_required = matches!(protocol_version, 2 | 3) && successful_execution;
+    if !matches!(protocol_version, 1 | 2 | 3) {
         return Err("unsupported receipt protocol version for terminal evidence".to_owned());
     }
+    let authority_required = candidate
+        || (protocol_version == 3 && receipt.encoding_version() == 4 && successful_execution);
     let mut occupancy_seen = false;
     let mut occupancy_present = false;
     let mut authority_seen = false;
@@ -1669,7 +1677,7 @@ fn verify_terminal_commitments(
                 authorization,
                 transfer_root,
             } => {
-                if !candidate
+                if !authority_required
                     || authority_seen
                     || *transfer_root != receipt.transfer_root()
                     || layerx_programs_runtime::transfer::verify_authorization_root(
@@ -1686,7 +1694,7 @@ fn verify_terminal_commitments(
     }
     if occupancy_required && !occupancy_seen
         || occupancy_present != (receipt.occupancy_evidence_digest() != [0; 32])
-        || candidate && authority_seen != (receipt.transfer_root() != [0; 32])
+        || authority_required && authority_seen != (receipt.transfer_root() != [0; 32])
     {
         return Err(
             "signed receipt attachment presence is not represented by the terminal ABI regime"
@@ -1694,6 +1702,71 @@ fn verify_terminal_commitments(
         );
     }
     Ok(())
+}
+
+fn verify_receipt_batch_authority(
+    result: &Value,
+    head: &VerifiedCallHead,
+    protocol: &layerx_wire::receipt::ProtocolReceipt,
+) -> Result<AuthorizedBatch, String> {
+    let authority = result
+        .get("authority")
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "program response omitted its batch authority".to_owned())?;
+    let field = |document: &Value, name: &str, label: &str| -> Result<[u8; 32], String> {
+        fixed_hex(
+            label,
+            document
+                .get(name)
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("program response omitted {label}"))?,
+        )
+    };
+    let batch_id = field(result, "batch_id", "batch id")?;
+    let state_root = field(result, "state_root", "state root")?;
+    let authority_batch_id = field(authority, "batch_id", "authority batch id")?;
+    let asset = field(authority, "asset", "authority asset")?;
+    let previous_state_root = field(
+        authority,
+        "previous_state_root",
+        "authority previous state root",
+    )?;
+    let resulting_state_root = field(
+        authority,
+        "resulting_state_root",
+        "authority resulting state root",
+    )?;
+    let sequencer_public_key = field(
+        authority,
+        "sequencer_public_key",
+        "authority sequencer public key",
+    )?;
+    if sequencer_public_key != head.sequencer_public_key
+        || authority_batch_id != batch_id
+        || resulting_state_root != state_root
+        || previous_state_root != head.state_root
+    {
+        return Err(
+            "program response batch authority disagrees with the configured trust anchor or the discovered state boundary"
+                .to_owned(),
+        );
+    }
+    if protocol.batch_id() != batch_id
+        || protocol.previous_state_root() != previous_state_root
+        || protocol.resulting_state_root() != resulting_state_root
+    {
+        return Err(
+            "program receipt batch identity or state roots disagree with the served batch authority"
+                .to_owned(),
+        );
+    }
+    Ok(AuthorizedBatch::new(
+        batch_id,
+        asset,
+        previous_state_root,
+        resulting_state_root,
+        sequencer_public_key,
+    ))
 }
 
 fn render_program_failure(
@@ -2857,6 +2930,329 @@ mod call_tests {
         })();
         std::fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
         result
+    }
+
+    const EXECUTED_V4_FIXTURE: &str =
+        include_str!("../../sdk/conformance/fixtures/receipt-programs-executed-v4.json");
+    const POSITIVE_V2_FIXTURE: &str =
+        include_str!("../../sdk/conformance/fixtures/receipt-programs-positive-v2.json");
+    const BATCH_AUTHORITY_MISMATCH: &str = "program response batch authority disagrees with the configured trust anchor or the discovered state boundary";
+    const RECEIPT_AUTHORITY_MISMATCH: &str =
+        "program receipt batch identity or state roots disagree with the served batch authority";
+
+    struct FixtureCall {
+        program_id: String,
+        sequencer_public_key: String,
+        payload: Vec<u8>,
+        signed: Vec<u8>,
+        head: VerifiedCallHead,
+        response: serde_json::Value,
+        receipt_digest: String,
+        resulting_state_root: String,
+    }
+
+    fn fixture_document(source: &str) -> serde_json::Value {
+        serde_json::from_str(source).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    fn fixture_text<'a>(document: &'a serde_json::Value, field: &str) -> &'a str {
+        document[field]
+            .as_str()
+            .unwrap_or_else(|| panic!("fixture field {field}"))
+    }
+
+    fn fixture_array(document: &serde_json::Value, field: &str) -> [u8; 32] {
+        crate::encoding::fixed_hex(field, fixture_text(document, field))
+            .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    fn fixture_bytes(document: &serde_json::Value, field: &str) -> Vec<u8> {
+        crate::encoding::hex_decode(field, fixture_text(document, field))
+            .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    fn served_authority(batch: &serde_json::Value) -> serde_json::Value {
+        json!({
+            "batch_id": batch["batch_id_hex"],
+            "asset": batch["asset_hex"],
+            "previous_state_root": batch["previous_state_root_hex"],
+            "resulting_state_root": batch["resulting_state_root_hex"],
+            "sequencer_public_key": batch["sequencer_public_key_hex"],
+        })
+    }
+
+    fn executed_v4_call() -> FixtureCall {
+        let document = fixture_document(EXECUTED_V4_FIXTURE);
+        let signed = fixture_bytes(&document, "signed_activity_hex");
+        let registry = super::program_call_registry().unwrap_or_else(|error| panic!("{error}"));
+        let activity = layerx_wire::activity::decode_signed(&signed, &registry)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let receipt =
+            layerx_wire::receipt::decode(&fixture_bytes(&document, "canonical_receipt_hex"))
+                .unwrap_or_else(|error| panic!("{error:?}"));
+        let protocol = receipt
+            .protocol()
+            .unwrap_or_else(|| panic!("protocol receipt"));
+        let batch = &document["authorized_batch"];
+        let head = VerifiedCallHead {
+            sequencer_public_key: fixture_array(batch, "sequencer_public_key_hex"),
+            state_root: fixture_array(batch, "previous_state_root_hex"),
+            abi_version: 2,
+            version: 1,
+            code_hash: [1; 32],
+            observed_sequence: protocol
+                .global_sequence()
+                .checked_sub(1)
+                .unwrap_or_else(|| panic!("fixture global sequence")),
+            observed_at: 1,
+        };
+        let response = json!({"result": {
+            "state": "executed",
+            "activity_id": hex_encode(&protocol.activity_id()),
+            "batch_id": batch["batch_id_hex"],
+            "state_root": batch["resulting_state_root_hex"],
+            "receipt": document["canonical_receipt_hex"],
+            "terminal_payload": document["terminal_payload_hex"],
+            "call_graph": document["call_graph_hex"],
+            "authority": served_authority(batch),
+        }});
+        FixtureCall {
+            program_id: fixture_text(&document, "program_id_hex").to_owned(),
+            sequencer_public_key: fixture_text(batch, "sequencer_public_key_hex").to_owned(),
+            payload: activity.payload().to_vec(),
+            signed,
+            head,
+            response,
+            receipt_digest: fixture_text(&document, "receipt_digest_hex").to_owned(),
+            resulting_state_root: fixture_text(batch, "resulting_state_root_hex").to_owned(),
+        }
+    }
+
+    fn render_fixture(
+        fixture: &FixtureCall,
+        response: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let request = CallRequest {
+            program_id: fixture.program_id.as_str(),
+            sequencer_public_key: fixture.sequencer_public_key.as_str(),
+            ..golden_request()
+        };
+        render_call_result(
+            &request,
+            &fixture.payload,
+            &fixture.signed,
+            &fixture.head,
+            response,
+        )
+    }
+
+    fn with_fields(
+        response: &serde_json::Value,
+        changes: &[(&[&str], serde_json::Value)],
+    ) -> serde_json::Value {
+        let mut changed = response.clone();
+        for (path, value) in changes {
+            match *path {
+                [field] => changed["result"][*field] = value.clone(),
+                [parent, field] => changed["result"][*parent][*field] = value.clone(),
+                _ => panic!("unsupported fixture path"),
+            }
+        }
+        changed
+    }
+
+    #[test]
+    fn protocol_three_execution_verifies_end_to_end_against_its_batch_authority(
+    ) -> Result<(), String> {
+        let fixture = executed_v4_call();
+        let rendered = render_fixture(&fixture, &fixture.response)?;
+        assert_eq!(rendered["protocol_version"], json!(3));
+        assert_eq!(rendered["result_code"], json!(0));
+        assert_eq!(rendered["outcome"]["status"], json!("completed"));
+        assert_eq!(rendered["receipt_digest"], json!(fixture.receipt_digest));
+        assert_eq!(
+            rendered["verified_previous_state_root"],
+            json!(hex_encode(&fixture.head.state_root))
+        );
+        assert_eq!(
+            rendered["verified_resulting_state_root"],
+            json!(fixture.resulting_state_root)
+        );
+        assert_eq!(rendered["program_id"], json!(fixture.program_id));
+        Ok(())
+    }
+
+    #[test]
+    fn tampered_batch_root_or_authority_is_refused() {
+        let fixture = executed_v4_call();
+        let other = json!(hex_encode(&[0x5c; 32]));
+        let single: [&[&str]; 6] = [
+            &["batch_id"],
+            &["state_root"],
+            &["authority", "batch_id"],
+            &["authority", "previous_state_root"],
+            &["authority", "resulting_state_root"],
+            &["authority", "sequencer_public_key"],
+        ];
+        for path in single {
+            let tampered = with_fields(&fixture.response, &[(path, other.clone())]);
+            assert_eq!(
+                render_fixture(&fixture, &tampered).unwrap_err(),
+                BATCH_AUTHORITY_MISMATCH,
+                "{}",
+                path.join(".")
+            );
+        }
+        let consistent_batch = with_fields(
+            &fixture.response,
+            &[
+                (&["batch_id"], other.clone()),
+                (&["authority", "batch_id"], other.clone()),
+            ],
+        );
+        assert_eq!(
+            render_fixture(&fixture, &consistent_batch).unwrap_err(),
+            RECEIPT_AUTHORITY_MISMATCH
+        );
+        let consistent_root = with_fields(
+            &fixture.response,
+            &[
+                (&["state_root"], other.clone()),
+                (&["authority", "resulting_state_root"], other.clone()),
+            ],
+        );
+        assert_eq!(
+            render_fixture(&fixture, &consistent_root).unwrap_err(),
+            RECEIPT_AUTHORITY_MISMATCH
+        );
+        let served_batch = fixture.response["result"]["batch_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("served batch id"))
+            .to_owned();
+        let receipt_hex = fixture.response["result"]["receipt"]
+            .as_str()
+            .unwrap_or_else(|| panic!("served receipt"))
+            .to_owned();
+        assert_eq!(receipt_hex.matches(served_batch.as_str()).count(), 1);
+        let other_hex = other.as_str().unwrap_or_else(|| panic!("other")).to_owned();
+        let forged_receipt = with_fields(
+            &fixture.response,
+            &[
+                (
+                    &["receipt"],
+                    json!(receipt_hex.replace(served_batch.as_str(), other_hex.as_str())),
+                ),
+                (&["batch_id"], other.clone()),
+                (&["authority", "batch_id"], other.clone()),
+            ],
+        );
+        let error = render_fixture(&fixture, &forged_receipt).unwrap_err();
+        assert!(
+            error.starts_with("program receipt verification failed at"),
+            "{error}"
+        );
+        let mut without_authority = fixture.response.clone();
+        without_authority["result"]
+            .as_object_mut()
+            .map(|object| object.remove("authority"));
+        assert_eq!(
+            render_fixture(&fixture, &without_authority).unwrap_err(),
+            "program response omitted its batch authority"
+        );
+        let mut without_batch = fixture.response.clone();
+        without_batch["result"]
+            .as_object_mut()
+            .map(|object| object.remove("batch_id"));
+        assert_eq!(
+            render_fixture(&fixture, &without_batch).unwrap_err(),
+            "program response omitted batch id"
+        );
+    }
+
+    #[test]
+    fn receipt_at_another_protocol_version_is_refused() -> Result<(), String> {
+        let document = fixture_document(POSITIVE_V2_FIXTURE);
+        let request = golden_request();
+        let payload = build_call(&request)?;
+        let signed =
+            signed_call_with_signer(&request, &payload, || Ok(SigningKey::from_bytes(&[7; 32])))?;
+        let batch = &document["authorized_batch"];
+        let receipt =
+            layerx_wire::receipt::decode(&fixture_bytes(&document, "canonical_receipt_hex"))
+                .unwrap_or_else(|error| panic!("{error:?}"));
+        let protocol = receipt
+            .protocol()
+            .unwrap_or_else(|| panic!("protocol receipt"));
+        assert_eq!(protocol.protocol_version(), 2);
+        let head = VerifiedCallHead {
+            sequencer_public_key: fixture_array(batch, "sequencer_public_key_hex"),
+            state_root: fixture_array(batch, "previous_state_root_hex"),
+            abi_version: 1,
+            version: 1,
+            code_hash: [1; 32],
+            observed_sequence: protocol
+                .global_sequence()
+                .checked_sub(1)
+                .unwrap_or_else(|| panic!("fixture global sequence")),
+            observed_at: 1,
+        };
+        let response = json!({"result": {
+            "receipt": document["canonical_receipt_hex"],
+            "terminal_payload": "",
+            "call_graph": "",
+            "batch_id": batch["batch_id_hex"],
+            "state_root": batch["resulting_state_root_hex"],
+            "authority": served_authority(batch),
+        }});
+        assert_eq!(
+            render_call_result(&request, &payload, &signed, &head, &response).unwrap_err(),
+            "program receipt protocol version differs from the configured protocol version"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_commitments_admit_protocol_three_and_keep_legacy_refusals() {
+        let document = fixture_document(EXECUTED_V4_FIXTURE);
+        let receipt =
+            layerx_wire::receipt::decode(&fixture_bytes(&document, "canonical_receipt_hex"))
+                .unwrap_or_else(|error| panic!("{error:?}"));
+        let outcome = receipt
+            .protocol()
+            .and_then(layerx_wire::receipt::ProtocolReceipt::program_outcome)
+            .unwrap_or_else(|| panic!("Programs outcome"));
+        assert_eq!(outcome.encoding_version(), 4);
+        let terminal_payload = fixture_bytes(&document, "terminal_payload_hex");
+        let (detail, _) = layerx_wire::receipt::decode_applied_terminal(&terminal_payload)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let terminal = layerx_programs_runtime::terminal::decode_terminal_payload(
+            outcome.terminal_kind(),
+            outcome.abi_version(),
+            detail,
+        )
+        .unwrap_or_else(|error| panic!("{error:?}"));
+        let graph = fixture_bytes(&document, "call_graph_hex");
+        assert_eq!(
+            super::verify_terminal_commitments(&terminal, &graph, 3, outcome),
+            Ok(())
+        );
+        assert_eq!(
+            super::verify_terminal_commitments(&terminal, &graph, 1, outcome),
+            Err(
+                "occupancy wrapper is not permitted by the receipt protocol and terminal family"
+                    .to_owned()
+            )
+        );
+        assert_eq!(
+            super::verify_terminal_commitments(&terminal, &graph, 4, outcome),
+            Err("unsupported receipt protocol version for terminal evidence".to_owned())
+        );
+        let mut truncated = graph.clone();
+        truncated.pop();
+        assert_eq!(
+            super::verify_terminal_commitments(&terminal, &truncated, 3, outcome),
+            Err("call graph bytes disagree with the signed receipt root".to_owned())
+        );
     }
 }
 
