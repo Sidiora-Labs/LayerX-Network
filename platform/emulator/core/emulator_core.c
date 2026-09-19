@@ -1035,6 +1035,7 @@ int32_t platform_emulator_execute(platform_emulator *emulator,
     execution.parameter_version = 1U;
     execution.signature_valid = true;
     execution.identities = &emulator->identities;
+    execution.verified_receipts = &emulator->verified_receipts;
     execution.authority = &authority;
     if (status == LXP_OK) {
         lxp_authority_allowance_bind(&grant, &authority, &allowance);
