@@ -498,7 +498,7 @@ mod paxd {
 
         /// The custody module holds deposits in its module account, not at the
         /// precompile address, so the held float is what `getAsset` reports as
-        /// custodied minus what it reports as released.
+        /// custodied: the module lowers it by every amount it pays out.
         pub(super) fn vault_balance(&self) -> u128 {
             let answer = self.node.eth_call(
                 CUSTODY_PRECOMPILE.bytes(),
@@ -515,7 +515,7 @@ mod paxd {
             };
             // head: asset_id, denom offset, pointer, enabled, paused,
             // minimum_deposit, custody_cap, custodied, released, pending
-            word(7).saturating_sub(word(8))
+            word(7)
         }
     }
 }

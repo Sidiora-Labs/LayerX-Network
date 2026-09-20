@@ -173,7 +173,8 @@ class Node:
 
         sequencer_public = unhex(request['sequencer_public_key'], 32)
         import hashlib
-        sequencer_id = hashlib.sha256(sequencer_public).digest()
+        # lxp_handover_sequencer_id: the identifier every batch header carries.
+        sequencer_id = hashlib.sha256(b'layerx-sequencer:' + sequencer_public.hex().encode()).digest()
         asset = unhex(request['asset'], 32)
 
         custody_genesis = self.work / 'custody-genesis.json'
@@ -220,6 +221,8 @@ class Node:
                     env=environment, stdout=log, stderr=log)
         self.escrow_genesis_bond(int(request['guarantor_bond']))
         binary = environment.get('PAXD', 'paxd')
+        self.rpc_port = ports['RPC']
+        self.custody_authority = self.validator_custody_authority(binary)
         with (self.work / 'paxd.log').open('w') as log:
             self.process = subprocess.Popen(
                 [binary, 'start', '--home', str(self.home),
@@ -250,6 +253,21 @@ class Node:
                 'comet_chain_id': COSMOS_CHAIN_ID, 'home': str(self.home),
                 'deployer': self.account.address, 'guarantor_id': enhex(self.guarantor_id),
                 'sequencer_id': enhex(sequencer_id)}
+
+    def validator_custody_authority(self, binary):
+        # A custody authority message is a Cosmos transaction, which only a key-derived
+        # account can sign; the cast account of an EVM address never can. The validator
+        # key init-chain.sh creates is the one funded account this keyring can sign for.
+        shown = subprocess.run(
+            [binary, 'keys', 'show', 'validator', '-a', '--keyring-backend', 'test', '--home', str(self.home)],
+            cwd=ROOT, capture_output=True, text=True, timeout=60, check=True)
+        authority = shown.stdout.strip()
+        assert authority.startswith('pax1'), 'validator account unavailable'
+        genesis_file = self.home / 'config' / 'genesis.json'
+        genesis = json.loads(genesis_file.read_text())
+        genesis['app_state']['layerxcustody']['params']['authority'] = authority
+        genesis_file.write_text(json.dumps(genesis))
+        return authority
 
     def escrow_genesis_bond(self, bond):
         # layerxanchor refuses to initialise when its module account does not already
@@ -311,14 +329,35 @@ class Node:
     def cancel(self, request):
         """The custody authority's cancellation: a module message, never an EVM call."""
         binary = os.environ.get('PAXD', 'paxd')
+        node = 'tcp://127.0.0.1:' + str(self.rpc_port)
+        unsigned = self.work / ('cancel-' + request['claim_id'].removeprefix('0x')[:16] + '.json')
+        unsigned.write_text(json.dumps({
+            'body': {'messages': [{'@type': '/paxprotocol.paxchain.layerxcustody.MsgCancelClaim',
+                                   'authority': self.custody_authority,
+                                   'claim_id': request['claim_id'].removeprefix('0x').lower()}],
+                     'memo': '', 'timeout_height': '0', 'extension_options': [],
+                     'non_critical_extension_options': []},
+            'auth_info': {'signer_infos': [], 'fee': {'amount': [{'denom': BOND_DENOM, 'amount': '20000'}],
+                                                      'gas_limit': '1000000', 'payer': '', 'granter': ''}},
+            'signatures': []}))
+        common = ['--home', str(self.home), '--chain-id', COSMOS_CHAIN_ID, '--keyring-backend', 'test', '--node', node]
+        signed = subprocess.run([binary, 'tx', 'sign', str(unsigned), '--from', 'validator'] + common,
+                                cwd=ROOT, capture_output=True, text=True, timeout=120, check=False)
+        if signed.returncode != 0:
+            return {'exit_code': signed.returncode, 'stdout': signed.stdout[-4096:], 'stderr': signed.stderr[-4096:]}
+        signed_file = unsigned.with_suffix('.signed.json')
+        signed_file.write_text(signed.stdout if signed.stdout.strip() else signed.stderr)
         result = subprocess.run(
-            [binary, 'tx', 'layerxcustody', 'cancel-claim', request['claim_id'],
-             '--from', self.account.address, '--home', str(self.home),
-             '--chain-id', COSMOS_CHAIN_ID, '--keyring-backend', 'test', '--yes',
-             '--output', 'json'],
+            [binary, 'tx', 'broadcast', str(signed_file), '--broadcast-mode', 'block', '--node', node,
+             '--home', str(self.home), '--output', 'json'],
             cwd=ROOT, capture_output=True, text=True, timeout=120, check=False)
-        return {'exit_code': result.returncode, 'stdout': result.stdout[-4096:],
-                'stderr': result.stderr[-4096:]}
+        code = result.returncode
+        if code == 0:
+            try:
+                code = int(json.loads(result.stdout)['code'])
+            except (ValueError, KeyError):
+                code = 1
+        return {'exit_code': code, 'stdout': result.stdout[-4096:], 'stderr': result.stderr[-4096:]}
 
     def stop(self, _request):
         if self.process is not None and self.process.poll() is None:
