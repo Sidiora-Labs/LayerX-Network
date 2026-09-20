@@ -6,9 +6,25 @@ import sys
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'tests/bridge'))
+from comet_credit import CUSTODY_ADDRESS, module_identity
 from custody_credit import create_profile, attest, identity_rpcs, quantity, unhex, write_new
 from deploy_local_custody import calldata, deploy, govern, send, signer
 from provision import protected_bytes, protected_json, require, write_json, h32
+
+WEI_PER_BASE_UNIT = 10 ** 12
+
+
+def native_bootstrap(args, root, rpc, account):
+    # Paxeer custody is the layerxcustody module behind the precompile: the asset map, the sequencer
+    # authorization and the delays are chain genesis state, so the bring-up deploys nothing for it.
+    require(quantity(rpc.call('eth_chainId', [])) == 125, root, 'native custody chain')
+    write_new(args.attestor_key, os.urandom(32))
+    identity = module_identity().hex()
+    create_profile(SimpleNamespace(**{**vars(args), 'chain_id': 125, 'vault': CUSTODY_ADDRESS,
+                   'runtime_sha256': '0x' + identity, 'asset': '0x' + args.asset, 'confirmations': 1,
+                   'output': str(root / 'custody.profile')}))
+    write_json(root / 'owner-custody.json', dict(vault=CUSTODY_ADDRESS, asset=args.asset,
+               runtime_sha256=identity, payer=account))
 
 
 def bootstrap(args):
@@ -20,6 +36,8 @@ def bootstrap(args):
     rpc = rpcs[0]
     account = signer(rpc, args.key_file)
     write_new(root / 'custody-bootstrap.started', b'preserve all artifacts; reconcile before retry\n')
+    if getattr(rpc, 'disposable', False):
+        return native_bootstrap(args, root, rpc, account)
     config = '0x' + hashlib.sha256(b'LayerX/local-custody/real-weth/v1').hexdigest()
     beta = getattr(rpc, 'disposable', False)
     timelock = deploy(rpc, account, 'contracts/governance/' +
@@ -72,14 +90,25 @@ def deposit(args):
     require(len(profile) == 207 and profile[:5] in (b'LXBC1', b'LXBC2') and profile[13:33] == unhex(config['vault'], 20)
             and profile[97:129] == bytes.fromhex(args.asset) and profile[201:207] == args.network_id.to_bytes(4, 'big') + b'\0\3',
             root, 'immutable custody profile binding')
-    for endpoint in rpcs:
-        require(hashlib.sha256(unhex(endpoint.call('eth_getCode', [config['vault'], 'latest']))).digest() == profile[33:65],
-                root, 'vault runtime pin')
+    native = getattr(rpc, 'disposable', False)
+    if native:
+        require(unhex(config['vault'], 20) == unhex(CUSTODY_ADDRESS, 20) and profile[33:65] == module_identity(),
+                root, 'native custody module pin')
+    else:
+        for endpoint in rpcs:
+            require(hashlib.sha256(unhex(endpoint.call('eth_getCode', [config['vault'], 'latest']))).digest() == profile[33:65],
+                    root, 'vault runtime pin')
     write_new(root / 'custody-deposit.started', b'preserve all artifacts; never blindly repeat this deposit\n')
-    send(rpc, account, config['token'], calldata('deposit()'), args.amount)
-    send(rpc, account, config['token'], calldata('approve(address,uint256)', config['vault'], args.amount))
-    result = send(rpc, account, config['vault'], calldata('deposit(bytes32,uint256,bytes32)',
-                  '0x' + args.asset, args.amount, '0x' + owner['owner_account']))
+    if native:
+        # --amount is in the custody asset's base units; the precompile takes the payment in wei and
+        # refuses a remainder below one base unit.
+        result = send(rpc, account, CUSTODY_ADDRESS, calldata('deposit(bytes32)', '0x' + owner['owner_account']),
+                      args.amount * WEI_PER_BASE_UNIT)
+    else:
+        send(rpc, account, config['token'], calldata('deposit()'), args.amount)
+        send(rpc, account, config['token'], calldata('approve(address,uint256)', config['vault'], args.amount))
+        result = send(rpc, account, config['vault'], calldata('deposit(bytes32,uint256,bytes32)',
+                      '0x' + args.asset, args.amount, '0x' + owner['owner_account']))
     write_json(root / 'custody-deposit.json', result)
     if not getattr(rpc, 'disposable', False):
         rpc.call('anvil_mine', ['0x80'], allow_missing=True)

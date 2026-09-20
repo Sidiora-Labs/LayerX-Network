@@ -7,41 +7,44 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum/crypto"
 	abci "github.com/sidiora-labs/paxeer-network/consensus/abci/types"
 	"github.com/sidiora-labs/paxeer-network/consensus/crypto/merkle"
-	cometjson "github.com/sidiora-labs/paxeer-network/consensus/libs/json"
 	"github.com/sidiora-labs/paxeer-network/consensus/light"
 	"github.com/sidiora-labs/paxeer-network/consensus/rpc/coretypes"
 	"github.com/sidiora-labs/paxeer-network/consensus/types"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/config"
+	custodytypes "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/types"
 	"github.com/sidiora-labs/paxeer-network/sdk/store/rootmulti"
 	storetypes "github.com/sidiora-labs/paxeer-network/sdk/store/types"
 )
 
 const (
-	Version         = "paxeer-custody-state-v2"
-	MaxInputBytes   = 128 * 1024 * 1024
-	MaxHistory      = 8192
-	MaxValidators   = 1000
-	MaxRuntimeBytes = 512 * 1024
-	MaxProofBytes   = 1024 * 1024
-	TrustingPeriod  = 24 * time.Hour
-	MaxClockDrift   = time.Minute
+	Version        = "paxeer-custody-state-v3"
+	MaxInputBytes  = 128 * 1024 * 1024
+	MaxHistory     = 8192
+	MaxValidators  = 1000
+	MaxRecordBytes = 4096
+	MaxProofBytes  = 1024 * 1024
+	TrustingPeriod = 24 * time.Hour
+	MaxClockDrift  = time.Minute
+	// ModuleDomain tags the custody module identity a profile pins where a
+	// Solidity vault profile pinned its runtime code hash.
+	ModuleDomain = "LX:CUSTODY:MODULE:v1"
 )
 
 type Expected struct {
 	GenesisSHA256 string `json:"genesis_sha256"`
 	CometChainID  string `json:"comet_chain_id"`
 	ChainID       uint64 `json:"chain_id"`
-	Vault         string `json:"vault"`
-	RuntimeSHA256 string `json:"runtime_sha256"`
+	Custody       string `json:"custody"`
+	ModuleSHA256  string `json:"module_sha256"`
+	AssetID       string `json:"asset_id"`
 	Confirmations uint64 `json:"confirmations"`
 	DepositID     string `json:"deposit_id,omitempty"`
-	DepositSlot   string `json:"deposit_slot,omitempty"`
 }
 
 type LightBlock struct {
@@ -50,10 +53,9 @@ type LightBlock struct {
 }
 
 type StatePoint struct {
-	Height   int64               `json:"height"`
-	Code     abci.ResponseQuery  `json:"code"`
-	CodeHash abci.ResponseQuery  `json:"code_hash"`
-	Deposit  *abci.ResponseQuery `json:"deposit,omitempty"`
+	Height  int64               `json:"height"`
+	Asset   abci.ResponseQuery  `json:"asset"`
+	Deposit *abci.ResponseQuery `json:"deposit,omitempty"`
 }
 
 type Bundle struct {
@@ -78,10 +80,14 @@ type Result struct {
 	ApplicationRoot     string `json:"application_root"`
 	FinalizedHeight     int64  `json:"finalized_height"`
 	FinalizedHeaderHash string `json:"finalized_header_hash"`
-	RuntimeSHA256       string `json:"runtime_sha256"`
+	ModuleSHA256        string `json:"module_sha256"`
 	ProofSHA256         string `json:"proof_sha256"`
+	Denom               string `json:"denom"`
 	DepositID           string `json:"deposit_id,omitempty"`
-	Runtime             []byte `json:"runtime"`
+	Depositor           string `json:"depositor,omitempty"`
+	Beneficiary         string `json:"beneficiary,omitempty"`
+	Amount              string `json:"amount,omitempty"`
+	Nonce               uint64 `json:"nonce,omitempty"`
 }
 
 func fixedHex(value string, length int) ([]byte, error) {
@@ -140,10 +146,11 @@ func genesisValidators(genesisBytes []byte, expected Expected, now time.Time) (*
 	if !bytes.Equal(digest[:], genesisHash) {
 		return nil, nil, errors.New("genesis identity")
 	}
-	var genesis types.GenesisDoc
-	if err := cometjson.Unmarshal(genesisBytes, &genesis); err != nil {
+	loaded, err := types.GenesisDocFromJSON(genesisBytes)
+	if err != nil {
 		return nil, nil, err
 	}
+	genesis := *loaded
 	if genesis.ChainID != expected.CometChainID || genesis.InitialHeight != 1 || genesis.GenesisTime.IsZero() ||
 		genesis.GenesisTime.After(now.Add(MaxClockDrift)) || len(genesis.Validators) == 0 || len(genesis.Validators) > MaxValidators {
 		return nil, nil, errors.New("genesis chain or validator identity")
@@ -223,9 +230,10 @@ func membership(response *abci.ResponseQuery, height int64, root, key []byte, ma
 		response.ProofOps == nil || len(response.ProofOps.Ops) != 2 {
 		return errors.New("state query identity or missing proof")
 	}
+	store := []byte(custodytypes.StoreKey)
 	ops := response.ProofOps.Ops
 	if ops[0].Type != storetypes.ProofOpIAVLCommitment || !bytes.Equal(ops[0].Key, key) ||
-		ops[1].Type != storetypes.ProofOpSimpleMerkleCommitment || !bytes.Equal(ops[1].Key, []byte("evm")) {
+		ops[1].Type != storetypes.ProofOpSimpleMerkleCommitment || !bytes.Equal(ops[1].Key, store) {
 		return errors.New("state proof store or key")
 	}
 	for _, op := range ops {
@@ -233,11 +241,20 @@ func membership(response *abci.ResponseQuery, height int64, root, key []byte, ma
 			return errors.New("state proof size")
 		}
 	}
-	path := merkle.KeyPath{}.AppendKey([]byte("evm"), merkle.KeyEncodingURL).AppendKey(key, merkle.KeyEncodingURL)
+	path := merkle.KeyPath{}.AppendKey(store, merkle.KeyEncodingURL).AppendKey(key, merkle.KeyEncodingURL)
 	if err := rootmulti.DefaultProofRuntime().VerifyValue(response.ProofOps, root, path.String(), response.Value); err != nil {
 		return fmt.Errorf("application-root membership: %w", err)
 	}
 	return nil
+}
+
+// ModuleIdentity is the value a custody profile pins for the native module:
+// the custody store name and the precompile address under ModuleDomain. A
+// native module has no EVM runtime to hash; what a proof authenticates is the
+// module's own records under its store in the application root.
+func ModuleIdentity() [32]byte {
+	address, _ := custodytypes.ParseAddress(custodytypes.CustodyAddress)
+	return sha256.Sum256(append(append([]byte(ModuleDomain), custodytypes.StoreKey...), address.Bytes()...))
 }
 
 func Verify(request *Request, now time.Time) (*Result, error) {
@@ -284,30 +301,35 @@ func verifyState(request *Request, now time.Time, lookup func(int64) (*types.Sig
 	if light.HeaderExpired(finalHeader, TrustingPeriod, now) || !finalHeader.Time.Before(now.Add(MaxClockDrift)) {
 		return nil, errors.New("live head freshness")
 	}
-	vault, err := fixedHex(expected.Vault, 20)
+	custody, err := fixedHex(expected.Custody, 20)
 	if err != nil {
 		return nil, err
 	}
-	runtimeHash, err := fixedHex(expected.RuntimeSHA256, 32)
+	precompile, err := custodytypes.ParseAddress(custodytypes.CustodyAddress)
+	if err != nil || !bytes.Equal(custody, precompile.Bytes()) {
+		return nil, errors.New("custody precompile address")
+	}
+	moduleHash, err := fixedHex(expected.ModuleSHA256, 32)
 	if err != nil {
 		return nil, err
 	}
+	if identity := ModuleIdentity(); !bytes.Equal(moduleHash, identity[:]) {
+		return nil, errors.New("custody module identity")
+	}
+	assetBytes, err := fixedHex(expected.AssetID, 32)
+	if err != nil {
+		return nil, err
+	}
+	var assetID, depositID [32]byte
+	copy(assetID[:], assetBytes)
 	var depositKey []byte
 	if expected.DepositID != "" {
-		depositID, err := fixedHex(expected.DepositID, 32)
+		identifier, err := fixedHex(expected.DepositID, 32)
 		if err != nil {
 			return nil, err
 		}
-		if len(expected.DepositSlot) != 66 || !strings.HasPrefix(expected.DepositSlot, "0x") {
-			return nil, errors.New("deposit storage slot")
-		}
-		slot, err := hex.DecodeString(expected.DepositSlot[2:])
-		if err != nil {
-			return nil, err
-		}
-		depositKey = append(append([]byte{3}, vault...), crypto.Keccak256(depositID, slot)...)
-	} else if expected.DepositSlot != "" {
-		return nil, errors.New("unexpected deposit slot")
+		copy(depositID[:], identifier)
+		depositKey = custodytypes.DepositKey(depositID)
 	}
 	points := []int64{bundle.StateHeight}
 	if bundle.FinalizedHeight != bundle.StateHeight {
@@ -316,7 +338,12 @@ func verifyState(request *Request, now time.Time, lookup func(int64) (*types.Sig
 	if len(bundle.State) != len(points) {
 		return nil, errors.New("state point count")
 	}
-	var runtime []byte
+	result := &Result{Version: Version, StateHeight: bundle.StateHeight,
+		StateHeaderHash: hexBytes(stateHeader.Hash()),
+		ApplicationRoot: hexBytes(stateHeader.AppHash),
+		FinalizedHeight: bundle.FinalizedHeight, FinalizedHeaderHash: hexBytes(finalHeader.Hash()),
+		ModuleSHA256: hexBytes(moduleHash), DepositID: expected.DepositID}
+	var recorded []byte
 	for index, height := range points {
 		point := &bundle.State[index]
 		if point.Height != height {
@@ -327,39 +354,54 @@ func verifyState(request *Request, now time.Time, lookup func(int64) (*types.Sig
 			return nil, err
 		}
 		root := header.AppHash
-		if err := membership(&point.Code, height, root, append([]byte{7}, vault...), MaxRuntimeBytes); err != nil {
+		if err := membership(&point.Asset, height, root, custodytypes.AssetKey(assetID), MaxRecordBytes); err != nil {
 			return nil, err
 		}
-		if err := membership(&point.CodeHash, height, root, append([]byte{8}, vault...), 32); err != nil {
-			return nil, err
+		var asset custodytypes.AssetMapping
+		if err := asset.Unmarshal(point.Asset.Value); err != nil || asset.Validate() != nil ||
+			asset.AssetId != custodytypes.Hash32(assetID) || (result.Denom != "" && result.Denom != asset.Denom) {
+			return nil, errors.New("authenticated custody asset")
 		}
-		digest := sha256.Sum256(point.Code.Value)
-		if !bytes.Equal(digest[:], runtimeHash) || !bytes.Equal(crypto.Keccak256(point.Code.Value), point.CodeHash.Value) {
-			return nil, errors.New("authenticated vault runtime")
-		}
+		result.Denom = asset.Denom
 		if depositKey != nil {
-			if err := membership(point.Deposit, height, root, depositKey, 32); err != nil {
+			if err := membership(point.Deposit, height, root, depositKey, MaxRecordBytes); err != nil {
 				return nil, err
 			}
-			one := make([]byte, 32)
-			one[31] = 1
-			if !bytes.Equal(point.Deposit.Value, one) {
-				return nil, errors.New("deposit membership value")
+			var deposit custodytypes.Deposit
+			if err := deposit.Unmarshal(point.Deposit.Value); err != nil || deposit.Validate() != nil ||
+				deposit.DepositId != custodytypes.Hash32(depositID) || deposit.AssetId != asset.AssetId ||
+				deposit.Denom != asset.Denom || deposit.Height <= 0 || deposit.Height > bundle.StateHeight ||
+				(recorded != nil && !bytes.Equal(recorded, point.Deposit.Value)) {
+				return nil, errors.New("authenticated custody deposit")
 			}
+			depositor, err := custodytypes.ParseAddress(deposit.Depositor)
+			if err != nil {
+				return nil, err
+			}
+			beneficiary, err := custodytypes.ParseNonZeroHash32(deposit.Beneficiary)
+			if err != nil {
+				return nil, err
+			}
+			amount, err := custodytypes.ParseAmount(deposit.Amount)
+			if err != nil {
+				return nil, err
+			}
+			if custodytypes.DepositID(new(big.Int).SetUint64(expected.ChainID), depositor, assetID, beneficiary,
+				amount.BigInt(), deposit.Nonce) != depositID {
+				return nil, errors.New("deposit identifier preimage")
+			}
+			recorded = point.Deposit.Value
+			result.Depositor, result.Beneficiary = hexBytes(depositor.Bytes()), hexBytes(beneficiary[:])
+			result.Amount, result.Nonce = amount.String(), deposit.Nonce
 		} else if point.Deposit != nil {
 			return nil, errors.New("unexpected deposit proof")
 		}
-		runtime = point.Code.Value
 	}
 	canonical, err := json.Marshal(bundle)
 	if err != nil {
 		return nil, err
 	}
 	digest := sha256.Sum256(canonical)
-	return &Result{Version: Version, StateHeight: bundle.StateHeight,
-		StateHeaderHash: hexBytes(stateHeader.Hash()),
-		ApplicationRoot: hexBytes(stateHeader.AppHash),
-		FinalizedHeight: bundle.FinalizedHeight, FinalizedHeaderHash: hexBytes(finalHeader.Hash()),
-		RuntimeSHA256: hexBytes(runtimeHash), ProofSHA256: hexBytes(digest[:]), DepositID: expected.DepositID,
-		Runtime: runtime}, nil
+	result.ProofSHA256 = hexBytes(digest[:])
+	return result, nil
 }

@@ -10,7 +10,7 @@ import (
 
 func realRequest(t *testing.T) *Request {
 	t.Helper()
-	encoded, err := os.ReadFile("../tests/fixtures/custody/paxeer-state-v2/state-credit.json")
+	encoded, err := os.ReadFile("../tests/fixtures/custody/paxeer-state-v3/state-credit.json")
 	if err != nil {
 		t.Fatal(err)
 	}
