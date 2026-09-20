@@ -251,14 +251,15 @@ human_custody_step() (
     python3 "$REPO_ROOT/platform/hosted/human/owner_custody.py" "$mode" \
         --work-dir "$work" --rpc "$PAXEER_URL" --rpc "$PAXEER_OBSERVER_URL" \
         --ca-bundle "$CA_DIR/ca.pem" --disposable-identity "$WORK_DIR/paxeer/rpc-origins.json" \
-        --key-file "$SECRETS_DIR/paxeer-deployer.key" --attestor-key "$SECRETS_DIR/custody-attestor.seed" \
+        --comet-rpc "$PAXEER_URL/comet" --trusted-height "${PAXEER_TRUSTED_HEIGHT:-1}" \
+        --key-file "$SECRETS_DIR/paxeer-deployer.key" \
         --network-id "$NODE_NETWORK_ID" --asset "$NODE_ASSET_ID" "$@"
 )
 
 # Under protocol 3 the kernel admits a program call, and so a noncommitting program read, only for a payer
 # that holds an account in the occupancy asset and only at a signed fee limit that covers the declared
 # execution ceiling. The bring-up therefore funds the explorer read principal once, through the same native
-# custody deposit and attested custody credit that fund the Human owner. The principal signs its own credit on the
+# custody deposit and light-client custody credit that fund the Human owner. The principal signs its own credit on the
 # host; the owner producer container, which already holds the node socket, submits it and verifies the
 # committed receipt against the sequencer key. It runs after the owner producer so the owner's own
 # activities are unchanged.

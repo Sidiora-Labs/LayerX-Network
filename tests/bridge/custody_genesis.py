@@ -20,7 +20,7 @@ def main():
     parser.add_argument('--disposable-identity')
     args = parser.parse_args()
     profile = Path(args.profile).read_bytes()
-    require(len(profile) == 207 and profile[:5] in (b'LXBC1', b'LXBC2') and profile[205:] == big(3, 2),
+    require(len(profile) == 207 and profile[:5] == b'LXBC3' and profile[205:] == big(3, 2),
             'protocol-three custody profile required')
     chain_id = int.from_bytes(profile[5:13], "big")
     if chain_id == 125 or args.disposable_identity:
@@ -28,7 +28,7 @@ def main():
                 "chain 125 requires verified disposable identity")
         rpc = disposable_rpc(args.rpc, args.ca_bundle, args.disposable_identity)
         require(quantity(rpc.call("eth_chainId", [])) == chain_id, "profile chain ID")
-        require(rpc.genesis_sha256 == profile[169:201], "profile genesis identity")
+        require(rpc.comet_chain_id.encode().ljust(32, b'\0') == profile[169:201], "profile Comet chain identity")
     else:
         require(not args.rpc and not args.ca_bundle, "RPC verification requires disposable identity")
     directory = Path(args.output).resolve()

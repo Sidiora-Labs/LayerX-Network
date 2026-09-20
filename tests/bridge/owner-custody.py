@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,7 +18,6 @@ from custody_credit import Rpc, eth_hash
 from deploy_local_custody import command
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 with tempfile.TemporaryDirectory(prefix='owner-custody-') as directory:
     work = Path(directory)
@@ -49,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix='owner-custody-') as directory:
                     break
                 time.sleep(0.1)
             args = SimpleNamespace(work_dir=str(work), rpc=[f'http://127.0.0.{i}:{port}' for i in (1, 2)],
-                ca_bundle=None, disposable_identity=None, key_file=str(keyfile), attestor_key=str(work / 'attestor.seed'),
+                ca_bundle=None, disposable_identity=None, key_file=str(keyfile),
                 network_id=77, asset='01' * 32, amount=1000000000000000000)
             bootstrap(args)
             clock_rpc = Rpc(args.rpc[0])
@@ -77,15 +77,15 @@ with tempfile.TemporaryDirectory(prefix='owner-custody-') as directory:
             credit = (inputs / 'custody-credit.bin').read_bytes()
             profile = (inputs / 'custody.profile').read_bytes()
             owner = json.loads((inputs / 'owner-admission.json').read_text())
-            assert len(credit) == 427 and credit[:5] == b'LXDC1'
+            assert len(credit) > 363 and credit[:5] == b'LXDC3'
             assert credit[107:139].hex() == owner['owner_account']
             assert credit[139:171].hex() == owner['public_key']
             assert int.from_bytes(credit[191:207], 'big') == args.amount
-            Ed25519PublicKey.from_public_bytes(profile[65:97]).verify(credit[363:], b'LX:CUSTODY:CREDIT:v1' + credit[:363])
+            assert credit[5:37] == hashlib.sha256(profile).digest() and credit[327:359] == hashlib.sha256(credit[363:]).digest()
             transaction = json.loads((inputs / 'custody-deposit.json').read_text())['transactionHash']
             published = inputs / ('credit-' + transaction[2:].lower() + '.bin')
             assert published.name == credit_material_name(transaction)
-            assert published.read_bytes() == credit and credit[327:359].hex() == transaction[2:].lower()
+            assert published.read_bytes() == credit
             assert published.lstat().st_mode & 0o777 == 0o600 and published.lstat().st_nlink == 1
             rpc = Rpc(args.rpc[0])
             before = rpc.call('eth_blockNumber', [])

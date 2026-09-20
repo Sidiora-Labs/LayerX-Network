@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 import unittest
 
-from custody_credit import Rpc, account_from_proof, agreed_block, attest, common_finalized, decode_rlp, eth_hash, header, quantity, receipt_bytes, rlp, rpc_pair, trie_root, unhex, verified_code, verified_receipts
+from custody_credit import Rpc, account_from_proof, agreed_block, common_finalized, decode_rlp, eth_hash, header, quantity, receipt_bytes, rlp, rpc_pair, trie_root, unhex, verified_code, verified_receipts
 
 
 @contextlib.contextmanager
@@ -136,43 +136,6 @@ class RealCustodyEvidence(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "block quorum disagreement"):
                 common_finalized([first, second])
 
-    def test_wrong_expected_amount_refused(self):
-        with tempfile.TemporaryDirectory() as directory:
-            args = argparse.Namespace(**vars(self.arguments))
-            args.expected_amount += 1
-            args.output = str(Path(directory) / "refused")
-            with self.assertRaises(ValueError):
-                attest(args)
-            self.assertFalse(Path(args.output).exists())
-
-    def test_real_attestation_and_wrong_beneficiary(self):
-        with tempfile.TemporaryDirectory() as directory:
-            args = argparse.Namespace(**vars(self.arguments))
-            args.output = str(Path(directory) / "credit")
-            attest(args)
-            self.assertEqual(len(Path(args.output).read_bytes()), 427)
-            args.output = str(Path(directory) / "refused")
-            changed = bytearray(unhex(args.beneficiary, 32))
-            changed[0] ^= 1
-            args.beneficiary = "0x" + changed.hex()
-            with self.assertRaises(ValueError):
-                attest(args)
-            self.assertFalse(Path(args.output).exists())
-
-    def test_wrong_chain_genesis_and_runtime_refused(self):
-        original = Path(self.arguments.profile).read_bytes()
-        for offset in (5, 13, 33, 65, 161, 169, 201, 205):
-            with tempfile.TemporaryDirectory() as directory:
-                args = argparse.Namespace(**vars(self.arguments))
-                changed = bytearray(original)
-                changed[offset] ^= 1
-                args.profile = str(Path(directory) / "profile")
-                Path(args.profile).write_bytes(changed)
-                args.output = str(Path(directory) / "refused")
-                with self.assertRaises(ValueError):
-                    attest(args)
-                self.assertFalse(Path(args.output).exists())
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -183,6 +146,5 @@ if __name__ == "__main__":
     parser.add_argument("--beneficiary", required=True)
     parser.add_argument("--beneficiary-key", required=True)
     parser.add_argument("--expected-amount", type=int, required=True)
-    parser.add_argument("--attestor-key", required=True)
     RealCustodyEvidence.arguments = parser.parse_args()
     unittest.main(argv=["test_evidence"], verbosity=2)

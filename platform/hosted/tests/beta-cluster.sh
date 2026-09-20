@@ -3294,8 +3294,8 @@ deposit=$root/deposit-$transaction.bin
 if [ ! -e "$credit" ] && [ ! -L "$credit" ]; then
     (set -C; printf '%s' "$encoded" | base64 -d > "$credit") || { rm -f "$credit"; printf '%s: custody credit could not be written\n' "$credit" >&2; exit 1; }
 fi
-printf '%s  %s\n' "$digest" "$credit" | sha256sum -c --status - || { printf '%s: custody credit bytes differ from the attested credit\n' "$credit" >&2; exit 1; }
-[ "$(stat -c %s "$credit")" -eq 427 ] || { printf '%s: custody credit is not 427 bytes\n' "$credit" >&2; exit 1; }
+printf '%s  %s\n' "$digest" "$credit" | sha256sum -c --status - || { printf '%s: custody credit bytes differ from the produced credit\n' "$credit" >&2; exit 1; }
+[ "$(stat -c %s "$credit")" -gt 363 ] || { printf '%s: custody credit carries no light-client bundle\n' "$credit" >&2; exit 1; }
 for path in "$deposit" "$credit"; do
     [ -f "$path" ] && [ ! -L "$path" ] || { printf '%s: evidence file missing\n' "$path" >&2; exit 1; }
     [ "$(stat -c '%u %a %h' "$path")" = "$(id -u) 600 1" ] || { printf '%s: evidence file is not private to the movement provider\n' "$path" >&2; exit 1; }
@@ -3312,8 +3312,8 @@ human_custody_evidence_publish() {
     account="agent:$(jq -er '.did' "$input/owner-admission.json"):main" \
         || fail "$input/owner-admission.json: the admitted owner DID is required before evidence delivery"
     credit="$input/credit-${transaction#0x}.bin"
-    [ -f "$credit" ] && [ ! -L "$credit" ] && [ "$(stat -c %s "$credit")" -eq 427 ] \
-        || fail "$credit: the attested custody credit for the owner deposit is missing; owner_custody.py deposit publishes it"
+    [ -f "$credit" ] && [ ! -L "$credit" ] && [ "$(stat -c %s "$credit")" -gt 363 ] \
+        || fail "$credit: the light-client custody credit for the owner deposit is missing; owner_custody.py deposit publishes it"
     [[ $CHECKPOINT_REGISTRY =~ ^0x[0-9a-fA-F]{40}$ ]] || fail "the anchor precompile address is required before evidence delivery"
     log "publishing the owner custody deposit proof for $transaction through the in-cluster movement provider"
     deadline=$((SECONDS + 600))

@@ -660,7 +660,7 @@ def _explorer_read_funding_prepare(work_dir, secrets_dir):
     custody = protected_json(custody_path)
     fields(custody, 'vault asset runtime_sha256 payer', custody_path, 'native custody binding')
     profile = protected_bytes(source / 'custody.profile', 207)
-    require(len(profile) == 207 and profile[:5] in (b'LXBC1', b'LXBC2')
+    require(len(profile) == 207 and profile[:5] == b'LXBC3'
             and profile[97:129].hex() == custody['asset'], source / 'custody.profile', 'custody profile asset binding')
     root = Path(work_dir) / EXPLORER_READ_FUNDING
     root.mkdir(mode=0o700)
@@ -676,8 +676,8 @@ def _explorer_read_credit_sign(work_dir, secrets_dir, network, state_path, outpu
     signer, public, did, account = explorer_read_identity(secrets_dir)
     uint(network, 32, work_dir, 'network id', 1)
     credit_path = Path(work_dir) / EXPLORER_READ_FUNDING / 'human-evidence-input/custody-credit.bin'
-    credit = protected_bytes(credit_path, 427)
-    require(len(credit) == 427 and credit[:5] in (b'LXDC1', b'LXDC2') and credit[107:139] == account
+    credit = protected_bytes(credit_path)
+    require(len(credit) > 363 and credit[:5] == b'LXDC3' and credit[107:139] == account
             and credit[139:171] == public, credit_path, 'explorer read principal custody credit binding')
     amount = int.from_bytes(credit[191:207], 'big')
     require(amount > 0, credit_path, 'custody credit amount')

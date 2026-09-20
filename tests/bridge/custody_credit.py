@@ -4,15 +4,12 @@ import ipaddress
 import json
 import os
 from pathlib import Path
-import stat
 import sys
 import urllib.parse
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "platform/hosted/paxeer"))
 from evm import keccak
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 
 MAX_RESPONSE = 16 * 1024 * 1024
@@ -344,19 +341,6 @@ def verified_receipts(rpcs, block):
     return groups[0]
 
 
-def read_key(path):
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    try:
-        info = os.fstat(descriptor)
-        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_mode & 0o077 == 0,
-                "key must be a private regular file")
-        data = os.read(descriptor, 33)
-        require(len(data) == 32, "key seed length")
-        return Ed25519PrivateKey.from_private_bytes(data)
-    finally:
-        os.close(descriptor)
-
-
 def write_new(path, data):
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(descriptor, "wb") as output:
@@ -398,95 +382,23 @@ def identity_rpcs(args):
 
 
 def create_profile(args):
-    rpcs, genesis = identity_rpcs(args)
+    rpcs, _ = identity_rpcs(args)
     chain = [quantity(rpc.call("eth_chainId", [])) for rpc in rpcs]
     require(chain == [args.chain_id, args.chain_id] and args.chain_id > 0, "chain identity")
-    if args.chain_id == 125:
-        from comet_credit import create_profile as create_comet_profile
-        return create_comet_profile(args, rpcs, genesis)
-    tip = common_finalized(rpcs)
-    code = verified_code(rpcs, args.vault, tip)
-    require(sha(code) == unhex(args.runtime_sha256, 32), "vault runtime pin")
-    public = read_key(args.attestor_key).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    name = b"system:paxeer-reserve"
-    reserve = sha(b"LX:ACCOUNT:v1" + big(len(name), 4) + name)
-    require(args.confirmations > 0 and args.network_id > 0, "confirmation/network bound")
-    profile = (b"LXBC1" + big(args.chain_id, 8) + unhex(args.vault, 20) + sha(code) + public +
-               unhex(args.asset, 32) + reserve + big(args.confirmations, 8) + genesis +
-               big(args.network_id, 4) + big(3, 2))
-    require(len(profile) == PROFILE_BYTES, "profile layout")
-    write_new(args.output, profile)
+    require(args.chain_id == 125, "custody profiles are issued only for the native Paxeer custody module")
+    from comet_credit import create_profile as create_comet_profile
+    return create_comet_profile(args, rpcs)
 
 
 def attest(args):
-    rpcs, genesis = identity_rpcs(args)
+    rpcs, _ = identity_rpcs(args)
     with open(args.profile, "rb") as source:
         profile = source.read(PROFILE_BYTES + 1)
-    if len(profile) == PROFILE_BYTES and profile[:5] == b"LXBC2":
-        from comet_credit import attest as attest_comet
-        return attest_comet(args, rpcs, genesis, profile)
-    require(len(profile) == PROFILE_BYTES and profile[:5] == b"LXBC1", "profile layout")
-    chain = int.from_bytes(profile[5:13], "big")
-    require(all(quantity(rpc.call("eth_chainId", [])) == chain for rpc in rpcs), "chain identity")
-    require(genesis == profile[169:201], "chain genesis identity")
-    require(args.network_id > 0 and profile[201:207] == big(args.network_id, 4) + big(3, 2), "network/protocol binding")
-    transaction = "0x" + unhex(args.transaction, 32).hex()
-    observations = [rpc.call("eth_getTransactionReceipt", [transaction]) for rpc in rpcs]
-    require(all(unhex(value["transactionHash"], 32) == unhex(transaction, 32) for value in observations),
-            "transaction receipt binding")
-    require(all(value["blockHash"] == observations[0]["blockHash"] for value in observations), "inclusion quorum")
-    block = agreed_block(rpcs, observations[0]["blockHash"], True)
-    final = common_finalized(rpcs)
-    height, final_height = quantity(block["number"]), quantity(final["number"])
-    confirmations = int.from_bytes(profile[161:169], "big")
-    require(confirmations > 0 and height > 0 and final_height >= height and
-            confirmations <= final_height - height + 1 <= MAX_ANCESTRY, "finality/ancestry bound")
-    ancestor = final
-    while quantity(ancestor["number"]) > height:
-        parent = agreed_block(rpcs, ancestor["parentHash"], True)
-        require(unhex(parent["hash"], 32) == unhex(ancestor["parentHash"], 32) and
-                quantity(parent["number"]) + 1 == quantity(ancestor["number"]), "ancestry parent binding")
-        ancestor = parent
-    require(unhex(ancestor["hash"], 32) == unhex(block["hash"], 32), "finalized ancestry")
-    vault = "0x" + profile[13:33].hex()
-    for point in (block, final):
-        code = verified_code(rpcs, vault, point)
-        require(sha(code) == profile[33:65], "vault runtime hash")
-    receipts = verified_receipts(rpcs, block)
-    index = quantity(observations[0]["transactionIndex"])
-    require(index < len(receipts) and receipts[index]["transactionHash"].lower() == transaction and
-            quantity(receipts[index]["status"]) == 1, "successful transaction required")
-    matches = [(index, log) for index, log in enumerate(receipts[index]["logs"])
-               if unhex(log["address"], 20) == profile[13:33] and log["topics"] and
-               log["topics"][0].lower() == DEPOSIT_TOPIC]
-    require(len(matches) == 1, "exactly one custody deposit required")
-    log_index, log = matches[0]
-    require(len(log["topics"]) == 4, "deposit topics")
-    deposit_id, asset, payer_word = [unhex(value, 32) for value in log["topics"][1:]]
-    data = unhex(log["data"], 96)
-    beneficiary, amount_word, nonce_word = data[:32], data[32:64], data[64:]
-    amount, nonce = int.from_bytes(amount_word, "big"), int.from_bytes(nonce_word, "big")
-    require(asset == profile[97:129] and payer_word[:12] == bytes(12) and
-            0 < amount < 2 ** 128 and 0 < nonce < 2 ** 64, "custody fields")
-    require(0 < args.expected_amount < 2 ** 128 and amount == args.expected_amount, "expected amount binding")
-    require(beneficiary == unhex(args.beneficiary, 32), "beneficiary binding")
-    owner = unhex(args.beneficiary_key, 32)
-    deposit_domain = b"LXP/Paxeer/custody-deposit/v1"
-    preimage = (big(256, 32) + big(chain, 32) + bytes(12) + profile[13:33] + payer_word + asset +
-                beneficiary + amount_word + nonce_word + big(len(deposit_domain), 32) +
-                deposit_domain.ljust(32, b"\0"))
-    require(sha(preimage) == deposit_id, "deposit ID preimage")
-    unsigned = (b"LXDC1" + sha(profile) + big(args.network_id, 4) + big(3, 2) + deposit_id + asset +
-                beneficiary + owner + payer_word[12:] + big(amount, 16) + big(nonce, 8) +
-                big(height, 8) + unhex(block["hash"], 32) + unhex(block["receiptsRoot"], 32) +
-                big(final_height, 8) + unhex(final["hash"], 32) + unhex(transaction, 32) + big(log_index, 4))
-    require(len(unsigned) == 363, "credit layout")
-    key = read_key(args.attestor_key)
-    require(key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw) == profile[65:97], "attestor authority")
-    payload = unsigned + key.sign(b"LX:CUSTODY:CREDIT:v1" + unsigned)
-    nullifier = sha(b"LX:DEPOSIT:NULLIFIER:v1" + deposit_id)
-    write_new(args.output, payload)
-    write_new(args.output + ".nullifier", nullifier.hex().encode() + b"\n")
+    require(profile[:5] not in (b"LXBC1", b"LXBC2"),
+            "attestor-signed custody profiles are retired; an LXBC3 light-client profile is required")
+    require(len(profile) == PROFILE_BYTES and profile[:5] == b"LXBC3", "profile layout")
+    from comet_credit import attest as attest_comet
+    return attest_comet(args, rpcs, profile)
 
 
 def main():
@@ -498,7 +410,7 @@ def main():
     profile.add_argument("--vault", required=True)
     profile.add_argument("--runtime-sha256", required=True)
     profile.add_argument("--asset", required=True)
-    profile.add_argument("--confirmations", type=int, required=True)
+    profile.add_argument("--trusted-height", type=int, required=True)
     credit = commands.add_parser("attest")
     credit.add_argument("--profile", required=True)
     credit.add_argument("--network-id", type=int, required=True)
@@ -508,11 +420,10 @@ def main():
     credit.add_argument("--expected-amount", type=int, required=True)
     for command in (profile, credit):
         command.add_argument("--vault-artifact")
-        command.add_argument("--history-state")
         command.add_argument("--ca-bundle")
         command.add_argument("--disposable-identity")
         command.add_argument("--rpc", action="append", required=True)
-        command.add_argument("--attestor-key", required=True)
+        command.add_argument("--comet-rpc", required=True)
         command.add_argument("--output", required=True)
     args = parser.parse_args()
     (create_profile if args.command == "profile" else attest)(args)
