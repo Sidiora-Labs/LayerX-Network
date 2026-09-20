@@ -10,8 +10,8 @@ use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRe
 use layerx_wire::activity::encode_unsigned_envelope;
 use sha2::{Digest as _, Sha256};
 
-const CREDIT: &[u8; 427] =
-    include_bytes!("../../../../tests/fixtures/custody/paxeer-state-v2/custody.credit");
+const CREDIT: &[u8] =
+    include_bytes!("../../../../tests/fixtures/custody/paxeer-light-v1/custody.credit");
 
 fn checked<T, E: Debug>(value: Result<T, E>) -> T {
     value.unwrap_or_else(|error| panic!("{error:?}"))
@@ -31,7 +31,7 @@ fn recipient() -> AccountId {
     checked(AccountId::parse(&format!("agent:did:layerx:{key}:main")))
 }
 
-fn credit(payload: &[u8; 427]) -> NativeCustodyCredit {
+fn credit(payload: &[u8]) -> NativeCustodyCredit {
     checked(NativeCustodyCredit::new(
         payload,
         checked(AccountId::parse("system:paxeer-reserve")),
@@ -97,7 +97,7 @@ fn native_credit_preserves_real_attestation_and_all_disclosed_bytes() {
     let expected: [u8; 32] = digest.finalize().into();
     assert_eq!(value.nullifier(), expected);
     for index in 0..CREDIT.len() {
-        let mut changed = *CREDIT;
+        let mut changed = CREDIT.to_vec();
         changed[index] ^= 1;
         if let Ok(changed) =
             NativeCustodyCredit::new(&changed, value.reserve().clone(), value.recipient().clone())

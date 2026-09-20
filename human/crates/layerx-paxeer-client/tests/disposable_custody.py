@@ -27,7 +27,6 @@ sys.path.insert(0, str(ROOT / 'tests/support'))
 from lxgb_metadata import metadata
 from deploy_local_custody import (calldata, command, disposable_rpc, send, signer, genesis_document,
                                   PERSISTENT_GENESIS, PERSISTENT_BLUEPRINT)
-from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
@@ -292,23 +291,6 @@ class DisposableCustody(unittest.TestCase):
                     signer(verified, directory / 'signer.key')
                 os.chmod(directory / 'signer.key', 0o600)
                 self.assertNotEqual(int(paxeer.call('eth_chainId', []), 16), 125)
-                authority = ed25519.Ed25519PrivateKey.generate()
-                authority_path = directory / 'attestor.key'
-                write_new(authority_path, authority.private_bytes_raw())
-                request = dict(operation='status', expected=dict(
-                    genesis_sha256=genesis, comet_chain_id=identity['comet_chain_id'],
-                    chain_id=125, vault='', runtime_sha256='', confirmations=0),
-                    bundle=dict(version='paxeer-custody-state-v2',
-                        genesis=base64.b64encode(genesis_path.read_bytes()).decode(),
-                        history=[], state_height=0, finalized_height=0, state=[]))
-                history = directory / 'rejected-history'
-                result = subprocess.run([str(self.proof_binary), '--history-state', str(history),
-                    '--attestor-key', str(authority_path)], input=json.dumps(request).encode(),
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=False)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(b'genesis identity bounds', result.stderr)
-                self.assertEqual(result.stdout, b'')
-                self.assertFalse(history.exists())
                 self.assertEqual(refused, [])
 
     def test_real_signed_ca_verified_deployment_and_identity_refusals(self):
@@ -401,17 +383,20 @@ class DisposableCustody(unittest.TestCase):
                     self.assertEqual(deployed['genesis_sha256'], genesis)
                     self.assertEqual(unhex(deployed['vault'], 20), unhex(CUSTODY_ADDRESS, 20))
                     self.assertEqual(unhex(deployed['runtime_sha256'], 32), module_identity())
-                    authority = ed25519.Ed25519PrivateKey.generate()
-                    authority_path = directory / 'attestor.key'
-                    write_new(authority_path, authority.private_bytes_raw())
                     profile = directory / 'custody.profile'
-                    history = directory / 'secrets/custody-history'
+                    comet = json.loads(chain.identity_path.read_text())['comet_url']
                     create_profile(SimpleNamespace(rpc=origins, ca_bundle=ca,
                         disposable_identity=str(identity_path), chain_id=125, network_id=402,
                         vault=deployed['vault'], runtime_sha256=deployed['runtime_sha256'],
-                        asset=deployed['asset'], confirmations=2, attestor_key=str(authority_path),
-                        output=str(profile), history_state=str(history)))
-                    self.assertEqual(profile.read_bytes()[:5], b'LXBC2')
+                        asset=deployed['asset'], trusted_height=1, trusting_period_seconds=1209600,
+                        comet_rpc=comet, output=str(profile)))
+                    encoded_profile = profile.read_bytes()
+                    self.assertEqual(len(encoded_profile), 223)
+                    self.assertEqual(encoded_profile[:5], b'LXBC3')
+                    self.assertEqual(encoded_profile[97:129], unhex(deployed['asset'], 32))
+                    self.assertEqual(int.from_bytes(encoded_profile[161:169], 'big'), 1)
+                    self.assertEqual(encoded_profile[201:207], (402).to_bytes(4, 'big') + (3).to_bytes(2, 'big'))
+                    self.assertEqual(int.from_bytes(encoded_profile[207:215], 'big'), 1209600)
                     genesis_metadata = directory / 'genesis-metadata'
                     write_new(genesis_metadata, metadata(unhex(deployed['asset'], 32), actor_public, os.urandom(32)))
                     invocation = ['python3', str(ROOT / 'tests/bridge/custody_genesis.py'),
@@ -426,23 +411,30 @@ class DisposableCustody(unittest.TestCase):
                     evidence_args = ['python3', str(ROOT / 'tests/bridge/local_credit_evidence.py'),
                         '--rpc', url, '--rpc', observer_url, '--ca-bundle', ca,
                         '--disposable-identity', str(identity_path), '--custody', str(output),
-                        '--asset', deployed['asset'], '--attestor-key', str(authority_path),
-                        '--attestor-public-key', '0x' + authority.public_key().public_bytes(
-                            Encoding.Raw, PublicFormat.Raw).hex(),
+                        '--asset', deployed['asset'], '--comet-rpc', comet,
                         '--beneficiary-key', '0x' + actor_public.hex(), '--network-id', '402',
-                        '--confirmations', '2', '--history-state', str(history)]
+                        '--trusted-height', '1', '--trusting-period-seconds', '1209600']
                     command(*evidence_args, '--output', str(directory / 'evidence'))
                     produced_profile = (directory / 'evidence/custody.profile').read_bytes()
-                    self.assertEqual(produced_profile, profile.read_bytes())
+                    self.assertEqual(produced_profile, encoded_profile)
                     credit = (directory / 'evidence/custody.credit').read_bytes()
-                    self.assertEqual(len(credit), 427)
-                    self.assertEqual(credit[:5], b'LXDC2')
-                    self.assertEqual(credit[37:41], (402).to_bytes(4, 'big'))
-                    authority.public_key().verify(credit[363:], b'LX:CUSTODY:CREDIT:v2' + credit[:363])
-                    with self.assertRaises(InvalidSignature):
-                        authority.public_key().verify(credit[363:], b'LX:CUSTODY:CREDIT:v1' + credit[:363])
+                    self.assertGreater(len(credit), 363)
+                    self.assertEqual(credit[:5], b'LXDC3')
+                    self.assertEqual(credit[5:37], hashlib.sha256(encoded_profile).digest())
+                    self.assertEqual(credit[37:43], (402).to_bytes(4, 'big') + (3).to_bytes(2, 'big'))
+                    self.assertEqual(credit[75:107], unhex(deployed['asset'], 32))
+                    self.assertEqual(credit[107:139], unhex(beneficiary, 32))
+                    self.assertEqual(credit[139:171], actor_public)
+                    self.assertEqual(credit[171:191], unhex(chain.account.address, 20))
+                    self.assertEqual(int.from_bytes(credit[191:207], 'big'), amount)
+                    self.assertEqual(int.from_bytes(credit[207:215], 'big'), 1)
+                    state_height = int.from_bytes(credit[215:223], 'big')
+                    self.assertGreaterEqual(state_height, int(deposited['blockNumber'], 16))
+                    self.assertEqual(int.from_bytes(credit[287:295], 'big'), state_height + 1)
+                    self.assertEqual(credit[327:359], hashlib.sha256(credit[363:]).digest())
+                    self.assertEqual(credit[359:363], (2).to_bytes(4, 'big'))
+                    self.assertEqual(credit[363:368], b'LXLB1')
                     for option, value in [('--asset', '0x' + '00' * 32),
-                                          ('--attestor-public-key', '0x' + '00' * 32),
                                           ('--beneficiary-key', '0x' + '00' * 32), ('--rpc', url)]:
                         invalid = evidence_args.copy()
                         selected = len(invalid) - 1 - invalid[::-1].index(option)

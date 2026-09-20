@@ -23,7 +23,7 @@ pub(crate) struct Config {
     pub listener: ListenerConfig,
     pub state_root: PathBuf,
     pub evidence_root: PathBuf,
-    pub custody_profile: Option<[u8; 207]>,
+    pub custody_profile: Option<[u8; layerx_paxeer_client::NATIVE_CUSTODY_PROFILE_BYTES]>,
     pub tracker: TrackerConfig,
     pub proof: DepositProofConfig,
     /// Address of the `LayerX` deposit-root checkpoint registry. Custody itself
@@ -89,9 +89,12 @@ impl Config {
             evidence_root: path("EVIDENCE_ROOT")?,
             custody_profile: if protocol == 3 {
                 Some(
-                    read_private(&path("CUSTODY_PROFILE")?, 207)?
-                        .try_into()
-                        .map_err(|_| Error::Configuration)?,
+                    read_private(
+                        &path("CUSTODY_PROFILE")?,
+                        layerx_paxeer_client::NATIVE_CUSTODY_PROFILE_BYTES,
+                    )?
+                    .try_into()
+                    .map_err(|_| Error::Configuration)?,
                 )
             } else {
                 None

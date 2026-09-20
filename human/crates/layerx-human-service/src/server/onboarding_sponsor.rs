@@ -481,13 +481,8 @@ fn bootstrap_intent(
         {
             return Err(refused(()));
         }
-        let raw: &[u8; 427] = request
-            .credit
-            .as_deref()
-            .ok_or_else(|| refused(()))?
-            .try_into()
-            .map_err(refused)?;
-        if raw[139..171] != owner.public_key {
+        let raw = request.credit.as_deref().ok_or_else(|| refused(()))?;
+        if raw.get(139..171) != Some(owner.public_key.as_slice()) {
             return Err(refused(()));
         }
         let credit = layerx_intents::NativeCustodyCredit::new(

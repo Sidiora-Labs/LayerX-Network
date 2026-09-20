@@ -1247,15 +1247,16 @@ fn receipt_matches_leg(
     leg: &LegRecord,
 ) -> bool {
     let native_credit = leg.activity_type == 0x0008_0001
-        && leg.payload.len() == 427
-        && matches!(leg.payload.get(..5), Some(b"LXDC1" | b"LXDC2"));
+        && leg.payload.len() >= 368
+        && leg.payload.get(..5) == Some(b"LXDC3".as_slice())
+        && leg.payload.get(363..368) == Some(b"LXLB1".as_slice());
     if native_credit {
         receipt.module_id() == 8
             && receipt.module_version() == 1
             && receipt.operation() == 0
             && (receipt.result_code() != 0
                 || receipt.effects().get(1).is_some_and(|event| {
-                    event.body().get(144..176) == Some(&Sha256::digest(&leg.payload)[..])
+                    event.body().get(144..176) == Some(&Sha256::digest(&leg.payload[..363])[..])
                         && event.body().get(..96) == leg.payload.get(43..139)
                         && event.body().get(96..112) == leg.payload.get(191..207)
                         && event.body().get(112..144) == leg.payload.get(5..37)

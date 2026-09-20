@@ -337,14 +337,14 @@ def _produce(work_dir):
     commitment = guardian_commitment(policy['threshold'], keys)
     require(list(commitment) == policy['root'], policy_path, 'guardian commitment')
     credit_path = root / 'custody-credit.bin'
-    credit = protected_bytes(credit_path, 427)
-    require(len(credit) == 427 and credit[:5] in (b'LXDC1', b'LXDC2') and credit[107:139] == account
+    credit = protected_bytes(credit_path)
+    require(len(credit) > 363 and credit[:5] == b'LXDC3' and credit[107:139] == account
             and credit[139:171] == public, credit_path, 'real custody credit beneficiary binding')
-    if credit[:5] == b'LXDC2':
-        require(credit[359:363] == b'\0\0\0\1' and
-                2 <= int.from_bytes(credit[215:223], 'big') <= int.from_bytes(credit[287:295], 'big') < 2**63-1 and
-                int.from_bytes(credit[287:295], 'big')-int.from_bytes(credit[215:223], 'big') < 8192,
-                credit_path, 'Comet custody state evidence binding')
+    require(credit[359:363] == b'\0\0\0\2' and
+            1 <= int.from_bytes(credit[215:223], 'big') < 2**63-1 and
+            int.from_bytes(credit[287:295], 'big') == int.from_bytes(credit[215:223], 'big')+1 and
+            credit[327:359] == hashlib.sha256(credit[363:]).digest(),
+            credit_path, 'Comet custody light-client evidence binding')
     output = root / 'owner-registration.json'
     require(not output.exists(), output, 'existing registration requires reconciliation')
     run_dir = root / 'owner-native-run'

@@ -30,7 +30,7 @@ def retain_public_evidence(work, evidence):
         relative = source.relative_to(work)
         if (not source.is_file() or source.is_symlink() or 'secrets' in relative.parts
                 or (source.suffix in ('.pem', '.key', '.env') and source.name != 'boundary-ca.pem')
-                or source.name in ('actor', 'attestor', 'sequencer', 'treasury', 'client')):
+                or source.name in ('actor', 'sequencer', 'treasury', 'client')):
             continue
         target = evidence / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -141,9 +141,8 @@ def main():
             did = 'did:layerx:' + public.hex()
             name = ('agent:' + did + ':main').encode()
             beneficiary = hashlib.sha256(b'LX:ACCOUNT:v1' + len(name).to_bytes(4, 'big') + name).hexdigest()
-            for name, value in [('actor', seed), ('attestor', bytes([0x55]) * 32)]:
-                (work / name).write_bytes(value)
-                (work / name).chmod(0o600)
+            (work / 'actor').write_bytes(seed)
+            (work / 'actor').chmod(0o600)
             artifacts = build / 'withdraw-contracts/artifacts'
             threads = min(4, int(os.environ.get('CARGO_BUILD_JOBS', '4')),
                           int(os.environ.get('RAYON_NUM_THREADS', '4')))
@@ -170,52 +169,23 @@ def main():
                 (work / 'custody.json').write_text(json.dumps(custody, sort_keys=True) + '\n')
                 with boundaries(work, first, boundary_binary) as (origins, ca, identity):
                     retain_custody_proofs(work, origins, ca, identity, custody['vault'])
-                    pair = ['--rpc', origins[0], '--rpc', origins[1], '--ca-bundle', str(ca), '--disposable-identity', str(identity)]
+                    comet = json.loads(first.identity_path.read_text())['comet_url']
+                    pair = ['--rpc', origins[0], '--rpc', origins[1], '--ca-bundle', str(ca), '--disposable-identity', str(identity),
+                            '--comet-rpc', comet]
                     run(sys.executable, 'tests/bridge/custody_credit.py', 'profile', *pair, '--chain-id', '125',
                         '--network-id', '77', '--vault', custody['vault'], '--runtime-sha256', custody['runtime_sha256'],
-                        '--asset', '0x' + ASSET, '--confirmations', '2', '--attestor-key', work / 'attestor', '--output', work / 'profile')
+                        '--asset', '0x' + ASSET, '--trusted-height', '1', '--trusting-period-seconds', '1209600', '--output', work / 'profile')
                     run(sys.executable, 'tests/bridge/custody_credit.py', 'attest', *pair, '--profile', work / 'profile',
                         '--network-id', '77', '--transaction', custody['transaction'], '--beneficiary', '0x' + beneficiary,
                         '--beneficiary-key', '0x' + public.hex(), '--expected-amount', str(amount),
-                        '--attestor-key', work / 'attestor', '--output', work / 'credit')
-                    identity_record = json.loads(identity.read_bytes())
-                    history = work/'secrets'/('custody-history-'+identity_record['genesis_sha256'][2:])
-                    run(sys.executable, 'tests/bridge/test_comet_evidence.py', '--evidence', str(work/'credit.proof.json'),
-                        '--history-state', str(history), '--attestor-key', str(work/'attestor'))
+                        '--output', work / 'credit')
                     if os.environ.get('LAYERX_CUSTODY_FIXTURE_DIR'):
                         exported = Path(os.environ['LAYERX_CUSTODY_FIXTURE_DIR'])
                         exported.mkdir(parents=True, exist_ok=True)
                         for source, name in ((work/'profile', 'custody.profile'), (work/'credit', 'custody.credit')):
                             with (exported/name).open('xb') as output:
                                 output.write(source.read_bytes())
-                        proof_evidence = json.loads((work/'credit.proof.json').read_bytes())
-                        fixture_request = proof_evidence['requests'][0]
-                        exported_history = subprocess.run([str(proof_binary),
-                            '--history-state', str(history), '--attestor-key', str(work/'attestor')],
-                            input=json.dumps(fixture_request | {'operation': 'export'}).encode(),
-                            capture_output=True, check=True, timeout=120)
-                        fixture_request['bundle']['history'] = json.loads(exported_history.stdout)
-                        with (exported/'state-credit.json').open('x') as output:
-                            json.dump(fixture_request, output, sort_keys=True, separators=(',', ':'))
-                            output.write('\n')
-                    execution_credit = work/'credit'
-                    if os.environ.get('LAYERX_CUSTODY_HISTORY_WINDOW') == '1':
-                        run(sys.executable, 'tests/bridge/comet_history.py', *pair,
-                            '--history-state', history, '--evidence', work/'credit.proof.json',
-                            '--profile', work/'profile', '--network-id', '77',
-                            '--transaction', custody['transaction'], '--beneficiary', '0x'+beneficiary,
-                            '--beneficiary-key', '0x'+public.hex(), '--expected-amount', str(amount),
-                            '--attestor-key', work/'attestor', '--output', work/'credit-after-window')
-                        execution_credit = work/'credit-after-window'
-                        if os.environ.get('LAYERX_CUSTODY_WINDOW_FIXTURE_DIR'):
-                            exported = Path(os.environ['LAYERX_CUSTODY_WINDOW_FIXTURE_DIR'])
-                            exported.mkdir(parents=True, exist_ok=True)
-                            for source, name in ((work/'profile', 'custody.profile'),
-                                                 (execution_credit, 'custody.credit'),
-                                                 (work/'credit-after-window.history.json', 'history.json')):
-                                with (exported/name).open('xb') as output:
-                                    output.write(source.read_bytes())
-                    run(build / 'tests/bridge/sign-credit', work / 'profile', execution_credit, did, work / 'actor',
+                    run(build / 'tests/bridge/sign-credit', work / 'profile', work / 'credit', did, work / 'actor',
                         '0', str(int(time.time() * 1000)), work / 'activity')
                     (work / 'activity').chmod(0o644)
                     env = os.environ | {'LAYERX_TEST_WITHDRAW_PROFILE': str(work / 'profile'),

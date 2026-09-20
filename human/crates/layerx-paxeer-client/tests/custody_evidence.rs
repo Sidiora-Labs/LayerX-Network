@@ -1,95 +1,25 @@
-use std::path::Path;
-use std::process::Command;
+use std::path::{Path, PathBuf};
 
-#[test]
-fn real_weth_protocol_three_custody_evidence() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+use layerx_paxeer_client::{
+    NativeCustodyCredit, NativeCustodyExpectation, NATIVE_CUSTODY_CREDIT_HEAD_BYTES,
+    NATIVE_CUSTODY_PROFILE_BYTES,
+};
+use sha2::{Digest as _, Sha256};
+
+fn fixtures() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(3)
-        .unwrap_or_else(|| panic!("repository root"));
-    let output = root
-        .join("qual-logs")
-        .join(format!("custody-evidence-{}", std::process::id()));
-    let status = Command::new("python3")
-        .arg(root.join("tests/bridge/local_credit_evidence.py"))
-        .arg("--output")
-        .arg(&output)
-        .status()
-        .unwrap_or_else(|error| panic!("custody evidence producer: {error}"));
-    assert!(status.success(), "real custody evidence failed: {status}");
-    let read = |name| std::fs::read(output.join(name)).unwrap_or_else(|error| panic!("{error}"));
-    let profile = read("custody.profile");
-    let credit = read("custody.credit");
-    assert_eq!(profile.len(), 207);
-    assert_eq!(credit.len(), 427);
-    let identity =
-        String::from_utf8(read("identity.json")).unwrap_or_else(|error| panic!("{error}"));
-    let identity =
-        layerx_paxeer_client::parse_json(&identity).unwrap_or_else(|error| panic!("{error:?}"));
-    let did = identity
-        .member("did")
-        .and_then(layerx_paxeer_client::Json::as_text)
-        .unwrap_or_else(|| panic!("actor DID"));
-    let account = layerx_types::account::AccountId::parse(&format!("agent:{did}:main"))
-        .unwrap_or_else(|error| panic!("{error:?}"));
-    let beneficiary = layerx_paxeer_client::account_address_for_protocol(&account, 3)
-        .unwrap_or_else(|error| panic!("{error:?}"));
-    assert_eq!(&credit[107..139], beneficiary.as_slice());
-    let public: [u8; 32] = profile[65..97]
-        .try_into()
-        .unwrap_or_else(|error| panic!("{error}"));
-    let authority =
-        ed25519_dalek::VerifyingKey::from_bytes(&public).unwrap_or_else(|error| panic!("{error}"));
-    let signature = ed25519_dalek::Signature::from_slice(&credit[363..])
-        .unwrap_or_else(|error| panic!("{error}"));
-    let mut message = b"LX:CUSTODY:CREDIT:v1".to_vec();
-    message.extend_from_slice(&credit[..363]);
-    authority
-        .verify_strict(&message, &signature)
-        .unwrap_or_else(|error| panic!("{error}"));
-    let decoded = layerx_paxeer_client::AttestedNativeCustodyCredit::verify(
-        &profile,
-        &credit,
-        layerx_paxeer_client::NativeCustodyExpectation {
-            network_id: u32::from_be_bytes(
-                profile[201..205]
-                    .try_into()
-                    .unwrap_or_else(|_| panic!("network")),
-            ),
-            beneficiary,
-            owner_key: credit[139..171]
-                .try_into()
-                .unwrap_or_else(|_| panic!("owner")),
-        },
-    )
-    .unwrap_or_else(|error| panic!("native custody decoder: {error:?}"));
-    assert!(matches!(
-        decoded.evidence(),
-        layerx_paxeer_client::NativeCustodyEvidence::EthereumReceipt { .. }
-    ));
-    assert_eq!(decoded.canonical_bytes().as_slice(), credit.as_slice());
-    message[20] ^= 1;
-    assert!(authority.verify_strict(&message, &signature).is_err());
+        .unwrap_or_else(|| panic!("repository root"))
+        .join("tests/fixtures/custody/paxeer-light-v1")
 }
 
-#[test]
-fn real_comet_state_credit_preserves_typed_evidence_and_refusals() {
-    use ed25519_dalek::{Signer as _, SigningKey};
-    use layerx_paxeer_client::{
-        AttestedNativeCustodyCredit, NativeCustodyEvidence, NativeCustodyExpectation,
-    };
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .unwrap_or_else(|| panic!("repository root"));
-    let fixtures = root.join("tests/fixtures/custody/paxeer-state-v2");
-    let profile =
-        std::fs::read(fixtures.join("custody.profile")).unwrap_or_else(|error| panic!("{error}"));
-    let credit =
-        std::fs::read(fixtures.join("custody.credit")).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(&profile[..5], b"LXBC2");
-    assert_eq!(&credit[..5], b"LXDC2");
-    let expected = NativeCustodyExpectation {
+fn read(name: &str) -> Vec<u8> {
+    std::fs::read(fixtures().join(name)).unwrap_or_else(|error| panic!("{name}: {error}"))
+}
+
+fn expectation(profile: &[u8], credit: &[u8]) -> NativeCustodyExpectation {
+    NativeCustodyExpectation {
         network_id: u32::from_be_bytes(
             profile[201..205]
                 .try_into()
@@ -101,19 +31,65 @@ fn real_comet_state_credit_preserves_typed_evidence_and_refusals() {
         owner_key: credit[139..171]
             .try_into()
             .unwrap_or_else(|_| panic!("owner")),
-    };
-    let decoded = AttestedNativeCustodyCredit::verify(&profile, &credit, expected)
+    }
+}
+
+#[test]
+fn real_light_credit_preserves_typed_evidence_and_refusals() {
+    let profile = read("custody.profile");
+    let credit = read("custody.credit");
+    assert_eq!(profile.len(), NATIVE_CUSTODY_PROFILE_BYTES);
+    assert_eq!(&profile[..5], b"LXBC3");
+    assert_eq!(&credit[..5], b"LXDC3");
+    assert_eq!(
+        &credit[NATIVE_CUSTODY_CREDIT_HEAD_BYTES..NATIVE_CUSTODY_CREDIT_HEAD_BYTES + 5],
+        b"LXLB1"
+    );
+    let did = String::from_utf8(read("did.txt")).unwrap_or_else(|error| panic!("{error}"));
+    let did = did.trim();
+    let owner = &credit[139..171];
+    let owner_hex: String = owner.iter().map(|byte| format!("{byte:02x}")).collect();
+    assert_eq!(did, format!("did:layerx:{owner_hex}"));
+    let account = layerx_types::account::AccountId::parse(&format!("agent:{did}:main"))
         .unwrap_or_else(|error| panic!("{error:?}"));
-    assert!(matches!(
-        decoded.evidence(),
-        NativeCustodyEvidence::CometState { .. }
-    ));
-    assert_eq!(decoded.canonical_bytes().as_slice(), credit.as_slice());
-    for index in 0..credit.len() {
+    let beneficiary = layerx_paxeer_client::account_address_for_protocol(&account, 3)
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    assert_eq!(&credit[107..139], beneficiary.as_slice());
+    let expected = expectation(&profile, &credit);
+    let decoded = NativeCustodyCredit::verify(&profile, &credit, expected)
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    let evidence = decoded.evidence();
+    assert_eq!(evidence.header_height, evidence.state_height + 1);
+    assert!(
+        evidence.state_height
+            >= u64::from_be_bytes(
+                profile[161..169]
+                    .try_into()
+                    .unwrap_or_else(|_| panic!("trusted height"))
+            )
+    );
+    assert_eq!(
+        evidence.proof_bundle_hash,
+        <[u8; 32]>::from(Sha256::digest(decoded.bundle_bytes()))
+    );
+    assert_eq!(decoded.canonical_bytes(), credit.as_slice());
+    assert_eq!(
+        decoded.head_bytes(),
+        &credit[..NATIVE_CUSTODY_CREDIT_HEAD_BYTES]
+    );
+    let nullifier = String::from_utf8(read("custody.credit.nullifier"))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let decoded_nullifier: String = decoded
+        .nullifier()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(nullifier.trim(), decoded_nullifier);
+    for index in (0..credit.len()).filter(|index| !(223..255).contains(index)) {
         let mut changed = credit.clone();
         changed[index] ^= 1;
         assert!(
-            AttestedNativeCustodyCredit::verify(&profile, &changed, expected).is_err(),
+            NativeCustodyCredit::verify(&profile, &changed, expected).is_err(),
             "credit {index}"
         );
     }
@@ -121,64 +97,83 @@ fn real_comet_state_credit_preserves_typed_evidence_and_refusals() {
         let mut changed = profile.clone();
         changed[index] ^= 1;
         assert!(
-            AttestedNativeCustodyCredit::verify(&changed, &credit, expected).is_err(),
+            NativeCustodyCredit::verify(&changed, &credit, expected).is_err(),
             "profile {index}"
         );
     }
-    let signer = SigningKey::from_bytes(&[0x55; 32]);
-    assert_eq!(signer.verifying_key().as_bytes(), &profile[65..97]);
-    for offset in [4, 215, 287, 359, 362] {
+    assert!(NativeCustodyCredit::verify(
+        &profile,
+        &credit[..NATIVE_CUSTODY_CREDIT_HEAD_BYTES],
+        expected
+    )
+    .is_err());
+    let mut trailing = credit.clone();
+    trailing.push(0);
+    assert!(NativeCustodyCredit::verify(&profile, &trailing, expected).is_err());
+    let mut wrong_owner = expected;
+    wrong_owner.owner_key[0] ^= 1;
+    assert!(NativeCustodyCredit::verify(&profile, &credit, wrong_owner).is_err());
+    let mut wrong_network = expected;
+    wrong_network.network_id += 1;
+    assert!(NativeCustodyCredit::verify(&profile, &credit, wrong_network).is_err());
+    for retired in [b"LXDC1", b"LXDC2"] {
         let mut changed = credit.clone();
-        changed[offset] ^= 1;
-        let mut message = b"LX:CUSTODY:CREDIT:v2".to_vec();
-        message.extend_from_slice(&changed[..363]);
-        changed[363..].copy_from_slice(&signer.sign(&message).to_bytes());
-        assert!(
-            AttestedNativeCustodyCredit::verify(&profile, &changed, expected).is_err(),
-            "signed field {offset}"
-        );
+        changed[..5].copy_from_slice(retired);
+        assert!(NativeCustodyCredit::verify(&profile, &changed, expected).is_err());
+    }
+    for retired in ["paxeer-state-v2", "paxeer-state-v2/history-window"] {
+        let directory = fixtures().join("..").join(retired);
+        let old_profile = std::fs::read(directory.join("custody.profile"))
+            .unwrap_or_else(|error| panic!("{error}"));
+        let old_credit = std::fs::read(directory.join("custody.credit"))
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(NativeCustodyCredit::verify(
+            &old_profile,
+            &old_credit,
+            expectation(&old_profile, &old_credit)
+        )
+        .is_err());
     }
 }
 
 #[test]
-fn real_comet_state_credit_after_history_pruning() {
-    use layerx_paxeer_client::{
-        AttestedNativeCustodyCredit, NativeCustodyEvidence, NativeCustodyExpectation,
-    };
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .unwrap_or_else(|| panic!("repository root"));
-    let fixtures = root.join("tests/fixtures/custody/paxeer-state-v2/history-window");
-    let profile =
-        std::fs::read(fixtures.join("custody.profile")).unwrap_or_else(|error| panic!("{error}"));
-    let credit =
-        std::fs::read(fixtures.join("custody.credit")).unwrap_or_else(|error| panic!("{error}"));
-    let expected = NativeCustodyExpectation {
-        network_id: u32::from_be_bytes(
-            profile[201..205]
-                .try_into()
-                .unwrap_or_else(|_| panic!("network")),
-        ),
-        beneficiary: credit[107..139]
-            .try_into()
-            .unwrap_or_else(|_| panic!("beneficiary")),
-        owner_key: credit[139..171]
-            .try_into()
-            .unwrap_or_else(|_| panic!("owner")),
-    };
-    let decoded = AttestedNativeCustodyCredit::verify(&profile, &credit, expected)
+fn real_light_credit_profiles_and_later_proofs_stay_bound() {
+    let profile = read("custody.profile");
+    let credit = read("custody.credit");
+    let adjacent_profile = read("custody-adjacent.profile");
+    let adjacent = read("custody-adjacent.credit");
+    let later = read("custody-later.credit");
+    let first = NativeCustodyCredit::verify(&profile, &credit, expectation(&profile, &credit))
         .unwrap_or_else(|error| panic!("{error:?}"));
-    match decoded.evidence() {
-        NativeCustodyEvidence::CometState {
-            state_height,
-            finalized_state_height,
-            ..
-        } => {
-            assert!(*state_height > 8192);
-            assert!(*finalized_state_height >= *state_height);
-        }
-        NativeCustodyEvidence::EthereumReceipt { .. } => panic!("Comet state evidence required"),
-    }
-    assert_eq!(decoded.canonical_bytes().as_slice(), credit.as_slice());
+    let adjacent_decoded = NativeCustodyCredit::verify(
+        &adjacent_profile,
+        &adjacent,
+        expectation(&adjacent_profile, &adjacent),
+    )
+    .unwrap_or_else(|error| panic!("{error:?}"));
+    let later_decoded =
+        NativeCustodyCredit::verify(&profile, &later, expectation(&profile, &later))
+            .unwrap_or_else(|error| panic!("{error:?}"));
+    assert_eq!(first.custody(), adjacent_decoded.custody());
+    assert_eq!(first.custody(), later_decoded.custody());
+    assert_eq!(first.nullifier(), later_decoded.nullifier());
+    assert_eq!(first.bundle_bytes(), adjacent_decoded.bundle_bytes());
+    assert_eq!(
+        u64::from_be_bytes(
+            adjacent_profile[161..169]
+                .try_into()
+                .unwrap_or_else(|_| panic!("trusted height"))
+        ),
+        adjacent_decoded.evidence().state_height
+    );
+    assert!(later_decoded.evidence().header_height > first.evidence().header_height);
+    assert!(NativeCustodyCredit::verify(
+        &adjacent_profile,
+        &credit,
+        expectation(&profile, &credit)
+    )
+    .is_err());
+    assert!(
+        NativeCustodyCredit::verify(&profile, &adjacent, expectation(&profile, &adjacent)).is_err()
+    );
 }

@@ -490,7 +490,7 @@ fn decode_bridge_deposit_credit(
     payload: &[u8],
     activity: &Activity,
 ) -> Result<SendSemantics, DisclosureError> {
-    if payload.starts_with(b"LXDC1") || payload.starts_with(b"LXDC2") {
+    if payload.starts_with(b"LXDC") {
         return decode_native_custody_credit(payload, activity);
     }
     let mut decoder = Decoder::new(payload, 0);
@@ -525,7 +525,12 @@ fn decode_native_custody_credit(
     payload: &[u8],
     activity: &Activity,
 ) -> Result<SendSemantics, DisclosureError> {
-    if payload.len() != 427
+    if payload.len() < 368
+        || payload.len() > layerx_types::limits::MAX_PAYLOAD_BYTES
+        || &payload[..5] != b"LXDC3"
+        || &payload[363..368] != b"LXLB1"
+        || payload[327..359] != Sha256::digest(&payload[363..])[..]
+        || payload[359..363] != 2_u32.to_be_bytes()
         || activity.protocol_version() != 3
         || payload[37..41] != activity.network_id().to_be_bytes()
         || payload[41..43] != activity.protocol_version().to_be_bytes()

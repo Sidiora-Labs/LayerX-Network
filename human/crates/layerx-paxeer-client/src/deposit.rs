@@ -1441,7 +1441,7 @@ pub struct DepositProof {
     inclusion_proof: Proof,
     leaf_hash: [u8; 32],
     nullifier: [u8; 32],
-    native_credit: Option<Box<crate::AttestedNativeCustodyCredit>>,
+    native_credit: Option<Box<crate::NativeCustodyCredit>>,
 }
 
 impl DepositProof {
@@ -1787,10 +1787,10 @@ impl DepositProof {
     }
 
     /// # Errors
-    /// Refuses a native attestation that differs from the independently verified deposit.
+    /// Refuses a native credit that differs from the independently verified deposit.
     pub fn with_native_credit(
         mut self,
-        credit: crate::AttestedNativeCustodyCredit,
+        credit: crate::NativeCustodyCredit,
     ) -> Result<Self, DepositFailure> {
         let profile = credit.profile_bytes();
         if credit.custody() != &self.custody
@@ -1799,34 +1799,21 @@ impl DepositProof {
             || profile[13..33] != self.vault.bytes()
             || profile[201..205] != self.network_id.to_be_bytes()
             || self.protocol_version != 3
+            || credit.evidence().state_height < self.inclusion.block.number
         {
             return Err(DepositFailure::CreditRefused(CreditFault::NativeBinding));
-        }
-        if let crate::NativeCustodyEvidence::EthereumReceipt {
-            inclusion_height,
-            block_hash,
-            transaction_hash,
-            ..
-        } = credit.evidence()
-        {
-            if *inclusion_height != self.inclusion.block.number
-                || *block_hash != self.inclusion.block.hash
-                || *transaction_hash != self.transaction.bytes()
-            {
-                return Err(DepositFailure::CreditRefused(CreditFault::NativeBinding));
-            }
         }
         self.native_credit = Some(Box::new(credit));
         Ok(self)
     }
 
     #[must_use]
-    pub fn native_credit(&self) -> Option<&crate::AttestedNativeCustodyCredit> {
+    pub fn native_credit(&self) -> Option<&crate::NativeCustodyCredit> {
         self.native_credit.as_deref()
     }
 }
 fn verify_native_credit_receipt(
-    credit: &crate::AttestedNativeCustodyCredit,
+    credit: &crate::NativeCustodyCredit,
     receipt_bytes: &[u8],
     batch: &AuthorizedBatch,
     expected_activity_id: [u8; 32],
@@ -1850,7 +1837,7 @@ fn verify_native_credit_receipt(
     {
         return Err(refusal());
     }
-    let payload_hash = Sha256::digest(credit.canonical_bytes());
+    let payload_hash = Sha256::digest(&credit.canonical_bytes()[..363]);
     let expected = [
         &credit.canonical_bytes()[43..139],
         &credit.canonical_bytes()[191..207],

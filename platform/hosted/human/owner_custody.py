@@ -1,6 +1,5 @@
 import argparse
 import hashlib
-import os
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -18,10 +17,9 @@ def native_bootstrap(args, root, rpc, account):
     # Paxeer custody is the layerxcustody module behind the precompile: the asset map, the sequencer
     # authorization and the delays are chain genesis state, so the bring-up deploys nothing for it.
     require(quantity(rpc.call('eth_chainId', [])) == 125, root, 'native custody chain')
-    write_new(args.attestor_key, os.urandom(32))
     identity = module_identity().hex()
     create_profile(SimpleNamespace(**{**vars(args), 'chain_id': 125, 'vault': CUSTODY_ADDRESS,
-                   'runtime_sha256': '0x' + identity, 'asset': '0x' + args.asset, 'confirmations': 1,
+                   'runtime_sha256': '0x' + identity, 'asset': '0x' + args.asset,
                    'output': str(root / 'custody.profile')}))
     write_json(root / 'owner-custody.json', dict(vault=CUSTODY_ADDRESS, asset=args.asset,
                runtime_sha256=identity, payer=account))
@@ -50,11 +48,10 @@ def bootstrap(args):
     govern(rpc, account, timelock, timelock, calldata('setCallPermission(address,bytes4,bool)', registry, register[:10], 'true'))
     govern(rpc, account, timelock, registry, register)
     runtime = hashlib.sha256(unhex(rpc.call('eth_getCode', [vault, 'latest']))).hexdigest()
-    write_new(args.attestor_key, os.urandom(32))
     if not beta:
         rpc.call('anvil_mine', ['0x80'], allow_missing=True)
     create_profile(SimpleNamespace(**{**vars(args), 'chain_id': quantity(rpc.call('eth_chainId', [])),
-                   'vault': vault, 'runtime_sha256': '0x' + runtime, 'asset': '0x' + args.asset, 'confirmations': 1,
+                   'vault': vault, 'runtime_sha256': '0x' + runtime, 'asset': '0x' + args.asset,
                    'output': str(root / 'custody.profile')}))
     write_json(root / 'owner-custody.json', dict(vault=vault, token=token, registry=registry,
                timelock=timelock, asset=args.asset, runtime_sha256=runtime, payer=account))
@@ -66,10 +63,9 @@ def credit_material_name(transaction):
 
 def publish_credit_material(root, transaction):
     source = root / 'custody-credit.bin'
-    credit = protected_bytes(source, 427)
-    require(len(credit) == 427 and credit[:5] in (b'LXDC1', b'LXDC2'), source, 'attested custody credit layout')
-    if credit[:5] == b'LXDC1':
-        require(credit[327:359] == unhex(transaction, 32), source, 'custody credit transaction binding')
+    credit = protected_bytes(source)
+    require(len(credit) > 363 and credit[:5] == b'LXDC3'
+            and credit[327:359] == hashlib.sha256(credit[363:]).digest(), source, 'light-client custody credit layout')
     target = root / credit_material_name(transaction)
     write_new(target, credit)
     return target
@@ -87,7 +83,7 @@ def deposit(args):
     account = signer(rpc, args.key_file)
     require(account == config['payer'] and args.asset == config['asset'], root, 'custody payer and asset')
     profile = (root / 'custody.profile').read_bytes()
-    require(len(profile) == 207 and profile[:5] in (b'LXBC1', b'LXBC2') and profile[13:33] == unhex(config['vault'], 20)
+    require(len(profile) == 223 and profile[:5] == b'LXBC3' and profile[13:33] == unhex(config['vault'], 20)
             and profile[97:129] == bytes.fromhex(args.asset) and profile[201:207] == args.network_id.to_bytes(4, 'big') + b'\0\3',
             root, 'immutable custody profile binding')
     native = getattr(rpc, 'disposable', False)
@@ -127,9 +123,10 @@ if __name__ == '__main__':
     parser.add_argument('--ca-bundle')
     parser.add_argument('--disposable-identity')
     parser.add_argument('--vault-artifact')
-    parser.add_argument('--history-state')
+    parser.add_argument('--comet-rpc', required=True)
+    parser.add_argument('--trusted-height', type=int)
+    parser.add_argument('--trusting-period-seconds', type=int)
     parser.add_argument('--key-file', required=True)
-    parser.add_argument('--attestor-key', required=True)
     parser.add_argument('--network-id', type=int, required=True)
     parser.add_argument('--asset', required=True)
     parser.add_argument('--amount', type=int, default=1000000000000000000)

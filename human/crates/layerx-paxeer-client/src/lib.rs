@@ -37,8 +37,9 @@ pub use finality::{
 };
 pub use json::{parse as parse_json, Json, JsonError, JsonErrorReason};
 pub use native_custody::{
-    AttestedNativeCustodyCredit, NativeCustodyError, NativeCustodyEvidence,
-    NativeCustodyExpectation,
+    NativeCustodyCredit, NativeCustodyError, NativeCustodyEvidence, NativeCustodyExpectation,
+    NATIVE_CUSTODY_CREDIT_HEAD_BYTES, NATIVE_CUSTODY_CREDIT_MAX_BYTES,
+    NATIVE_CUSTODY_PROFILE_BYTES,
 };
 pub use rpc::{raw_call, EndpointConfig, EndpointFailure, EndpointFault, EndpointTransport};
 pub use status::{

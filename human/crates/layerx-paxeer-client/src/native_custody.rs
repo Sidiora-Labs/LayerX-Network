@@ -1,15 +1,19 @@
-use ed25519_dalek::{Signature, VerifyingKey};
-use layerx_types::{amount::Amount, ids::AssetId, intent::EvmAddress};
+use ed25519_dalek::VerifyingKey;
+use layerx_types::{amount::Amount, ids::AssetId, intent::EvmAddress, limits::MAX_PAYLOAD_BYTES};
 use sha2::{Digest as _, Sha256};
 
 use crate::{deposit::derive_deposit_id, CustodyDeposit};
+
+pub const NATIVE_CUSTODY_PROFILE_BYTES: usize = 223;
+pub const NATIVE_CUSTODY_CREDIT_HEAD_BYTES: usize = 363;
+pub const NATIVE_CUSTODY_CREDIT_MAX_BYTES: usize = MAX_PAYLOAD_BYTES;
+const MAX_UNIX_SECONDS: u64 = 253_402_300_799;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeCustodyError {
     Layout,
     Profile,
     Binding,
-    Signature,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,30 +24,19 @@ pub struct NativeCustodyExpectation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NativeCustodyEvidence {
-    EthereumReceipt {
-        inclusion_height: u64,
-        block_hash: [u8; 32],
-        receipts_root: [u8; 32],
-        finalized_height: u64,
-        finalized_hash: [u8; 32],
-        transaction_hash: [u8; 32],
-        log_index: u32,
-    },
-    CometState {
-        state_height: u64,
-        state_header_hash: [u8; 32],
-        application_root: [u8; 32],
-        finalized_state_height: u64,
-        finalized_header_hash: [u8; 32],
-        proof_bundle_hash: [u8; 32],
-    },
+pub struct NativeCustodyEvidence {
+    pub state_height: u64,
+    pub header_height: u64,
+    pub header_hash: [u8; 32],
+    pub application_root: [u8; 32],
+    pub validators_hash: [u8; 32],
+    pub proof_bundle_hash: [u8; 32],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AttestedNativeCustodyCredit {
-    payload: [u8; 427],
-    profile: [u8; 207],
+pub struct NativeCustodyCredit {
+    payload: Vec<u8>,
+    profile: [u8; NATIVE_CUSTODY_PROFILE_BYTES],
     custody: CustodyDeposit,
     evidence: NativeCustodyEvidence,
 }
@@ -60,14 +53,23 @@ fn number(bytes: &[u8], start: usize) -> Result<u64, NativeCustodyError> {
     Ok(u64::from_be_bytes(field(bytes, start)?))
 }
 
-fn profile_version(
+fn comet_chain_id(profile: &[u8]) -> bool {
+    let text = &profile[169..201];
+    let length = text.iter().position(|byte| *byte == 0).unwrap_or(32);
+    length != 0
+        && text[..length]
+            .iter()
+            .all(|byte| (0x21..=0x7e).contains(byte))
+        && text[length..].iter().all(|byte| *byte == 0)
+}
+
+fn validate_profile(
     profile: &[u8],
     expected: NativeCustodyExpectation,
-) -> Result<bool, NativeCustodyError> {
-    let version = profile.get(..5).ok_or(NativeCustodyError::Profile)?;
-    let comet = version == b"LXBC2";
-    let chain = number(profile, 5)?;
-    let confirmations = number(profile, 161)?;
+) -> Result<(), NativeCustodyError> {
+    if profile.len() != NATIVE_CUSTODY_PROFILE_BYTES {
+        return Err(NativeCustodyError::Profile);
+    }
     let name = b"system:paxeer-reserve";
     let mut reserve = Sha256::new();
     reserve.update(b"LX:ACCOUNT:v1");
@@ -77,22 +79,34 @@ fn profile_version(
             .to_be_bytes(),
     );
     reserve.update(name);
-    if profile.len() != 207
-        || (!comet && version != b"LXBC1")
-        || chain == 0
-        || confirmations == 0
-        || (comet && (chain != 125 || confirmations >= 8192))
+    let mut module = Sha256::new();
+    module.update(b"LX:CUSTODY:MODULE:v1");
+    module.update(b"layerxcustody");
+    module.update(&profile[13..33]);
+    let trusted_height = number(profile, 161)?;
+    let trusting_period = number(profile, 207)?;
+    let trusted_time = number(profile, 215)?;
+    if &profile[..5] != b"LXBC3"
+        || number(profile, 5)? != 125
+        || profile[33..65] != module.finalize()[..]
+        || trusted_height == 0
+        || trusted_height >= i64::MAX.unsigned_abs()
+        || !comet_chain_id(profile)
         || expected.network_id == 0
         || field::<4>(profile, 201)? != expected.network_id.to_be_bytes()
         || field::<2>(profile, 205)? != 3_u16.to_be_bytes()
         || profile[129..161] != reserve.finalize()[..]
-        || [13..33, 33..65, 97..129, 169..201]
+        || trusting_period == 0
+        || trusting_period > u64::from(u32::MAX)
+        || trusted_time == 0
+        || trusted_time > MAX_UNIX_SECONDS
+        || [13..33, 65..97, 97..129]
             .iter()
             .any(|range| profile[range.clone()].iter().all(|byte| *byte == 0))
     {
         return Err(NativeCustodyError::Profile);
     }
-    Ok(comet)
+    Ok(())
 }
 
 fn custody(
@@ -133,90 +147,103 @@ fn custody(
     Ok(facts)
 }
 
-fn evidence(
-    profile: &[u8],
-    credit: &[u8],
-    comet: bool,
-) -> Result<NativeCustodyEvidence, NativeCustodyError> {
-    let height = number(credit, 215)?;
-    let finalized = number(credit, 287)?;
-    let first_hash = field(credit, 223)?;
-    let root = field(credit, 255)?;
-    let final_hash = field(credit, 295)?;
-    let reference = field(credit, 327)?;
-    if height == 0
-        || finalized < height
-        || finalized - height < number(profile, 161)? - 1
-        || [first_hash, root, final_hash, reference].contains(&[0; 32])
-    {
-        return Err(NativeCustodyError::Binding);
-    }
-    if comet {
-        if height < 2
-            || finalized >= i64::MAX.unsigned_abs()
-            || finalized - height >= 8192
-            || field::<4>(credit, 359)? != 1_u32.to_be_bytes()
-        {
-            return Err(NativeCustodyError::Binding);
+fn hash8(bundle: &[u8], at: &mut usize) -> Result<Option<[u8; 32]>, NativeCustodyError> {
+    let length = *bundle.get(*at).ok_or(NativeCustodyError::Binding)?;
+    *at += 1;
+    match length {
+        0 => Ok(None),
+        32 => {
+            let value = field(bundle, *at).map_err(|_| NativeCustodyError::Binding)?;
+            *at += 32;
+            Ok(Some(value))
         }
-        Ok(NativeCustodyEvidence::CometState {
-            state_height: height,
-            state_header_hash: first_hash,
-            application_root: root,
-            finalized_state_height: finalized,
-            finalized_header_hash: final_hash,
-            proof_bundle_hash: reference,
-        })
-    } else {
-        Ok(NativeCustodyEvidence::EthereumReceipt {
-            inclusion_height: height,
-            block_hash: first_hash,
-            receipts_root: root,
-            finalized_height: finalized,
-            finalized_hash: final_hash,
-            transaction_hash: reference,
-            log_index: u32::from_be_bytes(field(credit, 359)?),
-        })
+        _ => Err(NativeCustodyError::Binding),
     }
 }
 
-impl AttestedNativeCustodyCredit {
-    /// Verifies the pinned attestor signature and native credit bindings; the
-    /// explicit evidence variant preserves receipt versus state-fact semantics.
+struct BundleHeader {
+    height: u64,
+    validators_hash: [u8; 32],
+    application_root: [u8; 32],
+}
+
+fn bundle_header(bundle: &[u8]) -> Result<BundleHeader, NativeCustodyError> {
+    if bundle.get(..5) != Some(b"LXLB1".as_slice()) {
+        return Err(NativeCustodyError::Binding);
+    }
+    let height = number(bundle, 21).map_err(|_| NativeCustodyError::Binding)?;
+    let mut at = 41;
+    hash8(bundle, &mut at)?;
+    at += 4;
+    hash8(bundle, &mut at)?;
+    let mut hashes = [None; 8];
+    for hash in &mut hashes {
+        *hash = hash8(bundle, &mut at)?;
+    }
+    Ok(BundleHeader {
+        height,
+        validators_hash: hashes[2].ok_or(NativeCustodyError::Binding)?,
+        application_root: hashes[5].ok_or(NativeCustodyError::Binding)?,
+    })
+}
+
+fn evidence(credit: &[u8]) -> Result<NativeCustodyEvidence, NativeCustodyError> {
+    let evidence = NativeCustodyEvidence {
+        state_height: number(credit, 215)?,
+        header_height: number(credit, 287)?,
+        header_hash: field(credit, 223)?,
+        application_root: field(credit, 255)?,
+        validators_hash: field(credit, 295)?,
+        proof_bundle_hash: field(credit, 327)?,
+    };
+    if evidence.state_height == 0
+        || evidence.state_height >= i64::MAX.unsigned_abs() - 1
+        || evidence.header_height != evidence.state_height + 1
+        || field::<4>(credit, 359)? != 2_u32.to_be_bytes()
+        || evidence.proof_bundle_hash
+            != <[u8; 32]>::from(Sha256::digest(&credit[NATIVE_CUSTODY_CREDIT_HEAD_BYTES..]))
+        || evidence.header_hash == [0; 32]
+    {
+        return Err(NativeCustodyError::Binding);
+    }
+    let header = bundle_header(&credit[NATIVE_CUSTODY_CREDIT_HEAD_BYTES..])?;
+    if header.height != evidence.header_height
+        || header.validators_hash != evidence.validators_hash
+        || header.application_root != evidence.application_root
+    {
+        return Err(NativeCustodyError::Binding);
+    }
+    Ok(evidence)
+}
+
+impl NativeCustodyCredit {
+    /// Checks the light-client credit head against the pinned profile, the
+    /// expected account, the carried bundle hash and the bundle header's height,
+    /// validator-set hash and application root. The header hash, commit and
+    /// store proofs inside the bundle are verified by the LayerX bridge module,
+    /// not here.
     ///
     /// # Errors
-    /// Refuses malformed profiles, mixed versions, invalid signatures or any
-    /// mismatch with the expected network, beneficiary, owner or deposit facts.
+    /// Refuses malformed profiles, retired formats, or any mismatch with the
+    /// expected network, beneficiary, owner, deposit facts or bundle hash.
     pub fn verify(
         profile: &[u8],
         credit: &[u8],
         expected: NativeCustodyExpectation,
     ) -> Result<Self, NativeCustodyError> {
-        if credit.len() != 427 {
+        if credit.len() <= NATIVE_CUSTODY_CREDIT_HEAD_BYTES
+            || credit.len() > NATIVE_CUSTODY_CREDIT_MAX_BYTES
+        {
             return Err(NativeCustodyError::Layout);
         }
-        let comet = profile_version(profile, expected)?;
-        if &credit[..5] != if comet { b"LXDC2" } else { b"LXDC1" } {
+        validate_profile(profile, expected)?;
+        if &credit[..5] != b"LXDC3" {
             return Err(NativeCustodyError::Binding);
         }
         let custody = custody(profile, credit, expected)?;
-        let evidence = evidence(profile, credit, comet)?;
-        let authority = VerifyingKey::from_bytes(&field(profile, 65)?)
-            .map_err(|_| NativeCustodyError::Profile)?;
-        let signature =
-            Signature::from_slice(&credit[363..]).map_err(|_| NativeCustodyError::Signature)?;
-        let mut message = if comet {
-            b"LX:CUSTODY:CREDIT:v2"
-        } else {
-            b"LX:CUSTODY:CREDIT:v1"
-        }
-        .to_vec();
-        message.extend_from_slice(&credit[..363]);
-        authority
-            .verify_strict(&message, &signature)
-            .map_err(|_| NativeCustodyError::Signature)?;
+        let evidence = evidence(credit)?;
         Ok(Self {
-            payload: field(credit, 0)?,
+            payload: credit.to_vec(),
             profile: field(profile, 0)?,
             custody,
             evidence,
@@ -224,7 +251,7 @@ impl AttestedNativeCustodyCredit {
     }
 
     #[must_use]
-    pub const fn profile_bytes(&self) -> &[u8; 207] {
+    pub const fn profile_bytes(&self) -> &[u8; NATIVE_CUSTODY_PROFILE_BYTES] {
         &self.profile
     }
 
@@ -237,8 +264,18 @@ impl AttestedNativeCustodyCredit {
     }
 
     #[must_use]
-    pub const fn canonical_bytes(&self) -> &[u8; 427] {
+    pub fn canonical_bytes(&self) -> &[u8] {
         &self.payload
+    }
+
+    #[must_use]
+    pub fn head_bytes(&self) -> &[u8] {
+        &self.payload[..NATIVE_CUSTODY_CREDIT_HEAD_BYTES]
+    }
+
+    #[must_use]
+    pub fn bundle_bytes(&self) -> &[u8] {
+        &self.payload[NATIVE_CUSTODY_CREDIT_HEAD_BYTES..]
     }
 
     #[must_use]

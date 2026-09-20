@@ -2,8 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -13,14 +11,16 @@ import (
 )
 
 func run(output io.Writer) error {
-	flags := flag.NewFlagSet("layerx-custody-proof", flag.ContinueOnError)
-	state := flags.String("history-state", "", "protected authenticated history directory")
-	key := flags.String("attestor-key", "", "protected attestor seed file")
-	if err := flags.Parse(os.Args[1:]); err != nil {
-		return err
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "light-profile":
+			return lightProfile(os.Args[2:])
+		case "light-credit":
+			return lightCredit(os.Args[2:])
+		}
 	}
-	if flags.NArg() != 0 || (*state == "") != (*key == "") {
-		return fmt.Errorf("history state and authority must be supplied together")
+	if len(os.Args) != 1 {
+		return fmt.Errorf("usage: layerx-custody-proof [light-profile|light-credit] (a JSON verify request on stdin otherwise)")
 	}
 	input, err := io.ReadAll(io.LimitReader(os.Stdin, custodyproof.MaxInputBytes+1))
 	if err != nil {
@@ -33,35 +33,10 @@ func run(output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	now := time.Now().UTC()
-	var result any
-	if *state == "" {
-		if request.Operation != "" && request.Operation != "verify" {
-			return fmt.Errorf("history operation requires durable state")
-		}
-		result, err = custodyproof.Verify(request, now)
-	} else {
-		history, openErr := custodyproof.OpenHistory(*state, *key, request.Expected, request.Bundle.Genesis, now)
-		if openErr != nil {
-			return openErr
-		}
-		switch request.Operation {
-		case "status":
-			result, err = history.Status(now)
-		case "advance":
-			err = history.Advance(request.Bundle.History, now)
-			if err == nil {
-				result, err = history.Status(now)
-			}
-		case "verify":
-			result, err = history.Verify(request, now)
-		case "export":
-			result, err = history.Export()
-		default:
-			err = fmt.Errorf("unsupported history operation")
-		}
-		err = errors.Join(err, history.Close())
+	if request.Operation != "" && request.Operation != "verify" {
+		return fmt.Errorf("unsupported operation")
 	}
+	result, err := custodyproof.Verify(request, time.Now().UTC())
 	if err != nil {
 		return err
 	}

@@ -231,21 +231,21 @@ class MaterialTests(unittest.TestCase):
             asset = '11' * 32
             custody = dict(vault='0x' + '0' * 36 + '1013', asset=asset, runtime_sha256='66' * 32, payer='0x' + '77' * 20)
             provision.write_json(source / 'owner-custody.json', custody)
-            profile = b'LXBC2' + bytes(92) + bytes.fromhex(asset) + bytes(78)
+            profile = b'LXBC3' + bytes(92) + bytes.fromhex(asset) + bytes(78)
             owner_native.protected_write(source / 'custody.profile', profile)
             provision.explorer_read_funding(provision._explorer_read_funding_prepare, work, secrets)
             funding = work / 'explorer-read-funding/human-evidence-input'
             self.assertEqual(provision.protected_json(funding / 'owner-admission.json'),
                              dict(did=did.decode(), public_key=public.hex(), owner_account=account.hex()))
             self.assertEqual(provision.protected_json(funding / 'owner-custody.json'), custody)
-            self.assertEqual(provision.protected_bytes(funding / 'custody.profile', 207), profile)
+            self.assertEqual(provision.protected_bytes(funding / 'custody.profile', 223), profile)
             self.assertEqual((work / 'explorer-read-funding').stat().st_mode & 0o777, 0o700)
             with self.assertRaises(provision.Refused):
                 provision.explorer_read_funding(provision._explorer_read_funding_prepare, work, secrets)
             deposit = bytes(range(32, 64))
             units = 1000000000
-            credit = bytearray(427)
-            credit[:5] = b'LXDC2'
+            credit = bytearray(363 + 600)
+            credit[:5] = b'LXDC3'
             credit[43:75] = deposit
             credit[75:107] = bytes.fromhex(asset)
             credit[107:139] = account
@@ -283,7 +283,7 @@ class MaterialTests(unittest.TestCase):
             self.assertEqual((reader.take(1), reader.number(16)), (b'\11', 0))
             self.assertEqual((reader.take(1), reader.span(32)),
                              (b'\12', owner_native.digest(b'payload-hash', bytes(credit))))
-            self.assertEqual((reader.take(1), reader.span(427)), (b'\13', bytes(credit)))
+            self.assertEqual((reader.take(1), reader.span(len(credit))), (b'\13', bytes(credit)))
             unsigned = b'\0\3\x10\1\13' + signed[5:reader.offset]
             self.assertEqual(reader.take(1), b'\14')
             signature = reader.span(64)

@@ -1,0 +1,74 @@
+Light-client deposit credit vectors (profile LXBC3, credit LXDC3, bundle LXLB1).
+
+Real data from a disposable single-validator paxd; nothing here is fabricated.
+
+paxd commit        28fac23aa08e140b6b1d1f5fc9b3e7fed78fd068
+comet chain id     hyperpax_125-1 (EVM chain id 125)
+LayerX network id  77
+asset id           e8890d7035362c007aec07cbf1d263f99f2583c2852992679d775f29e5b81c3d  = sha256("LayerX/native-custody-qualification/asset"), mapped to uhpx
+actor seed         actor.seed = sha256("LayerX/light-credit-vector/actor"), a public test seed
+owner key          bd92821f6d46f72bc3c4c49e7bbd91bdd509b1677abf00a956ae62dd0b0cbfe5
+did                did.txt
+beneficiary        00366daeff2a583a21cbc41f3363d3b261aa16b8b509cd7d86bd94fdc2965e8e
+                   = sha256("LX:ACCOUNT:v1" || be32(len(name)) || name), name = "agent:" + did + ":main"
+deposit            1000000 uhpx (value 1000000000000000000 wei) through deposit(bytes32) on
+                   0x0000000000000000000000000000000000001013, block 10, nonce 1, payer 0x8038Ea4CE33aC1Ae4f18886f78d5A93Ce6928678
+                   (a throwaway key generated for this run)
+deposit tx hash    0x2629cccb36f58f78443bd6b414a243ec116ddfc94ef53a94da5fc09b2b376cbf
+deposit id         342277dfb77df6af409d8ab8a208e89b76aa565d0430415803eca150eaf1f51e
+trusting period    1209600 seconds (14 days), carried by every profile at [207:215]
+header times       height 2 2026-09-20T15:07:49.002453827Z, 39 15:08:27.536336945Z, 40 15:08:28.557689536Z,
+                   120 15:09:51.881224409Z, 125 15:09:57.087079174Z, 140 15:10:12.774901867Z
+                   Verifiers are given a fixed clock inside the trusting period (the Go tests use trusted time + 3600 s),
+                   never the wall clock: the vectors expire 14 days after these times otherwise.
+
+custody.profile            223 bytes, trusted height 2, trusted header time 1789916869
+custody.credit             header height N = 40, state height 39, bound to custody.profile (non-adjacent update,
+                           header.validators_hash equals the trusted hash, no trusted-validators section)
+custody.credit.nullifier   hex sha256("LX:DEPOSIT:NULLIFIER:v1" || deposit id)
+custody-adjacent.profile   trusted height 39, trusted header time 1789916907
+custody-adjacent.credit    the same bundle bytes as custody.credit under a head bound to custody-adjacent.profile
+custody-later.credit       the same deposit re-proven at header height N = 120, state height 119, bound to
+                           custody.profile
+custody-skip.profile       trusted height 125, trusted header time 1789916997 (validator power 7000000000,
+                           trusted hash 03c0ee50a4988771220951c3535d178662380e67ce078f3e737f3232a353ba2f)
+custody-skip.credit        the same deposit proven at header height N = 140, state height 139, bound to
+                           custody-skip.profile. A staking delegation of 1000000000000000uhpx to the validator in block 131
+                           (transaction 1B0CE13B95DE617DBEA89BBF040F7058D0BF41B04769A8E0429A8D16439385F6) raised its power
+                           to 8000000000 from height 133, so header 140 has validators hash
+                           a955dace47294508dffcc82fa42767e86aa2d0793d17e784e49e5568bffff6b2, the bundle carries the trusted
+                           validator set (m = 1) and the more-than-1/3 overlap rule is exercised. The chain has a single
+                           validator; the set changed by voting power, not by membership.
+
+Commands (RPC=http://127.0.0.1:46657, DEPOSIT and OWNER as above):
+
+  python3 platform/hosted/paxeer/custody-genesis.py --network-id 77 --sequencer-id SEQ_ID \
+      --sequencer-public-key SEQ_PUB --asset e8890d7035362c007aec07cbf1d263f99f2583c2852992679d775f29e5b81c3d:uhpx --output custody-genesis.json
+  PAXD=paxd LAYERX_PAXEER_HOME=home LAYERX_PAXEER_DEPLOYER_ADDRESS=0x37A46da10789FA52607b02696309a3C29a141231 \
+      LAYERX_PAXEER_CUSTODY_GENESIS_FILE=custody-genesis.json LAYERX_PAXEER_RPC_PORT=46657 LAYERX_PAXEER_P2P_PORT=46656 \
+      LAYERX_PAXEER_EVM_PORT=48545 LAYERX_PAXEER_EVM_WS_PORT=48546 LAYERX_PAXEER_GRPC_PORT=49090 \
+      LAYERX_PAXEER_GRPC_WEB_PORT=49091 LAYERX_PAXEER_COMMIT_TIMEOUT_NANOSECONDS=1000000000 \
+      bash platform/hosted/paxeer/init-chain.sh
+  paxd start --home home
+  python3 platform/hosted/paxeer/evm.py send --rpc http://127.0.0.1:48545 --chain 125 --key-file KEY \
+      --value 1000000000000000000 0x0000000000000000000000000000000000001013 'deposit(bytes32)' 0x00366daeff2a583a21cbc41f3363d3b261aa16b8b509cd7d86bd94fdc2965e8e
+  layerx-custody-proof light-profile --rpc $RPC --asset e8890d7035362c007aec07cbf1d263f99f2583c2852992679d775f29e5b81c3d --network-id 77 --trusted-height 2 \
+      --trusting-period-seconds 1209600 --output custody.profile
+  layerx-custody-proof light-credit --rpc $RPC --profile custody.profile --deposit-id $DEPOSIT --owner-key $OWNER \
+      --height 40 --output custody.credit
+  layerx-custody-proof light-profile --rpc $RPC --asset e8890d7035362c007aec07cbf1d263f99f2583c2852992679d775f29e5b81c3d --network-id 77 --trusted-height 39 \
+      --trusting-period-seconds 1209600 --output custody-adjacent.profile
+  layerx-custody-proof light-credit --rpc $RPC --profile custody-adjacent.profile --deposit-id $DEPOSIT --owner-key $OWNER \
+      --height 40 --output custody-adjacent.credit
+  layerx-custody-proof light-credit --rpc $RPC --profile custody.profile --deposit-id $DEPOSIT --owner-key $OWNER \
+      --height 120 --trusted-validators-height 2 --output custody-later.credit
+  paxd tx staking delegate VALOPER 1000000000000000uhpx --from validator --keyring-backend test --home home \
+      --chain-id hyperpax_125-1 --node tcp://127.0.0.1:46657 --gas 400000 --fees 8000uhpx --broadcast-mode block -y
+  layerx-custody-proof light-profile --rpc $RPC --asset e8890d7035362c007aec07cbf1d263f99f2583c2852992679d775f29e5b81c3d --network-id 77 --trusted-height 125 \
+      --trusting-period-seconds 1209600 --output custody-skip.profile
+  layerx-custody-proof light-credit --rpc $RPC --profile custody-skip.profile --deposit-id $DEPOSIT --owner-key $OWNER \
+      --height 140 --trusted-validators-height 125 --output custody-skip.credit
+
+paxd serves one historical store proof per second (sc-historical-proof-rate-limit); light-credit retries that
+refusal up to 10 times, 1.1 s apart.
+go test ./custodyproof/ loads these files and checks them against the Go reference verifier.

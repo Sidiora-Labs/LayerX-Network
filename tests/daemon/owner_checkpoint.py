@@ -117,9 +117,8 @@ def checkpoint(work, public, settlement, rpc, account, launch, ca_key, ca_cert, 
     config.write_text(json.dumps(domain))
     config.chmod(0o644)
     custody = json.loads((work / 'human-evidence-input/owner-custody.json').read_text())
-    deposit_key = ed25519.Ed25519PrivateKey.from_private_bytes((work / 'attestor.seed').read_bytes())
+    deposit_key = ed25519.Ed25519PrivateKey.generate()
     deposit_public = deposit_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    assert (work / 'human-evidence-input/custody.profile').read_bytes()[65:97] == deposit_public
     manager = deploy(rpc, account, 'contracts/challenge/CheckpointChallengeManager.sol:CheckpointChallengeManager',
         registry, bond, account, account, 3600, 1, '0x' + 'ac' * 32, 1)
     send(rpc, account, bond, calldata('setSlashingAuthority(address)', manager))

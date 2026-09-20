@@ -15,7 +15,10 @@ const FINALITY_TAG: u8 = 3;
 const DEPOSIT_TAG: u8 = 4;
 const DEPOSIT_FAILURE_TAG: u8 = 5;
 const LEGACY_DEPOSIT_PROOF_BYTES: usize = 2 + DEPOSIT_NATIVE_PAYLOAD_MAX;
-pub const MAX_DEPOSIT_PROOF_BYTES: usize = LEGACY_DEPOSIT_PROOF_BYTES + 4 + 207 + 427;
+pub const MAX_DEPOSIT_PROOF_BYTES: usize = LEGACY_DEPOSIT_PROOF_BYTES
+    + 4
+    + crate::NATIVE_CUSTODY_PROFILE_BYTES
+    + crate::NATIVE_CUSTODY_CREDIT_MAX_BYTES;
 pub const MAX_DEPOSIT_FAILURE_BYTES: usize = 65_538;
 const FORCED_EXIT_TAG: u8 = 6;
 const DEBIT_BYTES: usize = 1 + 1 + 32 + 4 + 32 + 32 + 32 + 32 + 16 + 20;
@@ -40,11 +43,9 @@ pub fn encode_deposit_proof(
     if maximum_bytes == 0 {
         return Err(NativeWireError::Limit);
     }
-    let overhead = if value.native_credit().is_some() {
-        4 + 207 + 427
-    } else {
-        0
-    };
+    let overhead = value.native_credit().map_or(0, |credit| {
+        4 + crate::NATIVE_CUSTODY_PROFILE_BYTES + credit.canonical_bytes().len()
+    });
     let payload_limit = maximum_bytes
         .checked_sub(overhead)
         .ok_or(NativeWireError::Limit)?
@@ -94,16 +95,22 @@ pub fn decode_deposit_proof(
                     .map_err(|_| NativeWireError::Encoding)?,
             ) as usize;
             let end = 6_usize.checked_add(length).ok_or(NativeWireError::Limit)?;
-            if bytes.len() != end + 207 + 427 || length > DEPOSIT_NATIVE_PAYLOAD_MAX {
+            let credit_start = end
+                .checked_add(crate::NATIVE_CUSTODY_PROFILE_BYTES)
+                .ok_or(NativeWireError::Limit)?;
+            if length > DEPOSIT_NATIVE_PAYLOAD_MAX
+                || bytes.len() <= credit_start + crate::NATIVE_CUSTODY_CREDIT_HEAD_BYTES
+                || bytes.len() - credit_start > crate::NATIVE_CUSTODY_CREDIT_MAX_BYTES
+            {
                 return Err(NativeWireError::Encoding);
             }
             let proof = DepositProof::decode_native(&bytes[6..end]).map_err(map_deposit_error)?;
-            let profile = &bytes[end..end + 207];
-            let raw = &bytes[end + 207..];
+            let profile = &bytes[end..credit_start];
+            let raw = &bytes[credit_start..];
             let owner_key = raw[139..171]
                 .try_into()
                 .map_err(|_| NativeWireError::Encoding)?;
-            let credit = crate::AttestedNativeCustodyCredit::verify(
+            let credit = crate::NativeCustodyCredit::verify(
                 profile,
                 raw,
                 crate::NativeCustodyExpectation {

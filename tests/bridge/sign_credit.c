@@ -38,6 +38,7 @@ int main(int argc, char **argv)
     size_t name_length;
     lxp_bridge_profile profile;
     lxp_bridge_credit credit;
+    uint64_t header_seconds = 0U;
     lxp_activity activity = {0};
     lxp_arena arena;
     lxp_byte_span encoded;
@@ -53,12 +54,11 @@ int main(int argc, char **argv)
     }
     if (read_file(argv[1], sizeof(profile.bytes), false, &profile_bytes, &profile_length) ||
         profile_length != sizeof(profile.bytes) ||
-        read_file(argv[2], sizeof(credit.bytes), false, &credit_bytes, &credit_length) ||
-        credit_length != sizeof(credit.bytes) ||
+        read_file(argv[2], LXP_MAX_PAYLOAD_BYTES, false, &credit_bytes, &credit_length) ||
+        lxp_bridge_credit_parse(credit_bytes, credit_length, &credit) != LXP_OK ||
         read_file(argv[4], 32U, true, &seed, &seed_length) || seed_length != 32U)
         goto done;
     (void)memcpy(profile.bytes, profile_bytes, sizeof(profile.bytes));
-    (void)memcpy(credit.bytes, credit_bytes, sizeof(credit.bytes));
     key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, seed, 32U);
     context = EVP_MD_CTX_new();
     if (key == NULL || context == NULL ||
@@ -71,7 +71,7 @@ int main(int argc, char **argv)
     activity.activity_type = LXP_BRIDGE_CREDIT;
     activity.actor_did = (lxp_byte_span){(const uint8_t *)argv[3], strlen(argv[3])};
     activity.authority = (lxp_byte_span){public_key, sizeof(public_key)};
-    activity.payload = (lxp_byte_span){credit.bytes, sizeof(credit.bytes)};
+    activity.payload = (lxp_byte_span){credit_bytes, credit_length};
     activity.signature = (lxp_byte_span){signature, sizeof(signature)};
     if (activity.actor_did.length == 0U || activity.actor_did.length > sizeof(name) - 11U)
         goto done;
@@ -88,8 +88,12 @@ int main(int argc, char **argv)
         activity.timestamp_bound.not_before > UINT64_MAX - 300000U)
         goto done;
     activity.timestamp_bound.not_after = activity.timestamp_bound.not_before + 300000U;
-    if (lxp_bridge_credit_verify(&profile, &credit, activity.network_id, 3U, activity.idempotency_key) != LXP_OK ||
-        lxp_hash_payload(credit.bytes, sizeof(credit.bytes), activity.payload_hash) != LXP_OK ||
+    for (size_t index = 0U; index < 8U; ++index)
+        header_seconds = (header_seconds << 8U) | credit.proof[29U + index];
+    if (header_seconds > UINT64_MAX / 1000U ||
+        lxp_bridge_credit_verify(&profile, &credit, activity.network_id, 3U, NULL,
+                                 header_seconds * 1000U, activity.idempotency_key, NULL) != LXP_OK ||
+        lxp_hash_payload(credit_bytes, credit_length, activity.payload_hash) != LXP_OK ||
         lxp_activity_signing_preimage(&activity, preimage) != LXP_OK ||
         EVP_DigestSignInit(context, NULL, NULL, NULL, key) != 1 ||
         EVP_DigestSign(context, signature, &signature_length, preimage, 32U) != 1 || signature_length != 64U ||

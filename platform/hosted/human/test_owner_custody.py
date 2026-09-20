@@ -7,9 +7,6 @@ import subprocess
 import tempfile
 import unittest
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-
 import owner_custody
 import provision
 
@@ -23,19 +20,16 @@ def big(value, length):
     return value.to_bytes(length, 'big')
 
 
-def attested_credit(evidence_hash, version=b'LXDC1'):
-    key = Ed25519PrivateKey.generate()
-    public = key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    profile = (b'LXBC1' + big(31337, 8) + bytes([8] * 20) + bytes([1] * 32) + public + bytes([2] * 32)
-               + bytes([3] * 32) + big(1, 8) + bytes([4] * 32) + big(77, 4) + big(3, 2))
-    assert len(profile) == 207
-    unsigned = (version + hashlib.sha256(profile).digest() + big(77, 4) + big(3, 2) + bytes([5] * 32)
-                + bytes([2] * 32) + bytes([6] * 32) + bytes([7] * 32) + bytes([9] * 20) + big(10 ** 18, 16)
-                + big(1, 8) + big(12, 8) + bytes([11] * 32) + bytes([12] * 32) + big(13, 8) + bytes([14] * 32)
-                + evidence_hash + big(0, 4))
-    assert len(unsigned) == 363
-    domain = b'LX:CUSTODY:CREDIT:v1' if version == b'LXDC1' else b'LX:CUSTODY:CREDIT:v2'
-    return profile, unsigned + key.sign(domain + unsigned)
+def light_credit(bundle=b'LXLB1' + bytes([15] * 600)):
+    profile = (b'LXBC3' + big(125, 8) + bytes([8] * 20) + bytes([1] * 32) + bytes([10] * 32) + bytes([2] * 32)
+               + bytes([3] * 32) + big(1, 8) + b'hyperpax_125-1'.ljust(32, b'\0') + big(77, 4) + big(3, 2))
+    assert len(profile) == 223
+    head = (b'LXDC3' + hashlib.sha256(profile).digest() + big(77, 4) + big(3, 2) + bytes([5] * 32)
+            + bytes([2] * 32) + bytes([6] * 32) + bytes([7] * 32) + bytes([9] * 20) + big(10 ** 18, 16)
+            + big(1, 8) + big(12, 8) + bytes([11] * 32) + bytes([12] * 32) + big(13, 8) + bytes([14] * 32)
+            + hashlib.sha256(bundle).digest() + big(2, 4))
+    assert len(head) == 363
+    return profile, head + bundle
 
 
 def evidence_input(directory):
@@ -60,33 +54,31 @@ class OwnerCustodyCreditMaterialTests(unittest.TestCase):
     def test_publish_writes_the_provider_copy_beside_the_native_producer_input(self):
         with tempfile.TemporaryDirectory() as directory:
             root = evidence_input(directory)
-            profile, credit = attested_credit(bytes.fromhex(TRANSACTION[2:]))
+            _, credit = light_credit()
             owner_custody.write_new(root / 'custody-credit.bin', credit)
             published = owner_custody.publish_credit_material(root, TRANSACTION)
             self.assertEqual(published, root / ('credit-' + TRANSACTION[2:] + '.bin'))
             info = published.lstat()
             self.assertTrue(stat.S_ISREG(info.st_mode))
             self.assertEqual((stat.S_IMODE(info.st_mode), info.st_nlink, info.st_size, info.st_uid),
-                             (0o600, 1, 427, os.geteuid()))
-            payload = provision.protected_bytes(published, 427)
+                             (0o600, 1, len(credit), os.geteuid()))
+            payload = provision.protected_bytes(published)
             self.assertEqual(payload, credit)
-            self.assertEqual(provision.protected_bytes(root / 'custody-credit.bin', 427), credit)
-            self.assertEqual(payload[327:359], bytes.fromhex(TRANSACTION[2:]))
-            Ed25519PublicKey.from_public_bytes(profile[65:97]).verify(
-                payload[363:], b'LX:CUSTODY:CREDIT:v1' + payload[:363])
+            self.assertEqual(provision.protected_bytes(root / 'custody-credit.bin'), credit)
+            self.assertEqual(payload[327:359], hashlib.sha256(payload[363:]).digest())
             self.assertEqual(sorted(path.name for path in root.iterdir()),
                              ['credit-' + TRANSACTION[2:] + '.bin', 'custody-credit.bin'])
             with self.assertRaises(FileExistsError):
                 owner_custody.publish_credit_material(root, TRANSACTION)
 
-    def test_publish_refuses_a_credit_that_does_not_bind_the_named_transaction(self):
+    def test_publish_refuses_a_credit_whose_head_does_not_bind_its_bundle(self):
         with tempfile.TemporaryDirectory() as directory:
             root = evidence_input(directory)
-            _, credit = attested_credit(bytes([1] * 32))
-            owner_custody.write_new(root / 'custody-credit.bin', credit)
+            _, credit = light_credit()
+            owner_custody.write_new(root / 'custody-credit.bin', credit[:-1] + bytes([credit[-1] ^ 1]))
             with self.assertRaises(provision.Refused) as refused:
                 owner_custody.publish_credit_material(root, TRANSACTION)
-            self.assertIn('custody credit transaction binding', str(refused.exception))
+            self.assertIn('light-client custody credit layout', str(refused.exception))
             self.assertEqual([path.name for path in root.iterdir()], ['custody-credit.bin'])
             (root / 'custody-credit.bin').chmod(0o640)
             with self.assertRaises(provision.Refused):
@@ -96,20 +88,13 @@ class OwnerCustodyCreditMaterialTests(unittest.TestCase):
     def test_publish_refuses_a_malformed_credit_layout(self):
         with tempfile.TemporaryDirectory() as directory:
             root = evidence_input(directory)
-            owner_custody.write_new(root / 'custody-credit.bin', b'LXDC9' + bytes(422))
-            with self.assertRaises(provision.Refused) as refused:
-                owner_custody.publish_credit_material(root, TRANSACTION)
-            self.assertIn('attested custody credit layout', str(refused.exception))
-            self.assertEqual([path.name for path in root.iterdir()], ['custody-credit.bin'])
-
-    def test_publish_keeps_comet_state_evidence_without_a_receipt_transaction_binding(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = evidence_input(directory)
-            _, credit = attested_credit(bytes([1] * 32), b'LXDC2')
-            owner_custody.write_new(root / 'custody-credit.bin', credit)
-            published = owner_custody.publish_credit_material(root, TRANSACTION)
-            self.assertEqual(published.name, 'credit-' + TRANSACTION[2:] + '.bin')
-            self.assertEqual(provision.protected_bytes(published, 427), credit)
+            for retired in (b'LXDC9' + bytes(422), b'LXDC1' + bytes(422), b'LXDC2' + bytes(422), light_credit()[1][:363]):
+                owner_custody.write_new(root / 'custody-credit.bin', retired)
+                with self.assertRaises(provision.Refused) as refused:
+                    owner_custody.publish_credit_material(root, TRANSACTION)
+                self.assertIn('light-client custody credit layout', str(refused.exception))
+                self.assertEqual([path.name for path in root.iterdir()], ['custody-credit.bin'])
+                (root / 'custody-credit.bin').unlink()
 
 
 def delivery_script():
@@ -133,7 +118,7 @@ class ClusterEvidenceDeliveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve() / 'evidence'
             root.mkdir(mode=0o700)
-            _, credit = attested_credit(bytes.fromhex(TRANSACTION[2:]))
+            _, credit = light_credit()
             published = root / ('credit-' + TRANSACTION[2:] + '.bin')
             deposit = root / ('deposit-' + TRANSACTION[2:] + '.bin')
             refused = deliver(root, credit)
@@ -145,28 +130,28 @@ class ClusterEvidenceDeliveryTests(unittest.TestCase):
             self.assertEqual((delivered.returncode, delivered.stderr), (0, b''))
             self.assertEqual(private_stat(published), (True, 0o600, 1, os.geteuid()))
             self.assertEqual(private_stat(deposit), (True, 0o600, 1, os.geteuid()))
-            self.assertEqual(provision.protected_bytes(published, 427), credit)
+            self.assertEqual(provision.protected_bytes(published), credit)
             self.assertEqual(sorted(path.name for path in root.iterdir()), sorted([deposit.name, published.name]))
             self.assertEqual(deliver(root, credit).returncode, 0)
             self.assertEqual(published.read_bytes(), credit)
-            _, other = attested_credit(bytes.fromhex(TRANSACTION[2:]))
+            _, other = light_credit(b'LXLB1' + bytes([16] * 600))
             tampered = deliver(root, other)
             self.assertNotEqual(tampered.returncode, 0)
-            self.assertIn('custody credit bytes differ from the attested credit', tampered.stderr.decode())
+            self.assertIn('custody credit bytes differ from the produced credit', tampered.stderr.decode())
             self.assertEqual(published.read_bytes(), credit)
             deposit.chmod(0o640)
             exposed = deliver(root, credit)
             self.assertNotEqual(exposed.returncode, 0)
             self.assertIn(str(deposit) + ': evidence file is not private to the movement provider', exposed.stderr.decode())
 
-    def test_delivery_refuses_a_credit_that_is_not_an_attested_credit(self):
+    def test_delivery_refuses_a_credit_that_carries_no_light_client_bundle(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve() / 'evidence'
             root.mkdir(mode=0o700)
             owner_custody.write_new(root / ('deposit-' + TRANSACTION[2:] + '.bin'), b'movement provider deposit proof publication')
-            short = deliver(root, b'LXDC1' + bytes(421))
+            short = deliver(root, light_credit()[1][:363])
             self.assertNotEqual(short.returncode, 0)
-            self.assertIn('custody credit is not 427 bytes', short.stderr.decode())
+            self.assertIn('custody credit carries no light-client bundle', short.stderr.decode())
             missing = subprocess.run(['sh', '-s', '--', str(root / 'absent'), TRANSACTION[2:], '', hashlib.sha256(b'').hexdigest()],
                                      input=delivery_script().encode(), capture_output=True)
             self.assertNotEqual(missing.returncode, 0)
