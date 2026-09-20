@@ -1,20 +1,20 @@
 //! Ordinary withdrawal against a real `LayerX` node and the native custody
-//! precompile.
+//! precompile on a real Paxeer node.
 //!
 //! The debit half runs against an actual `layerxd` node driven through
 //! `layerx-agentd`: the withdrawal activity is prepared, signed, submitted and
-//! its receipt proven by the node itself. The Paxeer half runs against an
-//! in-process JSON-RPC endpoint in the crate's established harness style that
-//! answers the `layerxCustody` (`0x…1013`) and `layerxAnchor` (`0x…1014`)
-//! precompiles. Nothing about the withdrawal is invented there: the request and
-//! finalise calldata the chain accepts is the byte-for-byte material the node's
-//! own receipt inclusion produced, the finalized roots it reports are the
-//! signed batch header's own roots, the nullifier is the receipt's context hash
-//! and the claim identifier is derived with the published custody helper.
-//!
-//! The node still settles against Solidity contracts, so `paxeer_real` keeps a
-//! real Anvil chain with `GuarantorBond` and `CheckpointRegistry` for the node
-//! fixture's genesis, exactly as `tests/daemon/withdraw-custody.py` does.
+//! its receipt proven by the node itself. The Paxeer half runs against a real
+//! disposable `paxd` started from genesis produced by
+//! `platform/hosted/paxeer/custody-genesis.py` and
+//! `platform/hosted/paxeer/anchor-genesis.py` and merged by
+//! `platform/hosted/paxeer/init-chain.sh`, so `layerxCustody` (`0x…1013`) is the
+//! native `layerxcustody` module and `layerxAnchor` (`0x…1014`) is the native
+//! `layerxanchor` module. Nothing about the withdrawal is invented: the request
+//! and finalise calldata is the byte-for-byte material the node's own receipt
+//! inclusion produced, the roots the anchor reports final come from the
+//! sequencer-signed batch header a genesis guarantor attested to, the nullifier
+//! is the receipt's context hash and the claim identifier is derived with the
+//! published custody helper.
 
 use layerx_human_test_support as support;
 
@@ -22,160 +22,47 @@ use layerx_human_test_support as support;
 mod withdraw_native;
 
 // ---------------------------------------------------------------------------
-// Solidity settlement genesis for the real node
+// The real Paxeer node behind both precompiles
 // ---------------------------------------------------------------------------
 
-mod paxeer_real {
+mod paxd {
     use std::collections::BTreeMap;
+    use std::io::{BufRead as _, BufReader, Write as _};
     use std::path::{Path, PathBuf};
-    use std::process::{Child, Command, Stdio};
-    use std::sync::atomic::{AtomicU16, Ordering};
-    use std::sync::{Mutex, OnceLock};
-    use std::thread;
-    use std::time::Duration;
+    use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+    use std::sync::{Arc, Mutex, MutexGuard};
+    use std::time::{Duration, Instant};
 
+    use serde_json::{json, Value};
+
+    use layerx_human_service::journeys::WithdrawalTransactionRequest;
+    use layerx_intents::canonical::{decode_batch_header, decode_receipt};
+    use layerx_paxeer_client::custody::{get_asset_calldata, withdrawal_claim_id};
     use layerx_paxeer_client::{
-        raw_call, EndpointConfig, EndpointTransport, ExecutionOutcome, Json, PaxeerClient,
-        TransactionHash, TransactionInclusion,
+        raw_call, DebitExpectation, EndpointConfig, EndpointTransport, Json, TransactionHash,
+        WithdrawalBoundary, WithdrawalConfig, WithdrawalMaterial, CUSTODY_PRECOMPILE,
+        WEI_PER_BASE_UNIT,
     };
-    use layerx_types::intent::EvmAddress;
-    use sha3::{Digest as _, Keccak256};
+    use layerx_proof::merkle::Proof;
+    use sha3::Digest as _;
 
-    const FUNDED: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
-    const CHALLENGER: &str = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
-    const PROTOCOL_VERSION: u16 = 3;
-    /// `Constants.USDL_TOKEN`; the bond refuses any other token address.
-    const USDL_TOKEN: EvmAddress = EvmAddress::new([
-        0x85, 0xfc, 0xd1, 0x37, 0x35, 0xf4, 0x30, 0x98, 0x33, 0xa5, 0x03, 0xee, 0x80, 0x4e, 0xa3,
-        0x23, 0x95, 0x85, 0x14, 0x79,
-    ]);
-    /// `Constants.USDL_ASSET_ID` (`keccak256("USDL")`).
-    const USDL_ASSET_ID: [u8; 32] = [
-        0x70, 0xf5, 0xb6, 0x3a, 0x98, 0x55, 0xdd, 0x2b, 0xe2, 0xba, 0x94, 0x1c, 0x04, 0xa3, 0x3a,
-        0x1f, 0x0e, 0xeb, 0x97, 0x50, 0xcc, 0xeb, 0x32, 0x4c, 0x22, 0x37, 0x64, 0xf0, 0xfd, 0xc5,
-        0x01, 0xd8,
-    ];
+    /// `hyperpax_125-1` is the only cosmos chain id `paxd` maps to an EVM chain
+    /// id, so the disposable chain is always 125.
+    pub(super) const CHAIN_ID: u64 = 125;
+    const WORD: usize = 32;
+    const REQUIRED_CONFIRMATIONS: u64 = 2;
+    /// Base units the custody module holds for the withdrawing account.
+    pub(super) const VAULT_BALANCE: u128 = 100;
+    /// `layerxcustody` `withdrawal_delay_seconds` in the disposable genesis: the
+    /// real queue-to-finalise window the journey waits out in wall-clock time.
+    pub(super) const CHALLENGE_WINDOW: u64 = 5;
+    /// The guarantor bond recorded in the anchor genesis, in bond units.
+    const GUARANTOR_BOND: u64 = 1_000_000;
 
-    static NEXT_PORT: AtomicU16 = AtomicU16::new(0);
-    static BYTECODE: OnceLock<Mutex<BTreeMap<&'static str, String>>> = OnceLock::new();
-
-    struct Anvil {
-        child: Child,
-        endpoint: EndpointConfig,
-    }
-
-    impl Anvil {
-        fn launch() -> Self {
-            for _ in 0..8 {
-                let offset = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
-                let lane = u16::try_from(std::process::id() % 7_000).unwrap_or(0);
-                let port = 24_000_u16
-                    .saturating_add(lane)
-                    .saturating_add(offset.saturating_mul(11));
-                let endpoint = EndpointConfig {
-                    url: format!("http://127.0.0.1:{port}"),
-                    request_timeout: Duration::from_secs(10),
-                    transport: EndpointTransport::LocalEmulator,
-                    expected_chain_id: 31_337,
-                };
-                let child = Command::new(foundry_binary("anvil"))
-                    .arg("--port")
-                    .arg(port.to_string())
-                    .arg("--chain-id")
-                    .arg("31337")
-                    .arg("--gas-limit")
-                    .arg("100000000")
-                    .arg("--silent")
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .unwrap_or_else(|error| panic!("spawn anvil: {error}"));
-                let mut anvil = Self { child, endpoint };
-                if anvil.ready() {
-                    return anvil;
-                }
-                anvil.halt();
-            }
-            panic!("no free port for anvil")
-        }
-
-        fn ready(&self) -> bool {
-            for _ in 0..200 {
-                if raw_call(&self.endpoint, "eth_blockNumber", &[]).is_ok() {
-                    return true;
-                }
-                thread::sleep(Duration::from_millis(25));
-            }
-            false
-        }
-
-        fn call(&self, method: &str, params: &[Json]) -> Json {
-            raw_call(&self.endpoint, method, params)
-                .unwrap_or_else(|failure| panic!("{method}: {failure:?}"))
-        }
-
-        fn send(&self, from: &str, to: Option<EvmAddress>, data: &[u8]) -> TransactionHash {
-            let mut fields = vec![
-                text_member("from", from),
-                text_member("data", &bytes_hex(data)),
-                text_member("gas", "0x3938700"),
-            ];
-            if let Some(address) = to {
-                fields.push(text_member("to", &address_hex(address)));
-            }
-            let result = self.call("eth_sendTransaction", &[Json::Object(fields)]);
-            let hash = result
-                .as_text()
-                .unwrap_or_else(|| panic!("eth_sendTransaction: expected hash"));
-            TransactionHash::from_hex(hash)
-                .unwrap_or_else(|error| panic!("transaction hash: {error:?}"))
-        }
-
-        fn deploy(&self, contract: &'static str, arguments: &[[u8; 32]]) -> EvmAddress {
-            let mut creation = hex_bytes(&contract_bytecode(contract));
-            for argument in arguments {
-                creation.extend_from_slice(argument);
-            }
-            let transaction = self.send(FUNDED, None, &creation);
-            let receipt = wait_receipt(self, transaction);
-            assert_eq!(
-                receipt.execution,
-                ExecutionOutcome::Succeeded,
-                "{contract} deployment reverted"
-            );
-            receipt
-                .deployed_contract
-                .unwrap_or_else(|| panic!("{contract}: no deployed address"))
-        }
-
-        fn install_code(&self, source: EvmAddress, target: EvmAddress) {
-            let code = self.call(
-                "eth_getCode",
-                &[
-                    Json::Text(address_hex(source)),
-                    Json::Text("latest".to_owned()),
-                ],
-            );
-            let code = code
-                .as_text()
-                .unwrap_or_else(|| panic!("eth_getCode: expected text"));
-            let _ = self.call(
-                "anvil_setCode",
-                &[Json::Text(address_hex(target)), Json::Text(code.to_owned())],
-            );
-        }
-
-        fn halt(&mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
-    }
-
-    impl Drop for Anvil {
-        fn drop(&mut self) {
-            self.halt();
-        }
+    fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
+        value
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn repo_root() -> PathBuf {
@@ -184,917 +71,6 @@ mod paxeer_real {
             .nth(3)
             .unwrap_or_else(|| panic!("repository root absent"))
             .to_path_buf()
-    }
-
-    fn foundry_binary(name: &str) -> PathBuf {
-        let binary = PathBuf::from(format!("/root/.foundry/bin/{name}"));
-        if binary.exists() {
-            binary
-        } else {
-            PathBuf::from(name)
-        }
-    }
-
-    fn contract_bytecode(contract: &'static str) -> String {
-        let cache = BYTECODE.get_or_init(|| Mutex::new(BTreeMap::new()));
-        let mut cache = cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(bytecode) = cache.get(contract) {
-            return bytecode.clone();
-        }
-        let output = Command::new(foundry_binary("forge"))
-            .arg("inspect")
-            .arg(contract)
-            .arg("bytecode")
-            .current_dir(repo_root())
-            .output()
-            .unwrap_or_else(|error| panic!("forge inspect {contract}: {error}"));
-        assert!(
-            output.status.success(),
-            "forge inspect {contract}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let bytecode = String::from_utf8(output.stdout)
-            .unwrap_or_else(|error| panic!("forge bytecode utf8: {error}"))
-            .trim()
-            .to_owned();
-        assert!(bytecode.starts_with("0x"));
-        cache.insert(contract, bytecode.clone());
-        bytecode
-    }
-
-    fn wait_receipt(anvil: &Anvil, transaction: TransactionHash) -> TransactionInclusion {
-        let client = PaxeerClient::new(vec![anvil.endpoint.clone()])
-            .unwrap_or_else(|error| panic!("client: {error:?}"));
-        for _ in 0..300 {
-            if let Some(receipt) = client
-                .transaction_receipt(transaction)
-                .unwrap_or_else(|error| panic!("receipt: {error:?}"))
-            {
-                return receipt;
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-        panic!("transaction was not included")
-    }
-
-    fn text_member(name: &str, value: &str) -> (String, Json) {
-        (name.to_owned(), Json::Text(value.to_owned()))
-    }
-
-    fn parse_address(text: &str) -> EvmAddress {
-        let bytes = hex_bytes(text);
-        EvmAddress::new(
-            bytes
-                .try_into()
-                .unwrap_or_else(|bytes: Vec<u8>| panic!("address length {}", bytes.len())),
-        )
-    }
-
-    fn address_hex(address: EvmAddress) -> String {
-        bytes_hex(&address.bytes())
-    }
-
-    fn hex_bytes(text: &str) -> Vec<u8> {
-        let digits = text
-            .trim()
-            .strip_prefix("0x")
-            .unwrap_or_else(|| panic!("hex prefix absent"));
-        assert_eq!(digits.len() % 2, 0);
-        digits
-            .as_bytes()
-            .chunks_exact(2)
-            .map(|pair| (hex_nibble(pair[0]) << 4) | hex_nibble(pair[1]))
-            .collect()
-    }
-
-    fn hex_nibble(byte: u8) -> u8 {
-        match byte {
-            b'0'..=b'9' => byte - b'0',
-            b'a'..=b'f' => byte - b'a' + 10,
-            b'A'..=b'F' => byte - b'A' + 10,
-            _ => panic!("non-hex digit"),
-        }
-    }
-
-    fn bytes_hex(bytes: &[u8]) -> String {
-        const DIGITS: &[u8; 16] = b"0123456789abcdef";
-        let mut text = String::from("0x");
-        for byte in bytes {
-            text.push(char::from(DIGITS[usize::from(byte >> 4)]));
-            text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
-        }
-        text
-    }
-
-    fn quantity_word(bytes: &[u8]) -> [u8; 32] {
-        let mut word = [0_u8; 32];
-        word[32_usize.saturating_sub(bytes.len())..].copy_from_slice(bytes);
-        word
-    }
-
-    fn address_word(address: EvmAddress) -> [u8; 32] {
-        let mut word = [0_u8; 32];
-        word[12..].copy_from_slice(&address.bytes());
-        word
-    }
-
-    /// Deploys exactly the settlement surface a `layerxd` node reads at
-    /// bring-up: the bond it names as its settlement contract and the
-    /// checkpoint registry whose genesis digests are its own.
-    fn deploy_settlement(
-        anvil: &Anvil,
-        network_id: u32,
-        genesis: [[u8; 32]; 3],
-    ) -> (EvmAddress, EvmAddress) {
-        let owner = parse_address(FUNDED);
-        let challenger = parse_address(CHALLENGER);
-        let token_template = anvil.deploy("IntegrationToken", &[address_word(owner)]);
-        anvil.install_code(token_template, USDL_TOKEN);
-        let asset_registry = anvil.deploy(
-            "AssetRegistry",
-            &[
-                address_word(owner),
-                address_word(challenger),
-                [0x21; 32],
-                quantity_word(&1_u128.to_be_bytes()),
-            ],
-        );
-        let vault = anvil.deploy(
-            "LayerXVault",
-            &[
-                address_word(asset_registry),
-                address_word(owner),
-                address_word(challenger),
-                [0x22; 32],
-                quantity_word(&1_u128.to_be_bytes()),
-            ],
-        );
-        let bond = anvil.deploy(
-            "GuarantorBond",
-            &[
-                address_word(owner),
-                address_word(owner),
-                address_word(USDL_TOKEN),
-                address_word(vault),
-                USDL_ASSET_ID,
-                quantity_word(&PROTOCOL_VERSION.to_be_bytes()),
-                quantity_word(&network_id.to_be_bytes()),
-                quantity_word(&100_u32.to_be_bytes()),
-                quantity_word(&86_400_u64.to_be_bytes()),
-                [0x23; 32],
-                quantity_word(&1_u128.to_be_bytes()),
-            ],
-        );
-        let registry = anvil.deploy(
-            "CheckpointRegistry",
-            &[
-                address_word(bond),
-                quantity_word(&PROTOCOL_VERSION.to_be_bytes()),
-                quantity_word(&network_id.to_be_bytes()),
-                quantity_word(&1_u16.to_be_bytes()),
-                quantity_word(&1_u16.to_be_bytes()),
-                quantity_word(&3_600_u64.to_be_bytes()),
-                quantity_word(&300_u64.to_be_bytes()),
-                genesis[0],
-                genesis[1],
-                genesis[2],
-                [0x24; 32],
-                quantity_word(&1_u128.to_be_bytes()),
-            ],
-        );
-        (bond, registry)
-    }
-
-    /// The real settlement chain the native node fixture registers against.
-    pub(super) struct GenesisChain {
-        _anvil: Anvil,
-        pub(super) configuration: serde_json::Value,
-    }
-
-    impl GenesisChain {
-        pub(super) fn new(generated: &serde_json::Value) -> Self {
-            let digest = |name: &str| -> [u8; 32] {
-                hex_bytes(
-                    generated[name]
-                        .as_str()
-                        .unwrap_or_else(|| panic!("genesis {name}")),
-                )
-                .try_into()
-                .unwrap_or_else(|_| panic!("genesis digest {name}"))
-            };
-            let genesis = [digest("manifest"), digest("state"), digest("receipt")];
-            let anvil = Anvil::launch();
-            let (bond, registry) = deploy_settlement(&anvil, super::NETWORK_ID, genesis);
-            let selector = Keccak256::digest(b"latestFinalisedStateRoot()");
-            let data = bytes_hex(&selector[..4]);
-            let observed = anvil.call(
-                "eth_call",
-                &[
-                    Json::Object(vec![
-                        text_member("to", &address_hex(registry)),
-                        text_member("data", &data),
-                    ]),
-                    Json::Text("latest".to_owned()),
-                ],
-            );
-            assert_eq!(
-                hex_bytes(observed.as_text().unwrap_or_else(|| panic!("genesis root"))),
-                genesis[2]
-            );
-            let configuration = serde_json::json!({
-                "url": anvil.endpoint.url,
-                "chain_id": anvil.endpoint.expected_chain_id,
-                "bond": address_hex(bond), "registry": address_hex(registry),
-                "root_call": data,
-            });
-            Self {
-                _anvil: anvil,
-                configuration,
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// In-process native custody chain
-// ---------------------------------------------------------------------------
-
-mod custody_chain {
-    use std::collections::BTreeMap;
-    use std::io::{Read as _, Write as _};
-    use std::net::{TcpListener, TcpStream};
-    use std::sync::{Arc, Mutex, MutexGuard};
-    use std::thread;
-    use std::time::Duration;
-
-    use serde_json::{json, Value};
-    use sha2::{Digest as _, Sha256};
-
-    use layerx_human_service::journeys::WithdrawalTransactionRequest;
-    use layerx_intents::canonical::{decode_batch_header, decode_receipt};
-    use layerx_paxeer_client::custody::{
-        withdrawal_claim_id, CLAIM_FINALISED_TOPIC, CLAIM_QUEUED_TOPIC, CUSTODY_RELEASE_TOPIC,
-        SELECTOR_GET_ASSET, SELECTOR_GET_CLAIM, SELECTOR_NATIVE_ASSET_ID,
-        SELECTOR_NULLIFIER_STATUS,
-    };
-    use layerx_paxeer_client::{
-        DebitExpectation, EndpointConfig, EndpointTransport, TransactionHash, WithdrawalBoundary,
-        WithdrawalConfig, WithdrawalMaterial, ANCHOR_PRECOMPILE, CUSTODY_PRECOMPILE,
-        WEI_PER_BASE_UNIT,
-    };
-    use layerx_proof::merkle::Proof;
-
-    const CHAIN_ID: u64 = 31_337;
-    const WORD: usize = 32;
-    const REQUIRED_CONFIRMATIONS: u64 = 2;
-    /// Base units the custody precompile holds for the withdrawing account.
-    pub(super) const VAULT_BALANCE: u128 = 100;
-    /// The precompile's queue-to-finalise delay, in chain seconds.
-    const CHALLENGE_WINDOW: u64 = 3_600;
-    const FIRST_HEAD: u64 = 8;
-    const FIRST_TIMESTAMP: u64 = 1_700_000_000;
-    const DENOM: &str = "ulxp";
-    /// `finalizedStateRoot(uint64)` on the anchor precompile.
-    const SELECTOR_FINALIZED_STATE_ROOT: [u8; 4] = [0x0f, 0x60, 0x7f, 0xe4];
-    /// `finalizedReceiptRoot(uint64)` on the anchor precompile.
-    const SELECTOR_FINALIZED_RECEIPT_ROOT: [u8; 4] = [0xe0, 0xa3, 0xcc, 0xaa];
-
-    /// Everything the custody precompile needs about one settled `LayerX`
-    /// withdrawal, derived only from the node's own proven receipt inclusion.
-    #[derive(Clone, Debug)]
-    pub(super) struct Settlement {
-        pub(super) material: WithdrawalMaterial,
-        batch_number: u64,
-        state_root: [u8; 32],
-        receipt_root: [u8; 32],
-        anchor: [u8; 32],
-        nullifier: [u8; 32],
-    }
-
-    impl Settlement {
-        pub(super) fn from_inclusion(
-            receipt: Vec<u8>,
-            proof: &Proof,
-            header: Vec<u8>,
-            header_signature: [u8; 64],
-        ) -> Self {
-            let (batch_number, state_root, receipt_root) = {
-                let decoded = decode_batch_header(&header)
-                    .unwrap_or_else(|error| panic!("settled batch header: {error:?}"));
-                (
-                    decoded.batch_number(),
-                    decoded.resulting_state_root(),
-                    decoded.receipt_merkle_root(),
-                )
-            };
-            let (anchor, nullifier) = {
-                let decoded = decode_receipt(&receipt)
-                    .unwrap_or_else(|error| panic!("withdrawal receipt: {error:?}"));
-                let protocol = decoded
-                    .protocol()
-                    .unwrap_or_else(|| panic!("withdrawal protocol receipt absent"));
-                let body = protocol
-                    .effects()
-                    .get(1)
-                    .map(|effect| effect.body().to_vec())
-                    .unwrap_or_else(|| panic!("withdrawal effect absent"));
-                let anchor: [u8; 32] = body
-                    .get(150..182)
-                    .and_then(|slice| slice.try_into().ok())
-                    .unwrap_or_else(|| panic!("withdrawal anchor absent"));
-                (anchor, protocol.context_hash())
-            };
-            let material =
-                WithdrawalMaterial::from_inclusion(receipt, proof, header, header_signature)
-                    .unwrap_or_else(|error| panic!("withdrawal material: {error:?}"));
-            Self {
-                material,
-                batch_number,
-                state_root,
-                receipt_root,
-                anchor,
-                nullifier,
-            }
-        }
-    }
-
-    #[derive(Clone, Debug)]
-    struct Log {
-        topics: Vec<[u8; 32]>,
-        data: Vec<u8>,
-    }
-
-    #[derive(Clone, Debug)]
-    struct Receipt {
-        block: u64,
-        status: u64,
-        logs: Vec<Log>,
-    }
-
-    struct Chain {
-        expectation: DebitExpectation,
-        settlement: Option<Settlement>,
-        head: u64,
-        timestamp: u64,
-        hashes: BTreeMap<u64, [u8; 32]>,
-        /// `(status, available_at)` of the single stored claim.
-        claim: Option<(u8, u64)>,
-        nullifier_status: u8,
-        /// Native balances in wei, exactly as `eth_getBalance` reports them.
-        balances: BTreeMap<[u8; 20], u128>,
-        receipts: BTreeMap<[u8; 32], Receipt>,
-        transactions: BTreeMap<[u8; 32], Vec<u8>>,
-        sequence: u64,
-    }
-
-    impl Chain {
-        fn new(expectation: DebitExpectation) -> Arc<Mutex<Self>> {
-            let mut hashes = BTreeMap::new();
-            for number in 0..=FIRST_HEAD {
-                hashes.insert(number, block_hash(number));
-            }
-            let mut balances = BTreeMap::new();
-            balances.insert(
-                CUSTODY_PRECOMPILE.bytes(),
-                VAULT_BALANCE.saturating_mul(WEI_PER_BASE_UNIT),
-            );
-            balances.insert(expectation.recipient.bytes(), 0);
-            Arc::new(Mutex::new(Self {
-                expectation,
-                settlement: None,
-                head: FIRST_HEAD,
-                timestamp: FIRST_TIMESTAMP,
-                hashes,
-                claim: None,
-                nullifier_status: 0,
-                balances,
-                receipts: BTreeMap::new(),
-                transactions: BTreeMap::new(),
-                sequence: 0,
-            }))
-        }
-
-        fn mine(&mut self) {
-            self.head = self.head.saturating_add(1);
-            self.hashes.insert(self.head, block_hash(self.head));
-        }
-
-        fn base_units(&self, address: [u8; 20]) -> u128 {
-            self.balances
-                .get(&address)
-                .copied()
-                .unwrap_or_default()
-                .saturating_div(WEI_PER_BASE_UNIT)
-        }
-
-        fn settled(&self) -> Settlement {
-            self.settlement
-                .clone()
-                .unwrap_or_else(|| panic!("custody chain has no settled withdrawal"))
-        }
-
-        fn claim_id(&self, settlement: &Settlement) -> [u8; 32] {
-            withdrawal_claim_id(
-                CHAIN_ID,
-                settlement.nullifier,
-                self.expectation.recipient,
-            )
-        }
-
-        /// The custody authority's cancellation of a pending claim. It is a
-        /// module message, so it moves claim and nullifier state with no EVM
-        /// transaction and releases nothing.
-        fn cancel(&mut self) {
-            let Some((1, available_at)) = self.claim else {
-                panic!("only a pending claim can be cancelled")
-            };
-            self.claim = Some((3, available_at));
-            self.nullifier_status = 3;
-        }
-
-        /// Applies one user transaction exactly as the custody precompile
-        /// would: `requestWithdrawal` reserves the nullifier and starts the
-        /// challenge window, `finaliseWithdrawal` consumes it and releases
-        /// custody once that window elapsed.
-        fn submit(&mut self, calldata: &[u8]) -> TransactionHash {
-            self.sequence = self.sequence.saturating_add(1);
-            let mut bytes = [0_u8; 32];
-            bytes[..8].copy_from_slice(&self.sequence.to_be_bytes());
-            bytes[31] = 0x7c;
-            let settlement = self.settled();
-            let mut logs = Vec::new();
-            let mut status = 1;
-            if calldata == settlement.material.request_calldata() {
-                if self.claim.is_none() && self.nullifier_status == 0 {
-                    let available_at = self.timestamp.saturating_add(CHALLENGE_WINDOW);
-                    self.claim = Some((1, available_at));
-                    self.nullifier_status = 1;
-                    logs.push(self.queued_log(&settlement, available_at));
-                } else {
-                    status = 0;
-                }
-            } else if calldata == settlement.material.finalise_calldata() {
-                match self.claim {
-                    Some((1, available_at)) if self.timestamp >= available_at => {
-                        self.claim = Some((2, available_at));
-                        self.nullifier_status = 2;
-                        self.release();
-                        logs.extend(self.release_logs(&settlement));
-                    }
-                    _ => status = 0,
-                }
-            } else {
-                status = 0;
-            }
-            self.receipts.insert(
-                bytes,
-                Receipt {
-                    block: self.head,
-                    status,
-                    logs,
-                },
-            );
-            self.transactions.insert(bytes, calldata.to_vec());
-            TransactionHash::new(bytes)
-        }
-
-        fn release(&mut self) {
-            let wei = self.expectation.amount.saturating_mul(WEI_PER_BASE_UNIT);
-            let vault = CUSTODY_PRECOMPILE.bytes();
-            let held = self.balances.get(&vault).copied().unwrap_or_default();
-            assert!(held >= wei, "custody balance below the released amount");
-            self.balances.insert(vault, held.saturating_sub(wei));
-            let recipient = self.expectation.recipient.bytes();
-            let paid = self.balances.get(&recipient).copied().unwrap_or_default();
-            self.balances.insert(recipient, paid.saturating_add(wei));
-        }
-
-        fn queued_log(&self, settlement: &Settlement, available_at: u64) -> Log {
-            let mut data = self.expectation.asset_id.to_vec();
-            data.extend_from_slice(&address_word(self.expectation.recipient.bytes()));
-            data.extend_from_slice(&u128_word(self.expectation.amount));
-            data.extend_from_slice(&u64_word(available_at));
-            Log {
-                topics: vec![
-                    CLAIM_QUEUED_TOPIC,
-                    self.claim_id(settlement),
-                    settlement.nullifier,
-                    settlement.anchor,
-                ],
-                data,
-            }
-        }
-
-        fn release_logs(&self, settlement: &Settlement) -> Vec<Log> {
-            let claim_id = self.claim_id(settlement);
-            let mut data = u128_word(self.expectation.amount).to_vec();
-            data.extend_from_slice(&address_word(CUSTODY_PRECOMPILE.bytes()));
-            vec![
-                Log {
-                    topics: vec![CLAIM_FINALISED_TOPIC, claim_id, settlement.nullifier],
-                    data: Vec::new(),
-                },
-                Log {
-                    topics: vec![
-                        CUSTODY_RELEASE_TOPIC,
-                        claim_id,
-                        self.expectation.asset_id,
-                        address_word(self.expectation.recipient.bytes()),
-                    ],
-                    data,
-                },
-            ]
-        }
-
-        /// `ILayerXCustody.Claim` exactly as `getClaim(bytes32)` returns it.
-        fn claim_tuple(&self) -> Vec<u8> {
-            let (Some(settlement), Some((status, available_at))) =
-                (self.settlement.as_ref(), self.claim)
-            else {
-                return tuple(&[[0_u8; 32]; 13], 7, "");
-            };
-            tuple(
-                &[
-                    self.claim_id(settlement),
-                    u64_word(1),
-                    u64_word(u64::from(status)),
-                    settlement.nullifier,
-                    self.expectation.withdrawal_id,
-                    self.expectation.account,
-                    self.expectation.asset_id,
-                    [0_u8; 32],
-                    address_word(self.expectation.recipient.bytes()),
-                    u128_word(self.expectation.amount),
-                    u64_word(settlement.batch_number),
-                    settlement.anchor,
-                    u64_word(available_at),
-                ],
-                7,
-                DENOM,
-            )
-        }
-
-        /// `ILayerXCustody.Asset` for the native asset: no ERC20 pointer.
-        fn asset_tuple(&self) -> Vec<u8> {
-            tuple(
-                &[
-                    self.expectation.asset_id,
-                    [0_u8; 32],
-                    [0_u8; 32],
-                    u64_word(1),
-                    u64_word(0),
-                    [0_u8; 32],
-                    [0_u8; 32],
-                    u128_word(self.base_units(CUSTODY_PRECOMPILE.bytes())),
-                    u128_word(
-                        VAULT_BALANCE.saturating_sub(self.base_units(CUSTODY_PRECOMPILE.bytes())),
-                    ),
-                    [0_u8; 32],
-                ],
-                1,
-                DENOM,
-            )
-        }
-
-        fn view(&self, to: &[u8], data: &[u8]) -> Vec<u8> {
-            let selector = data.get(..4).unwrap_or_default();
-            if to == CUSTODY_PRECOMPILE.bytes().as_slice() {
-                if selector == SELECTOR_NULLIFIER_STATUS {
-                    return u64_word(u64::from(self.nullifier_status)).to_vec();
-                }
-                if selector == SELECTOR_GET_CLAIM {
-                    return self.claim_tuple();
-                }
-                if selector == SELECTOR_GET_ASSET {
-                    return self.asset_tuple();
-                }
-                if selector == SELECTOR_NATIVE_ASSET_ID {
-                    return self.expectation.asset_id.to_vec();
-                }
-            } else if to == ANCHOR_PRECOMPILE.bytes().as_slice() {
-                if let Some(settlement) = self.settlement.as_ref() {
-                    let mut requested = [0_u8; 8];
-                    requested.copy_from_slice(
-                        data.get(4_usize.saturating_add(24)..4_usize.saturating_add(WORD))
-                            .unwrap_or(&[0; 8]),
-                    );
-                    let matched = u64::from_be_bytes(requested) == settlement.batch_number;
-                    if selector == SELECTOR_FINALIZED_STATE_ROOT {
-                        return two_words(settlement.state_root, matched);
-                    }
-                    if selector == SELECTOR_FINALIZED_RECEIPT_ROOT {
-                        return two_words(settlement.receipt_root, matched);
-                    }
-                }
-            }
-            Vec::new()
-        }
-    }
-
-    /// The Paxeer half of one withdrawal journey.
-    pub(super) struct JourneyChain {
-        chain: Arc<Mutex<Chain>>,
-        boundary: WithdrawalBoundary,
-    }
-
-    impl JourneyChain {
-        pub(super) fn new(expectation: DebitExpectation) -> Self {
-            let chain = Chain::new(expectation);
-            let listener =
-                TcpListener::bind("127.0.0.1:0").unwrap_or_else(|error| panic!("bind: {error}"));
-            let address = listener
-                .local_addr()
-                .unwrap_or_else(|error| panic!("address: {error}"));
-            serve(listener, Arc::clone(&chain));
-            let boundary = WithdrawalBoundary::new_for_protocol(
-                WithdrawalConfig {
-                    endpoints: vec![EndpointConfig {
-                        url: format!("http://{address}"),
-                        request_timeout: Duration::from_secs(5),
-                        transport: EndpointTransport::LocalEmulator,
-                        expected_chain_id: CHAIN_ID,
-                    }],
-                    minimum_endpoint_agreement: 1,
-                    required_confirmations: REQUIRED_CONFIRMATIONS,
-                    poll_cadence: Duration::from_millis(20),
-                    delayed_after_polls: 100,
-                },
-                3,
-            )
-            .unwrap_or_else(|error| panic!("withdrawal boundary: {error:?}"));
-            Self { chain, boundary }
-        }
-
-        pub(super) fn boundary(&self) -> &WithdrawalBoundary {
-            &self.boundary
-        }
-
-        /// Publishes the node's settled withdrawal to the precompile: the
-        /// anchor's finalized roots and the claim the custody ledger will hold.
-        pub(super) fn settle(&self, settlement: &Settlement) {
-            lock(&self.chain).settlement = Some(settlement.clone());
-        }
-
-        pub(super) fn send(&self, request: &WithdrawalTransactionRequest) -> TransactionHash {
-            assert_eq!(
-                request.target, CUSTODY_PRECOMPILE,
-                "withdrawal transactions target the custody precompile"
-            );
-            lock(&self.chain).submit(&request.calldata)
-        }
-
-        pub(super) fn mine(&self) {
-            lock(&self.chain).mine();
-        }
-
-        pub(super) fn advance(&self, seconds: u64) {
-            let mut chain = lock(&self.chain);
-            chain.timestamp = chain.timestamp.saturating_add(seconds);
-            chain.mine();
-        }
-
-        pub(super) fn cancel(&self) {
-            lock(&self.chain).cancel();
-        }
-
-        pub(super) fn recipient_balance(&self) -> u128 {
-            let chain = lock(&self.chain);
-            let recipient = chain.expectation.recipient.bytes();
-            chain.base_units(recipient)
-        }
-
-        pub(super) fn vault_balance(&self) -> u128 {
-            lock(&self.chain).base_units(CUSTODY_PRECOMPILE.bytes())
-        }
-    }
-
-    fn lock(chain: &Arc<Mutex<Chain>>) -> MutexGuard<'_, Chain> {
-        chain
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    fn block_hash(number: u64) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(b"layerx-human-withdraw-block\0");
-        hasher.update(number.to_be_bytes());
-        hasher.finalize().into()
-    }
-
-    fn u64_word(value: u64) -> [u8; 32] {
-        let mut word = [0_u8; 32];
-        word[24..].copy_from_slice(&value.to_be_bytes());
-        word
-    }
-
-    fn u128_word(value: u128) -> [u8; 32] {
-        let mut word = [0_u8; 32];
-        word[16..].copy_from_slice(&value.to_be_bytes());
-        word
-    }
-
-    fn address_word(value: [u8; 20]) -> [u8; 32] {
-        let mut word = [0_u8; 32];
-        word[12..].copy_from_slice(&value);
-        word
-    }
-
-    /// `(value, present)` exactly as the anchor precompile returns its roots.
-    fn two_words(value: [u8; 32], present: bool) -> Vec<u8> {
-        let mut out = if present { value.to_vec() } else { vec![0; WORD] };
-        out.extend_from_slice(&u64_word(u64::from(present)));
-        out
-    }
-
-    /// One dynamic Solidity tuple whose single `string` member sits at
-    /// `text_index`, exactly as the precompile returns `getClaim`/`getAsset`.
-    fn tuple(head: &[[u8; 32]], text_index: usize, value: &str) -> Vec<u8> {
-        let mut out = u64_word(u64::try_from(WORD).unwrap_or_default()).to_vec();
-        let offset = head.len().saturating_mul(WORD);
-        for (index, word) in head.iter().enumerate() {
-            if index == text_index {
-                out.extend_from_slice(&u64_word(u64::try_from(offset).unwrap_or_default()));
-            } else {
-                out.extend_from_slice(word);
-            }
-        }
-        out.extend_from_slice(&u64_word(u64::try_from(value.len()).unwrap_or_default()));
-        let mut data = value.as_bytes().to_vec();
-        while data.len() % WORD != 0 {
-            data.push(0);
-        }
-        out.extend_from_slice(&data);
-        out
-    }
-
-    fn read_request_body(stream: &mut TcpStream) -> Option<Vec<u8>> {
-        let mut buffer = Vec::new();
-        let mut byte = [0_u8; 1];
-        let mut expected = None;
-        loop {
-            match stream.read(&mut byte) {
-                Ok(1) => buffer.push(byte[0]),
-                _ => return None,
-            }
-            if expected.is_none() && buffer.ends_with(b"\r\n\r\n") {
-                let head = String::from_utf8_lossy(&buffer).to_ascii_lowercase();
-                let length: usize = head
-                    .split("content-length:")
-                    .nth(1)
-                    .and_then(|rest| rest.split("\r\n").next())
-                    .and_then(|value| value.trim().parse().ok())?;
-                expected = Some(buffer.len().saturating_add(length));
-            }
-            if expected.is_some_and(|total| buffer.len() >= total) {
-                break;
-            }
-        }
-        let body = buffer
-            .windows(4)
-            .position(|window| window == b"\r\n\r\n")?
-            .saturating_add(4);
-        buffer.get(body..).map(<[u8]>::to_vec)
-    }
-
-    fn serve(listener: TcpListener, chain: Arc<Mutex<Chain>>) {
-        thread::spawn(move || loop {
-            let Ok((mut stream, _)) = listener.accept() else {
-                return;
-            };
-            let Some(body) = read_request_body(&mut stream) else {
-                continue;
-            };
-            let Ok(request) = serde_json::from_slice::<Value>(&body) else {
-                continue;
-            };
-            let payload = json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "result": answer(&chain, &request),
-            })
-            .to_string();
-            let head = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                payload.len()
-            );
-            let _ = stream
-                .write_all(head.as_bytes())
-                .and_then(|()| stream.write_all(payload.as_bytes()))
-                .and_then(|()| stream.flush());
-        });
-    }
-
-    fn answer(chain: &Arc<Mutex<Chain>>, request: &Value) -> Value {
-        let method = request["method"].as_str().unwrap_or_default();
-        let params = &request["params"];
-        let chain = lock(chain);
-        match method {
-            "eth_chainId" => json!(quantity(CHAIN_ID)),
-            "eth_blockNumber" => json!(quantity(chain.head)),
-            "eth_getBlockByNumber" => {
-                let number = match params[0].as_str() {
-                    Some("latest") => chain.head,
-                    _ => hex_quantity(&params[0]),
-                };
-                chain.hashes.get(&number).map_or(Value::Null, |hash| {
-                    json!({
-                        "number": quantity(number),
-                        "hash": hex(hash),
-                        "timestamp": quantity(chain.timestamp),
-                    })
-                })
-            }
-            "eth_getTransactionReceipt" => {
-                let Some(requested) = requested_hash(&params[0]) else {
-                    return Value::Null;
-                };
-                chain
-                    .receipts
-                    .get(&requested)
-                    .map_or(Value::Null, |receipt| {
-                        let block_hash = chain
-                            .hashes
-                            .get(&receipt.block)
-                            .copied()
-                            .unwrap_or_default();
-                        receipt_json(requested, receipt, block_hash)
-                    })
-            }
-            "eth_getTransactionByHash" => {
-                let Some(requested) = requested_hash(&params[0]) else {
-                    return Value::Null;
-                };
-                chain
-                    .transactions
-                    .get(&requested)
-                    .map_or(Value::Null, |input| {
-                        json!({
-                            "hash": hex(&requested),
-                            "to": hex(&CUSTODY_PRECOMPILE.bytes()),
-                            "input": hex(input),
-                            "value": "0x0",
-                        })
-                    })
-            }
-            "eth_getBalance" => {
-                let bytes = hex_bytes(&params[0]);
-                let mut address = [0_u8; 20];
-                if bytes.len() != 20 {
-                    return json!("0x0");
-                }
-                address.copy_from_slice(&bytes);
-                let wei = chain.balances.get(&address).copied().unwrap_or_default();
-                json!(format!("0x{wei:x}"))
-            }
-            "eth_call" => json!(hex(
-                &chain.view(&hex_bytes(&params[0]["to"]), &hex_bytes(&params[0]["data"]))
-            )),
-            _ => Value::Null,
-        }
-    }
-
-    fn requested_hash(value: &Value) -> Option<[u8; 32]> {
-        let bytes = hex_bytes(value);
-        if bytes.len() != 32 {
-            return None;
-        }
-        let mut requested = [0_u8; 32];
-        requested.copy_from_slice(&bytes);
-        Some(requested)
-    }
-
-    fn receipt_json(transaction: [u8; 32], receipt: &Receipt, block_hash: [u8; 32]) -> Value {
-        let logs = receipt
-            .logs
-            .iter()
-            .map(|entry| {
-                json!({
-                    "address": hex(&CUSTODY_PRECOMPILE.bytes()),
-                    "topics": entry.topics.iter().map(|topic| hex(topic)).collect::<Vec<_>>(),
-                    "data": hex(&entry.data),
-                    "transactionHash": hex(&transaction),
-                    "blockHash": hex(&block_hash),
-                    "blockNumber": quantity(receipt.block),
-                    "transactionIndex": quantity(0),
-                    "removed": false,
-                })
-            })
-            .collect::<Vec<_>>();
-        json!({
-            "transactionHash": hex(&transaction),
-            "blockNumber": quantity(receipt.block),
-            "blockHash": hex(&block_hash),
-            "transactionIndex": quantity(0),
-            "status": quantity(receipt.status),
-            "contractAddress": Value::Null,
-            "logs": logs,
-        })
-    }
-
-    fn quantity(value: u64) -> String {
-        format!("0x{value:x}")
     }
 
     fn hex(bytes: &[u8]) -> String {
@@ -1106,27 +82,441 @@ mod custody_chain {
         text
     }
 
-    fn hex_quantity(value: &Value) -> u64 {
-        value
-            .as_str()
-            .and_then(|text| text.strip_prefix("0x"))
-            .and_then(|digits| u64::from_str_radix(digits, 16).ok())
-            .unwrap_or_default()
-    }
-
-    fn hex_bytes(value: &Value) -> Vec<u8> {
-        let Some(digits) = value.as_str().and_then(|text| text.strip_prefix("0x")) else {
-            return Vec::new();
-        };
+    fn hex_bytes(text: &str) -> Vec<u8> {
+        let digits = text
+            .trim()
+            .strip_prefix("0x")
+            .unwrap_or_else(|| panic!("hex prefix absent in {text}"));
+        assert_eq!(digits.len() % 2, 0, "odd hex length");
         digits
             .as_bytes()
             .chunks_exact(2)
-            .filter_map(|pair| {
+            .map(|pair| {
                 std::str::from_utf8(pair)
                     .ok()
-                    .and_then(|text| u8::from_str_radix(text, 16).ok())
+                    .and_then(|value| u8::from_str_radix(value, 16).ok())
+                    .unwrap_or_else(|| panic!("non-hex digit"))
             })
             .collect()
+    }
+
+    /// Everything the custody precompile needs about one settled `LayerX`
+    /// withdrawal, derived only from the node's own proven receipt inclusion.
+    #[derive(Clone, Debug)]
+    pub(super) struct Settlement {
+        pub(super) material: WithdrawalMaterial,
+        pub(super) batch_number: u64,
+        pub(super) header: Vec<u8>,
+        pub(super) header_signature: [u8; 64],
+        pub(super) nullifier: [u8; 32],
+    }
+
+    impl Settlement {
+        pub(super) fn from_inclusion(
+            receipt: Vec<u8>,
+            proof: &Proof,
+            header: Vec<u8>,
+            header_signature: [u8; 64],
+        ) -> Self {
+            let batch_number = decode_batch_header(&header)
+                .unwrap_or_else(|error| panic!("settled batch header: {error:?}"))
+                .batch_number();
+            let nullifier = {
+                let decoded = decode_receipt(&receipt)
+                    .unwrap_or_else(|error| panic!("withdrawal receipt: {error:?}"));
+                let protocol = decoded
+                    .protocol()
+                    .unwrap_or_else(|| panic!("withdrawal protocol receipt absent"));
+                assert!(
+                    protocol.effects().len() > 1,
+                    "withdrawal effect absent from the node's receipt"
+                );
+                protocol.context_hash()
+            };
+            let material = WithdrawalMaterial::from_inclusion(
+                receipt,
+                proof,
+                header.clone(),
+                header_signature,
+            )
+            .unwrap_or_else(|error| panic!("withdrawal material: {error:?}"));
+            Self {
+                material,
+                batch_number,
+                header,
+                header_signature,
+                nullifier,
+            }
+        }
+    }
+
+    /// The disposable `paxd` node, owned by one journey fixture.
+    pub(super) struct PaxdNode {
+        child: Mutex<Child>,
+        input: Mutex<ChildStdin>,
+        output: Mutex<BufReader<ChildStdout>>,
+        endpoint: Mutex<Option<EndpointConfig>>,
+        /// Sequencer-signed batch headers the node proved, by batch number.
+        headers: Mutex<BTreeMap<u64, (Vec<u8>, [u8; 64])>>,
+        finalized: Mutex<u64>,
+        work: PathBuf,
+    }
+
+    impl PaxdNode {
+        pub(super) fn launch(generated: &Value, beneficiary: [u8; 32]) -> Arc<Self> {
+            let work = super::directory("paxd");
+            std::fs::create_dir_all(&work).unwrap_or_else(|error| panic!("paxd work: {error}"));
+            let script =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/withdraw-paxd.py");
+            let mut child = Command::new(
+                std::env::var("LAYERX_TEST_PYTHON").unwrap_or_else(|_| "python3".to_owned()),
+            )
+            .arg(script)
+            .current_dir(repo_root())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|error| panic!("spawn disposable paxd harness: {error}"));
+            let input = child
+                .stdin
+                .take()
+                .unwrap_or_else(|| panic!("paxd harness input"));
+            let output = child
+                .stdout
+                .take()
+                .unwrap_or_else(|| panic!("paxd harness output"));
+            let node = Arc::new(Self {
+                child: Mutex::new(child),
+                input: Mutex::new(input),
+                output: Mutex::new(BufReader::new(output)),
+                endpoint: Mutex::new(None),
+                headers: Mutex::new(BTreeMap::new()),
+                finalized: Mutex::new(0),
+                work,
+            });
+            let sequencer = generated["sequencer_public_key"]
+                .as_str()
+                .unwrap_or_else(|| panic!("fixture sequencer public key absent"))
+                .to_owned();
+            let started = node.call(json!({
+                "command": "start",
+                "work": node.work.to_string_lossy(),
+                "network_id": super::NETWORK_ID,
+                "asset": hex(&super::ASSET),
+                "sequencer_public_key": sequencer,
+                "withdrawal_delay_seconds": CHALLENGE_WINDOW,
+                "guarantor_bond": GUARANTOR_BOND,
+                "vault_base_units": VAULT_BALANCE,
+                "beneficiary": hex(&beneficiary),
+            }));
+            let url = started["url"]
+                .as_str()
+                .unwrap_or_else(|| panic!("paxd endpoint absent"))
+                .to_owned();
+            *lock(&node.endpoint) = Some(EndpointConfig {
+                url,
+                request_timeout: Duration::from_secs(30),
+                transport: EndpointTransport::LocalEmulator,
+                expected_chain_id: CHAIN_ID,
+            });
+            node
+        }
+
+        fn call(&self, request: Value) -> Value {
+            let mut input = lock(&self.input);
+            writeln!(input, "{request}").unwrap_or_else(|error| panic!("paxd request: {error}"));
+            input
+                .flush()
+                .unwrap_or_else(|error| panic!("paxd request flush: {error}"));
+            drop(input);
+            let mut line = String::new();
+            let read = lock(&self.output)
+                .read_line(&mut line)
+                .unwrap_or_else(|error| panic!("paxd response: {error}"));
+            assert!(read > 0, "disposable paxd harness closed its output");
+            let answer: Value = serde_json::from_str(&line)
+                .unwrap_or_else(|error| panic!("paxd response json: {error}"));
+            assert!(
+                answer["ok"].as_bool().unwrap_or_default(),
+                "disposable paxd refused {}: {}",
+                request["command"],
+                answer["error"]
+            );
+            answer["result"].clone()
+        }
+
+        pub(super) fn endpoint(&self) -> EndpointConfig {
+            lock(&self.endpoint)
+                .clone()
+                .unwrap_or_else(|| panic!("disposable paxd is not started"))
+        }
+
+        fn rpc(&self, method: &str, params: &[Json]) -> Json {
+            raw_call(&self.endpoint(), method, params)
+                .unwrap_or_else(|failure| panic!("{method} on the disposable paxd: {failure:?}"))
+        }
+
+        fn quantity(&self, method: &str, params: &[Json]) -> u128 {
+            let answer = self.rpc(method, params);
+            let text = answer
+                .as_text()
+                .unwrap_or_else(|| panic!("{method}: expected a quantity"));
+            let digits = text
+                .strip_prefix("0x")
+                .unwrap_or_else(|| panic!("{method}: expected a hex quantity"));
+            u128::from_str_radix(digits, 16)
+                .unwrap_or_else(|error| panic!("{method} quantity: {error}"))
+        }
+
+        pub(super) fn block_number(&self) -> u64 {
+            u64::try_from(self.quantity("eth_blockNumber", &[])).unwrap_or_default()
+        }
+
+        pub(super) fn balance(&self, address: [u8; 20]) -> u128 {
+            self.quantity(
+                "eth_getBalance",
+                &[Json::Text(hex(&address)), Json::Text("latest".to_owned())],
+            )
+            .saturating_div(WEI_PER_BASE_UNIT)
+        }
+
+        pub(super) fn eth_call(&self, to: [u8; 20], data: &[u8]) -> Vec<u8> {
+            let answer = self.rpc(
+                "eth_call",
+                &[
+                    Json::Object(vec![
+                        ("to".to_owned(), Json::Text(hex(&to))),
+                        ("data".to_owned(), Json::Text(hex(data))),
+                    ]),
+                    Json::Text("latest".to_owned()),
+                ],
+            );
+            hex_bytes(
+                answer
+                    .as_text()
+                    .unwrap_or_else(|| panic!("eth_call: expected data")),
+            )
+        }
+
+        /// Records one sequencer-signed header so the anchor can be walked
+        /// forward to it: `layerxanchor` only finalizes contiguous batches.
+        pub(super) fn register_header(&self, header: &[u8], signature: [u8; 64]) {
+            let Ok(decoded) = decode_batch_header(header) else {
+                return;
+            };
+            lock(&self.headers).insert(decoded.batch_number(), (header.to_vec(), signature));
+        }
+
+        /// Finalizes every recorded batch through `batch` on the anchor module.
+        pub(super) fn finalize_through(&self, batch: u64) {
+            let pending: Vec<(u64, Vec<u8>, [u8; 64])> = lock(&self.headers)
+                .iter()
+                .filter(|(number, _)| **number <= batch && **number > *lock(&self.finalized))
+                .map(|(number, (header, signature))| (*number, header.clone(), *signature))
+                .collect();
+            for (number, header, signature) in pending {
+                let result = self.call(json!({
+                    "command": "checkpoint",
+                    "header": hex(&header),
+                    "header_signature": hex(&signature),
+                }));
+                assert!(
+                    result["final"].as_bool().unwrap_or_default(),
+                    "the anchor module did not finalize batch {number}: {result}"
+                );
+                *lock(&self.finalized) = number;
+            }
+            assert_eq!(
+                *lock(&self.finalized),
+                batch,
+                "the anchor module has no finalized checkpoint for batch {batch}"
+            );
+        }
+
+        pub(super) fn send(&self, calldata: &[u8]) -> TransactionHash {
+            let result = self.call(json!({ "command": "send", "calldata": hex(calldata) }));
+            let digest = result["transaction"]
+                .as_str()
+                .unwrap_or_else(|| panic!("custody transaction hash absent"));
+            TransactionHash::from_hex(digest)
+                .unwrap_or_else(|error| panic!("custody transaction hash: {error:?}"))
+        }
+
+        pub(super) fn cancel_claim(&self, claim_id: [u8; 32]) {
+            let result = self.call(json!({ "command": "cancel", "claim_id": hex(&claim_id) }));
+            assert_eq!(
+                result["exit_code"].as_i64(),
+                Some(0),
+                "the custody authority could not cancel the claim: {result}"
+            );
+        }
+
+        pub(super) fn wait_block(&self) {
+            let head = self.block_number();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while self.block_number() <= head {
+                assert!(
+                    Instant::now() < deadline,
+                    "disposable paxd stopped producing blocks"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+
+    impl Drop for PaxdNode {
+        fn drop(&mut self) {
+            let _ = lock(&self.input).write_all(b"{\"command\":\"stop\"}\n");
+            let mut child = lock(&self.child);
+            let _ = child.kill();
+            let _ = child.wait();
+            if std::thread::panicking() {
+                eprintln!("disposable paxd evidence: {}", self.work.display());
+            } else {
+                let _ = std::fs::remove_dir_all(&self.work);
+            }
+        }
+    }
+
+    /// The real settlement chain the native node fixture registers against.
+    pub(super) struct PaxdChain {
+        node: Arc<PaxdNode>,
+        pub(super) configuration: serde_json::Value,
+    }
+
+    impl PaxdChain {
+        pub(super) fn new(generated: &serde_json::Value, beneficiary: [u8; 32]) -> Self {
+            let node = PaxdNode::launch(generated, beneficiary);
+            let anchor = hex(&layerx_paxeer_client::ANCHOR_PRECOMPILE.bytes());
+            let state_root = generated["receipt"]
+                .as_str()
+                .unwrap_or_else(|| panic!("genesis receipt digest absent"))
+                .to_owned();
+            let selector = sha3::Keccak256::digest(b"threshold()");
+            let configuration = serde_json::json!({
+                "url": node.endpoint().url,
+                "chain_id": CHAIN_ID,
+                "bond": anchor,
+                "registry": anchor,
+                "root_call": hex(selector.get(..4).unwrap_or_default()),
+                "threshold": 1,
+                "genesis_state_root": state_root,
+            });
+            Self {
+                node,
+                configuration,
+            }
+        }
+
+        pub(super) fn node(&self) -> Arc<PaxdNode> {
+            Arc::clone(&self.node)
+        }
+    }
+
+    /// The Paxeer half of one withdrawal journey, on the real node.
+    pub(super) struct JourneyChain {
+        node: Arc<PaxdNode>,
+        expectation: DebitExpectation,
+        settlement: Mutex<Option<Settlement>>,
+        boundary: WithdrawalBoundary,
+    }
+
+    impl JourneyChain {
+        pub(super) fn new(node: Arc<PaxdNode>, expectation: DebitExpectation) -> Self {
+            let boundary = WithdrawalBoundary::new_for_protocol(
+                WithdrawalConfig {
+                    endpoints: vec![node.endpoint()],
+                    minimum_endpoint_agreement: 1,
+                    required_confirmations: REQUIRED_CONFIRMATIONS,
+                    poll_cadence: Duration::from_millis(200),
+                    delayed_after_polls: 100,
+                },
+                3,
+            )
+            .unwrap_or_else(|error| panic!("withdrawal boundary: {error:?}"));
+            Self {
+                node,
+                expectation,
+                settlement: Mutex::new(None),
+                boundary,
+            }
+        }
+
+        pub(super) fn boundary(&self) -> &WithdrawalBoundary {
+            &self.boundary
+        }
+
+        /// Walks the anchor module forward to the batch that carries the node's
+        /// settled withdrawal, so its roots are the roots a real finalized
+        /// checkpoint reports.
+        pub(super) fn settle(&self, settlement: &Settlement) {
+            self.node
+                .register_header(&settlement.header, settlement.header_signature);
+            self.node.finalize_through(settlement.batch_number);
+            *lock(&self.settlement) = Some(settlement.clone());
+        }
+
+        pub(super) fn send(&self, request: &WithdrawalTransactionRequest) -> TransactionHash {
+            assert_eq!(
+                request.target, CUSTODY_PRECOMPILE,
+                "withdrawal transactions target the custody precompile"
+            );
+            self.node.send(&request.calldata)
+        }
+
+        pub(super) fn mine(&self) {
+            self.node.wait_block();
+        }
+
+        /// The custody module's payout delay is real chain time, so the journey
+        /// waits it out instead of moving a simulated clock.
+        pub(super) fn advance(&self, seconds: u64) {
+            let deadline = Instant::now() + Duration::from_secs(seconds.saturating_add(60));
+            let until = Instant::now() + Duration::from_secs(seconds);
+            while Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            self.node.wait_block();
+            assert!(Instant::now() < deadline, "challenge window wait overran");
+        }
+
+        /// The custody authority's cancellation of a pending claim. It is a
+        /// module message, so it moves claim and nullifier state with no EVM
+        /// transaction and releases nothing.
+        pub(super) fn cancel(&self) {
+            let settlement = lock(&self.settlement)
+                .clone()
+                .unwrap_or_else(|| panic!("no settled withdrawal to cancel"));
+            let claim_id =
+                withdrawal_claim_id(CHAIN_ID, settlement.nullifier, self.expectation.recipient);
+            self.node.cancel_claim(claim_id);
+        }
+
+        pub(super) fn recipient_balance(&self) -> u128 {
+            self.node.balance(self.expectation.recipient.bytes())
+        }
+
+        /// The custody module holds deposits in its module account, not at the
+        /// precompile address, so the held float is what `getAsset` reports as
+        /// custodied minus what it reports as released.
+        pub(super) fn vault_balance(&self) -> u128 {
+            let answer = self.node.eth_call(
+                CUSTODY_PRECOMPILE.bytes(),
+                &get_asset_calldata(self.expectation.asset_id),
+            );
+            let word = |index: usize| -> u128 {
+                let start = WORD.saturating_mul(index).saturating_add(WORD);
+                let bytes = answer
+                    .get(start.saturating_add(16)..start.saturating_add(WORD))
+                    .unwrap_or_else(|| panic!("getAsset tuple is short"));
+                let mut value = [0_u8; 16];
+                value.copy_from_slice(bytes);
+                u128::from_be_bytes(value)
+            };
+            // head: asset_id, denom offset, pointer, enabled, paused,
+            // minimum_deposit, custody_cap, custodied, released, pending
+            word(7).saturating_sub(word(8))
+        }
     }
 }
 
@@ -1184,7 +574,7 @@ use layerx_types::intent::{EvmAddress, NetworkId};
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use sha2::{Digest as _, Sha256};
 
-use custody_chain::{JourneyChain, Settlement, VAULT_BALANCE};
+use paxd::{JourneyChain, PaxdNode, Settlement, VAULT_BALANCE};
 use support::{directory, principal, retention_uniform, tenancy};
 
 const NETWORK_ID: u32 = 77;
@@ -1593,6 +983,7 @@ impl AgentBoundary for RealWithdrawalAgent {
 }
 
 struct RealRuntime {
+    node: Arc<PaxdNode>,
     chain: JourneyChain,
     settled: SettledWithdrawal,
     proof_available: bool,
@@ -1602,9 +993,10 @@ struct RealRuntime {
 }
 
 impl RealRuntime {
-    fn new(expectation: DebitExpectation, settled: SettledWithdrawal) -> Self {
+    fn new(node: Arc<PaxdNode>, expectation: DebitExpectation, settled: SettledWithdrawal) -> Self {
         Self {
-            chain: JourneyChain::new(expectation),
+            chain: JourneyChain::new(Arc::clone(&node), expectation),
+            node,
             settled,
             proof_available: false,
             transactions: BTreeMap::new(),
@@ -1628,7 +1020,7 @@ impl WithdrawalRuntime for RealRuntime {
         if expectation.activity_id != expectation.withdrawal_id {
             return Err(WithdrawalBoundaryError::ContractViolation);
         }
-        self.chain = JourneyChain::new(expectation);
+        self.chain = JourneyChain::new(Arc::clone(&self.node), expectation);
         Ok(())
     }
 
@@ -2002,7 +1394,11 @@ fn real_agentd_debit_and_anvil_claim_survive_ack_gaps_and_pay_exactly_once() {
     let fixture = Fixture::new("withdrawpayout");
     let settled: SettledWithdrawal = Arc::new(Mutex::new(None));
     let mut agent = RealWithdrawalAgent::new(&fixture, Arc::clone(&settled));
-    let mut runtime = RealRuntime::new(fixture.expectation([0x31; 32]), settled);
+    let mut runtime = RealRuntime::new(
+        fixture.native.paxd(),
+        fixture.expectation([0x31; 32]),
+        settled,
+    );
     let (mut store, mut journey, mut now) = drive_claim_queued(&fixture, &mut runtime, &mut agent);
     let reminders = {
         let scope = store
@@ -2012,7 +1408,7 @@ fn real_agentd_debit_and_anvil_claim_survive_ack_gaps_and_pay_exactly_once() {
             .unwrap_or_else(|error| panic!("reminders: {error}"))
     };
     assert_eq!(reminders.len(), 1);
-    runtime.chain.advance(3_601);
+    runtime.chain.advance(paxd::CHALLENGE_WINDOW + 1);
     now += 1;
     (store, journey) = advance_once(&fixture, &mut runtime, &mut agent, store, journey, now);
     assert!(matches!(
@@ -2078,7 +1474,11 @@ fn real_challenge_hold_and_cancellation_report_actual_funds_disposition() {
     let fixture = Fixture::new("withdrawcancel");
     let settled: SettledWithdrawal = Arc::new(Mutex::new(None));
     let mut agent = RealWithdrawalAgent::new(&fixture, Arc::clone(&settled));
-    let mut runtime = RealRuntime::new(fixture.expectation([0x31; 32]), settled);
+    let mut runtime = RealRuntime::new(
+        fixture.native.paxd(),
+        fixture.expectation([0x31; 32]),
+        settled,
+    );
     let (mut store, mut journey, mut now) = drive_claim_queued(&fixture, &mut runtime, &mut agent);
     runtime.chain.cancel();
     let expected = CancelledFundsDisposition {

@@ -26,7 +26,7 @@ fn checked<T, E: std::fmt::Debug>(result: Result<T, E>) -> T {
 
 pub struct NativeFixture {
     child: Child,
-    _genesis: super::paxeer_real::GenesisChain,
+    genesis: super::paxd::PaxdChain,
     root: PathBuf,
     pub endpoint: PathBuf,
     pub timestamp: u64,
@@ -64,7 +64,11 @@ impl NativeFixture {
         let generated: serde_json::Value = checked(serde_json::from_slice(&checked(
             std::fs::read(root.join("generated.json")),
         )));
-        let genesis = super::paxeer_real::GenesisChain::new(&generated);
+        let beneficiary = checked(layerx_paxeer_client::account_address_for_protocol(
+            &super::owner_account(),
+            3,
+        ));
+        let genesis = super::paxd::PaxdChain::new(&generated, beneficiary);
         let input = child
             .stdin
             .as_mut()
@@ -114,15 +118,30 @@ impl NativeFixture {
         };
         let (_, evidence) = receipt(&mut node, &state.module_registry, ack.activity_id(), 1);
         assert_eq!(evidence.result_code(), 0);
+        // The anchor module only finalizes contiguous batches, so the batch that
+        // carried the custody credit is recorded before the withdrawal's.
+        if let VerifiedProofBundle::Receipt { signed_header, .. } =
+            receipt_bundle(&mut node, &state.module_registry, ack.activity_id(), 1)
+        {
+            genesis
+                .node()
+                .register_header(&signed_header.canonical_bytes, signed_header.signature);
+        }
         let state = checked(node.preparation_state(&actor, 3));
         Self {
             child,
-            _genesis: genesis,
+            genesis,
             root,
             endpoint,
             timestamp: state.protocol_timestamp,
             account_sequence: state.account_sequence,
         }
+    }
+}
+
+impl NativeFixture {
+    pub fn paxd(&self) -> std::sync::Arc<super::paxd::PaxdNode> {
+        self.genesis.node()
     }
 }
 
