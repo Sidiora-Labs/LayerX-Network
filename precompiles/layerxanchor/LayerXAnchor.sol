@@ -109,4 +109,10 @@ interface ILayerXAnchor {
 
     /// 0 unknown, 1 submitted, 2 final.
     function statusOf(uint64 batchNumber) external view returns (uint8);
+
+    /// The batch a checkpoint identifier is recorded for and its status; status 0 when it is not recorded.
+    function checkpointBatch(bytes32 checkpointId) external view returns (uint64 batchNumber, uint8 status);
+
+    /// The guarantors whose attestations the checkpoint was admitted with, in certificate order.
+    function checkpointGuarantors(uint64 batchNumber) external view returns (bytes32[] memory guarantorIds);
 }

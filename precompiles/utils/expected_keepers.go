@@ -240,6 +240,7 @@ type AnchorKeeper interface {
 	ResolveChallenge(ctx sdk.Context, authority sdk.AccAddress, id uint64, upheld bool) (anchortypes.Challenge, []anchortypes.SlashRecord, error)
 	SetSequencerAuthorization(ctx sdk.Context, authority sdk.AccAddress, authorization anchortypes.SequencerAuthorization) error
 	GetCheckpoint(ctx sdk.Context, batchNumber uint64) (anchortypes.Checkpoint, bool)
+	CheckpointByID(ctx sdk.Context, checkpointID [32]byte) (anchortypes.Checkpoint, bool)
 	GetGuarantor(ctx sdk.Context, id [32]byte) (anchortypes.Guarantor, bool)
 	GetUnbondings(ctx sdk.Context) []anchortypes.UnbondingEntry
 	FinalizedStateRoot(ctx sdk.Context, batchNumber uint64) ([32]byte, bool)

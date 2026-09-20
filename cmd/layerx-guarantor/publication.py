@@ -218,15 +218,17 @@ def transact(api, rpc, request, target, data):
     raise ValueError('publication receipt timeout')
 
 
-def publication_transaction(api, rpc, target, digest, commitment, deposit_root=None):
-    event = 'CheckpointWitnessesPublished(bytes32,uint16,bytes32)' if deposit_root is None else 'DepositRootRegistered(bytes32,bytes32,bytes32,uint16)'
-    topics = [hx(api.keccak(text=event)), hx(digest)]
-    if deposit_root is not None:
-        topics.append(hx(deposit_root))
+def recorded_ancestor(api, rpc, anchor, header):
+    batch, status = rpc.view(api.ANCHOR, 'checkpointBatch(bytes32)', ('bytes32',), (anchor,), ('uint64', 'uint8'))
+    return status in (api.STATUS_SUBMITTED, api.STATUS_FINAL) and 0 < batch <= header[3]
+
+
+def publication_transaction(api, rpc, target, digest, commitment, deposit_root):
+    topics = [hx(api.keccak(text='DepositRootRegistered(bytes32,bytes32,bytes32,uint16)')), hx(digest), hx(deposit_root)]
     logs = api.bounded_event_logs(rpc, target, topics)
     require(len(logs) == 1, 'publication event count mismatch')
     log = logs[0]
-    data = api.encode(['uint16', 'bytes32'], [2, commitment]) if deposit_root is None else api.encode(['bytes32', 'uint16'], [commitment, 2])
+    data = api.encode(['bytes32', 'uint16'], [commitment, 2])
     require(log['removed'] is False and log['topics'] == topics and raw(log['data']) == data, 'publication event mismatch')
     receipt = rpc.call('eth_getTransactionReceipt', [log['transactionHash']])
     require(receipt and int(receipt['status'], 16) == 1 and receipt['to'].lower() == target.lower() and receipt['blockHash'] == log['blockHash'] and receipt['blockNumber'] == log['blockNumber'], 'publication event receipt mismatch')
@@ -238,7 +240,7 @@ def publication_transaction(api, rpc, target, digest, commitment, deposit_root=N
 def publish(api, rpc, request):
     h = api.values(api.HEADER_TYPES, request['header'])
     digest = raw(request['checkpoint_id'], 32)
-    registry = request['checkpoint_registry']
+    api.require_anchor(request)
     balances, withdrawals, deposits, profile = native_request(api, request, h, digest)
     directory = Path(request['publication_state_dir'])
     if not balances and not withdrawals and not deposits:
@@ -276,10 +278,10 @@ def publish(api, rpc, request):
         recipient, anchor, signed = raw(v['recipient'], 20), raw(v['request_anchor'], 32), raw(v['signature'], 64)
         require(any(recipient) and any(anchor), 'recipient binding empty field')
         signature(fact['authority'], b'LX:SETTLE:RECIPIENT:v1\0' + h[1].to_bytes(4, 'big') + fact['account'] + fact['asset'] + recipient + anchor, signed)
-        require(rpc.view(registry, 'isRecordedAncestor(bytes32,bytes32)', ('bytes32', 'bytes32'), (anchor, digest), ('bool',))[0], 'recipient anchor not recorded ancestor')
+        require(recorded_ancestor(api, rpc, anchor, h), 'recipient anchor not recorded ancestor')
         balance_items.append(fact['account'] + fact['asset'] + fact['amount'] + recipient + checkpoint_wire(api, request, h, digest, anchor, fact['witness'], signed))
     for fact in withdrawals:
-        require(rpc.view(registry, 'isRecordedAncestor(bytes32,bytes32)', ('bytes32', 'bytes32'), (fact['anchor'], digest), ('bool',))[0], 'withdrawal anchor not recorded ancestor')
+        require(recorded_ancestor(api, rpc, fact['anchor'], h), 'withdrawal anchor not recorded ancestor')
         withdrawal_items.append(fact['identity'] + fact['leaf'] + checkpoint_wire(api, request, h, digest, fact['anchor'], fact['witness'], b''))
     withdrawal_vector = vector(b'LXP/Paxeer/withdrawal-witnesses/v2\0', withdrawal_items)
     balance_vector = vector(b'LXP/Paxeer/balance-witnesses/v2\0', balance_items)
@@ -303,13 +305,6 @@ def publish(api, rpc, request):
         signature(authority, deposit_registration, deposit_signature)
     else:
         require(authorization.get('deposit_registration') is None, 'deposit registration without replayed deposits')
-    commitment = sha(api.encode(['bytes32', 'uint16', 'bytes', 'bytes'], [digest, 2, withdrawal_vector, balance_vector]))
-    published = rpc.view(registry, 'witnessesPublished(bytes32)', ('bytes32',), (digest,), ('bool',))[0]
-    witness_tx = None
-    if not published:
-        witness_tx = transact(api, rpc, request, registry, api.calldata('publishCheckpointWitnesses(bytes32,bytes,bytes)', ('bytes32', 'bytes', 'bytes'), (digest, withdrawal_vector, balance_vector)))
-    require(rpc.view(registry, 'witnessesDigest(bytes32)', ('bytes32',), (digest,), ('bytes32',))[0] == commitment, 'published witnesses differ')
-    witness_tx = publication_transaction(api, rpc, registry, digest, commitment)
     deposit_tx = None
     if deposits:
         commitment_deposit = sha(api.encode(['uint16', 'bytes', 'bytes', 'bytes32[]'], [2, deposit_registration, deposit_signature, ordering]))
@@ -318,6 +313,6 @@ def publish(api, rpc, request):
             deposit_tx = transact(api, rpc, request, vault, api.calldata('registerDepositRoot(bytes,bytes,bytes32[])', ('bytes', 'bytes', 'bytes32[]'), (deposit_registration, deposit_signature, ordering)))
         require(rpc.view(vault, 'depositRegistrationDigest(bytes32)', ('bytes32',), (digest,), ('bytes32',))[0] == commitment_deposit, 'published deposit registration differs')
         deposit_tx = publication_transaction(api, rpc, vault, digest, commitment_deposit, level[0])
-    evidence = {'version': 2, 'checkpoint_id': hx(digest), 'withdrawal_witnesses': hx(withdrawal_vector), 'balance_witnesses': hx(balance_vector), 'withdrawal_count': len(withdrawals), 'balance_count': len(balances), 'deposit_count': len(deposits), 'witness_transaction': witness_tx, 'deposit_transaction': deposit_tx, 'deposit_registration': None if deposit_registration is None else hx(deposit_registration), 'deposit_signature': None if deposit_signature is None else hx(deposit_signature), 'leaf_ordering': [hx(v) for v in ordering]}
+    evidence = {'version': 2, 'checkpoint_id': hx(digest), 'withdrawal_witnesses': hx(withdrawal_vector), 'balance_witnesses': hx(balance_vector), 'withdrawal_count': len(withdrawals), 'balance_count': len(balances), 'deposit_count': len(deposits), 'deposit_transaction': deposit_tx, 'deposit_registration': None if deposit_registration is None else hx(deposit_registration), 'deposit_signature': None if deposit_signature is None else hx(deposit_signature), 'leaf_ordering': [hx(v) for v in ordering]}
     atomic_json(directory / (digest.hex() + '.evidence.json'), evidence)
     return evidence

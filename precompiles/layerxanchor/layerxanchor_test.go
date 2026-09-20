@@ -646,3 +646,35 @@ func TestRevertCarriesReason(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, reason)
 }
+
+func TestCheckpointIdentityViews(t *testing.T) {
+	h := newHarness(t, func(p *anchortypes.Params) { p.ChallengeWindowSeconds = 50 })
+	h.bootstrap()
+	v := h.vector("checkpoints", "batch_1_quorum")
+	id, _ := v.Array32("checkpoint_id")
+	require.Equal(t, []interface{}{uint64(0), anchortypes.CheckpointUnknown}, h.view(layerxanchor.CheckpointBatchMethod, id))
+	require.Empty(t, h.view(layerxanchor.CheckpointGuarantorsMethod, uint64(1))[0])
+
+	_, err := h.submit("batch_1_quorum")
+	require.NoError(t, err)
+	require.Equal(t, []interface{}{uint64(1), anchortypes.CheckpointSubmitted}, h.view(layerxanchor.CheckpointBatchMethod, id))
+	require.Equal(t, []interface{}{uint64(0), anchortypes.CheckpointUnknown}, h.view(layerxanchor.CheckpointBatchMethod, [32]byte{9}))
+	recorded, ok := h.anchor.GetCheckpoint(h.ctx(), 1)
+	require.True(t, ok)
+	expected := make([][32]byte, 0, len(recorded.Guarantors))
+	for _, guarantor := range recorded.Guarantors {
+		expected = append(expected, guarantor)
+	}
+	require.Len(t, expected, 3)
+	require.Equal(t, expected, h.view(layerxanchor.CheckpointGuarantorsMethod, uint64(1))[0])
+
+	// A checkpoint an upheld challenge removes is no longer recorded under its identifier.
+	challenger := h.party(0xc1, true)
+	h.fund(challenger.account, 1_000_000)
+	out, err := h.run(challenger, 1_000_000, false, layerxanchor.OpenChallengeMethod, uint64(1), anchortypes.ChallengeFraud, [32]byte{7})
+	require.NoError(t, err)
+	_, err = h.call(h.authority, layerxanchor.ResolveChallengeMethod, out[0], true)
+	require.NoError(t, err)
+	require.Equal(t, []interface{}{uint64(0), anchortypes.CheckpointUnknown}, h.view(layerxanchor.CheckpointBatchMethod, id))
+	h.invariant()
+}

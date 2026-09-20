@@ -57,6 +57,8 @@ const (
 	GuarantorMethod                 = "guarantor"
 	ThresholdMethod                 = "threshold"
 	StatusOfMethod                  = "statusOf"
+	CheckpointBatchMethod           = "checkpointBatch"
+	CheckpointGuarantorsMethod      = "checkpointGuarantors"
 )
 
 const (
@@ -129,7 +131,7 @@ func NewPrecompile(keepers utils.Keepers) (*pcommon.Precompile, error) {
 func isView(method string) bool {
 	switch method {
 	case LatestFinalizedMethod, CheckpointMethod, FinalizedStateRootMethod, FinalizedReceiptRootMethod,
-		GuarantorMethod, ThresholdMethod, StatusOfMethod:
+		GuarantorMethod, ThresholdMethod, StatusOfMethod, CheckpointBatchMethod, CheckpointGuarantorsMethod:
 		return true
 	default:
 		return false
@@ -273,6 +275,16 @@ func (p PrecompileExecutor) Execute(ctx sdk.Context, method *abi.Method, caller 
 		return method.Outputs.Pack(p.anchor.GetParams(ctx).Threshold)
 	case StatusOfMethod:
 		return method.Outputs.Pack(p.anchor.StatusOf(ctx, args[0].(uint64)))
+	case CheckpointBatchMethod:
+		checkpoint, _ := p.anchor.CheckpointByID(ctx, args[0].([32]byte))
+		return method.Outputs.Pack(checkpoint.BatchNumber, checkpoint.Status)
+	case CheckpointGuarantorsMethod:
+		checkpoint, _ := p.anchor.GetCheckpoint(ctx, args[0].(uint64))
+		guarantors := make([][32]byte, 0, len(checkpoint.Guarantors))
+		for _, id := range checkpoint.Guarantors {
+			guarantors = append(guarantors, id)
+		}
+		return method.Outputs.Pack(guarantors)
 	}
 	return nil, fmt.Errorf("layerxanchor: unknown method %s", method.Name)
 }

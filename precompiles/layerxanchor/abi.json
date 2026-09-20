@@ -905,5 +905,48 @@
       }
     ],
     "anonymous": false
+  },
+  {
+    "type": "function",
+    "name": "checkpointBatch",
+    "inputs": [
+      {
+        "name": "checkpointId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "batchNumber",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "status",
+        "type": "uint8",
+        "internalType": "uint8"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "checkpointGuarantors",
+    "inputs": [
+      {
+        "name": "batchNumber",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "guarantorIds",
+        "type": "bytes32[]",
+        "internalType": "bytes32[]"
+      }
+    ],
+    "stateMutability": "view"
   }
 ]
