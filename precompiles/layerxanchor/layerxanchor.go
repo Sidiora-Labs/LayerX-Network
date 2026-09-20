@@ -123,7 +123,7 @@ func NewPrecompile(keepers utils.Keepers) (*pcommon.Precompile, error) {
 		bankKeeper: keepers.BankK(),
 		evmKeeper:  keepers.EVMK(),
 	}
-	return pcommon.NewPrecompile(newAbi, p, p.address, PrecompileName), nil
+	return pcommon.NewPrecompile(newAbi, p, p.address, PrecompileName).WithRevertReasons(), nil
 }
 
 func isView(method string) bool {

@@ -47,6 +47,7 @@ type harness struct {
 	operators  []party
 	ids        [][32]byte
 	signers    []common.Address
+	reason     string
 }
 
 func (h *harness) ctx() sdk.Context { return h.stateDB.Ctx() }
@@ -151,7 +152,10 @@ func (h *harness) run(from party, units int64, readOnly bool, name string, args 
 	res, err := h.precompile.Run(h.evm, from.address, from.address, h.input(name, args...), value, readOnly, false, nil)
 	if err != nil {
 		require.ErrorIs(h.t, err, vm.ErrExecutionReverted)
-		require.Nil(h.t, res)
+		reason, unpackErr := abi.UnpackRevert(res)
+		require.NoError(h.t, unpackErr)
+		require.NotEmpty(h.t, reason)
+		h.reason = reason
 		h.stateDB.RevertToSnapshot(snapshot)
 		return nil, err
 	}
@@ -623,4 +627,22 @@ func TestWiring(t *testing.T) {
 	require.Equal(t, common.HexToAddress("0x0000000000000000000000000000000000001014"), address)
 	require.True(t, evmkeeper.IsPayablePrecompile(&address))
 	require.Contains(t, gigaprecompiles.AllCustomPrecompilesFailFast, address)
+}
+
+func TestRevertCarriesReason(t *testing.T) {
+	h := newHarness(t, nil)
+	_, err := h.call(h.reporter, layerxanchor.ActivateGuarantorMethod, h.ids[0])
+	require.ErrorIs(t, err, vm.ErrExecutionReverted)
+	require.Contains(t, h.reason, anchortypes.ErrUnauthorized.Error())
+
+	h.fund(h.reporter.account, 5)
+	_, err = h.run(h.reporter, 1, false, layerxanchor.ThresholdMethod)
+	require.ErrorIs(t, err, vm.ErrExecutionReverted)
+	require.NotEmpty(t, h.reason)
+
+	res, err := h.precompile.Run(h.evm, h.reporter.address, h.reporter.address, []byte{0xde, 0xad, 0xbe, 0xef}, nil, false, false, nil)
+	require.ErrorIs(t, err, vm.ErrExecutionReverted)
+	reason, err := abi.UnpackRevert(res)
+	require.NoError(t, err)
+	require.NotEmpty(t, reason)
 }

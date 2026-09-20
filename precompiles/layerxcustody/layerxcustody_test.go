@@ -144,6 +144,9 @@ func (h *harness) run(name string, value *big.Int, readOnly, delegate bool, args
 	res, err := h.precompile.Run(h.evm, h.caller, h.caller, h.input(name, args...), value, readOnly, delegate, nil)
 	if err != nil {
 		require.ErrorIs(h.t, err, vm.ErrExecutionReverted)
+		reason, unpackErr := abi.UnpackRevert(res)
+		require.NoError(h.t, unpackErr)
+		require.NotEmpty(h.t, reason)
 		return nil, err
 	}
 	out, err := h.method(name).Outputs.Unpack(res)
