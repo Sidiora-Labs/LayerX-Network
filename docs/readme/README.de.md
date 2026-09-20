@@ -1,8 +1,8 @@
 <p align="center"><img src="../../layerx-network.png" alt="LayerX Network" width="720"></p>
 
-<h1 align="center">Paxeer-LX-Network</h1>
+<h1 align="center">Paxeer X Network</h1>
 
-Paxeer-LX-Network — ein Netzwerk: die Paxeer-EVM-Kette und das LayerX-Agenten-Native-Domain hinter einer einzigen Schnittstelle.
+Paxeer X Network — ein Netzwerk: die Paxeer-EVM-Kette und das LayerX-Agenten-Native-Domain hinter einer einzigen Schnittstelle.
 
 [English](../../README.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md) · [简体中文](README.zh-CN.md) · [Português](README.pt-BR.md) · Deutsch · [Français](README.fr.md)
 
@@ -11,15 +11,15 @@ Paxeer-LX-Network — ein Netzwerk: die Paxeer-EVM-Kette und das LayerX-Agenten-
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](../../LICENSE)
 [![CI](https://github.com/Sidiora-Labs/LayerX-Network/actions/workflows/ci.yml/badge.svg)](../../.github/workflows/ci.yml)
 
-## Was Paxeer-LX-Network ist
+## Was Paxeer X Network ist
 
-LayerX Network ist ein deterministisches Ausführungs- und Buchungsnetzwerk für autonome Agenten. Jede zustandsändernde Operation geht als signierte, kanonisch kodierte `Activity` ein. Das Protokoll prüft den Akteur und seine Berechtigung, verbraucht die Kontosequenz, reiht die Activity in eine globale Sequenz ein, wendet einen deterministischen Zustandsübergang an und gibt eine signierte Quittung zurück, die an die resultierende State Root gebunden ist.
+Paxeer X Network ist ein deterministisches Ausführungs- und Buchungsnetzwerk für autonome Agenten. Jede zustandsändernde Operation geht als signierte, kanonisch kodierte `Activity` ein. Das Protokoll prüft den Akteur und seine Berechtigung, verbraucht die Kontosequenz, reiht die Activity in eine globale Sequenz ein, wendet einen deterministischen Zustandsübergang an und gibt eine signierte Quittung zurück, die an die resultierende State Root gebunden ist.
 
 Das nur anfügende Aktivitätsprotokoll ist die Autorität. Datenbankindizes sind verwerfbare Projektionen und lassen sich durch Replay dieses Protokolls neu aufbauen. Konsenskritische Ausführung schließt Gleitkommaarithmetik, Entscheidungen anhand der lokalen Uhr, die Iterationsreihenfolge von Datenbanken und andere Quellen von Nichtdeterminismus aus. `402LXP` ist die einzige Komponente, die Salden schreiben darf. Protokollmodule geben validierte Transfersätze aus, statt Guthaben selbst zu verändern.
 
 Gewöhnliche Agentenaktivität wird innerhalb von LayerX ausgeführt und geordnet. Periodische Checkpoints werden auf Paxeer abgewickelt, das Verwahrung, Checkpoint-Registrierung, Garantenbonds, Challenges, Auszahlungen, Streitfälle und Notausstiege hält. Eine gewöhnliche LayerX-Aktion erfordert keine Paxeer-Transaktion.
 
-Dieses Repository ist das Monorepo von Sidiora Labs für Paxeer-LX-Network und das Paxeer Network. Die gemeinsame Ablage hält Protokoll, Settlement-Netzwerk, Contracts und Entwickleroberflächen an einem Ort prüfbar. Jedes Subsystem behält seine eigene Build-, Release-, Deployment- und Vertrauensgrenze. Siehe [`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md).
+Dieses Repository ist das Monorepo von Sidiora Labs für Paxeer X Network und das Paxeer Network. Die gemeinsame Ablage hält Protokoll, Settlement-Netzwerk, Contracts und Entwickleroberflächen an einem Ort prüfbar. Jedes Subsystem behält seine eigene Build-, Release-, Deployment- und Vertrauensgrenze. Siehe [`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md).
 
 ## Testnet ausprobieren
 
@@ -143,4 +143,4 @@ Schwachstellen über GitHub Private Reporting melden, wie in [`SECURITY.md`](../
 
 Lizenziert unter der Apache License, Version 2.0. Siehe [`LICENSE`](../../LICENSE) und [`NOTICE`](../../NOTICE).
 
-Paxeer-LX-Network wird von Sidiora Labs entwickelt.
+Paxeer X Network wird von Sidiora Labs entwickelt.

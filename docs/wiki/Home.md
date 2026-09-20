@@ -1,6 +1,6 @@
-# Welcome to Paxeer-LX-Network
+# Welcome to Paxeer X Network
 
-Paxeer-LX-Network — one network: the Paxeer EVM chain and the LayerX agent-native domain behind one interface.
+Paxeer X Network — one network: the Paxeer EVM chain and the LayerX agent-native domain behind one interface.
 
 The public testnet exposes a gateway API and a faucet. There is no LayerX mainnet. Custody and settlement live on Paxeer. LayerX is licensed under the Apache License, Version 2.0.
 
@@ -11,7 +11,7 @@ inside LayerX while custody and checkpoint settlement remain on Paxeer.
 
 ## Repository and monorepo structure
 
-This is the canonical Sidiora Labs monorepo for Paxeer-LX-Network and the Paxeer Network. The Paxeer settlement node source lives under the repository root (`go.mod`, `chain.mk`, `daemon/`, `node/`, `modules/`, `consensus/`, `sdk/`, `rpc/`) with independent build, release tags (`paxeer-network/vX.Y.Z`), and trust boundaries. Co-location keeps the protocol, settlement network, and their automation auditable in one place while preserving separate deployment authority.
+This is the canonical Sidiora Labs monorepo for Paxeer X Network and the Paxeer Network. The Paxeer settlement node source lives under the repository root (`go.mod`, `chain.mk`, `daemon/`, `node/`, `modules/`, `consensus/`, `sdk/`, `rpc/`) with independent build, release tags (`paxeer-network/vX.Y.Z`), and trust boundaries. Co-location keeps the protocol, settlement network, and their automation auditable in one place while preserving separate deployment authority.
 
 LayerX Programs is kernel module ID `9` (`LXP_MODULE_PROGRAMS` in `include/layerx/lxp_module.h`). Guest code runs in that module's namespace. Every monetary effect is forced through 402LXP; no program ever holds direct balance-writing authority. See [Programs](Programs.md). Protocol 3 (`LXP_PROTOCOL_VERSION_STATE_COMMITMENT`) is the beta wire; the C header default `LXP_PROTOCOL_VERSION` remains occupancy protocol 2 (`include/layerx/lxp_protocol.h`).
 
@@ -129,4 +129,4 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 
 ---
 
-Paxeer-LX-Network is developed by [Sidiora Labs](https://github.com/Sidiora-Labs).
+Paxeer X Network is developed by [Sidiora Labs](https://github.com/Sidiora-Labs).
