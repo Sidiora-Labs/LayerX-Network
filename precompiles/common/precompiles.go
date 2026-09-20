@@ -39,12 +39,30 @@ type Precompile struct {
 	address  common.Address
 	name     string
 	executor PrecompileExecutor
+	reasons  bool
 }
 
 var _ vm.PrecompiledContract = &Precompile{}
 
 func NewPrecompile(a abi.ABI, executor PrecompileExecutor, address common.Address, name string) *Precompile {
 	return &Precompile{ABI: a, executor: executor, address: address, name: name}
+}
+
+// WithRevertReasons makes every failed call return the ABI encoding of
+// Error(string) carrying the error text, so a caller sees why it reverted.
+func (p *Precompile) WithRevertReasons() *Precompile {
+	p.reasons = true
+	return p
+}
+
+// RevertReason is the return data of a Solidity revert with a reason string.
+func RevertReason(err error) []byte {
+	stringType, _ := abi.NewType("string", "", nil)
+	data, packErr := abi.Arguments{{Type: stringType}}.Pack(err.Error())
+	if packErr != nil {
+		return nil
+	}
+	return append([]byte{0x08, 0xc3, 0x79, 0xa0}, data...)
 }
 
 func (p Precompile) RequiredGas(input []byte) uint64 {
@@ -66,6 +84,9 @@ func (p Precompile) Run(evm *vm.EVM, caller common.Address, callingContract comm
 	defer func() {
 		HandlePrecompileError(err, evm, operation)
 		if err != nil {
+			if p.reasons {
+				bz = RevertReason(err)
+			}
 			err = vm.ErrExecutionReverted
 		}
 	}()

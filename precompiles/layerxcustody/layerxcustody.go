@@ -66,11 +66,17 @@ const (
 	NativeAssetIDMethod      = "nativeAssetId"
 	ExitEligibleMethod       = "exitEligible"
 
+	RegisterDepositRootMethod       = "registerDepositRoot"
+	DepositRootAuthorityMethod      = "depositRootAuthority"
+	DepositRootRegisteredMethod     = "depositRootRegistered"
+	DepositRegistrationDigestMethod = "depositRegistrationDigest"
+
 	CustodyDepositEvent        = "CustodyDeposit"
 	ClaimQueuedEvent           = "ClaimQueued"
 	ClaimFinalisedEvent        = "ClaimFinalised"
 	CustodyReleaseEvent        = "CustodyRelease"
 	EmergencyExitExecutedEvent = "EmergencyExitExecuted"
+	DepositRootRegisteredEvent = "DepositRootRegistered"
 )
 
 const (
@@ -150,7 +156,7 @@ func NewPrecompile(keepers utils.Keepers) (*pcommon.Precompile, error) {
 		bankKeeper: keepers.BankK(),
 		evmKeeper:  keepers.EVMK(),
 	}
-	return pcommon.NewPrecompile(newAbi, p, p.address, PrecompileName), nil
+	return pcommon.NewPrecompile(newAbi, p, p.address, PrecompileName).WithRevertReasons(), nil
 }
 
 // Signatures returns the Ed25519 verifications a method performs.
@@ -158,7 +164,7 @@ func Signatures(method string) uint64 {
 	switch method {
 	case RequestWithdrawalMethod, FinaliseWithdrawalMethod:
 		return 2
-	case RequestForcedExitMethod, ExecuteForcedExitMethod:
+	case RequestForcedExitMethod, ExecuteForcedExitMethod, RegisterDepositRootMethod:
 		return 1
 	default:
 		return 0
@@ -174,6 +180,8 @@ func Writes(method string) uint64 {
 		return 6
 	case FinaliseWithdrawalMethod, ExecuteForcedExitMethod:
 		return 12
+	case RegisterDepositRootMethod:
+		return 2
 	default:
 		return 0
 	}
@@ -287,6 +295,22 @@ func (p PrecompileExecutor) Execute(ctx sdk.Context, method *abi.Method, caller 
 		return method.Outputs.Pack(hash32(asset.AssetId))
 	case ExitEligibleMethod:
 		return method.Outputs.Pack(p.keeper.ExitEligible(ctx))
+	case RegisterDepositRootMethod:
+		return p.registerDepositRoot(ctx, method, caller, args, evm)
+	case DepositRootAuthorityMethod:
+		return method.Outputs.Pack(hash32(p.keeper.GetParams(ctx).DepositRootAuthority))
+	case DepositRootRegisteredMethod:
+		if err = pcommon.ValidateArgsLength(args, 1); err != nil {
+			return nil, err
+		}
+		_, registered := p.keeper.GetDepositRoot(ctx, args[0].([32]byte))
+		return method.Outputs.Pack(registered)
+	case DepositRegistrationDigestMethod:
+		if err = pcommon.ValidateArgsLength(args, 1); err != nil {
+			return nil, err
+		}
+		registration, _ := p.keeper.GetDepositRoot(ctx, args[0].([32]byte))
+		return method.Outputs.Pack(hash32(registration.Commitment))
 	}
 	return nil, fmt.Errorf("layerxcustody: unknown method %s", method.Name)
 }
@@ -341,6 +365,26 @@ func (p PrecompileExecutor) log(evm *vm.EVM, name string, topics []common.Hash, 
 		return err
 	}
 	return pcommon.EmitEVMLog(evm, p.address, append([]common.Hash{event.ID}, topics...), packed)
+}
+
+// registerDepositRoot records a finalized checkpoint's deposit root for the
+// account that submitted the checkpoint.
+func (p PrecompileExecutor) registerDepositRoot(ctx sdk.Context, method *abi.Method, caller common.Address,
+	args []interface{}, evm *vm.EVM) ([]byte, error) {
+	if err := pcommon.ValidateArgsLength(args, 3); err != nil {
+		return nil, err
+	}
+	registration, err := p.keeper.RegisterDepositRoot(ctx, p.evmKeeper.GetPaxAddressOrDefault(ctx, caller),
+		args[0].([]byte), args[1].([]byte), args[2].([][32]byte))
+	if err != nil {
+		return nil, err
+	}
+	if err := p.log(evm, DepositRootRegisteredEvent,
+		[]common.Hash{hash32(registration.CheckpointId), hash32(registration.DepositRoot)},
+		hash32(registration.Commitment), custodykeeper.DepositRootEvidenceVersion); err != nil {
+		return nil, err
+	}
+	return method.Outputs.Pack()
 }
 
 func addressTopic(value common.Address) common.Hash { return common.BytesToHash(value.Bytes()) }

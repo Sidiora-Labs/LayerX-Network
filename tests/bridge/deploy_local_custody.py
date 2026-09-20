@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from custody_credit import NoRedirect, Rpc, eth_hash, quantity, require, unhex, write_new
+import evm
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -154,7 +155,7 @@ def signer(rpc, path):
 
 
 def calldata(signature, *args):
-    return command("cast", "calldata", signature, *map(str, args))
+    return evm.calldata(signature, *[arg if isinstance(arg, (bytes, bool)) else str(arg) for arg in args])
 
 
 def receipt(rpc, transaction):
@@ -171,9 +172,14 @@ def receipt(rpc, transaction):
 
 def send(rpc, account, target, data, value=0):
     if getattr(rpc, "signing_key", None):
-        transaction = command("cast", "send", "--rpc-url", rpc.url, "--private-key", rpc.signing_key,
-                              "--async", "--gas-limit", "6000000", "--value", str(value),
-                              target, data, env=getattr(rpc, "command_env", None))
+        secret = int.from_bytes(unhex(rpc.signing_key, 32), "big")
+        require(unhex(account, 20) == evm.address_of(secret), "signing key account")
+        raw = evm.sign_transaction(secret, quantity(rpc.call("eth_chainId", [])),
+                                   quantity(rpc.call("eth_getTransactionCount", [account, "pending"])),
+                                   quantity(rpc.call("eth_gasPrice", [])), 6000000,
+                                   unhex(target, 20), value, unhex(data))
+        transaction = rpc.call("eth_sendRawTransaction", ["0x" + raw.hex()])
+        require(unhex(transaction, 32) == evm.keccak(raw), "submitted transaction identity")
         return receipt(rpc, transaction)
     transaction = rpc.call("eth_sendTransaction", [{"from": account, "to": target,
                             "data": data, "value": hex(value), "gas": hex(6000000)}])

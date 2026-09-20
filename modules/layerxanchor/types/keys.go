@@ -23,6 +23,7 @@ var (
 	NextUnbondingIDKey       = []byte{0x0b}
 	AnchorKey                = []byte{0x0c}
 	CheckpointAttesterPrefix = []byte{0x0d}
+	CheckpointIDPrefix       = []byte{0x0e}
 )
 
 func u64(value uint64) []byte {
@@ -51,6 +52,9 @@ func GuarantorKey(guarantorID [32]byte) []byte { return join(GuarantorPrefix, gu
 func UnbondingKey(id uint64) []byte { return join(UnbondingPrefix, u64(id)) }
 
 func CheckpointKey(batchNumber uint64) []byte { return join(CheckpointPrefix, u64(batchNumber)) }
+
+// CheckpointIDKey indexes the batch a checkpoint identifier was recorded for.
+func CheckpointIDKey(checkpointID [32]byte) []byte { return join(CheckpointIDPrefix, checkpointID[:]) }
 
 func AvailabilityKey(batchNumber uint64, guarantorID [32]byte) []byte {
 	return join(AvailabilityPrefix, u64(batchNumber), guarantorID[:])

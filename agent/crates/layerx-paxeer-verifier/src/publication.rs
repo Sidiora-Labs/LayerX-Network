@@ -36,8 +36,12 @@ fn publication_log(
     endpoint: &EndpointConfig,
     contract: EvmAddress,
     topic: [u8; 32],
+    position: usize,
     checkpoint: [u8; 32],
 ) -> Result<Json, EndpointFault> {
+    let mut filter = vec![Json::Null; position.checked_add(1).ok_or_else(invalid)?];
+    filter[0] = Json::Text(hex(&topic));
+    filter[position] = Json::Text(hex(&checkpoint));
     let rpc = |method, params: &[Json]| raw_call(endpoint, method, params).map_err(|e| e.fault);
     let first = rpc(
         "eth_getBlockByNumber",
@@ -57,10 +61,7 @@ fn publication_log(
                 ("address".into(), Json::Text(hex(&contract.bytes()))),
                 ("fromBlock".into(), Json::Text(format!("0x{begin:x}"))),
                 ("toBlock".into(), Json::Text(format!("0x{last:x}"))),
-                (
-                    "topics".into(),
-                    Json::Array(vec![Json::Text(hex(&topic)), Json::Text(hex(&checkpoint))]),
-                ),
+                ("topics".into(), Json::Array(filter.clone())),
             ])],
         )?;
         let Json::Array(batch) = batch else {
@@ -95,12 +96,29 @@ pub fn publication(
     checkpoint: [u8; 32],
     confirmations: u64,
 ) -> Result<Publication, EndpointFailure> {
+    publication_at(endpoint, contract, topic, 1, checkpoint, confirmations)
+}
+
+/// Reads the one publication whose topic at `position` is `checkpoint`. The
+/// layerxAnchor checkpoint events index the batch number first and the
+/// checkpoint identifier second.
+///
+/// # Errors
+/// Refuses what `publication` refuses, and a position outside the indexed topics.
+pub fn publication_at(
+    endpoint: &EndpointConfig,
+    contract: EvmAddress,
+    topic: [u8; 32],
+    position: usize,
+    checkpoint: [u8; 32],
+    confirmations: u64,
+) -> Result<Publication, EndpointFailure> {
     let run = || -> Result<Publication, EndpointFault> {
-        if confirmations == 0 {
+        if confirmations == 0 || !(1..=3).contains(&position) {
             return Err(invalid());
         }
         let rpc = |method, params: &[Json]| raw_call(endpoint, method, params).map_err(|e| e.fault);
-        let log = publication_log(endpoint, contract, topic, checkpoint)?;
+        let log = publication_log(endpoint, contract, topic, position, checkpoint)?;
         let log = &log;
         if required(log, "removed")? != &Json::Bool(false)
             || fixed::<20>(required(log, "address")?)? != contract.bytes()
@@ -114,7 +132,7 @@ pub fn publication(
             .iter()
             .map(fixed::<32>)
             .collect::<Result<Vec<_>, _>>()?;
-        if topics.get(..2) != Some(&[topic, checkpoint]) {
+        if topics.first() != Some(&topic) || topics.get(position) != Some(&checkpoint) {
             return Err(invalid());
         }
         let hash = fixed::<32>(required(log, "transactionHash")?)?;

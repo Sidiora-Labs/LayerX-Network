@@ -57,6 +57,8 @@ const (
 	GuarantorMethod                 = "guarantor"
 	ThresholdMethod                 = "threshold"
 	StatusOfMethod                  = "statusOf"
+	CheckpointBatchMethod           = "checkpointBatch"
+	CheckpointGuarantorsMethod      = "checkpointGuarantors"
 )
 
 const (
@@ -123,13 +125,13 @@ func NewPrecompile(keepers utils.Keepers) (*pcommon.Precompile, error) {
 		bankKeeper: keepers.BankK(),
 		evmKeeper:  keepers.EVMK(),
 	}
-	return pcommon.NewPrecompile(newAbi, p, p.address, PrecompileName), nil
+	return pcommon.NewPrecompile(newAbi, p, p.address, PrecompileName).WithRevertReasons(), nil
 }
 
 func isView(method string) bool {
 	switch method {
 	case LatestFinalizedMethod, CheckpointMethod, FinalizedStateRootMethod, FinalizedReceiptRootMethod,
-		GuarantorMethod, ThresholdMethod, StatusOfMethod:
+		GuarantorMethod, ThresholdMethod, StatusOfMethod, CheckpointBatchMethod, CheckpointGuarantorsMethod:
 		return true
 	default:
 		return false
@@ -237,7 +239,7 @@ func (p PrecompileExecutor) Execute(ctx sdk.Context, method *abi.Method, caller 
 		return p.resolveChallenge(ctx, method, caller, args, evm)
 	case ActivateGuarantorMethod:
 		id := args[0].([32]byte)
-		if err := p.anchor.ActivateGuarantor(ctx, p.account(ctx, caller), id); err != nil {
+		if err := p.anchor.ActivateGuarantor(ctx, p.authorityAccount(ctx, caller), id); err != nil {
 			return nil, err
 		}
 		if err := p.log(evm, "GuarantorActivated", []common.Hash{id}); err != nil {
@@ -247,7 +249,7 @@ func (p PrecompileExecutor) Execute(ctx sdk.Context, method *abi.Method, caller 
 	case SetSequencerAuthorizationMethod:
 		authorization := anchortypes.SequencerAuthorization{SequencerID: args[0].([32]byte), PublicKey: args[1].([32]byte),
 			FirstBatchNumber: args[2].(uint64), LastBatchNumber: args[3].(uint64)}
-		if err := p.anchor.SetSequencerAuthorization(ctx, p.account(ctx, caller), authorization); err != nil {
+		if err := p.anchor.SetSequencerAuthorization(ctx, p.authorityAccount(ctx, caller), authorization); err != nil {
 			return nil, err
 		}
 		if err := p.log(evm, "SequencerAuthorized", []common.Hash{common.Hash(authorization.SequencerID)}, [32]byte(authorization.PublicKey),
@@ -273,6 +275,16 @@ func (p PrecompileExecutor) Execute(ctx sdk.Context, method *abi.Method, caller 
 		return method.Outputs.Pack(p.anchor.GetParams(ctx).Threshold)
 	case StatusOfMethod:
 		return method.Outputs.Pack(p.anchor.StatusOf(ctx, args[0].(uint64)))
+	case CheckpointBatchMethod:
+		checkpoint, _ := p.anchor.CheckpointByID(ctx, args[0].([32]byte))
+		return method.Outputs.Pack(checkpoint.BatchNumber, checkpoint.Status)
+	case CheckpointGuarantorsMethod:
+		checkpoint, _ := p.anchor.GetCheckpoint(ctx, args[0].(uint64))
+		guarantors := make([][32]byte, 0, len(checkpoint.Guarantors))
+		for _, id := range checkpoint.Guarantors {
+			guarantors = append(guarantors, id)
+		}
+		return method.Outputs.Pack(guarantors)
 	}
 	return nil, fmt.Errorf("layerxanchor: unknown method %s", method.Name)
 }
@@ -281,6 +293,18 @@ func (p PrecompileExecutor) Execute(ctx sdk.Context, method *abi.Method, caller 
 // the address cast when it has none.
 func (p PrecompileExecutor) account(ctx sdk.Context, caller common.Address) sdk.AccAddress {
 	return p.evmKeeper.GetPaxAddressOrDefault(ctx, caller)
+}
+
+// authorityAccount is the account an authority call is made as. Genesis names
+// the authority before its key has signed anything, as the cast of the key's
+// EVM address; the key's first transaction then associates the EVM address with
+// its public-key account. Only that key can call from the EVM address, so the
+// cast stays its account for the authority check after association.
+func (p PrecompileExecutor) authorityAccount(ctx sdk.Context, caller common.Address) sdk.AccAddress {
+	if cast := sdk.AccAddress(caller[:]); p.anchor.GetParams(ctx).Authority == cast.String() {
+		return cast
+	}
+	return p.account(ctx, caller)
 }
 
 // bondHolder is the account that owns a bond or a challenge bond. It must be
@@ -491,7 +515,7 @@ func (p PrecompileExecutor) openChallenge(ctx sdk.Context, method *abi.Method, c
 
 func (p PrecompileExecutor) resolveChallenge(ctx sdk.Context, method *abi.Method, caller common.Address, args []interface{}, evm *vm.EVM) ([]byte, error) {
 	upheld := args[1].(bool)
-	challenge, slashed, err := p.anchor.ResolveChallenge(ctx, p.account(ctx, caller), args[0].(uint64), upheld)
+	challenge, slashed, err := p.anchor.ResolveChallenge(ctx, p.authorityAccount(ctx, caller), args[0].(uint64), upheld)
 	if err != nil {
 		return nil, err
 	}

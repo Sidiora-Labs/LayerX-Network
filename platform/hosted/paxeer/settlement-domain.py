@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Helpers for deploy-contracts.sh: secp256k1 public-key handling and the
+"""Helpers for the Paxeer bring-up: secp256k1 public-key handling and the
 checkpoint settlement document update for one settlement domain."""
 
 import json
 import os
 import tempfile
 import pathlib
-import subprocess
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from evm import keccak
 
 P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
 SCHEMA = "layerx/checkpoint-settlement/1"
@@ -33,12 +35,6 @@ def decompress(compressed):
     if (y & 1) != (compressed[0] & 1):
         y = P - y
     return x.to_bytes(32, "big") + y.to_bytes(32, "big")
-
-
-def keccak(data):
-    return unhex(
-        subprocess.run(["cast", "keccak", hexstr(data)], check=True, capture_output=True, text=True).stdout.strip()
-    )
 
 
 def signer_of(compressed):

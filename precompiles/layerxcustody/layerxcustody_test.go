@@ -144,6 +144,9 @@ func (h *harness) run(name string, value *big.Int, readOnly, delegate bool, args
 	res, err := h.precompile.Run(h.evm, h.caller, h.caller, h.input(name, args...), value, readOnly, delegate, nil)
 	if err != nil {
 		require.ErrorIs(h.t, err, vm.ErrExecutionReverted)
+		reason, unpackErr := abi.UnpackRevert(res)
+		require.NoError(h.t, unpackErr)
+		require.NotEmpty(h.t, reason)
 		return nil, err
 	}
 	out, err := h.method(name).Outputs.Unpack(res)
@@ -397,6 +400,35 @@ func TestForcedExitThroughThePrecompile(t *testing.T) {
 	require.Error(t, err, "replay")
 	require.Equal(t, sdk.NewInt(5_000_000), h.balance(h.pax(recipient), tokenDenom))
 	h.solvent()
+}
+
+// TestDepositRootThroughThePrecompile covers the precompile surface; the
+// accepted path against a finalized anchor checkpoint is the keeper's
+// TestDepositRootRegistration.
+func TestDepositRootThroughThePrecompile(t *testing.T) {
+	h := newHarness(t, 0)
+	checkpointID := [32]byte{0x44}
+	require.Equal(t, [32]byte{}, h.view(layerxcustody.DepositRootAuthorityMethod)[0])
+	params := h.keeper.GetParams(h.ctx)
+	params.DepositRootAuthority = h.withdrawal.Fields["public_key"]
+	require.NoError(t, h.keeper.SetParams(h.ctx, params))
+	require.Equal(t, array(t, h.withdrawal, "public_key"), h.view(layerxcustody.DepositRootAuthorityMethod)[0])
+	require.Equal(t, false, h.view(layerxcustody.DepositRootRegisteredMethod, checkpointID)[0])
+	require.Equal(t, [32]byte{}, h.view(layerxcustody.DepositRegistrationDigestMethod, checkpointID)[0])
+
+	registration := append([]byte("LX:PAXEER:DEPOSIT:ROOT:v1"), make([]byte, 134)...)
+	args := []interface{}{registration, make([]byte, 64), [][32]byte{{1}}}
+	res, err := h.precompile.Run(h.evm, h.caller, h.caller, h.input(layerxcustody.RegisterDepositRootMethod, args...),
+		nil, false, false, nil)
+	require.ErrorIs(t, err, vm.ErrExecutionReverted)
+	reason, err := abi.UnpackRevert(res)
+	require.NoError(t, err)
+	require.Contains(t, reason, "checkpoint is not final")
+	_, err = h.run(layerxcustody.RegisterDepositRootMethod, nil, true, false, args...)
+	require.Error(t, err)
+	require.Empty(t, h.logs("DepositRootRegistered(bytes32,bytes32,bytes32,uint16)"))
+	require.Equal(t, layerxcustody.Gas(uint64(len(h.input(layerxcustody.RegisterDepositRootMethod, args...))-4), 1, 0, 2),
+		h.precompile.RequiredGas(h.input(layerxcustody.RegisterDepositRootMethod, args...)))
 }
 
 func TestGasIsTheDocumentedFormula(t *testing.T) {

@@ -26,4 +26,16 @@ type AnchorReader interface {
 	// LatestFinalizedBatch returns the highest finalized batch number and the
 	// unix second it was finalized on Paxeer.
 	LatestFinalizedBatch(ctx sdk.Context) (batchNumber uint64, finalizedAt int64, ok bool)
+	// FinalizedCheckpoint returns the finalized checkpoint recorded under
+	// checkpointID. A source that records no identifiers returns false.
+	FinalizedCheckpoint(ctx sdk.Context, checkpointID [32]byte) (FinalizedCheckpoint, bool)
+}
+
+// FinalizedCheckpoint is what a deposit root registration is checked against.
+type FinalizedCheckpoint struct {
+	BatchNumber     uint64
+	StateRoot       [32]byte
+	NetworkID       uint32
+	ProtocolVersion uint16
+	Proposer        sdk.AccAddress
 }

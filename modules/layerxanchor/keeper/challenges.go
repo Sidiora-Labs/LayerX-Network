@@ -116,7 +116,7 @@ func (k Keeper) ResolveChallenge(ctx sdk.Context, authority sdk.AccAddress, id u
 				slashed = append(slashed, record)
 			}
 			if checkpoint.Status != types.CheckpointFinal {
-				ctx.KVStore(k.storeKey).Delete(types.CheckpointKey(checkpoint.BatchNumber))
+				k.deleteCheckpoint(ctx, checkpoint)
 				k.clearAvailability(ctx, checkpoint.BatchNumber)
 			}
 		}
