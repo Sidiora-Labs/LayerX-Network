@@ -12,6 +12,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/precompiles/gov"
 	"github.com/sidiora-labs/paxeer-network/precompiles/ibc"
 	"github.com/sidiora-labs/paxeer-network/precompiles/json"
+	"github.com/sidiora-labs/paxeer-network/precompiles/layerxverify"
 	"github.com/sidiora-labs/paxeer-network/precompiles/oracle"
 	"github.com/sidiora-labs/paxeer-network/precompiles/p256"
 	"github.com/sidiora-labs/paxeer-network/precompiles/pointer"
@@ -45,19 +46,20 @@ func GetCustomPrecompiles(
 	keepers utils.Keepers,
 ) map[ecommon.Address]utils.VersionedPrecompiles {
 	return map[ecommon.Address]utils.VersionedPrecompiles{
-		ecommon.HexToAddress(bank.BankAddress):               bank.GetVersioned(latestUpgrade, keepers),
-		ecommon.HexToAddress(wasmd.WasmdAddress):             wasmd.GetVersioned(latestUpgrade, keepers),
-		ecommon.HexToAddress(json.JSONAddress):               json.GetVersioned(latestUpgrade, keepers),
-		ecommon.HexToAddress(addr.AddrAddress):               addr.GetVersioned(latestUpgrade, keepers),
-		ecommon.HexToAddress(staking.StakingAddress):         staking.GetVersioned(latestUpgrade, keepers),
-		ecommon.HexToAddress(gov.GovAddress):                 gov.GetVersioned(latestUpgrade, keepers),
-		ecommon.HexToAddress(distribution.DistrAddress):      distribution.GetVersioned(latestUpgrade, keepers),
-		ecommon.HexToAddress(oracle.OracleAddress):           oracle.GetVersioned(latestUpgrade, keepers),
-		ecommon.HexToAddress(ibc.IBCAddress):                 ibc.GetVersioned(latestUpgrade, keepers),
-		ecommon.HexToAddress(pointer.PointerAddress):         pointer.GetVersioned(latestUpgrade, keepers),
-		ecommon.HexToAddress(pointerview.PointerViewAddress): pointerview.GetVersioned(latestUpgrade, keepers),
-		ecommon.HexToAddress(p256.P256VerifyAddress):         p256.GetVersioned(latestUpgrade, keepers),
-		ecommon.HexToAddress(solo.SoloAddress):               solo.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(bank.BankAddress):                 bank.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(wasmd.WasmdAddress):               wasmd.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(json.JSONAddress):                 json.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(addr.AddrAddress):                 addr.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(staking.StakingAddress):           staking.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(gov.GovAddress):                   gov.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(distribution.DistrAddress):        distribution.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(oracle.OracleAddress):             oracle.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(ibc.IBCAddress):                   ibc.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(pointer.PointerAddress):           pointer.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(pointerview.PointerViewAddress):   pointerview.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(p256.P256VerifyAddress):           p256.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(solo.SoloAddress):                 solo.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(layerxverify.LayerXVerifyAddress): layerxverify.GetVersioned(latestUpgrade, keepers),
 	}
 }
 
@@ -120,6 +122,11 @@ func InitializePrecompiles(
 		return err
 	}
 
+	layerxverifyp, err := layerxverify.NewPrecompile(keepers)
+	if err != nil {
+		return err
+	}
+
 	PrecompileNamesToInfo[bankp.GetName()] = PrecompileInfo{ABI: bankp.GetABI(), Address: bankp.Address()}
 	PrecompileNamesToInfo[wasmdp.GetName()] = PrecompileInfo{ABI: wasmdp.GetABI(), Address: wasmdp.Address()}
 	PrecompileNamesToInfo[jsonp.GetName()] = PrecompileInfo{ABI: jsonp.GetABI(), Address: jsonp.Address()}
@@ -132,6 +139,7 @@ func InitializePrecompiles(
 	PrecompileNamesToInfo[pointerp.GetName()] = PrecompileInfo{ABI: pointerp.GetABI(), Address: pointerp.Address()}
 	PrecompileNamesToInfo[pointerviewp.GetName()] = PrecompileInfo{ABI: pointerviewp.GetABI(), Address: pointerviewp.Address()}
 	PrecompileNamesToInfo[p256p.GetName()] = PrecompileInfo{ABI: p256p.GetABI(), Address: p256p.Address()}
+	PrecompileNamesToInfo[layerxverifyp.GetName()] = PrecompileInfo{ABI: layerxverifyp.GetABI(), Address: layerxverifyp.Address()}
 
 	if !dryRun {
 		addPrecompileToVM(bankp)
@@ -146,6 +154,7 @@ func InitializePrecompiles(
 		addPrecompileToVM(pointerp)
 		addPrecompileToVM(pointerviewp)
 		addPrecompileToVM(p256p)
+		addPrecompileToVM(layerxverifyp)
 		Initialized = true
 	}
 	return nil
