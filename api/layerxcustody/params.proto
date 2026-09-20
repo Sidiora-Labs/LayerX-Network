@@ -1,0 +1,38 @@
+syntax = "proto3";
+package paxprotocol.paxchain.layerxcustody;
+
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/types";
+
+// SequencerAuthorization is the LayerX sequencer authority valid for an
+// inclusive batch range. Identifiers are 64 lowercase hex characters.
+message SequencerAuthorization {
+  option (gogoproto.equal) = true;
+
+  string sequencer_id = 1;
+  string public_key = 2;
+  uint64 first_batch_number = 3;
+  uint64 last_batch_number = 4;
+}
+
+// Params defines the parameters of the layerxcustody module.
+message Params {
+  // authority is the bech32 account allowed to change params, the asset map,
+  // finalized checkpoints, the emergency flag and to cancel pending claims.
+  // Empty selects the governance module account.
+  string authority = 1;
+  // network_id is the LayerX network every batch header and withdrawal must name.
+  uint32 network_id = 2;
+  // withdrawal_delay_seconds is the challenge window between queueing and
+  // paying a withdrawal claim.
+  uint64 withdrawal_delay_seconds = 3;
+  // forced_exit_delay_seconds is the window between requesting and paying a
+  // forced exit.
+  uint64 forced_exit_delay_seconds = 4;
+  // liveness_bound_seconds is the checkpoint silence after which forced exits
+  // become eligible without an emergency declaration.
+  uint64 liveness_bound_seconds = 5;
+  // sequencer_authorizations backs AnchorReader until the anchor module lands.
+  repeated SequencerAuthorization sequencer_authorizations = 6 [(gogoproto.nullable) = false];
+}

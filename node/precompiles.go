@@ -1,6 +1,7 @@
 package app
 
 import (
+	layerxcustodykeeper "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/keeper"
 	putils "github.com/sidiora-labs/paxeer-network/precompiles/utils"
 	"github.com/sidiora-labs/paxeer-network/sdk/client"
 	bankkeeper "github.com/sidiora-labs/paxeer-network/sdk/x/bank/keeper"
@@ -26,7 +27,8 @@ type PrecompileKeepers struct {
 	putils.ClientKeeper
 	putils.ConnectionKeeper
 	putils.ChannelKeeper
-	txConf client.TxConfig
+	txConf        client.TxConfig
+	layerxCustody *layerxcustodykeeper.Keeper
 }
 
 func NewPrecompileKeepers(a *App) *PrecompileKeepers {
@@ -48,6 +50,7 @@ func NewPrecompileKeepers(a *App) *PrecompileKeepers {
 		ConnectionKeeper:   a.IBCKeeper.ConnectionKeeper,
 		ChannelKeeper:      a.IBCKeeper.ChannelKeeper,
 		txConf:             a.GetTxConfig(),
+		layerxCustody:      a.LayerXCustodyKeeper,
 	}
 }
 
@@ -68,3 +71,6 @@ func (pk *PrecompileKeepers) ClientK() putils.ClientKeeper             { return 
 func (pk *PrecompileKeepers) ConnectionK() putils.ConnectionKeeper     { return pk.ConnectionKeeper }
 func (pk *PrecompileKeepers) ChannelK() putils.ChannelKeeper           { return pk.ChannelKeeper }
 func (pk *PrecompileKeepers) TxConfig() client.TxConfig                { return pk.txConf }
+func (pk *PrecompileKeepers) LayerXCustodyK() *layerxcustodykeeper.Keeper {
+	return pk.layerxCustody
+}

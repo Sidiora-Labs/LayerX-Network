@@ -1,0 +1,72 @@
+syntax = "proto3";
+package paxprotocol.paxchain.layerxcustody;
+
+option go_package = "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/types";
+
+// EventCustodyDeposit mirrors the CustodyDeposit EVM log.
+message EventCustodyDeposit {
+  string deposit_id = 1;
+  string asset_id = 2;
+  string payer = 3;
+  string beneficiary = 4;
+  string amount = 5;
+  uint64 nonce = 6;
+  uint64 index = 7;
+  string denom = 8;
+}
+
+// EventClaimQueued mirrors the ClaimQueued EVM log.
+message EventClaimQueued {
+  string claim_id = 1;
+  string nullifier = 2;
+  string kind = 3;
+  uint64 batch_number = 4;
+  string asset_id = 5;
+  string recipient = 6;
+  string amount = 7;
+  int64 available_at = 8;
+}
+
+// EventClaimFinalised mirrors the ClaimFinalised EVM log.
+message EventClaimFinalised {
+  string claim_id = 1;
+  string nullifier = 2;
+}
+
+// EventClaimCancelled mirrors the ClaimCancelled EVM log.
+message EventClaimCancelled {
+  string claim_id = 1;
+  string nullifier = 2;
+}
+
+// EventCustodyRelease mirrors the CustodyRelease EVM log.
+message EventCustodyRelease {
+  string claim_id = 1;
+  string asset_id = 2;
+  string recipient = 3;
+  string amount = 4;
+  string denom = 5;
+}
+
+// EventForcedExitExecuted mirrors the EmergencyExitExecuted EVM log.
+message EventForcedExitExecuted {
+  string claim_id = 1;
+  string nullifier = 2;
+  string anchor = 3;
+  string account = 4;
+  string asset_id = 5;
+  string recipient = 6;
+  string amount = 7;
+}
+
+// EventCheckpointRegistered records a finalized checkpoint.
+message EventCheckpointRegistered {
+  uint64 batch_number = 1;
+  string state_root = 2;
+  string receipt_root = 3;
+}
+
+// EventEmergencySet records the forced-exit emergency declaration.
+message EventEmergencySet {
+  bool enabled = 1;
+}
