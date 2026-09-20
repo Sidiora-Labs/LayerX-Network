@@ -1,0 +1,120 @@
+syntax = "proto3";
+package paxprotocol.paxchain.layerxcustody;
+
+option go_package = "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/types";
+
+// AssetMapping binds one LayerX 32-byte asset identifier to the Paxeer bank
+// denom that custody holds for it.
+message AssetMapping {
+  // asset_id is 64 lowercase hex characters.
+  string asset_id = 1;
+  string denom = 2;
+  // pointer is the 0x-prefixed ERC20 pointer contract of denom, or empty.
+  string pointer = 3;
+  bool enabled = 4;
+  bool paused = 5;
+  // minimum_deposit and custody_cap are decimal base-unit amounts; an empty
+  // custody_cap means uncapped.
+  string minimum_deposit = 6;
+  string custody_cap = 7;
+}
+
+// Deposit is one recorded custody deposit.
+message Deposit {
+  string deposit_id = 1;
+  uint64 index = 2;
+  // depositor is the 0x-prefixed EVM address that paid.
+  string depositor = 3;
+  // beneficiary is the 32-byte LayerX account identifier, exactly as the
+  // Solidity vault carried it.
+  string beneficiary = 4;
+  string asset_id = 5;
+  string denom = 6;
+  string amount = 7;
+  uint64 nonce = 8;
+  int64 height = 9;
+}
+
+// DepositNonce is the per depositor and asset deposit nonce.
+message DepositNonce {
+  string depositor = 1;
+  string asset_id = 2;
+  uint64 nonce = 3;
+}
+
+// ClaimKind separates proof-carrying withdrawals from forced exits.
+enum ClaimKind {
+  CLAIM_KIND_UNSPECIFIED = 0;
+  CLAIM_KIND_WITHDRAWAL = 1;
+  CLAIM_KIND_FORCED_EXIT = 2;
+}
+
+// ClaimStatus mirrors WithdrawalClaims.ClaimStatus.
+enum ClaimStatus {
+  CLAIM_STATUS_NONE = 0;
+  CLAIM_STATUS_PENDING = 1;
+  CLAIM_STATUS_PAID = 2;
+  CLAIM_STATUS_CANCELLED = 3;
+}
+
+// Claim is one queued payout: a withdrawal claim or a forced-exit request.
+message Claim {
+  string claim_id = 1;
+  ClaimKind kind = 2;
+  ClaimStatus status = 3;
+  string nullifier = 4;
+  string withdrawal_id = 5;
+  string account = 6;
+  string asset_id = 7;
+  string denom = 8;
+  // recipient is the 0x-prefixed EVM address that is paid.
+  string recipient = 9;
+  string amount = 10;
+  uint64 batch_number = 11;
+  // anchor is the withdrawal request anchor or the forced-exit state root.
+  string anchor = 12;
+  // available_at is the unix second from which the claim can be paid.
+  int64 available_at = 13;
+}
+
+// NullifierStatus mirrors WithdrawalNullifierRegistry.Status.
+enum NullifierStatus {
+  NULLIFIER_STATUS_NONE = 0;
+  NULLIFIER_STATUS_RESERVED = 1;
+  NULLIFIER_STATUS_CONSUMED = 2;
+  NULLIFIER_STATUS_CANCELLED = 3;
+}
+
+// Nullifier is the terminal replay guard of one withdrawal or exit.
+message Nullifier {
+  string nullifier = 1;
+  NullifierStatus status = 2;
+  string claim_id = 3;
+  string withdrawal_id = 4;
+}
+
+// Checkpoint is one finalized LayerX batch commitment.
+message Checkpoint {
+  uint64 batch_number = 1;
+  string state_root = 2;
+  string receipt_root = 3;
+  // finalized_at is the unix second the checkpoint was registered.
+  int64 finalized_at = 4;
+}
+
+// ConsumedBalance marks an account balance already exited at an anchor.
+message ConsumedBalance {
+  string account = 1;
+  string asset_id = 2;
+  string anchor = 3;
+}
+
+// AssetTotals is the custody accounting of one asset, in base units.
+message AssetTotals {
+  string asset_id = 1;
+  // custodied is deposits minus paid releases: the outstanding liability.
+  string custodied = 2;
+  string released = 3;
+  // pending is the sum of queued, unpaid claims.
+  string pending = 4;
+}

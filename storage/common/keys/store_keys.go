@@ -30,6 +30,8 @@ const (
 	WasmStoreKey         = "wasm"         // wasm/x/wasm/types.StoreKey
 	EpochStoreKey        = "epoch"        // modules/epoch/types.StoreKey
 	TokenfactoryStoreKey = "tokenfactory" // modules/tokenfactory/types.StoreKey
+
+	LayerXCustodyStoreKey = "layerxcustody" // modules/layerxcustody/types.StoreKey
 )
 
 // MemIAVLStoreKeys is the canonical list of module KV store keys that are
@@ -57,6 +59,7 @@ var MemIAVLStoreKeys = []string{
 	WasmStoreKey,
 	EpochStoreKey,
 	TokenfactoryStoreKey,
+	LayerXCustodyStoreKey,
 }
 
 // memIAVLStoreKeySet is MemIAVLStoreKeys materialized as a set for O(1)

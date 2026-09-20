@@ -1,0 +1,132 @@
+syntax = "proto3";
+package paxprotocol.paxchain.layerxcustody;
+
+import "gogoproto/gogo.proto";
+import "layerxcustody/params.proto";
+import "layerxcustody/state.proto";
+
+option go_package = "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/types";
+
+// Msg defines the layerxcustody module's gRPC message service. Deposits are
+// deliberately absent: they enter only through the precompile so that every
+// deposit carries its EVM log.
+service Msg {
+  rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
+  rpc SetAsset(MsgSetAsset) returns (MsgSetAssetResponse);
+  rpc RegisterCheckpoint(MsgRegisterCheckpoint) returns (MsgRegisterCheckpointResponse);
+  rpc SetEmergency(MsgSetEmergency) returns (MsgSetEmergencyResponse);
+  rpc CancelClaim(MsgCancelClaim) returns (MsgCancelClaimResponse);
+  rpc RequestWithdrawal(MsgRequestWithdrawal) returns (MsgRequestWithdrawalResponse);
+  rpc FinaliseWithdrawal(MsgFinaliseWithdrawal) returns (MsgFinaliseWithdrawalResponse);
+  rpc RequestForcedExit(MsgRequestForcedExit) returns (MsgRequestForcedExitResponse);
+  rpc ExecuteForcedExit(MsgExecuteForcedExit) returns (MsgExecuteForcedExitResponse);
+}
+
+// MsgUpdateParams replaces the module params. Authority only.
+message MsgUpdateParams {
+  string authority = 1;
+  Params params = 2 [(gogoproto.nullable) = false];
+}
+
+// MsgUpdateParamsResponse is the MsgUpdateParams response.
+message MsgUpdateParamsResponse {}
+
+// MsgSetAsset creates or replaces one asset mapping. Authority only.
+message MsgSetAsset {
+  string authority = 1;
+  AssetMapping asset = 2 [(gogoproto.nullable) = false];
+}
+
+// MsgSetAssetResponse is the MsgSetAsset response.
+message MsgSetAssetResponse {}
+
+// MsgRegisterCheckpoint records a finalized LayerX checkpoint. Authority only.
+message MsgRegisterCheckpoint {
+  string authority = 1;
+  uint64 batch_number = 2;
+  string state_root = 3;
+  string receipt_root = 4;
+}
+
+// MsgRegisterCheckpointResponse is the MsgRegisterCheckpoint response.
+message MsgRegisterCheckpointResponse {}
+
+// MsgSetEmergency declares or clears the forced-exit emergency. Authority only.
+message MsgSetEmergency {
+  string authority = 1;
+  bool enabled = 2;
+}
+
+// MsgSetEmergencyResponse is the MsgSetEmergency response.
+message MsgSetEmergencyResponse {}
+
+// MsgCancelClaim cancels a pending claim inside its window. Authority only.
+message MsgCancelClaim {
+  string authority = 1;
+  string claim_id = 2;
+}
+
+// MsgCancelClaimResponse is the MsgCancelClaim response.
+message MsgCancelClaimResponse {}
+
+// MsgRequestWithdrawal queues a proof-carrying withdrawal claim.
+message MsgRequestWithdrawal {
+  string sender = 1;
+  bytes receipt = 2;
+  bytes proof = 3;
+  bytes header = 4;
+  bytes header_signature = 5;
+}
+
+// MsgRequestWithdrawalResponse is the MsgRequestWithdrawal response.
+message MsgRequestWithdrawalResponse {
+  string claim_id = 1;
+  int64 available_at = 2;
+}
+
+// MsgFinaliseWithdrawal re-verifies the evidence and pays the claim.
+message MsgFinaliseWithdrawal {
+  string sender = 1;
+  bytes receipt = 2;
+  bytes proof = 3;
+  bytes header = 4;
+  bytes header_signature = 5;
+}
+
+// MsgFinaliseWithdrawalResponse is the MsgFinaliseWithdrawal response.
+message MsgFinaliseWithdrawalResponse {
+  string claim_id = 1;
+}
+
+// MsgRequestForcedExit queues a forced exit of a proven account balance.
+message MsgRequestForcedExit {
+  string sender = 1;
+  bytes witness = 2;
+  uint64 batch_number = 3;
+  string account = 4;
+  string asset_id = 5;
+  string recipient = 6;
+  bytes recipient_signature = 7;
+}
+
+// MsgRequestForcedExitResponse is the MsgRequestForcedExit response.
+message MsgRequestForcedExitResponse {
+  string claim_id = 1;
+  int64 available_at = 2;
+}
+
+// MsgExecuteForcedExit re-verifies the evidence and pays the forced exit.
+message MsgExecuteForcedExit {
+  string sender = 1;
+  bytes witness = 2;
+  uint64 batch_number = 3;
+  string account = 4;
+  string asset_id = 5;
+  string recipient = 6;
+  bytes recipient_signature = 7;
+}
+
+// MsgExecuteForcedExitResponse is the MsgExecuteForcedExit response.
+message MsgExecuteForcedExitResponse {
+  string claim_id = 1;
+}

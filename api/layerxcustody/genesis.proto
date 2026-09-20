@@ -1,0 +1,23 @@
+syntax = "proto3";
+package paxprotocol.paxchain.layerxcustody;
+
+import "gogoproto/gogo.proto";
+import "layerxcustody/params.proto";
+import "layerxcustody/state.proto";
+
+option go_package = "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/types";
+
+// GenesisState defines the layerxcustody module's genesis state.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+  repeated AssetMapping assets = 2 [(gogoproto.nullable) = false];
+  uint64 deposit_count = 3;
+  repeated Deposit deposits = 4 [(gogoproto.nullable) = false];
+  repeated DepositNonce deposit_nonces = 5 [(gogoproto.nullable) = false];
+  repeated Claim claims = 6 [(gogoproto.nullable) = false];
+  repeated Nullifier nullifiers = 7 [(gogoproto.nullable) = false];
+  repeated Checkpoint checkpoints = 8 [(gogoproto.nullable) = false];
+  repeated ConsumedBalance consumed_balances = 9 [(gogoproto.nullable) = false];
+  repeated AssetTotals totals = 10 [(gogoproto.nullable) = false];
+  bool emergency = 11;
+}

@@ -17,7 +17,7 @@ use layerx_crypto::ed25519::{verify_digest, verify_message};
 use layerx_crypto::SignatureMessage;
 use layerx_proof::inclusion::{verify_receipt, SequencerAuthorization};
 use layerx_proof::merkle::{build_proof, Proof};
-use layerx_proof::receipt::verify_sequencer_signature;
+use layerx_proof::receipt::{verify_outcome, verify_sequencer_signature, AuthorizedBatch};
 use layerx_proof::state::decode_account_value;
 use layerx_proof::state_witness::{AccountPath, StateWitness};
 use layerx_wire::encode::Encoder;
@@ -855,6 +855,237 @@ fn discovery_vectors(key: &SigningKey) -> Result<Vec<Object>, Failure> {
     Ok(out)
 }
 
+const WITHDRAWAL_RECEIPT: &[u8] =
+    include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/receipt");
+const WITHDRAWAL_PROOF: &[u8] =
+    include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/receipt.proof");
+const WITHDRAWAL_HEADER: &[u8] =
+    include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/header");
+const WITHDRAWAL_HEADER_SIGNATURE: &[u8; 64] =
+    include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/header.signature");
+const WITHDRAWAL_SEQUENCER: [u8; 32] =
+    *include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/sequencer.public");
+
+fn withdrawal_facts(receipt: &[u8], key: [u8; 32]) -> Result<AuthorizedBatch, Failure> {
+    let decoded = layerx_wire::receipt::decode(receipt).map_err(fail("withdrawal decode"))?;
+    let protocol = decoded.protocol().ok_or("withdrawal protocol receipt")?;
+    Ok(AuthorizedBatch::new(
+        protocol.batch_id(),
+        protocol.asset(),
+        protocol.previous_state_root(),
+        protocol.resulting_state_root(),
+        key,
+    ))
+}
+
+fn withdrawal_object(name: &str, receipt: &[u8], key: [u8; 32]) -> Result<Object, Failure> {
+    let mut object = Object::new(name);
+    object.bytes("receipt", receipt);
+    object.bytes("public_key", &key);
+    let outcome = verify_outcome(receipt, &withdrawal_facts(receipt, key)?);
+    if let Ok(verified) = &outcome {
+        let protocol = verified
+            .receipt()
+            .protocol()
+            .ok_or("withdrawal protocol receipt")?;
+        let body = protocol
+            .effects()
+            .get(1)
+            .ok_or("withdrawal event effect")?
+            .body();
+        object.number(
+            "network_id",
+            u128::from(u32::from_be_bytes(body[2..6].try_into()?)),
+        );
+        object.bytes("withdrawal_id", &body[6..38]);
+        object.bytes("account", &body[38..70]);
+        object.bytes("asset", &body[70..102]);
+        object.number("amount", u128::from_be_bytes(body[102..118].try_into()?));
+        object.bytes("recipient", &body[130..150]);
+        object.bytes("anchor", &body[150..182]);
+        object.bytes("nullifier", &protocol.context_hash());
+        object.number(
+            "fee_limit",
+            u128::from(u64::from_be_bytes(body[246..254].try_into()?)),
+        );
+    }
+    object.verdict(&outcome);
+    Ok(object)
+}
+
+fn mutated_withdrawal(offset: usize, key: &SigningKey) -> Result<Vec<u8>, Failure> {
+    let decoded =
+        layerx_wire::receipt::decode(WITHDRAWAL_RECEIPT).map_err(fail("withdrawal decode"))?;
+    let protocol = decoded.protocol().ok_or("withdrawal protocol receipt")?;
+    let body = protocol
+        .effects()
+        .get(1)
+        .ok_or("withdrawal event effect")?
+        .body();
+    let mut unsigned =
+        layerx_wire::receipt::encode_unsigned(&decoded).map_err(fail("withdrawal unsigned"))?;
+    let locations: Vec<usize> = unsigned
+        .windows(body.len())
+        .enumerate()
+        .filter_map(|(position, value)| (value == body).then_some(position))
+        .collect();
+    let [start] = locations.as_slice() else {
+        return Err("withdrawal event body is not unique".into());
+    };
+    unsigned[start + offset] ^= 1;
+    if offset == 130 {
+        let mut payload = [0_u8; 108];
+        payload[..32].copy_from_slice(&body[70..102]);
+        payload[32..48].copy_from_slice(&body[102..118]);
+        payload[48..68].copy_from_slice(&unsigned[start + 130..start + 150]);
+        payload[68..100].copy_from_slice(&body[150..182]);
+        payload[100..].copy_from_slice(&body[246..]);
+        let kind = layerx_types::payload::ActivityType::new(
+            layerx_types::payload::ModuleId::Asset,
+            9,
+        )
+        .map_err(fail("withdrawal kind"))?;
+        let registry =
+            layerx_proof::receipt::withdrawal::registry().map_err(fail("withdrawal registry"))?;
+        let value = layerx_types::payload::Payload::new(&registry, kind, &payload)
+            .map_err(fail("withdrawal payload"))?;
+        let digest =
+            layerx_wire::hash::payload_hash_for(&value).map_err(fail("withdrawal payload hash"))?;
+        unsigned[start + 182..start + 214].copy_from_slice(&digest);
+    }
+    let digest = receipt_digest(&unsigned).map_err(fail("withdrawal digest"))?;
+    if unsigned.pop() != Some(0) {
+        return Err("withdrawal unsigned terminator".into());
+    }
+    let mut signature = Encoder::new(69);
+    signature.u8(1).map_err(fail("withdrawal signature flag"))?;
+    signature
+        .bytes(&key.sign(&digest).to_bytes(), 64)
+        .map_err(fail("withdrawal signature"))?;
+    unsigned.extend_from_slice(&signature.finish());
+    Ok(unsigned)
+}
+
+fn withdrawal_vectors() -> Result<Vec<Object>, Failure> {
+    let header = layerx_wire::receipt::decode_batch_header(WITHDRAWAL_HEADER)
+        .map_err(fail("withdrawal header"))?;
+    let authorization = SequencerAuthorization::new(
+        header.sequencer_id(),
+        WITHDRAWAL_SEQUENCER,
+        header.batch_number(),
+        header.batch_number(),
+    );
+    let proof = evidence_proof(WITHDRAWAL_PROOF)?;
+    verify_receipt(
+        WITHDRAWAL_RECEIPT,
+        &proof,
+        WITHDRAWAL_HEADER,
+        WITHDRAWAL_HEADER_SIGNATURE,
+        &authorization,
+    )
+    .map_err(fail("withdrawal inclusion"))?;
+    let mut real = withdrawal_object(
+        "real-native-withdrawal",
+        WITHDRAWAL_RECEIPT,
+        WITHDRAWAL_SEQUENCER,
+    )?;
+    if real.0.iter().any(|(key, value)| key == "valid" && value != "true") {
+        return Err("the real native withdrawal was refused".into());
+    }
+    real.bytes("proof", WITHDRAWAL_PROOF);
+    real.bytes("header", WITHDRAWAL_HEADER);
+    real.bytes("header_signature", WITHDRAWAL_HEADER_SIGNATURE);
+    real.bytes("sequencer_id", &header.sequencer_id());
+    real.number("batch_number", u128::from(header.batch_number()));
+    real.number("header_network_id", u128::from(header.network_id()));
+    real.bytes("header_state_root", &header.resulting_state_root());
+    real.bytes("header_receipt_root", &header.receipt_merkle_root());
+    let mut out = vec![real];
+    let key = SigningKey::from_bytes(&[0x39; 32]);
+    for offset in [0, 2, 6, 38, 70, 102, 118, 130, 150, 182, 214, 253] {
+        out.push(withdrawal_object(
+            &format!("resigned-event-offset-{offset}"),
+            &mutated_withdrawal(offset, &key)?,
+            key.verifying_key().to_bytes(),
+        )?);
+    }
+    out.push(withdrawal_object(
+        "real-receipt-under-foreign-key",
+        WITHDRAWAL_RECEIPT,
+        key.verifying_key().to_bytes(),
+    )?);
+    Ok(out)
+}
+
+fn exit_vectors() -> Result<Vec<Object>, Failure> {
+    let authority = SigningKey::from_bytes(&[0x61; 32]);
+    let asset = [0x24_u8; 32];
+    let name = b"agent:exit-holder:main";
+    let (account_id, mut value) = account_value(name, 1, asset, 5_000_000)?;
+    let at = value.len() - 33;
+    value[at..at + 32].copy_from_slice(&authority.verifying_key().to_bytes());
+    decode_account_value(account_id, &value).map_err(fail("exit account value"))?;
+    let mut key = vec![4_u8];
+    key.extend_from_slice(&account_id);
+    let witness = StateWitness {
+        module_id: 0,
+        key,
+        value,
+        account_path: Some(AccountPath {
+            index: 0,
+            count: 2,
+            siblings: vec![state_leaf(&[4; 33], b"neighbour")?],
+        }),
+        leaf_index_a: 0,
+        leaf_count_a: 2,
+        siblings_a: vec![state_leaf(b"sequence", &21_u64.to_be_bytes())?],
+        leaf_count_b: 10,
+        siblings_b: vec![[0xd1; 32], [0xd2; 32], [0xd3; 32], [0xd4; 32]],
+    };
+    let root = witness.root().map_err(fail("exit root"))?;
+    let bytes = witness.encode().map_err(fail("exit encode"))?;
+    let network_id = 7332_u32;
+    let recipient = [0x42_u8; 20];
+    let mut message = b"LX:SETTLE:RECIPIENT:v1\0".to_vec();
+    message.extend_from_slice(&network_id.to_be_bytes());
+    message.extend_from_slice(&account_id);
+    message.extend_from_slice(&asset);
+    message.extend_from_slice(&recipient);
+    message.extend_from_slice(&root);
+    let signature = authority.sign(&message).to_bytes();
+    let mut out = Vec::new();
+    for (name, signature, expected) in [
+        ("valid-exit", signature, true),
+        (
+            "bit-flipped-recipient-signature",
+            {
+                let mut changed = signature;
+                changed[5] ^= 0x01;
+                changed
+            },
+            false,
+        ),
+    ] {
+        let mut object = state_object(name, &bytes, &root, true)?;
+        object.0.retain(|(key, _)| key != "valid");
+        object.number("network_id", u128::from(network_id));
+        object.bytes("account", &account_id);
+        object.bytes("asset", &asset);
+        object.number("balance", 5_000_000);
+        object.bytes("recipient", &recipient);
+        object.bytes("authority", &authority.verifying_key().to_bytes());
+        object.bytes("message", &message);
+        object.bytes("recipient_signature", &signature);
+        object.verdict(&require(
+            verify_message(&authority.verifying_key().to_bytes(), &signature, &message),
+            expected,
+            name,
+        )?);
+        out.push(object);
+    }
+    Ok(out)
+}
+
 fn main() -> Result<(), Failure> {
     let key = SigningKey::from_bytes(&[0x51; 32]);
     let public = key.verifying_key().to_bytes();
@@ -915,6 +1146,8 @@ fn main() -> Result<(), Failure> {
         section("state", &state.objects),
         section("accounts", &state.accounts),
         section("discovery", &discovery_vectors(&key)?),
+        section("withdrawal", &withdrawal_vectors()?),
+        section("exit", &exit_vectors()?),
     ];
     println!(
         "{{\n  \"generator\": \"agent/crates/layerx-client/examples/go_verifier_vectors.rs\",\n{}\n}}",

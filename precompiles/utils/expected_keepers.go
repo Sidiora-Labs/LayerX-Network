@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	ibctypes "github.com/sidiora-labs/paxeer-network/interchain/modules/apps/transfer/types"
 	clienttypes "github.com/sidiora-labs/paxeer-network/interchain/modules/core/02-client/types"
+	layerxcustodykeeper "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/keeper"
 	oracletypes "github.com/sidiora-labs/paxeer-network/modules/oracle/types"
 	"github.com/sidiora-labs/paxeer-network/sdk/client"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
@@ -41,6 +42,7 @@ type Keepers interface {
 	ConnectionK() ConnectionKeeper
 	ChannelK() ChannelKeeper
 	TxConfig() client.TxConfig
+	LayerXCustodyK() *layerxcustodykeeper.Keeper
 }
 
 type EmptyKeepers struct{}
@@ -62,6 +64,9 @@ func (ek *EmptyKeepers) ClientK() ClientKeeper             { return nil }
 func (ek *EmptyKeepers) ConnectionK() ConnectionKeeper     { return nil }
 func (ek *EmptyKeepers) ChannelK() ChannelKeeper           { return nil }
 func (ek *EmptyKeepers) TxConfig() client.TxConfig         { return nil }
+func (ek *EmptyKeepers) LayerXCustodyK() *layerxcustodykeeper.Keeper {
+	return nil
+}
 
 type BankKeeper interface {
 	SendCoins(sdk.Context, sdk.AccAddress, sdk.AccAddress, sdk.Coins) error
