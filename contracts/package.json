@@ -22,7 +22,7 @@
     "@openzeppelin/test-helpers": "^0.5.16",
     "@types/node": "^24.2.0",
     "dotenv": "^16.3.1",
-    "ethers": "^v6.14.4",
+    "ethers": "^v6.17.0",
     "hardhat": "^2.20.1",
     "tsx": "^4.20.3",
     "typescript": "^5.9.2"
