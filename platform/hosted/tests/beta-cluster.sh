@@ -194,6 +194,11 @@
 # container as LAYERX_EXPLORER_NAMING_PROGRAM. Both are built for wasm32-unknown-unknown from this
 # repository, so that Rust target has to be installed.
 #
+# The explorer index resolves names by signing noncommitting reads of that naming program as its own chain
+# identity. The bring-up generates that ed25519 key with the other secrets, admits did:layerx:<public key>
+# to the node's identity file in the same fresh-genesis append that admits the Human owner, and publishes
+# the seed and the sequencer public key in the layerx-explorer-index Secret. It is not an owner input.
+#
 # Boundary checks (--boundary-checks) additionally read the inputs of
 # platform/hosted/gateway/tests/hosted-boundary.sh and platform/hosted/webhooks/tests/fault-injection.sh.
 set -euo pipefail
@@ -752,6 +757,17 @@ ed25519_public_hex() {
     openssl pkey -in "$1" -pubout -outform DER 2>/dev/null | tail -c 32 | od -An -v -tx1 | tr -d ' \n'
 }
 
+explorer_read_principal_generate() {
+    # explorer_read_principal_generate SECRETS_DIR -> the explorer index's own read identity. The bring-up
+    # generates and keeps this key like every other service principal; it is never an owner input.
+    local d=$1
+    (umask 077; openssl genpkey -algorithm ed25519 -out "$d/explorer-read.key" 2>/dev/null)
+    ed25519_public_hex "$d/explorer-read.key" > "$d/explorer-read.pub.hex"
+    [ "$(wc -c < "$d/explorer-read.pub.hex")" -eq 64 ] || fail "explorer read principal key is not an ed25519 key"
+    (umask 077; openssl pkey -in "$d/explorer-read.key" -outform DER 2>/dev/null | tail -c 32 | od -An -v -tx1 | tr -d ' \n' > "$d/explorer-read.seed.hex")
+    [ "$(wc -c < "$d/explorer-read.seed.hex")" -eq 64 ] || fail "explorer read principal key seed is not 32 bytes"
+}
+
 secp256k1_public_key() {
     # secp256k1_public_key KEY_FILE -> compressed secp256k1 public key of that private key
     local key
@@ -947,6 +963,7 @@ secrets_generate() {
     write_token "$d/registry-authority.token"
     write_token "$d/registry-identity.token"
     write_token "$d/explorer-program.token"
+    explorer_read_principal_generate "$d"
     local producer
     for producer in gateway registry human; do
         write_token "$d/$producer-event-producer.token"
@@ -1241,7 +1258,10 @@ secrets_apply() {
         --from-file=server.key.der="$c/human/key.der" --from-file=ca.crt="$c/ca.crt"
     apply_secret "$ns" layerx-internal-ca --from-file=ca.crt.der="$c/ca.der" --from-file=ca.crt="$c/ca.crt"
     apply_secret "$ns" layerx-human-web-tls --from-file=tls.crt="$c/human-web/cert.pem" --from-file=tls.key="$c/human-web/key.pem"
-    apply_secret "$ns" layerx-explorer-index --from-file=program-token="$s/explorer-program.token"
+    [ -s "$s/explorer-read.seed.hex" ] && [ -s "$s/explorer-read.pub.hex" ] && [ -s "$s/sequencer-public-key" ] \
+        || fail "explorer read principal material is missing: $s/explorer-read.seed.hex, $s/explorer-read.pub.hex and $s/sequencer-public-key are generated with fresh material"
+    apply_secret "$ns" layerx-explorer-index --from-file=program-token="$s/explorer-program.token" \
+        --from-file=read-key="$s/explorer-read.seed.hex" --from-file=sequencer-public-key="$s/sequencer-public-key"
     apply_secret "$ns" layerx-explorer-index-tls --from-file=tls.crt="$c/explorer-index/cert.pem" --from-file=tls.key="$c/explorer-index/key.pem"
     apply_secret "$ns" layerx-testnet-control-tls --from-file=server.crt.der="$c/testnet-control/cert.der" \
         --from-file=server.key.der="$c/testnet-control/key.der" --from-file=ca.crt.der="$c/ca.der" --from-file=ca.crt="$c/ca.crt"
@@ -1958,8 +1978,11 @@ PYPUBLISH
 # The reference naming program is deployed by the node treasury, the same publication authority the reference
 # escrow deployment of human_journal_deploy uses: the registry admits a deployment only against protocol
 # evidence its node boundary produced, and the node treasury signer is the only deployment principal the
-# bring-up holds inside the node pod. It runs before human_evidence_provision so that the single journal
-# materialisation of human_journal_deploy exports both deployment pairs to $WORK_DIR/registry-journal.
+# bring-up holds inside the node pod. human_evidence_provision calls it inside two bounds. It runs after
+# human_native_provision, because the owner admission there requires a fresh native genesis head and this
+# deployment commits an activity that advances the head. It runs before human_journal_deploy, because that
+# step materialises the registry journal exactly once and the export to $WORK_DIR/registry-journal has to
+# hold both deployment pairs: explorer_observation_publish reads the naming program id from that export.
 naming_program_deploy() {
     local example="$REPO_ROOT/programs/sdk/rust/examples/naming"
     local artifact="$WORK_DIR/program-target/wasm32-unknown-unknown/release/layerx_reference_naming.wasm"
@@ -3630,7 +3653,6 @@ beta_cluster_up() {
         done
         apply_configmap "$TESTNET_NAMESPACE" layerx-human-guardian-bindings \
             --from-file=bindings.json="$WORK_DIR/human-evidence-input/recovery-guardian-bindings.json"
-        naming_program_deploy
         human_evidence_provision
         human_policy_publish
     fi

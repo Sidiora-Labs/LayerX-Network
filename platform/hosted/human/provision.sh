@@ -2,6 +2,11 @@
 
 source "${REPO_ROOT}/platform/hosted/human/onboarding_provision.sh"
 
+# Base units of the node asset the bring-up credits to the explorer read principal. The balance only has to
+# cover LAYERX_EXPLORER_READ_FEE_LIMIT in platform/hosted/registry/deployment.yaml: a read never commits, so
+# nothing is ever debited from it.
+EXPLORER_READ_FUNDING_UNITS=1000000000
+
 human_owner_provision() (
     set -euo pipefail
     umask 077
@@ -222,7 +227,9 @@ human_evidence_provision() (
     local provision="$REPO_ROOT/platform/hosted/human/provision.py"
     human_native_owner_prepare
     human_native_provision
+    explorer_read_principal_fund
     python3 "$provision" --validate-owner-registration --work-dir "$WORK_DIR"
+    naming_program_deploy
     registry_deployment_produce
     human_journal_deploy
     python3 "$provision" --validate-evidence-inputs --work-dir "$WORK_DIR" \
@@ -233,16 +240,64 @@ human_evidence_provision() (
 )
 
 human_custody_step() (
+    # human_custody_step MODE [WORK_DIR [owner_custody.py arguments]] -> WORK_DIR defaults to the owner's.
     set -euo pipefail
     umask 077
     export PATH="$FOUNDRY_BIN:$PATH"
+    local mode=$1 work=${2:-$WORK_DIR}
+    shift
+    [ "$#" -eq 0 ] || shift
     [ "$PAXEER_URL" = 'https://localhost:19449' ] && [ "$PAXEER_OBSERVER_URL" = 'https://localhost:19452' ] \
         || fail 'owner custody requires the disposable in-cluster Paxeer port forwards'
-    python3 "$REPO_ROOT/platform/hosted/human/owner_custody.py" "$1" \
-        --work-dir "$WORK_DIR" --rpc "$PAXEER_URL" --rpc "$PAXEER_OBSERVER_URL" \
+    python3 "$REPO_ROOT/platform/hosted/human/owner_custody.py" "$mode" \
+        --work-dir "$work" --rpc "$PAXEER_URL" --rpc "$PAXEER_OBSERVER_URL" \
         --ca-bundle "$CA_DIR/ca.pem" --disposable-identity "$WORK_DIR/paxeer/rpc-origins.json" \
         --key-file "$SECRETS_DIR/paxeer-deployer.key" --attestor-key "$SECRETS_DIR/custody-attestor.seed" \
-        --network-id "$NODE_NETWORK_ID" --asset "$NODE_ASSET_ID"
+        --network-id "$NODE_NETWORK_ID" --asset "$NODE_ASSET_ID" "$@"
+)
+
+# Under protocol 3 the kernel admits a program call, and so a noncommitting program read, only for a payer
+# that holds an account in the occupancy asset and only at a signed fee limit that covers the declared
+# execution ceiling. The bring-up therefore funds the explorer read principal once, through the same vault
+# deposit and attested custody credit that fund the Human owner. The principal signs its own credit on the
+# host; the owner producer container, which already holds the node socket, submits it and verifies the
+# committed receipt against the sequencer key. It runs after the owner producer so the owner's own
+# activities are unchanged.
+explorer_read_principal_fund() (
+    set -euo pipefail
+    umask 077
+    local provision="$REPO_ROOT/platform/hosted/human/provision.py"
+    local funding="$WORK_DIR/explorer-read-funding" remote=/run/owner/explorer-read explorer_did status=0
+    [ ! -e "$funding" ] || fail "$funding: reconcile the retained explorer read principal funding before retry"
+    python3 "$provision" --prepare-explorer-read-funding --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR"
+    human_custody_step deposit "$funding" --amount "$EXPLORER_READ_FUNDING_UNITS"
+    explorer_did="did:layerx:$(tr -d '\r\n' < "$SECRETS_DIR/explorer-read.pub.hex")"
+    kube -n "$TESTNET_NAMESPACE" exec layerx-node-0 -c registry-check -- \
+        /usr/local/bin/layerxctl read-state --socket /run/layerx/node/layerxd.lni.sock \
+        --network-id "$NODE_NETWORK_ID" --protocol-version 3 --actor "$explorer_did" \
+        > "$funding/read-state.json" 2>/dev/null \
+        || fail "$funding/read-state.json: the node did not report the explorer read principal $explorer_did"
+    python3 "$provision" --sign-explorer-read-credit --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR" \
+        --network "$NODE_NETWORK_ID" --request "$funding/read-state.json" --output "$funding/credit-request.json"
+    kube -n "$TESTNET_NAMESPACE" exec -i layerx-node-0 -c owner-producer -- sh -ec '
+        umask 077
+        mkdir -m 0700 /run/owner/explorer-read
+        cat > /run/owner/explorer-read/credit-request.json
+    ' < "$funding/credit-request.json"
+    kube -n "$TESTNET_NAMESPACE" exec layerx-node-0 -c owner-producer -- \
+        python3 /usr/local/lib/layerx-human/provision.py --submit-explorer-read-credit --work-dir /run/owner/work \
+        --request "$remote/credit-request.json" --output "$remote/credit-result.json" \
+        > "$LOG_DIR/explorer-read-funding.log" 2>&1 || status=$?
+    [ "$status" = 0 ] || fail "explorer read principal credit refused; see $LOG_DIR/explorer-read-funding.log and retain $funding"
+    kube -n "$TESTNET_NAMESPACE" exec layerx-node-0 -c owner-producer -- cat "$remote/credit-result.json" \
+        > "$funding/credit-result.json"
+    python3 - "$funding/credit-request.json" "$funding/credit-result.json" "$EXPLORER_READ_FUNDING_UNITS" <<'PY'
+import json, sys
+request, result = (json.load(open(path)) for path in sys.argv[1:3])
+units = int(sys.argv[3])
+if request['amount'] != units or result['amount'] != units or result['account'] != request['account']:
+    raise SystemExit('explorer read principal credit does not match the funded amount and account')
+PY
 )
 
 human_native_provision() (
@@ -251,6 +306,15 @@ human_native_provision() (
     local input="$WORK_DIR/human-evidence-input" state="$WORK_DIR/human-native-statefulset.json"
     local manifest="$WORK_DIR/human-native-producer.json" status=0
     [ ! -e "$input/owner-native.started" ] || fail 'owner-native.started: reconcile the retained native outcome before retry'
+    local explorer_public explorer_did
+    [ -s "$SECRETS_DIR/explorer-read.pub.hex" ] \
+        || fail "explorer-read.pub.hex: the explorer read principal key is missing from $SECRETS_DIR"
+    explorer_public=$(tr -d '\r\n' < "$SECRETS_DIR/explorer-read.pub.hex")
+    [[ $explorer_public =~ ^[0-9a-f]{64}$ ]] || fail 'explorer-read.pub.hex: the explorer read principal key is not an ed25519 public key'
+    explorer_did="did:layerx:$explorer_public"
+    cat "$input/owner-admission.txt" > "$input/genesis-admission.txt"
+    printf '%s:%s:0\n' "$(printf '%s' "$explorer_did" | od -An -v -tx1 | tr -d ' \n')" "$explorer_public" \
+        >> "$input/genesis-admission.txt"
     kube -n "$TESTNET_NAMESPACE" exec -i layerx-node-0 -c layerxd -- sh -ec '
         set -eu
         umask 077
@@ -265,7 +329,7 @@ human_native_provision() (
             install -m 0440 "$target" "$destination.owner-pending"
             mv "$destination.owner-pending" "$destination"
         done
-    ' < "$input/owner-admission.txt"
+    ' < "$input/genesis-admission.txt"
     local did admitted=0 attempt
     did=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["did"])' "$input/owner-admission.json")
     for attempt in $(seq 1 100); do
@@ -283,6 +347,17 @@ import json, sys
 state = json.load(open(sys.argv[1]))
 if state['account_sequence'] != 0 or state['global_sequence'] != 0:
     raise SystemExit('owner admission requires a fresh native genesis head')
+PY
+    kube -n "$TESTNET_NAMESPACE" exec layerx-node-0 -c registry-check -- \
+        /usr/local/bin/layerxctl read-state --socket /run/layerx/node/layerxd.lni.sock \
+        --network-id "$NODE_NETWORK_ID" --protocol-version 3 --actor "$explorer_did" \
+        > "$input/explorer-read-admission-state.json" 2>/dev/null \
+        || fail "genesis-admission.txt: the node did not admit the explorer read principal $explorer_did; preserve identity files"
+    python3 - "$input/explorer-read-admission-state.json" <<'PY'
+import json, sys
+state = json.load(open(sys.argv[1]))
+if state['account_sequence'] != 0:
+    raise SystemExit('explorer read principal admission requires an unused identity sequence')
 PY
     kube -n "$TESTNET_NAMESPACE" get statefulset layerx-node -o json > "$state"
     python3 "$REPO_ROOT/platform/hosted/human/native_manifest.py" "$WORK_DIR" "$NODE_NETWORK_ID" \

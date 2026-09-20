@@ -34,6 +34,7 @@ RESOLVED_EDGES = (
     'StatefulSet layerx-testnet/layerx-program-registry -> layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443 [env LAYERX_REGISTRY_RECEIPT_AUTHORITY_ENDPOINT]',
     'StatefulSet layerx-testnet/layerx-program-registry -> layerx-agent-boundary.layerx-testnet.svc.cluster.local:9443 [env LAYERX_EXPLORER_NODE_ENDPOINT]',
     'StatefulSet layerx-testnet/layerx-program-registry -> layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443 [env LAYERX_EXPLORER_AUTHORITY_ENDPOINT]',
+    'StatefulSet layerx-testnet/layerx-program-registry -> layerx-pending-core.layerx-testnet.svc.cluster.local:9443 [env LAYERX_EXPLORER_READ_ENDPOINT]',
     'Deployment layerx-internal/payments -> layerx-gateway.layerx-testnet.svc:443 [env LAYERX_EVENTS_UPSTREAM_URL]',
     'Deployment layerx-internal/programs -> layerx-gateway.layerx-testnet.svc:443 [env LAYERX_EVENTS_UPSTREAM_URL]',
     'Deployment layerx-developer/layerx-webhooks -> layerx-agent-boundary.layerx-testnet.svc:9443 [env LAYERX_WEBHOOKS_COMPONENT_URL]',
@@ -228,5 +229,25 @@ for parser in ('load_pyyaml', 'load_builtin'):
     assert 'exec socat' in parsed[0]
     assert relay['env'][0]['name'] == 'LAYERX_NODE_PAXEER_RELAY_PORT'
 print('PASS node sequence literal block consumes body and preserves following env')
+
+cluster_script = (ROOT / 'platform/hosted/tests/beta-cluster.sh').read_text()
+provision_script = (ROOT / 'platform/hosted/human/provision.sh').read_text()
+assert 'source "$REPO_ROOT/platform/hosted/human/provision.sh"\n' in cluster_script
+assert cluster_script.count('\nnaming_program_deploy() {\n') == 1
+evidence = provision_script.split('\nhuman_evidence_provision() (\n', 1)[1].split('\n)\n', 1)[0].split('\n')
+ordered = [evidence.index('    ' + step) for step in (
+    'human_native_provision', 'naming_program_deploy', 'registry_deployment_produce', 'human_journal_deploy')]
+assert ordered == sorted(ordered) and len(set(ordered)) == 4, (
+    'human_evidence_provision must call naming_program_deploy after human_native_provision, whose owner '
+    'admission requires a fresh native genesis head that a committed deployment advances, and before '
+    'human_journal_deploy, whose single registry journal export must hold the naming deployment pair', ordered)
+assert evidence.count('    naming_program_deploy') == 1
+calls = [line.strip() for line in cluster_script.split('\n')
+         if line.strip() in ('naming_program_deploy', 'human_evidence_provision')]
+assert calls == ['human_evidence_provision'], (
+    'the bring-up sequence must not deploy the naming program ahead of human_evidence_provision: the owner '
+    'admission requires a fresh native genesis head, and the deployment belongs inside human_evidence_provision '
+    'ahead of the registry journal export', calls)
+print('PASS naming program deployment follows the fresh-genesis-head owner admission and precedes the registry journal export')
 
 raise SystemExit(1 if parity_failed else 0)
