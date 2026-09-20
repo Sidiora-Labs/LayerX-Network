@@ -80,13 +80,20 @@ func TestSignedTerminalV4Vectors(t *testing.T) {
 			if result.TransferVerification != expected {
 				t.Fatalf("status %q", result.TransferVerification)
 			}
+			if len(result.OccupancyPaymentAccounts) != 0 {
+				t.Fatalf("unpaid occupancy reported %d payment accounts", len(result.OccupancyPaymentAccounts))
+			}
+			offered, offeredError := VerifyProgramReceiptWithPayers(execution, authority, []OccupancyPayer{{DID: []byte("did:layerx:payer0")}}, 3)
+			if offeredError != nil || offered.TransferVerification != expected || len(offered.OccupancyPaymentAccounts) != 0 {
+				t.Fatalf("payer-offering entry point diverged: %q %v", offered.TransferVerification, offeredError)
+			}
 			if name == "executed-v4" || name == "account-bound-v4" {
 				for length := 0; length < len(terminal); length++ {
-					if _, err := verifyProgramTerminal(execution, verified.Receipt, terminal[:length], graph); err == nil {
+					if _, _, err := verifyProgramTerminal(execution, verified.Receipt, terminal[:length], graph, nil); err == nil {
 						t.Fatalf("accepted truncation %d", length)
 					}
 				}
-				if _, err := verifyProgramTerminal(execution, verified.Receipt, append(append([]byte{}, terminal...), 0), graph); err == nil {
+				if _, _, err := verifyProgramTerminal(execution, verified.Receipt, append(append([]byte{}, terminal...), 0), graph, nil); err == nil {
 					t.Fatal("accepted trailing byte")
 				}
 			}

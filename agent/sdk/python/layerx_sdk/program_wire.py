@@ -41,7 +41,11 @@ _OCCUPANCY_MANDATE = b"LXP/storage-occupancy-mandate/v1\0"
 _MERKLE_LEAF = b"LXP/v1/merkle-leaf\0"
 _MERKLE_INTERNAL = b"LXP/v1/merkle-internal\0"
 _ACCOUNT_DERIVATION = b"LX:ACCOUNT:v1"
+_DID_DERIVATION = b"LXP/v1/did-id\0"
 _FEE_TREASURY_LABEL = b"system:fees"
+_STATE_COMMITMENT_PROTOCOL_VERSION = 3
+_MAX_OCCUPANCY_PAYERS = 256
+_MAX_PAYER_DID_BYTES = 255
 _MAX_U128 = (1 << 128) - 1
 _CAPABILITIES: Mapping[str, int] = {"storage_read": 1, "storage_write": 2, "transfer": 3, "emit_event": 4, "compose": 5}
 _MAX_TRACE = 34 + 65_536 * 52
@@ -62,6 +66,13 @@ class DecodedProgramTerminal:
     outcome: Mapping[str, object]
     usage: Mapping[str, object]
     transfer_verification: Literal["reconstructed", "recorded_terminal_root_not_locally_reconstructable"]
+    occupancy_payment_accounts: tuple[bytes, ...] = ()
+
+
+@dataclass(frozen=True)
+class OccupancyPayer:
+    did: bytes | str
+    account: bytes | None = None
 
 
 def bind_signed_program_lifecycle(canonical: bytes, payload: bytes | None, ordinal: int, expected_idempotency_key: str | None = None) -> DecodedSignedProgramCall:
@@ -231,6 +242,7 @@ def decode_and_verify_program_terminal(
     receipt: ProgramReceiptOutcome,
     protocol_version: int,
     *, protocol: ProtocolReceipt | None = None, expected_payload_hash: bytes | None = None,
+    occupancy_payers: tuple[OccupancyPayer, ...] = (),
 ) -> DecodedProgramTerminal:
     if not call_graph or sha256(call_graph).digest() != receipt.call_graph_root:
         _fail("program call graph root")
@@ -324,6 +336,7 @@ def decode_and_verify_program_terminal(
     occupancy_required = protocol_version in (2, 3) and successful
     if (occupancy is not None) != occupancy_required:
         _fail("occupancy attachment presence")
+    occupancy_payment_accounts: tuple[bytes, ...] = ()
     if occupancy is not None:
         if not occupancy:
             if receipt.occupancy_evidence_digest != bytes(32) or receipt.occupancy_transfer_root != bytes(32) or receipt.occupancy_byte_batches or receipt.occupancy_fee_units:
@@ -333,9 +346,11 @@ def decode_and_verify_program_terminal(
                 _fail("occupancy evidence digest")
             settlement = _decode_occupancy_settlement(occupancy)
             if (settlement["byte_batches"] != receipt.occupancy_byte_batches
-                    or settlement["fee_units"] != receipt.occupancy_fee_units
-                    or _occupancy_transfer_root(settlement, receipt.occupancy_asset_id) != receipt.occupancy_transfer_root):
+                    or settlement["fee_units"] != receipt.occupancy_fee_units):
                 _fail("occupancy receipt binding")
+            occupancy_payment_accounts = _verify_occupancy_transfer_root(
+                settlement, protocol_version, receipt.occupancy_asset_id,
+                receipt.occupancy_transfer_root, occupancy_payers)
     elif receipt.occupancy_evidence_digest != bytes(32) or receipt.occupancy_transfer_root != bytes(32) or receipt.occupancy_byte_batches or receipt.occupancy_fee_units:
         _fail("unexpected occupancy commitment")
     transfer_present = receipt.transfer_root != bytes(32)
@@ -351,7 +366,8 @@ def decode_and_verify_program_terminal(
     if protocol_version not in (1, 2, 3):
         _fail("program receipt protocol")
     return DecodedProgramTerminal(outcome, usage if usage is not None else _receipt_usage(receipt),
-        "recorded_terminal_root_not_locally_reconstructable" if recorded else "reconstructed")
+        "recorded_terminal_root_not_locally_reconstructable" if recorded else "reconstructed",
+        occupancy_payment_accounts)
 
 
 def _verify_pre_runtime(terminal: bytes, graph: bytes, outcome: ProgramReceiptOutcome,
@@ -871,19 +887,101 @@ def _decode_storage_namespace(reader: _Reader) -> Mapping[str, object]:
     return result
 
 
-def _occupancy_transfer_root(settlement: Mapping[str, object], asset: bytes) -> bytes:
-    if len(asset) != 32: _fail("occupancy asset length")
-    _nonzero(asset, "occupancy asset")
+def _occupancy_payer_dispositions(settlement: Mapping[str, object]) -> list[tuple[bytes, list[int]]]:
     payers: dict[bytes, list[int]] = {}
     for charge in cast(tuple[Mapping[str, object], ...], settlement["charges"]):
         payer = cast(bytes, charge["payer"]); values = payers.setdefault(payer, [0, 0, 0])
         values[0] = _checked_u128_add(values[0], cast(int, charge["amount_due"]), "occupancy payer due")
         if charge["paid"]: values[1] = _checked_u128_add(values[1], cast(int, charge["amount_due"]), "occupancy payer paid")
         values[2] = _checked_u128_add(values[2], cast(int, charge["arrears_after"]), "occupancy payer arrears")
+    return sorted(payers.items())
+
+
+def _occupancy_transfer_root(settlement: Mapping[str, object], asset: bytes) -> bytes:
+    if len(asset) != 32: _fail("occupancy asset length")
+    _nonzero(asset, "occupancy asset")
     treasury = sha256(_ACCOUNT_DERIVATION + (11).to_bytes(4, "big") + _FEE_TREASURY_LABEL).digest()
     legs = [b"\0" + payer + treasury + asset + values[1].to_bytes(16, "big") + (23).to_bytes(2, "big")
-        for payer, values in sorted(payers.items()) if (values[0] or values[2]) and values[1]]
+        for payer, values in _occupancy_payer_dispositions(settlement) if (values[0] or values[2]) and values[1]]
     return _merkle_root(legs)
+
+
+def _verify_occupancy_transfer_root(settlement: Mapping[str, object], protocol_version: int, asset: bytes,
+                                    committed_root: bytes, payers: tuple[OccupancyPayer, ...]) -> tuple[bytes, ...]:
+    if protocol_version != _STATE_COMMITMENT_PROTOCOL_VERSION:
+        if _occupancy_transfer_root(settlement, asset) != committed_root:
+            _fail("occupancy receipt binding")
+        return ()
+    if len(asset) != 32: _fail("occupancy asset length")
+    _nonzero(asset, "occupancy asset")
+    dispositions = _occupancy_payer_dispositions(settlement)
+    accounts = _proven_paying_accounts(dispositions, payers, asset)
+    if len(accounts) > 2 * _MAX_OCCUPANCY_PAYERS:
+        _fail("occupancy payment account bound")
+    paying: list[tuple[int, list[bytes]]] = []
+    selections = 1
+    for payer, values in dispositions:
+        if not values[1]: continue
+        proven: list[bytes] = []
+        for account in accounts:
+            if account[0] == payer and account[1] == asset and account[2] not in proven:
+                proven.append(account[2])
+        if not proven:
+            _fail("occupancy payment account")
+        selections *= len(proven)
+        if selections > _MAX_OCCUPANCY_PAYERS:
+            _fail("occupancy payment account bound")
+        paying.append((values[1], proven))
+    if len(paying) > _MAX_OCCUPANCY_PAYERS:
+        _fail("occupancy payment account bound")
+    treasury = sha256(_ACCOUNT_DERIVATION + (11).to_bytes(4, "big") + _FEE_TREASURY_LABEL).digest()
+    for selection in range(selections):
+        remaining = selection
+        chosen: list[bytes] = []
+        legs: list[bytes] = []
+        for paid, proven in paying:
+            account = proven[remaining % len(proven)]
+            remaining //= len(proven)
+            legs.append(b"\0" + account + treasury + asset + paid.to_bytes(16, "big") + (23).to_bytes(2, "big"))
+            chosen.append(account)
+        if _merkle_root(legs) == committed_root:
+            return tuple(chosen)
+    _fail("occupancy transfer root")
+
+
+def _proven_paying_accounts(dispositions: list[tuple[bytes, list[int]]], payers: tuple[OccupancyPayer, ...],
+                            asset: bytes) -> list[tuple[bytes, bytes, bytes]]:
+    paying = [payer for payer, values in dispositions if values[1]]
+    accounts: list[tuple[bytes, bytes, bytes]] = []
+    if not paying or len(paying) > _MAX_OCCUPANCY_PAYERS:
+        return accounts
+    for payer in payers:
+        did = payer.did.encode() if isinstance(payer.did, str) else bytes(payer.did)
+        try:
+            main = _occupancy_payment_account(did, asset, asset_scoped=False)
+        except ValueError:
+            continue
+        if main[0] not in paying:
+            continue
+        scoped = _occupancy_payment_account(did, asset, asset_scoped=True)
+        if payer.account is None:
+            accounts.extend((main, scoped))
+            continue
+        offered = bytes(payer.account)
+        proven = [candidate for candidate in (main, scoped) if candidate[2] == offered]
+        if not proven:
+            _fail("occupancy payment account")
+        accounts.append(proven[0])
+    return accounts
+
+
+def _occupancy_payment_account(did: bytes, asset: bytes, *, asset_scoped: bool) -> tuple[bytes, bytes, bytes]:
+    if not did or len(did) > _MAX_PAYER_DID_BYTES or len(asset) != 32 or not any(asset):
+        _fail("occupancy payer did")
+    payer = sha256(_DID_DERIVATION + len(did).to_bytes(2, "big") + did).digest()
+    _nonzero(payer, "occupancy payer did")
+    name = b"agent:" + did + (b":asset:" + asset.hex().encode() if asset_scoped else b":main")
+    return payer, asset, sha256(_ACCOUNT_DERIVATION + len(name).to_bytes(4, "big") + name).digest()
 
 
 def _merkle_root(legs: list[bytes]) -> bytes:

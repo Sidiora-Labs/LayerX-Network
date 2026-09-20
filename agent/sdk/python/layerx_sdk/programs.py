@@ -12,6 +12,7 @@ from .production import IdempotencyKey, PlatformSdkError, ProductionClient, SdkE
 from .program_lifecycle import NativeProgramLifecycleRequest
 from .program_wire import (
     DecodedSignedProgramCall,
+    OccupancyPayer,
     assert_fresh_simulation_observation,
     bind_retained_program_call,
     decode_and_verify_program_terminal,
@@ -148,6 +149,7 @@ class VerifiedProgramReceipt:
     terminal_payload: bytes
     call_graph: bytes
     transfer_verification: Literal["reconstructed", "recorded_terminal_root_not_locally_reconstructable"]
+    occupancy_payment_accounts: tuple[bytes, ...] = ()
 
 
 def _hex32(value: str) -> bool:
@@ -180,6 +182,7 @@ def verify_program_receipt(
     signatures: LocalSignatureVerifier,
     trust: ProgramTrustContext,
     *, expected_signed_activity: bytes | None = None,
+    occupancy_payers: tuple[OccupancyPayer, ...] = (),
 ) -> VerifiedProgramReceipt:
     activity_id = execution.get("activity_id")
     module_version = execution.get("module_version")
@@ -213,10 +216,12 @@ def verify_program_receipt(
             raise ValueError("program retained call metadata mismatch")
     terminal = decode_and_verify_program_terminal(
         terminal_payload, call_graph, cast(str, execution["program_id"]), outcome,
-        protocol.protocol_version, protocol=protocol, expected_payload_hash=payload_hash)
+        protocol.protocol_version, protocol=protocol, expected_payload_hash=payload_hash,
+        occupancy_payers=occupancy_payers)
     if terminal.usage != execution.get("usage") or terminal.outcome != execution.get("outcome"):
         raise ValueError("program terminal document binding failed")
-    return VerifiedProgramReceipt(verification, terminal_payload, call_graph, terminal.transfer_verification)
+    return VerifiedProgramReceipt(verification, terminal_payload, call_graph, terminal.transfer_verification,
+                                  terminal.occupancy_payment_accounts)
 
 
 def verify_lifecycle_recovery(result: object, expected_activity: str, sequencer: bytes, signatures: LocalSignatureVerifier) -> ReceiptVerification:

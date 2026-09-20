@@ -115,7 +115,38 @@ Inner domain then selects the terminal body
 | `LXP/programs/callback-failure/v1\0` | `terminal_kind == 2`, length domain+5 | `refused` / `guest_refused` |
 
 Occupancy is required iff `protocol_version in (2, 3)` and the terminal
-is successful (`program_wire.py:255-257`). Transfer authority is
+is successful (`program_wire.py:338`).
+
+The occupancy settlement always binds `occupancy_byte_batches` and
+`occupancy_fee_units`. `occupancy_transfer_root` is rebuilt differently
+per protocol version. Before the state commitment the kernel debits the
+payer principal named by the settlement, so the verifier rebuilds the
+root from those principals with no caller input. Under protocol 3 the
+kernel debits the payer DID's account, which the settlement does not
+carry, so the caller offers the payer DIDs it knows
+(`OccupancyPayer` in `program_wire.py:72-75`,
+`program-wire.ts:61-64`, `programs.go:299-304`). Each offered DID is
+proven against the settlement: its principal
+`SHA-256("LXP/v1/did-id\0" || u16be(len(did)) || did)` must be one the
+settlement charges, and only the two accounts that DID derives for the
+receipt asset are admissible —
+`SHA-256("LX:ACCOUNT:v1" || u32be(len(name)) || name)` over
+`agent:<did>:main` and `agent:<did>:asset:<asset hex>`. A caller may
+instead offer one of those two account identifiers directly, and an
+identifier neither derivation produces is refused. The verifier then
+enumerates the account selections in ascending payer-principal order,
+bounded at 256 candidates, and returns the one selection whose Merkle
+root equals `occupancy_transfer_root`; no selection is
+`occupancy transfer root`. A protocol 3 receipt that paid an occupancy
+charge is therefore refused when no payer is offered — the verifier
+never falls back to the principal root
+(`program_wire.py:909-949`, `program-wire.ts:860-902`,
+`programs.go:1257-1339`). The proven accounts are returned as
+`occupancy_payment_accounts` / `occupancyPaymentAccounts` /
+`OccupancyPaymentAccounts`; pre-state-commitment verification returns
+none.
+
+Transfer authority is
 required for a candidate (`/v4`) body, or for encoding 4 on a
 successful terminal, unless the historical recorded path applies
 (`program_wire.py:272-276`). The Python and TypeScript decoders on the testnet
@@ -158,35 +189,41 @@ checker use these boundaries:
 
 | Boundary | Input |
 | --- | --- |
-| `program call graph root` | empty graph, or SHA-256 ≠ `call_graph_root` (`program_wire.py:171-172`) |
-| `program terminal root` | empty payload, payload longer than `1_048_576`, or SHA-256 ≠ `terminal_payload_root` (`program_wire.py:173-174`) |
-| `applied terminal domain` | encoding 4 payload that does not start with `LXP/programs/terminal-applied-legs/v1\0` (`program_wire.py:176-180`) |
-| `empty applied terminal detail` | encoding 4 inner length 0 (`program_wire.py:182-183`) |
-| `applied legs digest` | SHA-256 of the leg span ≠ `applied_legs_digest` (`program_wire.py:186-187`) |
-| `trailing canonical bytes` | leftover bytes after the applied-leg, authority, or occupancy wrapper (`program_wire.py:185, 197, 202, 804-805`) |
-| `applied legs bounds` | leg span length not a multiple of 115, or greater than `256 * 115` (`program_wire.py:290-291`) |
-| `applied leg canonical fields` | reserved byte, kind, or a zero source, destination, asset, or amount (`program_wire.py:293-296`) |
-| `applied transfer root` | reconstructed Merkle root ≠ `transfer_root` (`program_wire.py:297-298`) |
-| `program terminal wrapper order` | authority or occupancy prefix after those wrappers were already consumed (`program_wire.py:203-204`) |
-| `legacy terminal kind` | `/v2` or `/v3` body with `terminal_kind != 1` or `abi_version != 1` (`program_wire.py:209-211`) |
-| `candidate terminal binding` | `/v4` body whose kind, ABI 2, or program id does not match the receipt (`program_wire.py:221-222`) |
-| `candidate call graph` | `/v4` embedded graph ≠ supplied `call_graph` (`program_wire.py:224-225`) |
-| `failure terminal kind` | failure-detail body with `terminal_kind != 2` (`program_wire.py:235-236`) |
-| `resource terminal kind` | resource-detail body with `terminal_kind != 3` (`program_wire.py:240-241`) |
-| `settlement terminal` | settlement body with `terminal_kind != 2`, wrong length, or code outside `1..12` (`program_wire.py:245-246`) |
-| `callback terminal` | callback body with `terminal_kind != 2` or length ≠ domain+5 (`program_wire.py:249-250`) |
-| `unknown terminal domain` | inner prefix not one of the domains above (`program_wire.py:252-253`) |
-| `occupancy attachment presence` | occupancy wrapper present XOR not (`protocol 2 or 3` and success) (`program_wire.py:255-257`) |
-| `empty occupancy attachment` | empty occupancy bytes with a nonzero occupancy commitment (`program_wire.py:259-261`) |
-| `occupancy evidence digest` | SHA-256 of occupancy bytes ≠ `occupancy_evidence_digest` (`program_wire.py:263-264`) |
-| `occupancy receipt binding` | occupancy usage or occupancy transfer root ≠ receipt (`program_wire.py:266-269`) |
-| `unexpected occupancy commitment` | no occupancy wrapper, but receipt occupancy fields are nonzero (`program_wire.py:270-271`) |
-| `transfer authority presence` | authority wrapper presence disagrees with `transfer_root` outside the recorded path (`program_wire.py:272-276`) |
-| `transfer authority root` | empty authority bytes, or wrapper root ≠ `transfer_root` (`program_wire.py:278-279`) |
-| `V2 transfer authority required` | encoding 4 authority that does not start with transfer-set v2 (`program_wire.py:280-281`) |
+| `program call graph root` | empty graph, or SHA-256 ≠ `call_graph_root` (`program_wire.py:248`) |
+| `program terminal root` | empty payload, payload longer than `1_048_576`, or SHA-256 ≠ `terminal_payload_root` (`program_wire.py:250`) |
+| `applied terminal domain` | encoding 4 payload that does not start with `LXP/programs/terminal-applied-legs/v1\0` (`program_wire.py:259`) |
+| `empty applied terminal detail` | encoding 4 inner length 0 (`program_wire.py:262`) |
+| `applied legs digest` | SHA-256 of the leg span ≠ `applied_legs_digest` (`program_wire.py:266`) |
+| `trailing canonical bytes` | leftover bytes after the applied-leg, authority, or occupancy wrapper (`program_wire.py:1049`) |
+| `applied legs bounds` | leg span length not a multiple of 115, or greater than `256 * 115` (`program_wire.py:417`) |
+| `applied leg canonical fields` | reserved byte, kind, or a zero source, destination, asset, or amount (`program_wire.py:422`) |
+| `applied transfer root` | reconstructed Merkle root ≠ `transfer_root` (`program_wire.py:424`) |
+| `program terminal wrapper order` | authority or occupancy prefix after those wrappers were already consumed (`program_wire.py:283`) |
+| `legacy terminal kind` | `/v2` or `/v3` body with `terminal_kind != 1` or `abi_version != 1` (`program_wire.py:290`) |
+| `candidate terminal binding` | `/v4` body whose kind, ABI 2, or program id does not match the receipt (`program_wire.py:301`) |
+| `candidate call graph` | `/v4` embedded graph ≠ supplied `call_graph` (`program_wire.py:304`) |
+| `failure terminal kind` | failure-detail body with `terminal_kind != 2` (`program_wire.py:317`) |
+| `resource terminal kind` | resource-detail body with `terminal_kind != 3` (`program_wire.py:322`) |
+| `settlement terminal` | settlement body with `terminal_kind != 2`, wrong length, or code outside `1..12` (`program_wire.py:327`) |
+| `callback terminal` | callback body with `terminal_kind != 2` or length ≠ domain+5 (`program_wire.py:331`) |
+| `unknown terminal domain` | inner prefix not one of the domains above (`program_wire.py:334`) |
+| `occupancy attachment presence` | occupancy wrapper present XOR not (`protocol 2 or 3` and success) (`program_wire.py:338`) |
+| `empty occupancy attachment` | empty occupancy bytes with a nonzero occupancy commitment (`program_wire.py:343`) |
+| `occupancy evidence digest` | SHA-256 of occupancy bytes ≠ `occupancy_evidence_digest` (`program_wire.py:346`) |
+| `occupancy receipt binding` | occupancy usage ≠ receipt, or a pre-state-commitment transfer root ≠ receipt (`program_wire.py:350, 913`) |
+| `occupancy asset length` | occupancy asset identity not 32 bytes (`program_wire.py:901, 915`) |
+| `occupancy asset` | all-zero occupancy asset identity (`program_wire.py:902, 916`) |
+| `occupancy payer did` | empty payer DID, DID longer than 255 bytes, or a zero derived principal (`program_wire.py:980, 982`) |
+| `occupancy payment account` | a protocol 3 paying payer with no proven payment account, or an offered account neither DID derivation produces (`program_wire.py:930, 973`) |
+| `occupancy payment account bound` | more than `2 * 256` proven accounts, more than 256 paying payers, or more than 256 account candidates to enumerate (`program_wire.py:920, 933, 936`) |
+| `occupancy transfer root` | no protocol 3 candidate selection rebuilds `occupancy_transfer_root` (`program_wire.py:949`) |
+| `unexpected occupancy commitment` | no occupancy wrapper, but receipt occupancy fields are nonzero (`program_wire.py:355`) |
+| `transfer authority presence` | authority wrapper presence disagrees with `transfer_root` outside the recorded path (`program_wire.py:360`) |
+| `transfer authority root` | empty authority bytes, or wrapper root ≠ `transfer_root` (`program_wire.py:363`) |
+| `V2 transfer authority required` | encoding 4 authority that does not start with transfer-set v2 (`program_wire.py:633`) |
 | `account-bound transfer authority` | nested wrapper, malformed original-set length, missing/extra account names, invalid canonical account name, nonempty program-debit name, trailing bytes, or rebuilt root mismatch (`programs/crates/layerx-programs-runtime/src/transfer.rs:882-955`) |
-| `program receipt protocol` | `protocol_version` not in `(1, 2, 3)` (`program_wire.py:283-284`) |
-| `terminal receipt metadata` | runtime, ABI, fee schedule, metering, or usage disagrees with the receipt (`program_wire.py:484-486`) |
+| `program receipt protocol` | `protocol_version` not in `(1, 2, 3)` (`program_wire.py:367`) |
+| `terminal receipt metadata` | runtime, ABI, fee schedule, metering, or usage disagrees with the receipt (`program_wire.py:612`) |
 
 Shared-vector refusals:
 
@@ -305,8 +342,8 @@ Status strings match Go `ProgramTransfersReconstructed` /
    `programVerification()` (`Programs.swift:649`). Go returns `error`
    strings (`programs.go:488-531`).
 3. Python occupancy uses the `protocol_version` argument
-   (`program_wire.py:169, 255`). Go occupancy uses
-   `receipt.ProtocolVersion` (`programs.go:502`).
+   (`program_wire.py:243, 336`). Go occupancy uses
+   `receipt.ProtocolVersion` (`programs.go:507`).
 4. The account-bound transfer-authority wrapper is not recognized by any SDK
    in this tree. Python and TypeScript require direct `transfer-set/v2`
    authority bytes, and no account-bound fixture exists in the shared-vector
