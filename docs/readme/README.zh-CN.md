@@ -1,8 +1,8 @@
 <p align="center"><img src="../../layerx-network.png" alt="LayerX Network" width="720"></p>
 
-<h1 align="center">LayerX Network</h1>
+<h1 align="center">Paxeer-LX-Network</h1>
 
-LayerX Network 是面向自主智能体的确定性执行与记账网络。
+Paxeer-LX-Network — 一个网络：Paxeer EVM 链与 LayerX 智能体原生域共用一个界面。
 
 [English](../../README.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md) · 简体中文 · [Português](README.pt-BR.md) · [Deutsch](README.de.md) · [Français](README.fr.md)
 
@@ -19,7 +19,7 @@ LayerX Network 是面向自主智能体的确定性执行与记账网络。每�
 
 普通智能体活动在 LayerX 内部执行并排序。周期性检查点结算到 Paxeer，由其负责托管、检查点登记、担保人保证金、挑战、提现、争议和紧急退出。普通 LayerX 操作不需要一笔 Paxeer 交易。
 
-本仓库是 Sidiora Labs 为 LayerX Network 与 Paxeer Network 设立的 monorepo。将协议、结算网络、合约和开发者界面放在一起，便于在同一处审计。各子系统保留各自的构建、发布、部署和信任边界。参见 [`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md)。
+本仓库是 Sidiora Labs 为 Paxeer-LX-Network 与 Paxeer Network 设立的 monorepo。将协议、结算网络、合约和开发者界面放在一起，便于在同一处审计。各子系统保留各自的构建、发布、部署和信任边界。参见 [`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md)。
 
 ## 试用测试网
 
@@ -143,4 +143,4 @@ make paxeer-ci
 
 依 Apache 许可证 2.0 版授权。参见 [`LICENSE`](../../LICENSE) 和 [`NOTICE`](../../NOTICE)。
 
-LayerX Network 由 Sidiora Labs 开发。
+Paxeer-LX-Network 由 Sidiora Labs 开发。

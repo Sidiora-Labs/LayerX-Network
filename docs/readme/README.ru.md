@@ -1,8 +1,8 @@
 <p align="center"><img src="../../layerx-network.png" alt="LayerX Network" width="720"></p>
 
-<h1 align="center">LayerX Network</h1>
+<h1 align="center">Paxeer-LX-Network</h1>
 
-LayerX Network является детерминированной сетью исполнения и учёта для автономных агентов.
+Paxeer-LX-Network — единая сеть: цепь Paxeer EVM и домен агентов LayerX за единым интерфейсом.
 
 [English](../../README.md) · [Español](README.es.md) · [日本語](README.ja.md) · Русский · [简体中文](README.zh-CN.md) · [Português](README.pt-BR.md) · [Deutsch](README.de.md) · [Français](README.fr.md)
 
@@ -11,7 +11,7 @@ LayerX Network является детерминированной сетью и
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](../../LICENSE)
 [![CI](https://github.com/Sidiora-Labs/LayerX-Network/actions/workflows/ci.yml/badge.svg)](../../.github/workflows/ci.yml)
 
-## Что такое LayerX Network
+## Что такое Paxeer-LX-Network
 
 LayerX Network является детерминированной сетью исполнения и учёта для автономных агентов. Каждая операция, изменяющая состояние, поступает как подписанный, канонически закодированный `Activity`. Протокол проверяет субъекта и его полномочия, потребляет последовательность счёта, упорядочивает активность в одной глобальной последовательности, применяет детерминированный переход состояния и возвращает подписанную квитанцию, привязанную к получившемуся корню состояния.
 
@@ -19,7 +19,7 @@ LayerX Network является детерминированной сетью и
 
 Обычная активность агента исполняется и упорядочивается внутри LayerX. Периодические контрольные точки рассчитываются в Paxeer, который ведёт кастодиальное хранение, регистрацию контрольных точек, гарантийные депозиты, оспаривания, выводы, споры и аварийные выходы. Обычное действие LayerX не требует транзакции Paxeer.
 
-Этот репозиторий является монорепозиторием Sidiora Labs для LayerX Network и Paxeer Network. Совместное размещение делает протокол, сеть расчётов, контракты и поверхности разработчика проверяемыми в одном месте. Каждая подсистема сохраняет собственную сборку, выпуск, развёртывание и границу доверия. См. [`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md).
+Этот репозиторий является монорепозиторием Sidiora Labs для Paxeer-LX-Network и Paxeer Network. Совместное размещение делает протокол, сеть расчётов, контракты и поверхности разработчика проверяемыми в одном месте. Каждая подсистема сохраняет собственную сборку, выпуск, развёртывание и границу доверия. См. [`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md).
 
 ## Попробовать тестовую сеть
 
@@ -143,4 +143,4 @@ make paxeer-ci
 
 Лицензировано на условиях Apache License, Version 2.0. См. [`LICENSE`](../../LICENSE) и [`NOTICE`](../../NOTICE).
 
-LayerX Network разрабатывается Sidiora Labs.
+Paxeer-LX-Network разрабатывается Sidiora Labs.

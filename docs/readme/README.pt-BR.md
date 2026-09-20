@@ -1,8 +1,8 @@
 <p align="center"><img src="../../layerx-network.png" alt="LayerX Network" width="720"></p>
 
-<h1 align="center">LayerX Network</h1>
+<h1 align="center">Paxeer-LX-Network</h1>
 
-LayerX Network é uma rede determinística de execução e contabilização para agentes autônomos.
+Paxeer-LX-Network — uma rede: a cadeia EVM Paxeer e o domínio agent-nativo LayerX por uma única interface.
 
 [English](../../README.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md) · [简体中文](README.zh-CN.md) · Português · [Deutsch](README.de.md) · [Français](README.fr.md)
 
@@ -11,7 +11,7 @@ LayerX Network é uma rede determinística de execução e contabilização para
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](../../LICENSE)
 [![CI](https://github.com/Sidiora-Labs/LayerX-Network/actions/workflows/ci.yml/badge.svg)](../../.github/workflows/ci.yml)
 
-## O que é o LayerX Network
+## O que é o Paxeer-LX-Network
 
 LayerX Network é uma rede determinística de execução e contabilização para agentes autônomos. Toda operação que altera estado entra como um `Activity` assinado e canonicamente codificado. O protocolo verifica o ator e sua autoridade, consome a sequência da conta, ordena a atividade em uma sequência global, aplica uma transição de estado determinística e devolve um recibo assinado vinculado à raiz de estado resultante.
 
@@ -19,7 +19,7 @@ O log de atividades somente de acréscimo é a autoridade. Os índices de banco 
 
 A atividade ordinária de agentes é executada e ordenada dentro do LayerX. Checkpoints periódicos liquidam no Paxeer, que detém a custódia, o registro de checkpoints, as cauções de avalistas, os desafios, os saques, as disputas e as saídas de emergência. Uma ação ordinária no LayerX não exige uma transação no Paxeer.
 
-Este repositório é o monorepo da Sidiora Labs para o LayerX Network e a Paxeer Network. A colocalização mantém o protocolo, a rede de liquidação, os contratos e as superfícies de desenvolvedor auditáveis em um só lugar. Cada subsistema conserva seu próprio build, release, implantação e fronteira de confiança. Consulte [`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md).
+Este repositório é o monorepo da Sidiora Labs para o Paxeer-LX-Network e a Paxeer Network. A colocalização mantém o protocolo, a rede de liquidação, os contratos e as superfícies de desenvolvedor auditáveis em um só lugar. Cada subsistema conserva seu próprio build, release, implantação e fronteira de confiança. Consulte [`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md).
 
 ## Experimente a testnet
 
@@ -143,4 +143,4 @@ Reporte vulnerabilidades pelo relatório privado do GitHub, conforme descrito em
 
 Licenciado sob a Licença Apache, Versão 2.0. Consulte [`LICENSE`](../../LICENSE) e [`NOTICE`](../../NOTICE).
 
-LayerX Network é desenvolvido pela Sidiora Labs.
+Paxeer-LX-Network é desenvolvido pela Sidiora Labs.
