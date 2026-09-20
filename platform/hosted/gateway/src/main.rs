@@ -1,4 +1,5 @@
 mod native_call;
+mod paxeer;
 mod program_lifecycle;
 mod public_reads;
 mod rpc;
@@ -56,6 +57,7 @@ struct Config {
     client: Client,
     component: Endpoint,
     public_core: Option<Endpoint>,
+    paxeer: Option<Endpoint>,
     component_token: Zeroizing<String>,
     authority: Endpoint,
     authority_token: Zeroizing<String>,
@@ -720,6 +722,7 @@ fn config() -> Result<Config, String> {
                 .map_err(|_| "gateway component URL is required")?,
         )?,
         public_core: public_reads::configured_endpoint()?,
+        paxeer: paxeer::configured_endpoint()?,
         component_token: read_secret("LAYERX_GATEWAY_COMPONENT_TOKEN_FILE")?,
         authority: Endpoint::parse(
             &env::var("LAYERX_GATEWAY_AUTHORITY_URL")
@@ -3398,7 +3401,7 @@ fn gateway_status(config: &Config) -> OutgoingResponse {
                 "hosted_gateway": if gateway { "degraded" } else { "unavailable" },
                 "testnet_core": if core { "available" } else { "unavailable" },
                 "receipt_authority": if authority { "available" } else { "unavailable" },
-                "paxeer": "not_configured"
+                "paxeer": paxeer::status(config)
             },
             "lxp_wire_version": config.wire_version,
             "package_semver": env!("CARGO_PKG_VERSION")

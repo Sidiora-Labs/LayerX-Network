@@ -95,6 +95,7 @@ spec:
             - {name: LAYERX_GATEWAY_IDENTITY_PROVISIONING_TOKEN_FILE, value: /run/layerx/identity-provisioning/token}
             - {name: LAYERX_GATEWAY_FAUCET_URL, value: "https://layerx-faucet-public.layerx-testnet.svc.cluster.local:443"}
             - {name: LAYERX_GATEWAY_FAUCET_SERVICE_TOKEN_FILE, value: /run/layerx/faucet/token}
+            - {name: LAYERX_GATEWAY_PAXEER_RPC_URL, value: "https://paxeer-boundary.layerx-testnet.svc.cluster.local:9443"}
             - {name: LAYERX_GATEWAY_PROGRAM_REGISTRY_URL, value: "https://layerx-program-registry.layerx-testnet.svc.cluster.local:9420"}
             - {name: LAYERX_GATEWAY_PROGRAM_REGISTRY_TOKEN_FILE, value: /run/layerx/registry/token}
             - {name: LAYERX_GATEWAY_REDIS_URL, value: "rediss://layerx-gateway-redis.layerx-testnet.svc.cluster.local:6379"}

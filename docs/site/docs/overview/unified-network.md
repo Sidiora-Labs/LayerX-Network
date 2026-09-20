@@ -123,11 +123,54 @@ Guarantors bond native tokens. They can register, increase their bond, begin unb
 
 Genesis for the anchor module is written by `platform/hosted/paxeer/anchor-genesis.py`. It configures the authority account, Paxeer chain ID, network ID, certificate threshold, minimum bond, challenge parameters, unbonding delay, sequencer authorization, and optional pre-registered guarantors. The anchor point — the batch the first checkpoint must continue — is set at genesis.
 
+## The single network endpoint
+
+One endpoint serves the whole network: the hosted gateway at
+`https://api.testnet.layerx.network/rpc`. A caller does not choose a chain — the
+method name decides the domain.
+
+- `eth_*`, `net_*` and `web3_*` are the Paxeer EVM JSON-RPC, relayed verbatim to
+  the chain through the Paxeer boundary named by
+  `LAYERX_GATEWAY_PAXEER_RPC_URL`. `eth_sendRawTransaction` is included: a
+  signed transaction sent to the gateway lands on Paxeer. The node's own key
+  never signs for a caller, so `eth_accounts`, `eth_coinbase`,
+  `eth_sendTransaction`, `eth_sign`, `eth_signTransaction`, `eth_signTypedData`,
+  `eth_signTypedData_v4` and `eth_mining` are refused, as are `eth_subscribe`
+  and `eth_unsubscribe` — the gateway's WebSocket carries `lx_subscribe` only.
+- `lx_*` are the LayerX methods, unchanged.
+- `px_*` are unified cross-domain reads that answer from the precompiles above:
+  `px_resolveAccount`, `px_getAccount`, `px_getBalances`, `px_listAssets` and
+  `px_getNetwork`.
+
+A JSON-RPC batch may mix all three namespaces; entries keep their ids and their
+order. The `px_*` and `lx_*` reads need no API key; they are gated only by the
+public read budget.
+
+`px_resolveAccount` and `px_getAccount` take one identifier — an
+`0x`-prefixed EVM address, a `did:layerx:<hex>` DID, or the bare 64-hex DID
+public key — and answer with both halves of the identity (`evm_address`,
+`pax_address`, `layerx_did`, `layerx_account`, `bound`) as
+`getUnifiedAccount`, `getLayerXDid` and `getEvmAddrByLayerX` report them.
+`px_listAssets` joins the LayerX asset list to the custody asset map read from
+`getAsset`. `px_getBalances` resolves the account and then, per asset, reports
+the custody record, the Paxeer bank balance of the custody denom for that EVM
+address, and the LayerX account for the same asset. `px_getNetwork` reports the
+chain id, the head block, the LayerX node info, and the latest finalized
+checkpoint with its status from the anchor's ladder. Both joins are bounded to
+the first sixteen assets and say so in `joined_limit`.
+
+The exact parameter and result shapes are in the gateway's
+[`openrpc.json`](https://github.com/Sidiora-Labs/Layerx-protocol/blob/main/platform/hosted/gateway/openrpc.json),
+served live at `GET /rpc/schema`.
+
+Clients that want to bind an account call `bindLayerX` with a signature the
+`layerx-client` crate builds: `layerx_client::paxeer_binding::Binding` assembles
+the exact consent message described below and signs it with the DID key.
+
 ## Not yet built
 
 The following components are planned but not yet implemented:
 
-- **Shared single endpoint** — a unified RPC endpoint that routes requests to the appropriate domain without requiring callers to know which chain to target.
 - **Unified index / explorer account page** — a single view that merges activity from both domains for one account.
 - **Intent routing** — a mechanism for expressing cross-domain intents that the network resolves automatically.
 - **Light-client verification of Paxeer deposits on LayerX** — a light-client proof that a deposit transaction was included in a Paxeer block, verifiable on the LayerX side without a full Paxeer node.

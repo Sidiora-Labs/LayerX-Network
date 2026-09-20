@@ -169,7 +169,23 @@ impl Client {
         self.request_authorized(endpoint, &format!("Bearer {bearer}"), request)
     }
 
-    /// Sends one bounded request with the supplied authorization value.
+    /// Sends one bounded request to a component that authenticates no caller,
+    /// such as the Paxeer boundary's public EVM JSON-RPC relay. The mutually
+    /// authenticated TLS identity is still presented; no bearer credential is
+    /// disclosed to a component that has no use for one.
+    ///
+    /// # Errors
+    /// Refuses requests outside the configured bounds and TLS or HTTP failures.
+    pub fn request_unauthenticated(
+        &self,
+        endpoint: &Endpoint,
+        request: &OutboundRequest<'_>,
+    ) -> Result<UpstreamResponse, String> {
+        self.request_authorized(endpoint, "", request)
+    }
+
+    /// Sends one bounded request with the supplied authorization value. An
+    /// empty value sends no `Authorization` header at all.
     ///
     /// # Errors
     /// Refuses requests outside the configured bounds and TLS or HTTP failures.
@@ -253,8 +269,7 @@ impl Client {
         if !path.starts_with('/') || path.contains(['?', '#', '\\']) || body.len() > MAX_RESPONSE {
             return Err("outbound request exceeds its boundary".to_owned());
         }
-        if authorization.is_empty()
-            || authorization.len() > 4096
+        if authorization.len() > 4096
             || authorization
                 .bytes()
                 .any(|byte| matches!(byte, b'\r' | b'\n' | 0))
@@ -413,14 +428,20 @@ fn exchange(
     let publication = publication_key.map_or_else(zeroize::Zeroizing::default, |key| {
         zeroize::Zeroizing::new(format!("LayerX-Key: {key}\r\n"))
     });
+    let authorization = if authorization.is_empty() {
+        zeroize::Zeroizing::new(String::new())
+    } else {
+        zeroize::Zeroizing::new(format!("Authorization: {authorization}\r\n"))
+    };
     let mut outbound = zeroize::Zeroizing::new(Vec::new());
     write!(
         outbound,
-        "{} {}{} HTTP/1.1\r\nHost: {}\r\nAuthorization: {authorization}\r\nAccept: application/json\r\nContent-Type: {}\r\n{idempotency}{trace}{freshness}{}Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+        "{} {}{} HTTP/1.1\r\nHost: {}\r\n{}Accept: application/json\r\nContent-Type: {}\r\n{idempotency}{trace}{freshness}{}Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
         request.method,
         endpoint.base_path,
         request.path,
         endpoint.authority(),
+        authorization.as_str(),
         request.content_type,
         publication.as_str(),
         request.body.len()

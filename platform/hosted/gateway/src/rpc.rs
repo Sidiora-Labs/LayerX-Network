@@ -227,6 +227,9 @@ pub(super) fn dispatch(config: &Config, request: &IncomingRequest, value: &Value
     {
         return value.get("id").map(|_| result);
     }
+    if let Some(result) = crate::paxeer::dispatch(config, method, &id, value.get("params")) {
+        return value.get("id").map(|_| result);
+    }
     if method == "lx_sendActivity" {
         let result = send(config, request, &id, value.get("params"));
         return value.get("id").map(|_| result);
@@ -727,6 +730,11 @@ mod tests {
             "lx_getNodeInfo",
             "lx_subscribe",
             "lx_unsubscribe",
+            "px_resolveAccount",
+            "px_getAccount",
+            "px_getBalances",
+            "px_listAssets",
+            "px_getNetwork",
         ];
         for name in published {
             assert_eq!(
