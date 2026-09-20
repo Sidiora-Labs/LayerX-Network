@@ -151,7 +151,7 @@ def main():
             run('forge', 'build', 'contracts/GuarantorBond.sol', 'contracts/CheckpointRegistry.sol',
                 'platform/hosted/paxeer/contracts/BetaUsdl.sol', 'contracts/challenge/CheckpointChallengeManager.sol',
                 'contracts/governance/LayerXBetaTimelock.sol', 'contracts/custody/AssetRegistry.sol',
-                'contracts/custody/LayerXVault.sol', 'paxeer-network/loadtest/contracts/evm/lib/solmate/src/tokens/WETH.sol',
+                'contracts/custody/LayerXVault.sol', 'loadtest/contracts/evm/lib/solmate/src/tokens/WETH.sol',
                 '--threads', str(threads), '--out', artifacts, '--cache-path', build / 'withdraw-contracts/cache')
             target = Path(os.environ['CARGO_TARGET_DIR']).resolve()
             boundary_binary = Path(os.environ.get('LAYERX_PAXEER_BOUNDARY_BIN', target/'debug/layerx-paxeer-boundary')).resolve()

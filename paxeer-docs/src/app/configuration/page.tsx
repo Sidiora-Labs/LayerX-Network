@@ -12,7 +12,7 @@ export default function Configuration() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/node/params/config.go</code>, <code>docker/localnode/config/</code>, <code>config.yml</code>
+        <strong>Source:</strong> <code>node/params/config.go</code>, <code>docker/localnode/config/</code>, <code>config.yml</code>
       </div>
 
       <h2>Configuration Files</h2>

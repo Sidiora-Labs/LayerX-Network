@@ -1,12 +1,12 @@
 # Paxeer Network documentation
 
-These files document the **Paxeer Network** subtree of [Sidiora-Labs/LayerX-Network](https://github.com/Sidiora-Labs/LayerX-Network). They are not a standalone repository. The node, modules, RPC, and chain contracts live in `paxeer-network/`; LayerX Network execution, settlement contracts, and specifications live beside it at the monorepo root.
+These files document the **Paxeer Network** subtree of [Sidiora-Labs/LayerX-Network](https://github.com/Sidiora-Labs/LayerX-Network). They are not a standalone repository. The node, modules, RPC, and chain contracts live at the repository root (`node/`, `modules/`, `rpc/`, `contracts/src/`); LayerX Network execution, settlement contracts, and specifications live beside it at the monorepo root.
 
 Paxeer is the EVM L1 (chain ID `125`) LayerX uses for custody and checkpoint settlement. Co-location in this monorepo does not merge the two trust boundaries.
 
 | Document | Contents |
 | --- | --- |
-| [`../README.md`](../README.md) | What this subtree is, how it sits next to LayerX, build and test entrypoints |
+| [`paxeer-network.md`](paxeer-network.md) | What this subtree is, how it sits next to LayerX, build and test entrypoints |
 | [`evm_jsonrpc_unsupported.md`](evm_jsonrpc_unsupported.md) | EVM JSON-RPC methods registered on Pax that return a documented error |
 | This page (below) | Regenerating the node's OpenAPI / Swagger UI |
 | [`../docker/README.md`](../docker/README.md) | Local Docker node and cluster |
@@ -16,7 +16,7 @@ Paxeer is the EVM L1 (chain ID `125`) LayerX uses for custody and checkpoint set
 
 LayerX settlement contracts (custody, checkpoints, bonds, exits) are documented with the protocol at the repository root (`contracts/`, `spec/layerx-protocol/`). They are not this subtree's `contracts/` directory.
 
-Commands below are run from `paxeer-network/` unless noted.
+Commands below are run from the repository root unless noted.
 
 ---
 

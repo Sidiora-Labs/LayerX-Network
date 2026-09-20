@@ -6,7 +6,7 @@ on:
 
 defaults:
   run:
-    working-directory: paxeer-network
+    working-directory: .
 
 jobs:
   run-tests-devnet:
@@ -22,7 +22,7 @@ jobs:
       - name: Install paxd
         run: |
           # Install paxd using go install
-          make install
+          make -f chain.mk install
           
           # Add the Go bin directory to the PATH
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
@@ -45,7 +45,7 @@ jobs:
       - name: Install paxd
         run: |
           # Install paxd using go install
-          make install
+          make -f chain.mk install
           
           # Add the Go bin directory to the PATH
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH

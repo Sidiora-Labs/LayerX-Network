@@ -30,7 +30,7 @@ make test-contracts
 make ci
 ```
 
-Paxeer Network is a separate Go module under `paxeer-network/` (`make paxeer-build`, `make paxeer-lint`, `make paxeer-test`, `make paxeer-ci`). See [docs/MONOREPO.md](docs/MONOREPO.md).
+Paxeer Network is a separate Go module rooted at the repository root (`go.mod`, built through `chain.mk`) (`make paxeer-build`, `make paxeer-lint`, `make paxeer-test`, `make paxeer-ci`). See [docs/MONOREPO.md](docs/MONOREPO.md).
 
 ## Spec first
 

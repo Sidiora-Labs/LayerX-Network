@@ -12,7 +12,7 @@ export default function RestGrpc() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/api/</code> proto definitions, <code>paxeer-network/docs/</code>
+        <strong>Source:</strong> <code>api/</code> proto definitions, <code>docs/</code>
       </div>
 
       <h2>Overview</h2>
@@ -24,7 +24,7 @@ export default function RestGrpc() {
       <h3>Protocol Buffers</h3>
 
       <p>
-        All services are defined in <code>paxeer-network/api/</code> using Protocol Buffers v3. The proto files generate:
+        All services are defined in <code>api/</code> using Protocol Buffers v3. The proto files generate:
       </p>
 
       <ul>
@@ -43,7 +43,7 @@ export default function RestGrpc() {
       <pre><code>{`ignite generate proto-go`}</code></pre>
 
       <p>
-        Requires Ignite CLI v0.23.0. See <code>paxeer-network/api/README.md</code> for installation.
+        Requires Ignite CLI v0.23.0. See <code>api/README.md</code> for installation.
       </p>
 
       <h2>EVM Module Query Service</h2>
@@ -129,7 +129,7 @@ export default function RestGrpc() {
       </table>
 
       <div className="source-note">
-        <strong>Proto:</strong> <code>paxeer-network/api/evm/query.proto</code>
+        <strong>Proto:</strong> <code>api/evm/query.proto</code>
       </div>
 
       <h2>Epoch Module Query Service</h2>
@@ -161,7 +161,7 @@ export default function RestGrpc() {
       </table>
 
       <div className="source-note">
-        <strong>Proto:</strong> <code>paxeer-network/api/epoch/query.proto</code>
+        <strong>Proto:</strong> <code>api/epoch/query.proto</code>
       </div>
 
       <h2>Oracle Module Query Service</h2>
@@ -249,7 +249,7 @@ export default function RestGrpc() {
       </table>
 
       <div className="source-note">
-        <strong>Proto:</strong> <code>paxeer-network/api/oracle/query.proto</code>
+        <strong>Proto:</strong> <code>api/oracle/query.proto</code>
       </div>
 
       <h2>TokenFactory Module Query Service</h2>
@@ -296,7 +296,7 @@ export default function RestGrpc() {
       </table>
 
       <div className="source-note">
-        <strong>Proto:</strong> <code>paxeer-network/api/tokenfactory/query.proto</code>
+        <strong>Proto:</strong> <code>api/tokenfactory/query.proto</code>
       </div>
 
       <h2>Mint Module Query Service</h2>
@@ -328,7 +328,7 @@ export default function RestGrpc() {
       </table>
 
       <div className="source-note">
-        <strong>Proto:</strong> <code>paxeer-network/api/mint/v1beta1/query.proto</code>
+        <strong>Proto:</strong> <code>api/mint/v1beta1/query.proto</code>
       </div>
 
       <h2>Admin gRPC Service</h2>
@@ -369,8 +369,8 @@ admin_enabled = true
 admin_address = "127.0.0.1:9095"`}</code></pre>
 
       <div className="source-note">
-        <strong>Proto:</strong> <code>paxeer-network/api/pax/admin/v0/admin.proto</code><br />
-        <strong>Implementation:</strong> <code>paxeer-network/admin/</code>
+        <strong>Proto:</strong> <code>api/pax/admin/v0/admin.proto</code><br />
+        <strong>Implementation:</strong> <code>admin/</code>
       </div>
 
       <h2>OpenAPI / Swagger Documentation</h2>
@@ -400,7 +400,7 @@ swagger = true`}</code></pre>
       </p>
 
       <div className="source-note">
-        <strong>See:</strong> <code>paxeer-network/docs/README.md</code> for generation instructions
+        <strong>See:</strong> <code>docs/README.md</code> for generation instructions
       </div>
 
       <h2>gRPC Endpoints</h2>

@@ -12,7 +12,7 @@ export default function Precompiles() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/precompiles/</code>
+        <strong>Source:</strong> <code>precompiles/</code>
       </div>
 
       <h2>Overview</h2>
@@ -34,7 +34,7 @@ export default function Precompiles() {
       <h3>addr</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/precompiles/addr/</code>
+        <strong>Source:</strong> <code>precompiles/addr/</code>
       </div>
 
       <p>
@@ -44,7 +44,7 @@ export default function Precompiles() {
       <h3>bank</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/precompiles/bank/</code>
+        <strong>Source:</strong> <code>precompiles/bank/</code>
       </div>
 
       <p>
@@ -64,7 +64,7 @@ export default function Precompiles() {
       <h3>common</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/precompiles/common/</code>
+        <strong>Source:</strong> <code>precompiles/common/</code>
       </div>
 
       <p>
@@ -80,7 +80,7 @@ export default function Precompiles() {
       <h3>distribution</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/precompiles/distribution/</code>
+        <strong>Source:</strong> <code>precompiles/distribution/</code>
       </div>
 
       <p>
@@ -96,7 +96,7 @@ export default function Precompiles() {
       <h3>gov</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/precompiles/gov/</code>
+        <strong>Source:</strong> <code>precompiles/gov/</code>
       </div>
 
       <p>
@@ -116,7 +116,7 @@ export default function Precompiles() {
       <h3>ibc</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/precompiles/ibc/</code>
+        <strong>Source:</strong> <code>precompiles/ibc/</code>
       </div>
 
       <p>
@@ -131,7 +131,7 @@ export default function Precompiles() {
       <h3>json</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/precompiles/json/</code>
+        <strong>Source:</strong> <code>precompiles/json/</code>
       </div>
 
       <p>
@@ -141,7 +141,7 @@ export default function Precompiles() {
       <h3>oracle</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/precompiles/oracle/</code>
+        <strong>Source:</strong> <code>precompiles/oracle/</code>
       </div>
 
       <p>
@@ -160,7 +160,7 @@ export default function Precompiles() {
       <h3>p256</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/precompiles/p256/</code>
+        <strong>Source:</strong> <code>precompiles/p256/</code>
       </div>
 
       <p>
@@ -174,7 +174,7 @@ export default function Precompiles() {
       <h3>pointer</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/precompiles/pointer/</code>
+        <strong>Source:</strong> <code>precompiles/pointer/</code>
       </div>
 
       <p>
@@ -194,7 +194,7 @@ export default function Precompiles() {
       <h3>pointerview</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/precompiles/pointerview/</code>
+        <strong>Source:</strong> <code>precompiles/pointerview/</code>
       </div>
 
       <p>
@@ -210,7 +210,7 @@ export default function Precompiles() {
       <h3>solo</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/precompiles/solo/</code>
+        <strong>Source:</strong> <code>precompiles/solo/</code>
       </div>
 
       <p>
@@ -220,7 +220,7 @@ export default function Precompiles() {
       <h3>staking</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/precompiles/staking/</code>
+        <strong>Source:</strong> <code>precompiles/staking/</code>
       </div>
 
       <p>
@@ -238,7 +238,7 @@ export default function Precompiles() {
       <h3>wasmd</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/precompiles/wasmd/</code>
+        <strong>Source:</strong> <code>precompiles/wasmd/</code>
       </div>
 
       <p>
@@ -257,11 +257,11 @@ export default function Precompiles() {
       <h2>Precompile Addresses</h2>
 
       <p>
-        Precompile addresses are determined at chain initialization and registered in the EVM module. Addresses are not declared in the paxeer-network tree; they are assigned by the node application during setup.
+        Precompile addresses are determined at chain initialization and registered in the EVM module. Addresses are not declared in the chain source tree; they are assigned by the node application during setup.
       </p>
 
       <div className="source-note">
-        <strong>Note:</strong> Contract addresses for precompiles are not hardcoded in <code>paxeer-network/precompiles/</code>. They are registered at runtime in <code>node/app.go</code>.
+        <strong>Note:</strong> Contract addresses for precompiles are not hardcoded in <code>precompiles/</code>. They are registered at runtime in <code>node/app.go</code>.
       </div>
 
       <h2>Legacy Precompiles</h2>
@@ -273,7 +273,7 @@ export default function Precompiles() {
       <h2>Setup and Registration</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/precompiles/setup.go</code>
+        <strong>Source:</strong> <code>precompiles/setup.go</code>
       </div>
 
       <p>
@@ -306,7 +306,7 @@ contract MyContract {
 }`}</code></pre>
 
       <p>
-        Interface definitions are available in <code>paxeer-network/contracts/</code>.
+        Interface definitions are available in <code>contracts/</code>.
       </p>
 
       <h2>Gas Costs</h2>

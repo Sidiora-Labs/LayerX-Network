@@ -12,7 +12,7 @@ export default function Store() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/modules/store/</code>
+        <strong>Source:</strong> <code>modules/store/</code>
       </div>
 
       <h2>Overview</h2>

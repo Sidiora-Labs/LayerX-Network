@@ -39,10 +39,10 @@ jobs:
       - name: Install pinned settlement compiler
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version-file: paxeer-network/go.mod
+          go-version-file: go.mod
           cache: false
       - name: Download declared settlement modules
-        working-directory: paxeer-network
+        working-directory: .
         run: go mod download
       - name: Build, lint, and enforce boundaries
         run: CARGO_TARGET_DIR="$PWD/.lane-target" CARGO_BUILD_JOBS=4 make agent-build agent-lint agent-check
@@ -100,10 +100,10 @@ jobs:
       - name: Install pinned settlement compiler
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version-file: paxeer-network/go.mod
+          go-version-file: go.mod
           cache: false
       - name: Download declared settlement modules
-        working-directory: paxeer-network
+        working-directory: .
         run: go mod download
       - name: Run sanitizer variants
         run: |

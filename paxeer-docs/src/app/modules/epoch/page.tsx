@@ -12,7 +12,7 @@ export default function Epoch() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/modules/epoch/</code>
+        <strong>Source:</strong> <code>modules/epoch/</code>
       </div>
 
       <h2>Overview</h2>

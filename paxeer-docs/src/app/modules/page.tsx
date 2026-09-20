@@ -12,13 +12,13 @@ export default function Modules() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/modules/README.md</code>
+        <strong>Source:</strong> <code>modules/README.md</code>
       </div>
 
       <h2>Module Overview</h2>
 
       <p>
-        Paxeer-specific chain modules live under <code>paxeer-network/modules/</code>. These extend the Cosmos SDK with functionality unique to Paxeer's EVM L1 design.
+        Paxeer-specific chain modules live under <code>modules/</code>. These extend the Cosmos SDK with functionality unique to Paxeer's EVM L1 design.
       </p>
 
       <h2>Module List</h2>

@@ -37,15 +37,15 @@ Set `HPX_MIRROR` only when operating an explicitly trusted alternate mirror.
 Run from this monorepo after a new `paxd` or chain configuration is ready:
 
 ```bash
-sudo paxeer-network/hpx/publish.sh
+sudo hpx/publish.sh
 ```
 
 Defaults:
 
-- `paxd`: `paxeer-network/build/paxd`
-- native libraries: the architecture outputs under `paxeer-network/wasm-runtime`
-  and `paxeer-network/wasm/x/wasm/artifacts`
-- release identity: `paxeer-network/version.json`
+- `paxd`: `build/paxd`
+- native libraries: the architecture outputs under `wasm-runtime`
+  and `wasm/x/wasm/artifacts`
+- release identity: `version.json`
 - live chain configuration: `/root/.paxeer/config`, overridable with `SRC_CFG`
   or `HPX_RUNTIME_CONFIG_DIR`
 - publication root: `/srv/hpx/artifacts`, overridable with
@@ -58,7 +58,7 @@ the `current` symlink. A failed staging run never changes the served release.
 
 ## Publish the registry runtime
 
-Changes under `paxeer-network/hpx/registry` trigger the repository workflow
+Changes under `hpx/registry` trigger the repository workflow
 `Paxeer / HPX Registry`. It publishes revision-bound Linux executables as public
 GitHub release assets and publishes the same source as a multi-architecture GHCR
 image. Generated registry executables are never committed.
@@ -67,7 +67,7 @@ After the workflow publishes the revision, deploy it on the host that serves the
 public origin:
 
 ```bash
-sudo paxeer-network/hpx/hosting/deploy.sh
+sudo hpx/hosting/deploy.sh
 ```
 
 The deployment installs the checksum-verified release executable as an

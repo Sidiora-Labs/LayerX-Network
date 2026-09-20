@@ -12,7 +12,7 @@ export default function Operators() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/docker/README.md</code>, <code>hpx/README.md</code>, <code>Makefile</code>
+        <strong>Source:</strong> <code>docker/README.md</code>, <code>hpx/README.md</code>, <code>Makefile</code>
       </div>
 
       <h2>Node Types</h2>
@@ -129,7 +129,7 @@ https://docs.docker.com/compose/install/other/`}</code></pre>
       <h3>Start 4-Node Cluster</h3>
 
       <p>
-        From the <code>paxeer-network/</code> directory:
+        From the repository root:
       </p>
 
       <pre><code>{`# First time or rebuild:

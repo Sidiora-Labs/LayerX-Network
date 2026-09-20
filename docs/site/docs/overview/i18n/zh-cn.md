@@ -102,7 +102,7 @@ make paxeer-ci
 | `programs/` | 可编程 LayerX 运行时与程序工具 |
 | `interop/` | 智能体商务与跨网络互操作界面 |
 | `contracts/` | 用于 Paxeer 托管、检查点、担保人保证金、索赔、争议和退出的 Solidity 合约 |
-| `paxeer-network/` | Paxeer Network 节点、EVM/RPC 兼容、存储引擎、模块、合约及子系统本地构建 |
+| `go.mod`, `chain.mk`, `daemon/`, `node/`, `modules/`, `consensus/`, `sdk/`, `rpc/`, `precompiles/`, `storage/`, `wasm/`, `docker/` | Paxeer Network 节点、EVM/RPC 兼容、存储引擎、模块、合约及子系统本地构建 |
 | `spec/` | 规范性 KVX 规格、生成的设计、需求与任务图 |
 | `tests/`, `test/`, `fuzz/` | 原生、合约、重放、不变量、故障与模糊测试套件 |
 | `migrations/` | 创世、迁移、对账与影子重放工作 |

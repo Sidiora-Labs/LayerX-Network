@@ -32,7 +32,7 @@ export default function PaxeerVsLayerX() {
       </ul>
 
       <div className="source-note">
-        <strong>Repository path:</strong> <code>paxeer-network/</code> (this documentation)
+        <strong>Repository path:</strong> repository root: <code>go.mod</code>, <code>node/</code>, <code>modules/</code> (this documentation)
       </div>
 
       <h3>LayerX Network (Agent Channel)</h3>
@@ -123,11 +123,11 @@ export default function PaxeerVsLayerX() {
       </ul>
 
       <div className="source-note">
-        <strong>Contracts path:</strong> <code>contracts/</code> at repository root (not <code>paxeer-network/contracts/</code>)
+        <strong>Contracts path:</strong> <code>contracts/</code> at repository root (not <code>contracts/</code>)
       </div>
 
       <p>
-        The contracts at <code>paxeer-network/contracts/</code> are <strong>Paxeer-native</strong> utilities (WPAX, pointers, precompile interfaces), not LayerX settlement contracts.
+        The contracts at <code>contracts/</code> are <strong>Paxeer-native</strong> utilities (WPAX, pointers, precompile interfaces), not LayerX settlement contracts.
       </p>
 
       <h2>No LayerX Token</h2>

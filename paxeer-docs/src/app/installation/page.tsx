@@ -12,7 +12,7 @@ export default function Installation() {
       </p>
 
       <div className="bg-surface-high border border-outline-variant rounded-lg px-4 py-3 mb-6">
-        <strong className="text-on-surface">Source:</strong> <code>paxeer-network/Makefile</code> and <code>paxeer-network/README.md</code>
+        <strong className="text-on-surface">Source:</strong> <code>Makefile</code> and <code>README.md</code>
       </div>
 
       <h2>Prerequisites</h2>
@@ -27,11 +27,11 @@ export default function Installation() {
       <h2>Repository Location</h2>
 
       <p>
-        Paxeer Network lives in the <a href="https://github.com/Sidiora-Labs/LayerX-Network">Sidiora-Labs/LayerX-Network</a> monorepo under <code>paxeer-network/</code>.
+        Paxeer Network lives in the <a href="https://github.com/Sidiora-Labs/LayerX-Network">Sidiora-Labs/LayerX-Network</a> monorepo; the chain Go module is rooted at the repository root.
       </p>
 
       <pre><code>{`git clone https://github.com/Sidiora-Labs/LayerX-Network.git
-cd LayerX-Network/paxeer-network`}</code></pre>
+cd LayerX-Network`}</code></pre>
 
       <h2>Build from Monorepo Root</h2>
 
@@ -39,7 +39,7 @@ cd LayerX-Network/paxeer-network`}</code></pre>
         From the <strong>monorepo root</strong>, use these namespaced targets:
       </p>
 
-      <pre><code>{`make paxeer-build    # Build paxd binary to paxeer-network/build/paxd
+      <pre><code>{`make paxeer-build    # Build paxd binary to build/paxd
 make paxeer-lint     # Run linters
 make paxeer-test     # Run tests
 make paxeer-ci       # Lint + test (CI gate)`}</code></pre>
@@ -48,17 +48,17 @@ make paxeer-ci       # Lint + test (CI gate)`}</code></pre>
         <code>make monorepo-ci</code> at the repository root composes the LayerX Network gate with <code>make paxeer-ci</code>.
       </p>
 
-      <h2>Build from paxeer-network/ Directory</h2>
+      <h2>Build from the Repository Root</h2>
 
       <p>
-        From <strong>within <code>paxeer-network/</code></strong>:
+        From <strong>the repository root</strong>, using <code>chain.mk</code>:
       </p>
 
-      <pre><code>{`make build    # Build to ./build/paxd
+      <pre><code>{`make -f chain.mk build    # Build to ./build/paxd
 make install  # Install to \$GOPATH/bin (go install ./daemon/paxd)
 make lint     # Run linters
-make test     # Run tests
-make ci       # Lint + test`}</code></pre>
+make -f chain.mk test     # Run tests
+make -f chain.mk ci       # Lint + test`}</code></pre>
 
       <h3>Build Output</h3>
 
@@ -67,7 +67,7 @@ make ci       # Lint + test`}</code></pre>
       </p>
 
       <ul>
-        <li><code>./build/paxd</code> when using <code>make build</code></li>
+        <li><code>./build/paxd</code> when using <code>make -f chain.mk build</code></li>
         <li><code>$GOPATH/bin/paxd</code> when using <code>make install</code></li>
       </ul>
 
@@ -79,7 +79,7 @@ make ci       # Lint + test`}</code></pre>
         Ledger hardware wallet support is enabled by default. To build without ledger:
       </p>
 
-      <pre><code>{`make build LEDGER_ENABLED=false`}</code></pre>
+      <pre><code>{`make -f chain.mk build LEDGER_ENABLED=false`}</code></pre>
 
       <h3>Mock Balances (Testing)</h3>
 
@@ -128,7 +128,7 @@ make ci       # Lint + test`}</code></pre>
         To build a statically-linked binary:
       </p>
 
-      <pre><code>{`make build LINK_STATICALLY=true`}</code></pre>
+      <pre><code>{`make -f chain.mk build LINK_STATICALLY=true`}</code></pre>
 
       <h2>Go Module</h2>
 
@@ -150,16 +150,15 @@ go 1.23`}</code></pre>
         Paxeer-native contracts use Foundry:
       </p>
 
-      <pre><code>{`cd paxeer-network
-forge install
-forge build`}</code></pre>
+      <pre><code>{`forge install
+FOUNDRY_CONFIG=foundry.paxeer.toml forge build`}</code></pre>
 
       <p>
-        See <code>paxeer-network/contracts/README.md</code> for contract-specific instructions.
+        See <code>contracts/README.md</code> for contract-specific instructions.
       </p>
 
       <div className="source-note">
-        <strong>Important:</strong> <code>paxeer-network/contracts/</code> contains Paxeer-native contracts (WPAX, pointers, precompile interfaces). LayerX settlement contracts are at <code>contracts/</code> in the repository root.
+        <strong>Important:</strong> <code>contracts/</code> contains Paxeer-native contracts (WPAX, pointers, precompile interfaces). LayerX settlement contracts are at <code>contracts/</code> in the repository root.
       </div>
 
       <h2>Docker</h2>

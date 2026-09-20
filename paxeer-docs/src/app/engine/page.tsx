@@ -12,7 +12,7 @@ export default function Engine() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/</code>
+        <strong>Source:</strong> <code>engine/</code>
       </div>
 
       <h2>Overview</h2>
@@ -24,7 +24,7 @@ export default function Engine() {
       <h2>Executor</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/executor/</code>
+        <strong>Source:</strong> <code>engine/executor/</code>
       </div>
 
       <p>
@@ -84,7 +84,7 @@ func NewEvmoneExecutor(evmoneVM *evmc.VM, blockCtx vm.BlockContext,
       <h3>Internal Components</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/executor/internal/</code>
+        <strong>Source:</strong> <code>engine/executor/internal/</code>
       </div>
 
       <p>
@@ -100,7 +100,7 @@ func NewEvmoneExecutor(evmoneVM *evmc.VM, blockCtx vm.BlockContext,
       <h2>Precompiles</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/executor/precompiles/</code>
+        <strong>Source:</strong> <code>engine/executor/precompiles/</code>
       </div>
 
       <p>
@@ -114,7 +114,7 @@ func NewEvmoneExecutor(evmoneVM *evmc.VM, blockCtx vm.BlockContext,
       <h2>Dependencies (xbank, xevm)</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/deps/</code>
+        <strong>Source:</strong> <code>engine/deps/</code>
       </div>
 
       <p>
@@ -153,7 +153,7 @@ func NewEvmoneExecutor(evmoneVM *evmc.VM, blockCtx vm.BlockContext,
       <h2>Configuration</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/executor/config/</code>
+        <strong>Source:</strong> <code>engine/executor/config/</code>
       </div>
 
       <p>
@@ -169,7 +169,7 @@ func NewEvmoneExecutor(evmoneVM *evmc.VM, blockCtx vm.BlockContext,
       <h2>Testing</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/tests/</code>
+        <strong>Source:</strong> <code>engine/tests/</code>
       </div>
 
       <p>
@@ -191,7 +191,7 @@ func NewEvmoneExecutor(evmoneVM *evmc.VM, blockCtx vm.BlockContext,
       <h2>Utilities</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/executor/utils/</code>
+        <strong>Source:</strong> <code>engine/executor/utils/</code>
       </div>
 
       <p>

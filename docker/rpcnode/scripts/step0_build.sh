@@ -7,6 +7,6 @@ ARCH=$(uname -m)
 echo "Building paxd from local branch"
 git config --global --add safe.directory /pax-protocol/pax-chain
 LEDGER_ENABLED=false
-make install
+make -f chain.mk install
 mkdir -p build/generated
 echo "DONE" > build/generated/build.complete

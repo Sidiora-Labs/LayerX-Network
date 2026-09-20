@@ -12,7 +12,7 @@ export default function JsonRpcUnsupported() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/docs/evm_jsonrpc_unsupported.md</code> and <code>paxeer-network/rpc/AGENTS.md</code>
+        <strong>Source:</strong> <code>docs/evm_jsonrpc_unsupported.md</code> and <code>rpc/AGENTS.md</code>
       </div>
 
       <h2>Overview</h2>

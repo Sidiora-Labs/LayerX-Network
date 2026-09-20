@@ -12,8 +12,8 @@ export default function AdminHpx() {
       </div>
 
       <div className="source-note">
-        <strong>Admin:</strong> <code>paxeer-network/admin/</code><br />
-        <strong>HPX:</strong> <code>paxeer-network/hpx/</code>
+        <strong>Admin:</strong> <code>admin/</code><br />
+        <strong>HPX:</strong> <code>hpx/</code>
       </div>
 
       <h2>Admin gRPC Service</h2>
@@ -145,8 +145,8 @@ grpcurl -plaintext -d '{"logger":"evm"}' \\
       <pre><code>{`ssh -L 9095:127.0.0.1:9095 user@node-ip`}</code></pre>
 
       <div className="source-note">
-        <strong>Proto:</strong> <code>paxeer-network/api/pax/admin/v0/admin.proto</code><br />
-        <strong>Implementation:</strong> <code>paxeer-network/admin/server.go</code>, <code>service.go</code>, <code>config.go</code>
+        <strong>Proto:</strong> <code>api/pax/admin/v0/admin.proto</code><br />
+        <strong>Implementation:</strong> <code>admin/server.go</code>, <code>service.go</code>, <code>config.go</code>
       </div>
 
       <h2>HPX: HyperPax Node Distribution</h2>
@@ -343,7 +343,7 @@ hpx setup`}</code></pre>
       </p>
 
       <pre><code>{`# From the monorepo root
-sudo paxeer-network/hpx/publish.sh`}</code></pre>
+sudo hpx/publish.sh`}</code></pre>
 
       <p>
         This script:
@@ -365,7 +365,7 @@ sudo paxeer-network/hpx/publish.sh`}</code></pre>
       <h3>Registry Runtime Deployment</h3>
 
       <p>
-        Changes to the registry service under <code>paxeer-network/hpx/registry/</code> trigger the GitHub workflow <code>Paxeer / HPX Registry</code>, which:
+        Changes to the registry service under <code>hpx/registry/</code> trigger the GitHub workflow <code>Paxeer / HPX Registry</code>, which:
       </p>
 
       <ol>
@@ -378,7 +378,7 @@ sudo paxeer-network/hpx/publish.sh`}</code></pre>
         Deploy the registry on the public origin host:
       </p>
 
-      <pre><code>{`sudo paxeer-network/hpx/hosting/deploy.sh`}</code></pre>
+      <pre><code>{`sudo hpx/hosting/deploy.sh`}</code></pre>
 
       <p>
         This script:
@@ -402,7 +402,7 @@ sudo paxeer-network/hpx/publish.sh`}</code></pre>
       </p>
 
       <pre><code>{`export HPX_REGISTER_TOKEN=your-secret-token
-sudo paxeer-network/hpx/hosting/deploy.sh`}</code></pre>
+sudo hpx/hosting/deploy.sh`}</code></pre>
 
       <p>
         The registry will then require <code>X-HPX-Token: your-secret-token</code> header on <code>POST /api/register</code>.
@@ -459,7 +459,7 @@ hpx setup`}</code></pre>
       </p>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/hpx/README.md</code>, <code>paxeer-network/hpx/hosting/</code>
+        <strong>Source:</strong> <code>hpx/README.md</code>, <code>hpx/hosting/</code>
       </div>
 
       <div className="prev-next">

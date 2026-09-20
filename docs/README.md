@@ -20,6 +20,8 @@ in [`site/README.md`](site/README.md).
 | [MONOREPO.md](MONOREPO.md) | Monorepo layout, build boundaries, and release tags |
 | [QUALIFICATION.md](QUALIFICATION.md) | Qualification evidence levels and gates |
 | [readme/](readme/) | Localized root README copies |
+| [paxeer-network.md](paxeer-network.md) | Paxeer Network chain overview (the former chain README) |
+| [paxeer-chain-docs.md](paxeer-chain-docs.md) | Paxeer chain docs index: Swagger/OpenAPI under `swagger/` and `swagger-ui/`, EVM JSON-RPC notes |
 
 Normative protocol text lives under [`spec/`](../spec/), not here. The root
 [README.md](../README.md) is the project introduction.

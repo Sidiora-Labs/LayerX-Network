@@ -12,7 +12,7 @@ export default function Interchain() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/interchain/</code>
+        <strong>Source:</strong> <code>interchain/</code>
       </div>
 
       <h2>Overview</h2>
@@ -30,7 +30,7 @@ export default function Interchain() {
       <h2>Location</h2>
 
       <p>
-        The IBC implementation is vendored under <code>paxeer-network/interchain/</code> within the monorepo. This is <strong>not</strong> a standalone published module but an in-tree dependency for <code>paxd</code>.
+        The IBC implementation is vendored under <code>interchain/</code> within the monorepo. This is <strong>not</strong> a standalone published module but an in-tree dependency for <code>paxd</code>.
       </p>
 
       <h2>Core IBC Components</h2>
@@ -280,7 +280,7 @@ paxd query ibc channel channels`}</code></pre>
       </ul>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/interchain/README.md</code>
+        <strong>Source:</strong> <code>interchain/README.md</code>
       </div>
 
       <div className="prev-next">

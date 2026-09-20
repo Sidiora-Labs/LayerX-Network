@@ -1,6 +1,6 @@
 #!/bin/bash
 
-make clean
+make -f chain.mk clean
 
 # Check if $1 is set and use its value for UPGRADE_VERSION_LIST
 if [ -n "$1" ]; then

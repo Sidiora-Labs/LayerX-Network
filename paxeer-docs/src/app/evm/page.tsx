@@ -12,7 +12,7 @@ export default function EVM() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/modules/evm/</code>
+        <strong>Source:</strong> <code>modules/evm/</code>
       </div>
 
       <h2>Overview</h2>
@@ -52,7 +52,7 @@ export default function EVM() {
       <h2>Address Association</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/deps/xevm/keeper/address.go</code>
+        <strong>Source:</strong> <code>engine/deps/xevm/keeper/address.go</code>
       </div>
 
       <p>
@@ -77,7 +77,7 @@ export default function EVM() {
       <h2>State Management</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/deps/xevm/keeper/state.go</code>
+        <strong>Source:</strong> <code>engine/deps/xevm/keeper/state.go</code>
       </div>
 
       <p>
@@ -114,7 +114,7 @@ export default function EVM() {
       <h2>Receipts</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/deps/xevm/keeper/receipt.go</code>
+        <strong>Source:</strong> <code>engine/deps/xevm/keeper/receipt.go</code>
       </div>
 
       <p>
@@ -152,7 +152,7 @@ export default function EVM() {
       <h2>Precompile Integration</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/deps/xevm/keeper/precompile.go</code>
+        <strong>Source:</strong> <code>engine/deps/xevm/keeper/precompile.go</code>
       </div>
 
       <p>
@@ -166,7 +166,7 @@ export default function EVM() {
       <h2>Fee Collection</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/deps/xevm/keeper/fee.go</code>
+        <strong>Source:</strong> <code>engine/deps/xevm/keeper/fee.go</code>
       </div>
 
       <p>
@@ -187,7 +187,7 @@ export default function EVM() {
       <h2>Coinbase</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/deps/xevm/keeper/coinbase.go</code>
+        <strong>Source:</strong> <code>engine/deps/xevm/keeper/coinbase.go</code>
       </div>
 
       <p>
@@ -203,7 +203,7 @@ export default function EVM() {
       <h2>Configuration</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/deps/xevm/config/</code>
+        <strong>Source:</strong> <code>engine/deps/xevm/config/</code>
       </div>
 
       <p>
@@ -220,7 +220,7 @@ export default function EVM() {
       <h2>Genesis</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/deps/xevm/keeper/genesis.go</code>
+        <strong>Source:</strong> <code>engine/deps/xevm/keeper/genesis.go</code>
       </div>
 
       <p>
@@ -236,7 +236,7 @@ export default function EVM() {
       <h2>Logging</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/deps/xevm/keeper/log.go</code>
+        <strong>Source:</strong> <code>engine/deps/xevm/keeper/log.go</code>
       </div>
 
       <p>
@@ -246,7 +246,7 @@ export default function EVM() {
       <h2>Deferred Operations</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/engine/deps/xevm/keeper/deferred.go</code>
+        <strong>Source:</strong> <code>engine/deps/xevm/keeper/deferred.go</code>
       </div>
 
       <p>

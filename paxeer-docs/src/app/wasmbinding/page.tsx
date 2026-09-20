@@ -12,7 +12,7 @@ export default function WasmBinding() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/wasmbinding/</code>
+        <strong>Source:</strong> <code>wasmbinding/</code>
       </div>
 
       <h2>Overview</h2>
@@ -64,7 +64,7 @@ let rate: ExchangeRateResponse = deps.querier.query(&query_msg)?;`}</code></pre>
       </p>
 
       <pre><code>{`[dependencies]
-paxeer-bindings = { git = "https://github.com/Sidiora-Labs/LayerX-Network", branch = "main", subdir = "paxeer-network/wasmbinding" }`}</code></pre>
+paxeer-bindings = { git = "https://github.com/Sidiora-Labs/LayerX-Network", branch = "main", subdir = "wasmbinding" }`}</code></pre>
 
       <h2>Message Handling</h2>
 

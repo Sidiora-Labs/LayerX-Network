@@ -989,7 +989,7 @@ append_interop_steps() {
 append_paxeer_steps() {
   case "$1" in
     INSTALL)
-      add_step paxeer INSTALL "Download locked Paxeer Go modules" "paxeer-network" "go" "go mod download"
+      add_step paxeer INSTALL "Download locked Paxeer Go modules" "." "go" "go mod download"
       add_step paxeer INSTALL "Install every locked nested Paxeer manifest" "." "make cargo go npm" "make paxeer-manifest-install"
       ;;
     BUILD)

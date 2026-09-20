@@ -4,7 +4,7 @@ Technical documentation site for Paxeer Network (EVM L1 chain ID 125) - the sett
 
 ## About
 
-This is a standalone Next.js documentation site built from source material in `../paxeer-network/`. It provides comprehensive technical documentation for:
+This is a standalone Next.js documentation site built from source material in the chain directories at the repository root. It provides comprehensive technical documentation for:
 
 - Network architecture and parameters
 - Node operation and configuration
@@ -17,12 +17,12 @@ This is a standalone Next.js documentation site built from source material in `.
 ## Source Material
 
 Documentation is derived from:
-- `paxeer-network/README.md`
-- `paxeer-network/Makefile`
-- `paxeer-network/docs/`
-- `paxeer-network/modules/`
-- `paxeer-network/rpc/`
-- `paxeer-network/consensus/`
+- `README.md`
+- `Makefile`
+- `docs/`
+- `modules/`
+- `rpc/`
+- `consensus/`
 - Other source directories
 
 CSS extracted from https://paxeer.app.

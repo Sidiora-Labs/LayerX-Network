@@ -205,7 +205,7 @@ class DisposableCustody(unittest.TestCase):
         command('forge', 'build', 'platform/hosted/paxeer/contracts/BetaUsdl.sol',
                 'contracts/governance/LayerXBetaTimelock.sol', 'contracts/custody/AssetRegistry.sol',
                 'contracts/custody/LayerXVault.sol',
-                'paxeer-network/loadtest/contracts/evm/lib/solmate/src/tokens/WETH.sol',
+                'loadtest/contracts/evm/lib/solmate/src/tokens/WETH.sol',
                 '--threads', str(threads))
         cls.artifacts = ROOT / 'build/forge-artifacts'
         cls.vault_artifact = cls.artifacts / 'LayerXVault.sol/LayerXVault.json'

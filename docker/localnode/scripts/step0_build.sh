@@ -9,14 +9,14 @@ MOCK_BALANCES=${MOCK_BALANCES:-false}
 echo "Building paxd from local branch"
 git config --global --add safe.directory /pax-protocol/pax-chain
 export LEDGER_ENABLED=false
-make clean
+make -f chain.mk clean
 # build paxd with the mock balance function enabled
 if [ "$MOCK_BALANCES" = true ]; then
     echo "Building with mock balances enabled..."
-    make build-linux BUILD_TAGS="mock_balances"
+    make -f chain.mk build-linux BUILD_TAGS="mock_balances"
 else
     echo "Building with standard configuration..."
-    make build-linux
+    make -f chain.mk build-linux
 fi
 mkdir -p build/generated
 echo "DONE" > build/generated/build.complete

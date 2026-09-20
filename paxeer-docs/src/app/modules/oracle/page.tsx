@@ -12,7 +12,7 @@ export default function Oracle() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/modules/oracle/</code>
+        <strong>Source:</strong> <code>modules/oracle/</code>
       </div>
 
       <h2>Overview</h2>

@@ -12,7 +12,7 @@ export default function Docker() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/docker/</code>, <code>paxeer-network/Makefile</code>
+        <strong>Source:</strong> <code>docker/</code>, <code>Makefile</code>
       </div>
 
       <h2>Prerequisites</h2>
@@ -282,7 +282,7 @@ make run-rpc-node`}</code></pre>
       </p>
 
       <ol>
-        <li>Edit code under <code>paxeer-network/</code> (modules, consensus, SDK, storage, WASM)</li>
+        <li>Edit chain code at the repository root (modules, consensus, SDK, storage, WASM)</li>
         <li>Rebuild the node image: <code>make build-docker-node</code></li>
         <li>Restart the cluster: <code>make docker-cluster-start</code></li>
       </ol>
@@ -337,7 +337,7 @@ make run-rpc-node`}</code></pre>
       <h2>Docker Image</h2>
 
       <p>
-        The cluster uses the <code>pax-chain/localnode</code> image built from <code>paxeer-network/Dockerfile</code>. Platform defaults to <code>linux/amd64</code> but can be overridden with <code>DOCKER_PLATFORM</code>.
+        The cluster uses the <code>pax-chain/localnode</code> image built from <code>Dockerfile</code>. Platform defaults to <code>linux/amd64</code> but can be overridden with <code>DOCKER_PLATFORM</code>.
       </p>
 
       <h2>Network Configuration</h2>

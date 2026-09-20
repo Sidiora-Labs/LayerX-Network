@@ -12,7 +12,7 @@ export default function Consensus() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/consensus/</code>
+        <strong>Source:</strong> <code>consensus/</code>
       </div>
 
       <h2>Overview</h2>
@@ -22,7 +22,7 @@ export default function Consensus() {
       </p>
 
       <p>
-        The consensus implementation lives in <code>paxeer-network/consensus/</code> and includes:
+        The consensus implementation lives in <code>consensus/</code> and includes:
       </p>
 
       <ul>
@@ -37,7 +37,7 @@ export default function Consensus() {
       <h2>Autobahn Consensus</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/consensus/autobahn/</code>
+        <strong>Source:</strong> <code>consensus/autobahn/</code>
       </div>
 
       <p>
@@ -86,7 +86,7 @@ export default function Consensus() {
       <h2>Node</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/consensus/node/</code>
+        <strong>Source:</strong> <code>consensus/node/</code>
       </div>
 
       <p>
@@ -109,7 +109,7 @@ export default function Consensus() {
       <h2>State Management</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/consensus/internal/state/</code> and <code>consensus/state/</code>
+        <strong>Source:</strong> <code>consensus/internal/state/</code> and <code>consensus/state/</code>
       </div>
 
       <p>
@@ -130,7 +130,7 @@ export default function Consensus() {
       <h2>Light Client</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/consensus/light/</code>
+        <strong>Source:</strong> <code>consensus/light/</code>
       </div>
 
       <p>
@@ -157,7 +157,7 @@ export default function Consensus() {
       <h2>Validator Key Management (PrivVal)</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/consensus/privval/</code>
+        <strong>Source:</strong> <code>consensus/privval/</code>
       </div>
 
       <p>
@@ -177,7 +177,7 @@ export default function Consensus() {
       <h2>Configuration</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/consensus/config/</code>
+        <strong>Source:</strong> <code>consensus/config/</code>
       </div>
 
       <p>
@@ -199,7 +199,7 @@ export default function Consensus() {
       <h2>RPC</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/consensus/rpc/</code>
+        <strong>Source:</strong> <code>consensus/rpc/</code>
       </div>
 
       <p>
@@ -219,7 +219,7 @@ export default function Consensus() {
       <h2>Network (P2P)</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/consensus/internal/p2p/</code>
+        <strong>Source:</strong> <code>consensus/internal/p2p/</code>
       </div>
 
       <p>
@@ -236,7 +236,7 @@ export default function Consensus() {
       <h2>Utilities</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/consensus/libs/</code>
+        <strong>Source:</strong> <code>consensus/libs/</code>
       </div>
 
       <p>

@@ -2,7 +2,7 @@
 # Initialises a single-validator Paxeer chain for the LayerX beta.
 #
 # The cosmos chain id hyperpax_125-1 is the only identifier paxd maps to the EVM chain id 125
-# (paxeer-network/modules/evm/config/config.go ChainIDMapping), so the EVM chain id is fixed by
+# (modules/evm/config/config.go ChainIDMapping), so the EVM chain id is fixed by
 # that mapping and the script refuses any other value. Genesis funds the deployer's cast
 # address, seeds the beta USDL token code at the address the contracts pin
 # (contracts/libraries/Constants.sol USDL_TOKEN) with the deployer as its owner, and binds the

@@ -12,7 +12,7 @@ export default function Storage() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/storage/</code>
+        <strong>Source:</strong> <code>storage/</code>
       </div>
 
       <h2>Overview</h2>
@@ -49,7 +49,7 @@ export default function Storage() {
       <h3>State Commitment (SC) Layer</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/storage/state_db/sc/</code>
+        <strong>Source:</strong> <code>storage/state_db/sc/</code>
       </div>
 
       <p>
@@ -70,7 +70,7 @@ export default function Storage() {
       <h3>State Store (SS) Layer</h3>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/storage/state_db/ss/</code>
+        <strong>Source:</strong> <code>storage/state_db/ss/</code>
       </div>
 
       <p>
@@ -107,7 +107,7 @@ export default function Storage() {
       <h2>Database Engine</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/storage/db_engine/</code>
+        <strong>Source:</strong> <code>storage/db_engine/</code>
       </div>
 
       <p>
@@ -141,7 +141,7 @@ export default function Storage() {
       <h2>Write-Ahead Log (WAL)</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/storage/wal/</code>
+        <strong>Source:</strong> <code>storage/wal/</code>
       </div>
 
       <p>
@@ -151,7 +151,7 @@ export default function Storage() {
       <h2>Common Utilities</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/storage/common/</code>
+        <strong>Source:</strong> <code>storage/common/</code>
       </div>
 
       <p>
@@ -170,7 +170,7 @@ export default function Storage() {
       <h2>Benchmarking and Tools</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/storage/tools/</code>
+        <strong>Source:</strong> <code>storage/tools/</code>
       </div>
 
       <p>
@@ -185,7 +185,7 @@ export default function Storage() {
       <h2>Protobuf Definitions</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/storage/proto/</code>
+        <strong>Source:</strong> <code>storage/proto/</code>
       </div>
 
       <p>

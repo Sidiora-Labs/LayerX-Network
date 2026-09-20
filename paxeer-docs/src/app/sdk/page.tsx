@@ -12,13 +12,13 @@ export default function SDK() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/sdk/</code>
+        <strong>Source:</strong> <code>sdk/</code>
       </div>
 
       <h2>Overview</h2>
 
       <p>
-        Paxeer vendors a fork of the Cosmos SDK directly in the monorepo under <code>paxeer-network/sdk/</code>. This is <strong>not</strong> a published Go module or npm package. It is an in-tree dependency for the <code>paxd</code> binary and Paxeer chain modules.
+        Paxeer vendors a fork of the Cosmos SDK directly in the monorepo under <code>sdk/</code>. This is <strong>not</strong> a published Go module or npm package. It is an in-tree dependency for the <code>paxd</code> binary and Paxeer chain modules.
       </p>
 
       <h3>Why a Fork?</h3>
@@ -148,7 +148,7 @@ export default function SDK() {
       </table>
 
       <p>
-        Plus Paxeer-specific modules under <code>paxeer-network/modules/</code>:
+        Plus Paxeer-specific modules under <code>modules/</code>:
       </p>
 
       <ul>
@@ -215,11 +215,10 @@ export default function SDK() {
         SDK types are defined in <code>sdk/proto/</code>. Regenerate Go code with:
       </p>
 
-      <pre><code>{`cd paxeer-network
-ignite generate proto-go`}</code></pre>
+      <pre><code>{`ignite generate proto-go`}</code></pre>
 
       <p>
-        Requires Ignite CLI v0.23.0. See <code>paxeer-network/api/README.md</code>.
+        Requires Ignite CLI v0.23.0. See <code>api/README.md</code>.
       </p>
 
       <h2>Building Against the SDK</h2>
@@ -244,10 +243,10 @@ ignite generate proto-go`}</code></pre>
       </p>
 
       <pre><code>{`# Build paxd
-make build
+make -f chain.mk build
 
 # Run tests
-make test
+make -f chain.mk test
 
 # Generate proto
 make proto-gen`}</code></pre>
@@ -273,13 +272,13 @@ make proto-gen`}</code></pre>
       <h2>Contributing to the Fork</h2>
 
       <p>
-        Changes to <code>paxeer-network/sdk/</code> affect the entire Paxeer chain. Test thoroughly:
+        Changes to <code>sdk/</code> affect the entire Paxeer chain. Test thoroughly:
       </p>
 
       <ol>
         <li>Edit code under <code>sdk/</code></li>
-        <li>Rebuild <code>paxd</code>: <code>make build</code></li>
-        <li>Run unit tests: <code>make test</code></li>
+        <li>Rebuild <code>paxd</code>: <code>make -f chain.mk build</code></li>
+        <li>Run unit tests: <code>make -f chain.mk test</code></li>
         <li>Test with <Link href="/docker">Docker cluster</Link>: <code>make docker-cluster-start</code></li>
         <li>Run integration tests: <code>make test-integration</code></li>
       </ol>

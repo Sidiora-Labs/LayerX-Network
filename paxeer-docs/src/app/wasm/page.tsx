@@ -12,7 +12,7 @@ export default function Wasm() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/wasm/</code>
+        <strong>Source:</strong> <code>wasm/</code>
       </div>
 
       <h2>Overview</h2>
@@ -196,7 +196,7 @@ export default function Wasm() {
       <h2>Contract Examples</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/example/cosmwasm/</code>
+        <strong>Source:</strong> <code>example/cosmwasm/</code>
       </div>
 
       <p>
@@ -206,7 +206,7 @@ export default function Wasm() {
       <h2>Testing</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/integration_test/wasm_module/</code>
+        <strong>Source:</strong> <code>integration_test/wasm_module/</code>
       </div>
 
       <p>

@@ -21,8 +21,8 @@ HUMAN_WEB_DIR := human/apps/web
 HUMAN_NPM ?= npm --prefix $(HUMAN_WEB_DIR)
 INTEROP_CARGO ?= cargo
 INTEROP_MANIFEST := interop/Cargo.toml
-PAXEER_DIR := $(CURDIR)/paxeer-network
-PAXEER_MAKE := $(MAKE) -C $(PAXEER_DIR)
+PAXEER_DIR := $(CURDIR)
+PAXEER_MAKE := $(MAKE) -f $(PAXEER_DIR)/chain.mk
 HPX_ORIGIN ?= https://node.hyperpaxeer.com
 
 CHECKPOINT_SETTLEMENT := contracts/config/checkpoint-settlement.json
@@ -2215,7 +2215,7 @@ test-owner-movement-proof: build/bin/layerxd build/bin/layerx-genesis-build buil
 	cargo build --locked --manifest-path platform/Cargo.toml --target-dir $(MOVEMENT_PROOF_TARGET) -p layerx-platform-authority -p layerx-platform-paxeer-boundary -p layerx-runtime-clock
 	cargo build --locked --manifest-path cmd/layerxctl/Cargo.toml --target-dir $(MOVEMENT_PROOF_TARGET)
 	CARGO_TARGET_DIR=$(MOVEMENT_PROOF_TARGET) LAYERX_RUNTIME_CLOCK_BIN=$(MOVEMENT_PROOF_TARGET)/debug/layerx-runtime-clock sh tools/runtime/run-with-clock.sh python3 tests/bridge/owner-custody.py --native --governance --checkpoint --settlement-only --movement-proof
-HUMAN_TEST_PAXD := $(abspath paxeer-network/build/paxd)
+HUMAN_TEST_PAXD := $(abspath build/paxd)
 HUMAN_TEST_CUSTODY_PROOF := $(abspath $(BUILD_DIR)/bin/layerx-custody-proof)
 
 .PHONY: human-test-custody-prerequisites
@@ -2450,7 +2450,7 @@ public-tls-test-prerequisites:
 
 .PHONY: agent-test-native-prerequisites
 agent-test agent-test-sanitize: agent-test-native-prerequisites
-agent-test agent-test-sanitize: export PAXD = $(abspath paxeer-network/build/paxd)
+agent-test agent-test-sanitize: export PAXD = $(abspath build/paxd)
 agent-test agent-test-sanitize: export LAYERX_CUSTODY_PROOF_BIN = $(abspath $(BUILD_DIR)/bin/layerx-custody-proof)
 agent-test agent-test-sanitize: export LAYERX_TEST_NATIVE_BIN_DIR = $(abspath $(BUILD_DIR)/bin)
 agent-test agent-test-sanitize: export LAYERX_TEST_NATIVE_BUILD_DIR = $(abspath $(BUILD_DIR))
@@ -2996,25 +2996,50 @@ workspace-node-preflight:
 	@node -e 'const major=Number(process.versions.node.split(".")[0]); if (major < 24) { console.error(`Node >=24 required by workspace packages; found $${process.version}`); process.exit(1); }'
 
 PAXEER_LOCKED_RUST_MANIFESTS := \
-	paxeer-network/example/cosmwasm/cw1155/Cargo.toml \
-	paxeer-network/example/cosmwasm/cw20/Cargo.toml \
-	paxeer-network/example/cosmwasm/cw721/Cargo.toml \
-	paxeer-network/example/cosmwasm/echo/Cargo.toml \
-	paxeer-network/example/cosmwasm/iter/Cargo.toml \
-	paxeer-network/loadtest/contracts/jupiter/Cargo.toml \
-	paxeer-network/loadtest/contracts/mars/Cargo.toml \
-	paxeer-network/loadtest/contracts/saturn/Cargo.toml \
-	paxeer-network/loadtest/contracts/venus/Cargo.toml \
-	paxeer-network/parallelization/bank/Cargo.toml \
-	paxeer-network/parallelization/staking/Cargo.toml \
-	paxeer-network/parallelization/wasm/Cargo.toml \
-	paxeer-network/wasm-runtime/libwasmvm/Cargo.toml
+	example/cosmwasm/cw1155/Cargo.toml \
+	example/cosmwasm/cw20/Cargo.toml \
+	example/cosmwasm/cw721/Cargo.toml \
+	example/cosmwasm/echo/Cargo.toml \
+	example/cosmwasm/iter/Cargo.toml \
+	loadtest/contracts/jupiter/Cargo.toml \
+	loadtest/contracts/mars/Cargo.toml \
+	loadtest/contracts/saturn/Cargo.toml \
+	loadtest/contracts/venus/Cargo.toml \
+	parallelization/bank/Cargo.toml \
+	parallelization/staking/Cargo.toml \
+	parallelization/wasm/Cargo.toml \
+	wasm-runtime/libwasmvm/Cargo.toml
 
-PAXEER_NESTED_GO_DIRS := paxeer-network/hpx/registry \
-	paxeer-network/sdk/cosmovisor paxeer-network/sdk/ics23
+PAXEER_NESTED_GO_DIRS := hpx/registry \
+	sdk/cosmovisor sdk/ics23
 PAXEER_TOOLS_DIR := $(CURDIR)/build/paxeer-tools
 PAXEER_GOLANGCI_LINT := $(PAXEER_TOOLS_DIR)/golangci-lint
 PAXEER_GOLANGCI_LINT_SUM_FILE := tools/workspace/checksums/golangci-lint-v2.8.0.h1
+
+# Paxeer chain targets live in chain.mk. Names that do not exist in this
+# Makefile are forwarded so chain scripts, workflows and docs can keep calling
+# `make <target>` from the repository root. The five names both files define
+# (all, build, ci, clean, test) keep their LayerX meaning here; reach the chain
+# versions with `make -f chain.mk <target>` or the paxeer-* targets below.
+PAXEER_FORWARDED_TARGETS := autobahn-integration-test build-docker-node \
+	build-integration-ci-artifacts build-linux build-loadtest \
+	build-paxd-in-localnode build-paxd-in-localnode-ci build-rocksdb \
+	build-rpc-node build-verbose dblint docker-cluster-start \
+	docker-cluster-start-ci docker-cluster-start-giga-mixed \
+	docker-cluster-start-monitoring docker-cluster-start-skipbuild \
+	docker-cluster-stop docker-cluster-stop-monitoring \
+	ensure-integration-ci-images giga-integration-test \
+	giga-mixed-integration-test install install-bench install-mock-balances \
+	install-rocksdb install-with-race-detector kill-pax-node kill-rpc-node \
+	lint loadtest rocksdb-source-check run-local-node run-rpc-node \
+	run-rpc-node-integration-ci run-rpc-node-skipbuild split-test-packages
+
+.PHONY: $(PAXEER_FORWARDED_TARGETS)
+$(PAXEER_FORWARDED_TARGETS):
+	$(PAXEER_MAKE) $@
+
+test-group-%:
+	$(PAXEER_MAKE) $@
 
 paxeer-build:
 	GOPROXY=off $(PAXEER_MAKE) build
@@ -3037,30 +3062,30 @@ paxeer-node-preflight:
 	@node -e 'const major=Number(process.versions.node.split(".")[0]); if (major < 20) { console.error(`Node >=20 required; found $${process.version}`); process.exit(1); }'
 
 paxeer-npm-install: paxeer-node-preflight
-	npm --prefix paxeer-network/contracts ci --ignore-scripts --no-audit --no-fund
-	npm --prefix paxeer-network/integration_test/dapp_tests ci --ignore-scripts --no-audit --no-fund
-	npm --prefix paxeer-network/integration_test/rpc_tests ci --ignore-scripts --no-audit --no-fund
+	npm --prefix contracts ci --ignore-scripts --no-audit --no-fund
+	npm --prefix integration_test/dapp_tests ci --ignore-scripts --no-audit --no-fund
+	npm --prefix integration_test/rpc_tests ci --ignore-scripts --no-audit --no-fund
 	$(MAKE) paxeer-docs-install
 
 paxeer-npm-dependencies-ready:
-	@test -d paxeer-network/contracts/node_modules
-	@test -d paxeer-network/integration_test/dapp_tests/node_modules
-	@test -d paxeer-network/integration_test/rpc_tests/node_modules
-	@test -d paxeer-network/paxeer-docs/node_modules
+	@test -d contracts/node_modules
+	@test -d integration_test/dapp_tests/node_modules
+	@test -d integration_test/rpc_tests/node_modules
+	@test -d paxeer-docs/node_modules
 
 paxeer-hardhat-compilers-ready: paxeer-npm-dependencies-ready
 	node tools/workspace/check-hardhat-compilers.mjs
 
 paxeer-npm-build: paxeer-hardhat-compilers-ready
-	npm --prefix paxeer-network/contracts exec -- hardhat compile
-	npm --prefix paxeer-network/integration_test/dapp_tests exec -- hardhat compile
-	npm --prefix paxeer-network/integration_test/rpc_tests run compile
+	npm --prefix contracts exec -- hardhat compile
+	npm --prefix integration_test/dapp_tests exec -- hardhat compile
+	npm --prefix integration_test/rpc_tests run compile
 	$(MAKE) paxeer-docs-build
 
 paxeer-npm-static-test: paxeer-npm-dependencies-ready
-	npm --prefix paxeer-network/contracts exec -- tsc --noEmit
-	find paxeer-network/integration_test/dapp_tests -type f -name '*.js' -exec node --check {} \;
-	npm --prefix paxeer-network/integration_test/rpc_tests exec -- tsc --noEmit
+	npm --prefix contracts exec -- tsc --noEmit
+	find integration_test/dapp_tests -type f -name '*.js' -exec node --check {} \;
+	npm --prefix integration_test/rpc_tests exec -- tsc --noEmit
 	$(MAKE) paxeer-docs-static-test
 
 paxeer-tools-install:
@@ -3085,36 +3110,36 @@ paxeer-manifest-install: workspace-inventory-check paxeer-npm-install paxeer-too
 	@set -eu; for directory in $(PAXEER_NESTED_GO_DIRS); do (cd "$$directory" && go mod download); done
 
 paxeer-manifest-build: workspace-inventory-check paxeer-npm-build
-	forge build --offline --root paxeer-network
-	sh paxeer-network/loadtest/contracts/evm/setup.sh
-	forge build --offline --root paxeer-network/loadtest/contracts/evm
+	FOUNDRY_CONFIG=foundry.paxeer.toml forge build --offline --root .
+	sh loadtest/contracts/evm/setup.sh
+	forge build --offline --root loadtest/contracts/evm
 	@set -eu; for manifest in $(PAXEER_LOCKED_RUST_MANIFESTS); do cargo build --manifest-path "$$manifest" --locked --offline; done
 	@set -eu; for directory in $(PAXEER_NESTED_GO_DIRS); do (cd "$$directory" && GOPROXY=off go build ./...); done
 
 paxeer-manifest-test: workspace-inventory-check paxeer-npm-static-test
-	forge test --offline --root paxeer-network
-	sh paxeer-network/loadtest/contracts/evm/setup.sh
-	forge test --offline --root paxeer-network/loadtest/contracts/evm
+	FOUNDRY_CONFIG=foundry.paxeer.toml forge test --offline --root .
+	sh loadtest/contracts/evm/setup.sh
+	forge test --offline --root loadtest/contracts/evm
 	@set -eu; for manifest in $(PAXEER_LOCKED_RUST_MANIFESTS); do cargo test --manifest-path "$$manifest" --locked --offline; done
 	@set -eu; for directory in $(PAXEER_NESTED_GO_DIRS); do (cd "$$directory" && GOPROXY=off go test ./...); done
 
 paxeer-manifest-lint: workspace-inventory-check paxeer-npm-static-test
-	forge fmt --check --root paxeer-network
-	sh paxeer-network/loadtest/contracts/evm/setup.sh
-	forge fmt --check --root paxeer-network/loadtest/contracts/evm
+	FOUNDRY_CONFIG=foundry.paxeer.toml forge fmt --check --root .
+	sh loadtest/contracts/evm/setup.sh
+	forge fmt --check --root loadtest/contracts/evm
 	@set -eu; for manifest in $(PAXEER_LOCKED_RUST_MANIFESTS); do cargo clippy --manifest-path "$$manifest" --locked --offline --all-targets -- -D warnings; done
-	@test -z "$$(cd paxeer-network && gofmt -l .)"
+	@test -z "$$(find . \( -path ./.git -o -path ./platform -o -path ./spec -o -name node_modules \) -prune -o -type f -name '*.go' -print0 | xargs -0 gofmt -l)"
 	$(PAXEER_MAKE) GOLANGCI_LINT=$(PAXEER_GOLANGCI_LINT) lint
 	@set -eu; for directory in $(PAXEER_NESTED_GO_DIRS); do (cd "$$directory" && test -z "$$(gofmt -l .)" && GOPROXY=off go vet ./... && go mod verify); done
 
 paxeer-docs-install:
-	npm --prefix paxeer-network/paxeer-docs ci --ignore-scripts --no-audit --no-fund
+	npm --prefix paxeer-docs ci --ignore-scripts --no-audit --no-fund
 
 paxeer-docs-build:
-	npm --prefix paxeer-network/paxeer-docs run build
+	npm --prefix paxeer-docs run build
 
 paxeer-docs-static-test:
-	npm --prefix paxeer-network/paxeer-docs run test:static
+	npm --prefix paxeer-docs run test:static
 
 developer-dashboard-install:
 	node tools/ci/developer-dashboard-lock.mjs
@@ -3170,7 +3195,7 @@ workspace-install:
 	cargo fetch --manifest-path interop/Cargo.toml --locked
 	$(MAKE) platform-js-install programs-js-install
 	$(MAKE) developer-dashboard-install paxeer-manifest-install platform-dependencies-install
-	cd paxeer-network && go mod download
+	go mod download
 	cd spec/specgen && go mod download
 
 workspace-build: build agent-build human-build platform-build-all programs-build interop-build \
@@ -3647,7 +3672,7 @@ PAXEER_GO_JOBS ?= 4
 .PHONY: custody-proof-build
 custody-proof-build:
 	@mkdir -p $(BUILD_DIR)/bin
-	cd paxeer-network && $(PAXEER_GO) build -mod=readonly -buildvcs=true -p $(PAXEER_GO_JOBS) -o $(abspath $(BUILD_DIR)/bin/layerx-custody-proof) ./daemon/layerx-custody-proof
+	$(PAXEER_GO) build -mod=readonly -buildvcs=true -p $(PAXEER_GO_JOBS) -o $(abspath $(BUILD_DIR)/bin/layerx-custody-proof) ./daemon/layerx-custody-proof
 
 $(BUILD_DIR)/tests/bridge/test-comet-credit: tests/bridge/test_comet_credit.c tests/bridge/files.h $(LIBRARY) $(PROGRAMS_RUNTIME_LIB)
 	@mkdir -p $(@D)

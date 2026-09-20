@@ -54,7 +54,7 @@ jobs:
       - name: Build and push nightly (regular)
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: paxeer-network
+          context: .
           platforms: linux/amd64
           push: true
           tags: ${{ steps.login-ecr.outputs.registry }}/pax/pax-chain:${{ steps.tag.outputs.nightly }}
@@ -67,7 +67,7 @@ jobs:
       - name: Build and push mock-nightly (mock_balances)
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: paxeer-network
+          context: .
           platforms: linux/amd64
           push: true
           tags: ${{ steps.login-ecr.outputs.registry }}/pax/pax-chain:${{ steps.tag.outputs.mock }}
@@ -82,7 +82,7 @@ jobs:
       - name: Build and push mock_chain_validation-nightly (mock_balances + mock_chain_validation)
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: paxeer-network
+          context: .
           platforms: linux/amd64
           push: true
           tags: ${{ steps.login-ecr.outputs.registry }}/pax/pax-chain:${{ steps.tag.outputs.mock_chain }}

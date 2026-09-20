@@ -12,7 +12,7 @@ export default function Mint() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/modules/mint/</code>
+        <strong>Source:</strong> <code>modules/mint/</code>
       </div>
 
       <h2>Overview</h2>

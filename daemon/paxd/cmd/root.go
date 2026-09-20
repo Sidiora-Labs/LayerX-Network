@@ -40,7 +40,7 @@ import (
 	banktypes "github.com/sidiora-labs/paxeer-network/sdk/x/bank/types"
 	genutilcli "github.com/sidiora-labs/paxeer-network/sdk/x/genutil/client/cli"
 	paxdbconfig "github.com/sidiora-labs/paxeer-network/storage/config"
-	"github.com/sidiora-labs/paxeer-network/tools"
+	tools "github.com/sidiora-labs/paxeer-network/tools/chain"
 	"github.com/sidiora-labs/paxeer-network/wasm/x/wasm"
 	wasmkeeper "github.com/sidiora-labs/paxeer-network/wasm/x/wasm/keeper"
 	"github.com/spf13/cast"

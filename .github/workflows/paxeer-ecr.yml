@@ -6,7 +6,77 @@ on:
       - main
       - 'release/**'
     paths:
-      - 'paxeer-network/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'chain.mk'
+      - 'Dockerfile'
+      - 'Dockerfile.dockerignore'
+      - 'foundry.paxeer.toml'
+      - 'buf.gen.yaml'
+      - 'buf.lock'
+      - 'buf.yaml'
+      - 'codecov.yml'
+      - 'config.yml'
+      - '.golangci.yml'
+      - 'gen.go'
+      - 'link_directives_test.go'
+      - 'mod_test.go'
+      - 'run_blocktests.sh'
+      - 'version.json'
+      - 'admin/**'
+      - 'api/**'
+      - 'assets/**'
+      - 'benchmark/**'
+      - 'consensus/**'
+      - 'custodyproof/**'
+      - 'daemon/**'
+      - 'docker/**'
+      - 'engine/**'
+      - 'example/**'
+      - 'hpx/**'
+      - 'integration_test/**'
+      - 'interchain/**'
+      - 'loadtest/**'
+      - 'modules/**'
+      - 'node/**'
+      - 'occ_tests/**'
+      - 'parallelization/**'
+      - 'paxeer-docs/**'
+      - 'precompiles/**'
+      - 'ratelimiter/**'
+      - 'rpc/**'
+      - 'sdk/**'
+      - 'storage/**'
+      - 'store/**'
+      - 'sync/**'
+      - 'testutil/**'
+      - 'types/**'
+      - 'utils/**'
+      - 'wasm/**'
+      - 'wasm-runtime/**'
+      - 'wasmbinding/**'
+      - 'contracts/src/**'
+      - 'contracts/test/**'
+      - 'contracts/scripts/**'
+      - 'contracts/wasm/**'
+      - 'docs/swagger/**'
+      - 'docs/swagger-ui/**'
+      - 'tests/chain/**'
+      - 'tools/chain/**'
+      - 'tools/tx-scanner/**'
+      - 'tools/utils/**'
+      - 'contracts/config/client.toml'
+      - 'contracts/hardhat.config.js'
+      - 'contracts/package.json'
+      - 'contracts/package-lock.json'
+      - 'contracts/tsconfig.json'
+      - 'docs/evm_jsonrpc_unsupported.md'
+      - 'docs/paxeer-network.md'
+      - 'docs/paxeer-chain-docs.md'
+      - 'scripts/**'
+      - '!scripts/PaxeerBetaDeploy.s.sol'
+      - '!scripts/qualify-mirror-live.sh'
+      - '!scripts/qualify-mirror-verification-live.sh'
       - '.github/workflows/paxeer-ecr.yml'
   workflow_dispatch:
     inputs:
@@ -45,7 +115,7 @@ jobs:
       - name: Build and push paxd with mock balances
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: paxeer-network
+          context: .
           cache-from: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/pax/build-cache:shared
           cache-to: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/pax/build-cache:shared,mode=max
           platforms: linux/amd64
@@ -57,7 +127,7 @@ jobs:
       - name: Build and push paxd with mock block validation
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: paxeer-network
+          context: .
           cache-from: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/pax/build-cache:shared
           cache-to: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/pax/build-cache:shared,mode=max
           platforms: linux/amd64
@@ -69,7 +139,7 @@ jobs:
       - name: Build and push paxd with mock balances + mock chain validation
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: paxeer-network
+          context: .
           cache-from: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/pax/build-cache:shared
           cache-to: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/pax/build-cache:shared,mode=max
           platforms: linux/amd64
@@ -81,7 +151,7 @@ jobs:
       - name: Build and push paxd
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: paxeer-network
+          context: .
           cache-from: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/pax/build-cache:shared
           cache-to: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/pax/build-cache:shared,mode=max
           platforms: linux/amd64

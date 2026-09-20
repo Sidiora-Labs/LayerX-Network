@@ -168,7 +168,7 @@ go.sum: go.mod
 lint:
 	@command -v "$(GOLANGCI_LINT)" >/dev/null || { echo "golangci-lint is required; run make workspace-install" >&2; exit 1; }
 	GOPROXY=off "$(GOLANGCI_LINT)" run
-	@test -z "$$(gofmt -l .)"
+	@test -z "$$(find . \( -path ./.git -o -path ./platform -o -path ./spec -o -name node_modules \) -prune -o -type f -name '*.go' -print0 | xargs -0 gofmt -l)"
 	GOPROXY=off go vet ./...
 	GOPROXY=off go mod tidy -diff
 	go mod verify
@@ -188,8 +188,9 @@ build:
 build-verbose:
 	go build -x -v $(BUILD_FLAGS) -o ./build/paxd ./daemon/paxd
 
+# build/ is shared with the LayerX root Makefile; remove only chain outputs.
 clean:
-	rm -rf ./build
+	rm -rf ./build/paxd ./build/loadtest ./build/generated ./build/proto ./build/packages.txt ./build/packages.txt.*
 
 build-loadtest:
 	go build -o build/loadtest ./loadtest/
@@ -199,7 +200,7 @@ build-loadtest:
 ###                       Local testing using docker container              ###
 ###############################################################################
 # To start a 4-node cluster from scratch:
-# make clean && make docker-cluster-start
+# make -f chain.mk clean && make docker-cluster-start
 # To stop the 4-node cluster:
 # make docker-cluster-stop
 # If you have already built the binary, you can skip the build:
@@ -211,10 +212,10 @@ build-loadtest:
 build-linux:
 	@if [ "$$(uname -m)" = "aarch64" ] || [ "$$(uname -m)" = "arm64" ]; then \
 		echo "Building for ARM64..."; \
-		GOOS=linux GOARCH=arm64 CGO_ENABLED=1 make build; \
+		GOOS=linux GOARCH=arm64 CGO_ENABLED=1 $(MAKE) -f $(PAXEER_PROJECT_HOME)/chain.mk build; \
 	else \
 		echo "Building for AMD64..."; \
-		GOOS=linux GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-linux-gnu-gcc make build; \
+		GOOS=linux GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-linux-gnu-gcc $(MAKE) -f $(PAXEER_PROJECT_HOME)/chain.mk build; \
 	fi
 .PHONY: build-linux
 
@@ -250,7 +251,7 @@ build-paxd-in-localnode: build-docker-node
 		-w /pax-protocol/pax-chain \
 		-e LEDGER_ENABLED=false \
 		pax-chain/localnode \
-		bash -c 'export PATH=/usr/local/go/bin:$$PATH && make clean && make build-linux && mkdir -p build/generated && echo DONE > build/generated/build.complete'
+		bash -c 'export PATH=/usr/local/go/bin:$$PATH && make -f chain.mk clean && make -f chain.mk build-linux && mkdir -p build/generated && echo DONE > build/generated/build.complete'
 .PHONY: build-paxd-in-localnode
 
 # CI variant: assumes localnode image already built by Buildx in prepare-cluster (skips docker build).
@@ -265,7 +266,7 @@ build-paxd-in-localnode-ci: ensure-integration-ci-images
 		-w /pax-protocol/pax-chain \
 		-e LEDGER_ENABLED=false \
 		pax-chain/localnode \
-		bash -c 'export PATH=/usr/local/go/bin:$$PATH && make clean && make build-linux && mkdir -p build/generated && echo DONE > build/generated/build.complete'
+		bash -c 'export PATH=/usr/local/go/bin:$$PATH && make -f chain.mk clean && make -f chain.mk build-linux && mkdir -p build/generated && echo DONE > build/generated/build.complete'
 .PHONY: build-paxd-in-localnode-ci
 
 # Images + paxd binary for integration-test CI (see ../.github/workflows/paxeer-integration-test.yml).
@@ -438,9 +439,9 @@ docker-cluster-stop-monitoring:
 # runs the EVM GIGA tests, then stops the cluster.
 giga-integration-test:
 	@echo "=== Starting GIGA Integration Tests ==="
-	@$(MAKE) docker-cluster-stop || true
+	@$(MAKE) -f $(PAXEER_PROJECT_HOME)/chain.mk docker-cluster-stop || true
 	@rm -rf $(PROJECT_HOME)/build/generated
-	@GIGA_EXECUTOR=true GIGA_OCC=true DOCKER_DETACH=true $(MAKE) docker-cluster-start
+	@GIGA_EXECUTOR=true GIGA_OCC=true DOCKER_DETACH=true $(MAKE) -f $(PAXEER_PROJECT_HOME)/chain.mk docker-cluster-start
 	@echo "Waiting for cluster to be ready..."
 	@timeout=300; elapsed=0; \
 	while [ $$elapsed -lt $$timeout ]; do \
@@ -454,15 +455,15 @@ giga-integration-test:
 	done; \
 	if [ $$elapsed -ge $$timeout ]; then \
 		echo "ERROR: Cluster failed to start within $${timeout}s"; \
-		$(MAKE) docker-cluster-stop; \
+		$(MAKE) -f $(PAXEER_PROJECT_HOME)/chain.mk docker-cluster-stop; \
 		exit 1; \
 	fi
 	@echo "Waiting 10s for nodes to stabilize..."
 	@sleep 10
 	@echo "=== Running GIGA EVM Tests ==="
-	@./integration_test/evm_module/scripts/evm_giga_tests.sh || ($(MAKE) docker-cluster-stop && exit 1)
+	@./integration_test/evm_module/scripts/evm_giga_tests.sh || ($(MAKE) -f $(PAXEER_PROJECT_HOME)/chain.mk docker-cluster-stop && exit 1)
 	@echo "=== Stopping cluster ==="
-	@$(MAKE) docker-cluster-stop
+	@$(MAKE) -f $(PAXEER_PROJECT_HOME)/chain.mk docker-cluster-stop
 	@echo "=== GIGA Integration Tests Complete ==="
 .PHONY: giga-integration-test
 
@@ -497,9 +498,9 @@ docker-cluster-start-giga-mixed: docker-cluster-stop build-docker-node
 giga-mixed-integration-test:
 	@echo "=== Starting GIGA Mixed-Mode Integration Tests ==="
 	@echo "=== Node 0: GIGA_EXECUTOR=true GIGA_OCC=true, Nodes 1-3: standard V2 ==="
-	@$(MAKE) docker-cluster-stop || true
+	@$(MAKE) -f $(PAXEER_PROJECT_HOME)/chain.mk docker-cluster-stop || true
 	@rm -rf $(PROJECT_HOME)/build/generated
-	@DOCKER_DETACH=true $(MAKE) docker-cluster-start-giga-mixed
+	@DOCKER_DETACH=true $(MAKE) -f $(PAXEER_PROJECT_HOME)/chain.mk docker-cluster-start-giga-mixed
 	@echo "Waiting for cluster to be ready..."
 	@timeout=300; elapsed=0; \
 	while [ $$elapsed -lt $$timeout ]; do \
@@ -513,15 +514,15 @@ giga-mixed-integration-test:
 	done; \
 	if [ $$elapsed -ge $$timeout ]; then \
 		echo "ERROR: Cluster failed to start within $${timeout}s"; \
-		$(MAKE) docker-cluster-stop; \
+		$(MAKE) -f $(PAXEER_PROJECT_HOME)/chain.mk docker-cluster-stop; \
 		exit 1; \
 	fi
 	@echo "Waiting 10s for nodes to stabilize..."
 	@sleep 10
 	@echo "=== Running GIGA EVM Tests (mixed mode) ==="
-	@./integration_test/evm_module/scripts/evm_giga_tests.sh || (echo "TEST FAILURE - check if node 0 (giga) halted due to consensus mismatch" && $(MAKE) docker-cluster-stop && exit 1)
+	@./integration_test/evm_module/scripts/evm_giga_tests.sh || (echo "TEST FAILURE - check if node 0 (giga) halted due to consensus mismatch" && $(MAKE) -f $(PAXEER_PROJECT_HOME)/chain.mk docker-cluster-stop && exit 1)
 	@echo "=== Stopping cluster ==="
-	@$(MAKE) docker-cluster-stop
+	@$(MAKE) -f $(PAXEER_PROJECT_HOME)/chain.mk docker-cluster-stop
 	@echo "=== GIGA Mixed-Mode Integration Tests Complete ==="
 .PHONY: giga-mixed-integration-test
 

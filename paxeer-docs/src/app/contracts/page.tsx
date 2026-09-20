@@ -12,7 +12,7 @@ export default function Contracts() {
       </div>
 
       <div className="source-note">
-        <strong>Paxeer-native:</strong> <code>paxeer-network/contracts/</code><br />
+        <strong>Paxeer-native:</strong> <code>contracts/</code><br />
         <strong>LayerX settlement:</strong> <code>contracts/</code> at repository root
       </div>
 
@@ -32,7 +32,7 @@ export default function Contracts() {
         </thead>
         <tbody>
           <tr>
-            <td><code>paxeer-network/contracts/</code></td>
+            <td><code>contracts/</code></td>
             <td>Paxeer-native chain utilities: WPAX, pointer contracts, precompile interfaces, testing infrastructure</td>
             <td>Foundry + Hardhat</td>
           </tr>
@@ -47,7 +47,7 @@ export default function Contracts() {
       <h2>Paxeer-Native Contracts</h2>
 
       <p>
-        The contracts under <code>paxeer-network/contracts/</code> are part of the Paxeer chain itself. They provide EVM-side interfaces to chain functionality.
+        The contracts under <code>contracts/</code> are part of the Paxeer chain itself. They provide EVM-side interfaces to chain functionality.
       </p>
 
       <h3>Core Contracts</h3>
@@ -150,12 +150,12 @@ export default function Contracts() {
       </p>
 
       <pre><code>{`# Foundry
-cd paxeer-network/contracts
+cd contracts
 forge install
 forge build
 
 # Hardhat
-cd paxeer-network/contracts
+cd contracts
 npm install
 npx hardhat compile
 npx hardhat test --network paxlocal`}</code></pre>
@@ -183,7 +183,7 @@ npx hardhat test --network paxlocal`}</code></pre>
       </ol>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/contracts/README.md</code>, <code>paxeer-network/contracts/src/</code>
+        <strong>Source:</strong> <code>contracts/README.md</code>, <code>contracts/src/</code>
       </div>
 
       <h2>LayerX Settlement Contracts</h2>
@@ -273,7 +273,7 @@ npx hardhat test --network paxlocal`}</code></pre>
         <tbody>
           <tr>
             <td><strong>Location</strong></td>
-            <td><code>paxeer-network/contracts/</code></td>
+            <td><code>contracts/</code></td>
             <td><code>contracts/</code> (root)</td>
           </tr>
           <tr>

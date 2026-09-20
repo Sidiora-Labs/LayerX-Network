@@ -227,7 +227,7 @@ prometheus_listen_addr = ":26660"`}</code></pre>
         For local testing, use Docker compose:
       </p>
 
-      <pre><code>{`cd paxeer-network/docker
+      <pre><code>{`cd docker
 make docker-cluster-start`}</code></pre>
 
       <p>

@@ -144,8 +144,8 @@ if audit_rg '^tools/ci/public-repo-audit\.sh$' "$private_refs"; then
 fi
 
 secret_scan_allowlist='^tools/ci/public-repo-audit\.sh$'
-secret_scan_allowlist="$secret_scan_allowlist"'|^paxeer-network/rpc/tests/mock_data/transactions/0x99d895ea71e5ce3a8b949ba7979a27c08080210a4ba9b46b0bb06f8126b6957d\.json$'
-secret_scan_allowlist="$secret_scan_allowlist"'|^paxeer-network/rpc/tests/mock_data/transactions/0x1b9ceaabadfc635aa8eb5e6d4a66ee60c826980805fa93af3913872f7b565586\.json$'
+secret_scan_allowlist="$secret_scan_allowlist"'|^rpc/tests/mock_data/transactions/0x99d895ea71e5ce3a8b949ba7979a27c08080210a4ba9b46b0bb06f8126b6957d\.json$'
+secret_scan_allowlist="$secret_scan_allowlist"'|^rpc/tests/mock_data/transactions/0x1b9ceaabadfc635aa8eb5e6d4a66ee60c826980805fa93af3913872f7b565586\.json$'
 secret_scan_allowlist="$secret_scan_allowlist"'|^platform/integrations/ios/Sources/LayerXMobile/EmbeddedSecretDetector\.swift$'
 secret_scan_allowlist="$secret_scan_allowlist"'|^platform/integrations/android/src/main/java/com/sidiora/layerx/android/EmbeddedSecretDetector\.java$'
 secret_scan_allowlist="$secret_scan_allowlist"'|^programs/vendor/'

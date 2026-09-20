@@ -12,7 +12,7 @@ export default function TokenFactory() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/modules/tokenfactory/</code>
+        <strong>Source:</strong> <code>modules/tokenfactory/</code>
       </div>
 
       <h2>Overview</h2>

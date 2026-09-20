@@ -65,7 +65,7 @@ export default function Home() {
               LayerX activities (receipts, 402LXP balances, agent/human interactions) run on LayerX. Periodic checkpoints, custody, guarantor bonds, disputes, withdrawals, and emergency exits settle on Paxeer. Custody never leaves an L1 that can be replayed independently of the LayerX sequencer.
             </p>
             <p>
-              The settlement contracts live in <code>contracts/</code> at the monorepo root. They deploy <em>on</em> Paxeer. The node itself lives in <code>paxeer-network/</code>: <code>paxd</code> binary, EVM execution, JSON-RPC, chain modules, Docker compose, and HPX node distribution.
+              The settlement contracts live in <code>contracts/</code> at the monorepo root. They deploy <em>on</em> Paxeer. The node itself lives in the chain directories at the repository root (<code>daemon/</code>, <code>node/</code>, <code>modules/</code>): <code>paxd</code> binary, EVM execution, JSON-RPC, chain modules, Docker compose, and HPX node distribution.
             </p>
           </div>
         </div>
@@ -104,7 +104,7 @@ export default function Home() {
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="text-xs text-on-surface-variant mb-2 tracking-wide">Repository layout</div>
-              <code className="text-sm font-mono">paxeer-network/</code>
+              <code className="text-sm font-mono">go.mod, node/, modules/</code>
             </div>
           </div>
           <div className="mt-4 space-y-2 text-sm">

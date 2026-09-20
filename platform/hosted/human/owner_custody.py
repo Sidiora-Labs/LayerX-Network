@@ -26,7 +26,7 @@ def bootstrap(args):
                       ('LayerXBetaTimelock.sol:LayerXBetaTimelock' if beta else 'LayerXTimelock.sol:LayerXTimelock'),
                       0 if beta else 86400, 172800, account, account, account, 0, config, 1)
     registry = deploy(rpc, account, 'contracts/custody/AssetRegistry.sol:AssetRegistry', timelock, account, config, 1)
-    token = deploy(rpc, account, 'paxeer-network/loadtest/contracts/evm/lib/solmate/src/tokens/WETH.sol:WETH')
+    token = deploy(rpc, account, 'loadtest/contracts/evm/lib/solmate/src/tokens/WETH.sol:WETH')
     vault = deploy(rpc, account, 'contracts/custody/LayerXVault.sol:LayerXVault', registry, timelock, account, config, 1)
     register = calldata('registerAsset(bytes32,address,uint8,uint128,uint128)', '0x' + args.asset, token, 18, 1, 2 ** 128 - 1)
     govern(rpc, account, timelock, timelock, calldata('setCallPermission(address,bytes4,bool)', registry, register[:10], 'true'))

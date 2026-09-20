@@ -12,7 +12,7 @@ export default function JsonRpc() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/rpc/README.md</code> and <code>paxeer-network/rpc/AGENTS.md</code>
+        <strong>Source:</strong> <code>rpc/README.md</code> and <code>rpc/AGENTS.md</code>
       </div>
 
       <h2>Architecture Overview</h2>

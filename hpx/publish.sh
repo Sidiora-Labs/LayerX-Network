@@ -5,7 +5,7 @@ set -euo pipefail
 
 HPX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PAXEER_ROOT="$(cd "${HPX_DIR}/.." && pwd)"
-MONOREPO_ROOT="$(cd "${PAXEER_ROOT}/.." && pwd)"
+MONOREPO_ROOT="${PAXEER_ROOT}"
 
 SRC_BIN="${SRC_BIN:-${PAXEER_ROOT}/build/paxd}"
 SRC_CFG="${SRC_CFG:-${HPX_RUNTIME_CONFIG_DIR:-/root/.paxeer/config}}"

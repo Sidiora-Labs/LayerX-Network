@@ -102,7 +102,7 @@ make paxeer-ci
 | `programs/` | プログラマブル LayerX ランタイムおよびプログラムツール |
 | `interop/` | エージェントコマースおよびクロスネットワーク相互運用面 |
 | `contracts/` | Paxeer のカストディ、チェックポイント、保証人ボンディング、請求、紛争、退出向け Solidity コントラクト |
-| `paxeer-network/` | Paxeer Network ノード、EVM/RPC 互換、ストレージエンジン、モジュール、コントラクト、サブシステムローカルビルド |
+| `go.mod`, `chain.mk`, `daemon/`, `node/`, `modules/`, `consensus/`, `sdk/`, `rpc/`, `precompiles/`, `storage/`, `wasm/`, `docker/` | Paxeer Network ノード、EVM/RPC 互換、ストレージエンジン、モジュール、コントラクト、サブシステムローカルビルド |
 | `spec/` | 規範的 KVX 仕様、生成された設計、要件、タスクグラフ |
 | `tests/`, `test/`, `fuzz/` | ネイティブ、コントラクト、リプレイ、不変条件、フォルト、ファズの各スイート |
 | `migrations/` | ジェネシス、マイグレーション、突合、シャドウリプレイの作業 |

@@ -144,7 +144,7 @@ export default function NetworkParameters() {
       </ul>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/node/genesis.go</code>
+        <strong>Source:</strong> <code>node/genesis.go</code>
       </div>
 
       <h2>Consensus Parameters</h2>
@@ -162,7 +162,7 @@ export default function NetworkParameters() {
       </ul>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/consensus/</code>
+        <strong>Source:</strong> <code>consensus/</code>
       </div>
 
       <h2>RPC Compatibility</h2>
@@ -199,7 +199,7 @@ export default function NetworkParameters() {
       </ul>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/modules/</code>
+        <strong>Source:</strong> <code>modules/</code>
       </div>
 
       <h2>Public Endpoints</h2>

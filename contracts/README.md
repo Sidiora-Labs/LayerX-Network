@@ -5,7 +5,7 @@
     * `npx hardhat test --network paxlocal test/ERC20toCW20PointerTest.js`
 
 ## Compile and build contracts with Foundry
- * run: `forge install` and `forge build`
+ * run from the repository root: `forge install` and `FOUNDRY_CONFIG=foundry.paxeer.toml forge build`
  * This will generate binaries and abis in the `contracts/out/` directory
 
 ## Updating Pointer contracts across codebase

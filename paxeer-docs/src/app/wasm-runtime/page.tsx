@@ -12,7 +12,7 @@ export default function WasmRuntime() {
       </div>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/wasm-runtime/</code>
+        <strong>Source:</strong> <code>wasm-runtime/</code>
       </div>
 
       <h2>Overview</h2>
@@ -24,7 +24,7 @@ export default function WasmRuntime() {
       <h2>libwasmvm</h2>
 
       <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/wasm-runtime/libwasmvm/</code>
+        <strong>Source:</strong> <code>wasm-runtime/libwasmvm/</code>
       </div>
 
       <p>

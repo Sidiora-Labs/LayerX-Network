@@ -7,7 +7,7 @@ This repository is the canonical Sidiora Labs ecosystem monorepo for LayerX Netw
 | Path | Subsystem | Build entry | Release tags |
 | --- | --- | --- | --- |
 | `src/`, `include/`, `agent/`, `human/`, `platform/`, `programs/`, `interop/`, `contracts/`, `spec/`, `tests/`, `fuzz/`, `migrations/` | LayerX protocol, agent interface, human control plane, developer platform, programmable runtime, interoperability gateway, and settlement contracts | Root `Makefile` | `vX.Y.Z` |
-| `paxeer-network/` | Paxeer Network node, EVM/RPC compatibility, storage engines, modules, contracts, Docker environments, and subsystem-local build manifests | `paxeer-network/Makefile` | `paxeer-network/vX.Y.Z` |
+| `go.mod`, `chain.mk`, `daemon/`, `node/`, `modules/`, `consensus/`, `sdk/`, `rpc/`, `precompiles/`, `storage/`, `wasm/`, `docker/` | Paxeer Network node, EVM/RPC compatibility, storage engines, modules, contracts, Docker environments, and subsystem-local build manifests | `Makefile` | `paxeer-network/vX.Y.Z` |
 
 ## Build and release boundaries
 
@@ -36,7 +36,7 @@ GitHub workflows and CI jobs use prefixed names to make subsystem ownership clea
 - LayerX workflows: `agent.yml`, `human.yml`, `platform.yml`, `programs-conformance.yml`
 - Paxeer workflows: `Paxeer / Build`, `Paxeer / Lint`, `Paxeer / Test`
 
-File paths under `paxeer-network/` trigger Paxeer-specific CI. Changes outside that directory do not run Paxeer builds unless explicitly configured.
+The Paxeer chain sources sit at the repository root next to the LayerX trees, so no single directory scopes Paxeer CI. Each `paxeer-*.yml` workflow lists the chain paths it covers explicitly: the root Go module files (`go.mod`, `go.sum`, `chain.mk`, `foundry.paxeer.toml`, `Dockerfile`), the chain-only directories (`daemon/`, `node/`, `modules/`, `consensus/`, `sdk/`, `rpc/`, `precompiles/`, `storage/`, `wasm/`, and the rest of that list), and the chain-owned subpaths of the shared directories (`contracts/src/`, `contracts/test/`, `docs/swagger/`, `scripts/`, `tests/chain/`, `tools/chain/`, `tools/tx-scanner/`, `tools/utils/`). Changes outside those paths do not run Paxeer builds.
 
 ## Further reading
 

@@ -14,12 +14,12 @@ LayerX is under active development and release qualification. The public testnet
 | --- | --- |
 | Repository root (`src/`, `include/`, `agent/`, `human/`, `platform/`, `programs/`, `interop/`) | LayerX execution: activities, `402LXP` balances, receipts, agent and human surfaces |
 | [`contracts/`](../contracts/) at the repository root | LayerX settlement contracts deployed *on* Paxeer: custody, checkpoints, bonds, claims, disputes, exits |
-| **This directory (`paxeer-network/`)** | Paxeer Network itself: `paxd`, EVM execution, JSON-RPC, chain modules, Docker, node distribution |
+| **Chain directories at the repository root (`daemon/`, `node/`, `modules/`, `consensus/`, `sdk/`, `rpc/`, ...)** | Paxeer Network itself: `paxd`, EVM execution, JSON-RPC, chain modules, Docker, node distribution |
 | [`spec/`](../spec/) | Normative LayerX specifications (KVX first) |
 
 `402LXP` remains the only LayerX balance writer. There is no LayerX token. Paxeer is the custody domain; Ethereum and Solana mirrors in `interop/` are archives, not settlement venues.
 
-The Cosmos-style chain identifier used by node distribution is `hyperpax_125-1` (EVM chain ID `125`). See [`hpx/`](hpx/).
+The Cosmos-style chain identifier used by node distribution is `hyperpax_125-1` (EVM chain ID `125`). See [`hpx/`](../hpx/).
 
 ## Layout
 
@@ -48,19 +48,19 @@ make paxeer-test
 make paxeer-ci
 ```
 
-Those targets invoke this directory's Makefile. `make monorepo-ci` at the repository root composes the LayerX gate with `make paxeer-ci`. Paxeer releases use namespaced `paxeer-network/vX.Y.Z` tags.
+Those targets invoke `chain.mk` at the repository root. `make monorepo-ci` at the repository root composes the LayerX gate with `make paxeer-ci`. Paxeer releases use namespaced `paxeer-network/vX.Y.Z` tags.
 
-From **this directory**:
+From the **repository root**:
 
 ```sh
-make build    # ./build/paxd
+make -f chain.mk build  # ./build/paxd
 make install  # go install ./daemon/paxd
 make lint
-make test
-make ci       # lint + test
+make -f chain.mk test
+make -f chain.mk ci     # lint + test
 ```
 
-Local Docker cluster targets (`docker-cluster-start`, `run-local-node`, and the rest) are documented in [`docker/README.md`](docker/README.md) and the Makefile. Paths in those files are relative to `paxeer-network/`.
+Local Docker cluster targets (`docker-cluster-start`, `run-local-node`, and the rest) are documented in [`docker/README.md`](../docker/README.md) and the Makefile. Paths in those files are relative to the repository root.
 
 ### Foundry
 
@@ -71,16 +71,16 @@ forge install
 forge build
 ```
 
-See [`contracts/README.md`](contracts/README.md). LayerX settlement contracts at the repository root are a separate Solidity `0.8.27` tree.
+See [`contracts/README.md`](../contracts/README.md). LayerX settlement contracts at the repository root are a separate Solidity `0.8.27` tree.
 
 A successful local run is development evidence. It is not authorization to deploy validators, move custody, or handle real assets.
 
 ## Documentation
 
-Start in [`docs/`](docs/):
+Start in [`docs/`](./):
 
-- [`docs/README.md`](docs/README.md) - subtree docs index and OpenAPI/Swagger generation
-- [`docs/evm_jsonrpc_unsupported.md`](docs/evm_jsonrpc_unsupported.md) - EVM JSON-RPC methods that return a documented error
+- [`docs/paxeer-chain-docs.md`](paxeer-chain-docs.md) - subtree docs index and OpenAPI/Swagger generation
+- [`docs/evm_jsonrpc_unsupported.md`](evm_jsonrpc_unsupported.md) - EVM JSON-RPC methods that return a documented error
 
 LayerX protocol behavior, including how checkpoints and custody bind to Paxeer, is specified under [`spec/layerx-protocol/`](../spec/layerx-protocol/).
 

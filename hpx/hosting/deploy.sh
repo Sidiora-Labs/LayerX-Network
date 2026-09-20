@@ -5,10 +5,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HPX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PAXEER_ROOT="$(cd "${HPX_DIR}/.." && pwd)"
-MONOREPO_ROOT="$(cd "${PAXEER_ROOT}/.." && pwd)"
+MONOREPO_ROOT="${PAXEER_ROOT}"
 
 DOMAIN="node.hyperpaxeer.com"
-SOURCE_REVISION="${HPX_SOURCE_REVISION:-$(git -C "$MONOREPO_ROOT" log -1 --format=%H -- paxeer-network/hpx/registry .github/workflows/paxeer-hpx-registry.yml)}"
+SOURCE_REVISION="${HPX_SOURCE_REVISION:-$(git -C "$MONOREPO_ROOT" log -1 --format=%H -- hpx/registry .github/workflows/paxeer-hpx-registry.yml)}"
 ARTIFACTS_ROOT="${HPX_ARTIFACTS_ROOT:-/srv/hpx/artifacts}"
 DATA_DIR="${HPX_DATA_DIR:-/srv/hpx/data}"
 WEB_ROOT="${HPX_WEB_ROOT:-/var/www/hpx}"

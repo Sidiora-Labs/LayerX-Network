@@ -4,9 +4,9 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 const requirements = [
-  ["paxeer-network/contracts", "0.8.28"],
-  ["paxeer-network/integration_test/dapp_tests", "0.8.20"],
-  ["paxeer-network/integration_test/rpc_tests", "0.8.28"],
+  ["contracts", "0.8.28"],
+  ["integration_test/dapp_tests", "0.8.20"],
+  ["integration_test/rpc_tests", "0.8.28"],
 ];
 
 for (const [directory, version] of requirements) {
