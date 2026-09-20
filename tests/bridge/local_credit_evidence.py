@@ -14,7 +14,8 @@ def existing_evidence(args, directory):
             'two trusted RPC origins, CA bundle and disposable identity required')
     require(args.custody and args.asset and args.comet_rpc
             and args.beneficiary_key and args.network_id == 402 and args.trusted_height
-            and args.trusted_height > 0, 'explicit cluster custody configuration required')
+            and args.trusted_height > 0 and args.trusting_period_seconds
+            and args.trusting_period_seconds > 0, 'explicit cluster custody configuration required')
     rpcs = [disposable_rpc(url, args.ca_bundle, args.disposable_identity) for url in args.rpc]
     require(rpcs[0].identity != rpcs[1].identity, 'distinct trusted RPC origins required')
     custody = json.loads(Path(args.custody).read_text())
@@ -42,7 +43,8 @@ def existing_evidence(args, directory):
                        disposable_identity=args.disposable_identity,
                        chain_id=identity['chain_id'], network_id=args.network_id,
                        vault=custody['vault'], runtime_sha256=custody['runtime_sha256'], asset=args.asset,
-                       trusted_height=args.trusted_height, comet_rpc=args.comet_rpc, output=profile))
+                       trusted_height=args.trusted_height,
+                       trusting_period_seconds=args.trusting_period_seconds, comet_rpc=args.comet_rpc, output=profile))
         encoded = Path(profile).read_bytes()
         require(encoded[169:201] == identity['comet_chain_id'].encode().ljust(32, b'\0'),
                 'profile disposable Comet chain binding')
@@ -78,6 +80,7 @@ def main():
     parser.add_argument('--beneficiary-key')
     parser.add_argument('--network-id', type=int)
     parser.add_argument('--trusted-height', type=int)
+    parser.add_argument('--trusting-period-seconds', type=int)
     args = parser.parse_args()
     directory = Path(args.output).resolve()
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)

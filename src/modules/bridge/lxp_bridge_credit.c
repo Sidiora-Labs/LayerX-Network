@@ -53,6 +53,10 @@ lxp_result lxp_bridge_profile_validate(const lxp_bridge_profile *profile)
         chain_id_length(profile) == 0U ||
         lxp_ct_is_zero(profile->bytes + 201U, 4U) ||
         profile->bytes[205] != 0U || profile->bytes[206] != 3U ||
+        read_u64(profile->bytes + 207U) == 0U ||
+        read_u64(profile->bytes + 207U) > UINT32_MAX ||
+        read_u64(profile->bytes + 215U) == 0U ||
+        read_u64(profile->bytes + 215U) > UINT64_C(253402300799) ||
         lx_account_id_from_string(name, sizeof(name) - 1U, reserve) != LXP_OK ||
         lxp_ct_memcmp(reserve, profile->bytes + 129U, 32U) != 0)
         return LXP_ERR_NON_CANONICAL;
@@ -65,6 +69,7 @@ void lxp_bridge_profile_trust(const lxp_bridge_profile *profile,
     (void)memset(trust, 0, sizeof(*trust));
     trust->height = read_u64(profile->bytes + 161U);
     (void)memcpy(trust->next_validators_hash, profile->bytes + 65U, 32U);
+    trust->time_seconds = (int64_t)read_u64(profile->bytes + 215U);
 }
 
 lxp_result lxp_bridge_light_trust_load(lxp_module_ctx *ctx,
@@ -185,6 +190,7 @@ lxp_result lxp_bridge_credit_verify(const lxp_bridge_profile *profile,
                                     uint32_t network_id,
                                     uint16_t protocol_version,
                                     const lxp_bridge_light_trust *trusted,
+                                    uint64_t now_ms,
                                     uint8_t nullifier[32],
                                     lxp_bridge_light_trust *advanced)
 {
@@ -251,6 +257,7 @@ lxp_result lxp_bridge_credit_verify(const lxp_bridge_profile *profile,
     }
     status = lxp_bridge_light_verify(profile->bytes + 169U, chain_id_length(profile),
                                      custody_store, sizeof(custody_store) - 1U, trusted,
+                                     read_u64(profile->bytes + 207U), now_ms / 1000U,
                                      credit->proof, credit->proof_length, &proven);
     if (status != LXP_OK) return status;
     if (proven.height != state_height + 1U ||

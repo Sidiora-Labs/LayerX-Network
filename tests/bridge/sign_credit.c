@@ -38,6 +38,7 @@ int main(int argc, char **argv)
     size_t name_length;
     lxp_bridge_profile profile;
     lxp_bridge_credit credit;
+    uint64_t header_seconds = 0U;
     lxp_activity activity = {0};
     lxp_arena arena;
     lxp_byte_span encoded;
@@ -87,8 +88,11 @@ int main(int argc, char **argv)
         activity.timestamp_bound.not_before > UINT64_MAX - 300000U)
         goto done;
     activity.timestamp_bound.not_after = activity.timestamp_bound.not_before + 300000U;
-    if (lxp_bridge_credit_verify(&profile, &credit, activity.network_id, 3U, NULL,
-                                 activity.idempotency_key, NULL) != LXP_OK ||
+    for (size_t index = 0U; index < 8U; ++index)
+        header_seconds = (header_seconds << 8U) | credit.proof[29U + index];
+    if (header_seconds > UINT64_MAX / 1000U ||
+        lxp_bridge_credit_verify(&profile, &credit, activity.network_id, 3U, NULL,
+                                 header_seconds * 1000U, activity.idempotency_key, NULL) != LXP_OK ||
         lxp_hash_payload(credit_bytes, credit_length, activity.payload_hash) != LXP_OK ||
         lxp_activity_signing_preimage(&activity, preimage) != LXP_OK ||
         EVP_DigestSignInit(context, NULL, NULL, NULL, key) != 1 ||

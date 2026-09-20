@@ -2099,8 +2099,8 @@ lxp_result lxp_ctx_bridge_credit(lxp_module_ctx *ctx,
     status = lxp_bridge_light_trust_load(ctx, &profile, &trusted);
     if (status != LXP_OK) return LXP_ERR_DEPOSIT_PROOF_NOT_FINAL;
     status = lxp_bridge_credit_verify(&profile, credit, activity->network_id,
-                                      activity->protocol_version, &trusted, nullifier,
-                                      &advanced);
+                                      activity->protocol_version, &trusted,
+                                      lxp_ctx_batch_timestamp_ms(ctx), nullifier, &advanced);
     if (status != LXP_OK) return status;
     if (lxp_ct_memcmp(nullifier, activity->idempotency_key, 32U) != 0)
         return LXP_ERR_CONTEXT_MISMATCH;

@@ -1993,8 +1993,8 @@ static lxp_result program_admission_decode(
         status = lxp_bridge_light_trust_load(&ctx, &profile, &trusted);
         if (status != LXP_OK) return status;
         status = lxp_bridge_credit_verify(&profile, &credit, owner->network_id,
-                                          activity->protocol_version, &trusted, nullifier,
-                                          NULL);
+                                          activity->protocol_version, &trusted,
+                                          owner->latest_sealed_timestamp, nullifier, NULL);
         if (status == LXP_OK)
             status = lni_principal(owner->kernel->state->accounts, activity,
                                    activity->authority.bytes, principal,
@@ -2004,6 +2004,16 @@ static lxp_result program_admission_decode(
              lxp_ct_memcmp(principal, credit.bytes + 107U, 32U) != 0 ||
              lxp_ct_memcmp(activity->authority.bytes, credit.bytes + 139U, 32U) != 0))
             status = LXP_ERR_CONTEXT_MISMATCH;
+        if (status == LXP_OK) {
+            const lx_account_registry *accounts = owner->kernel->state->accounts;
+            bool known = false;
+            for (size_t index = 0U; index < accounts->count && !known; ++index)
+                known = lxp_ct_memcmp(accounts->accounts[index].id, principal, 32U) == 0;
+            if (!known && !lxp_bridge_credit_owner_bound(activity->actor_did.bytes,
+                                                         activity->actor_did.length,
+                                                         activity->authority.bytes))
+                status = LXP_ERR_ACCOUNT_ID_MISMATCH;
+        }
         return status;
     }
     if (activity->activity_type == LX_ASSET_WITHDRAW) {

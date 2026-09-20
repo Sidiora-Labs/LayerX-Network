@@ -23,7 +23,7 @@ def big(value, length):
 def light_credit(bundle=b'LXLB1' + bytes([15] * 600)):
     profile = (b'LXBC3' + big(125, 8) + bytes([8] * 20) + bytes([1] * 32) + bytes([10] * 32) + bytes([2] * 32)
                + bytes([3] * 32) + big(1, 8) + b'hyperpax_125-1'.ljust(32, b'\0') + big(77, 4) + big(3, 2))
-    assert len(profile) == 207
+    assert len(profile) == 223
     head = (b'LXDC3' + hashlib.sha256(profile).digest() + big(77, 4) + big(3, 2) + bytes([5] * 32)
             + bytes([2] * 32) + bytes([6] * 32) + bytes([7] * 32) + bytes([9] * 20) + big(10 ** 18, 16)
             + big(1, 8) + big(12, 8) + bytes([11] * 32) + bytes([12] * 32) + big(13, 8) + bytes([14] * 32)

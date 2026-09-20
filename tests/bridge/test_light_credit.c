@@ -11,6 +11,7 @@
     (void)fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #condition); return 1; } } while (0)
 
 typedef struct layout {
+    size_t commit;
     size_t validators_hash;
     size_t validator_count;
     size_t validators;
@@ -50,6 +51,7 @@ static int locate(const uint8_t *bundle, size_t length, layout *out)
         offset += 1U + bundle[offset];
     }
     offset += 1U + bundle[offset];
+    out->commit = offset;
     offset += 40U;
     count = number(bundle + offset, 2U);
     out->validator_count = count;
@@ -115,6 +117,8 @@ static int copy(const payload *source, payload *out)
     return 0;
 }
 
+static uint64_t now_ms;
+
 static lxp_result verify(const lxp_bridge_profile *profile, const payload *input, bool rebind,
                          const lxp_bridge_light_trust *trusted, lxp_bridge_light_trust *advanced)
 {
@@ -127,7 +131,7 @@ static lxp_result verify(const lxp_bridge_profile *profile, const payload *input
         (lxp_hash_sha256(profile->bytes, sizeof(profile->bytes), credit.bytes + 5U) != LXP_OK ||
          lxp_hash_sha256(credit.proof, credit.proof_length, credit.bytes + 327U) != LXP_OK))
         return LXP_ERR_IO;
-    return lxp_bridge_credit_verify(profile, &credit, network, 3U, trusted, nullifier, advanced);
+    return lxp_bridge_credit_verify(profile, &credit, network, 3U, trusted, now_ms, nullifier, advanced);
 }
 
 static int read_profile(const char *path, lxp_bridge_profile *profile)
@@ -166,13 +170,17 @@ int main(int argc, char **argv)
     size_t bundle_length;
     size_t digit;
     uint32_t network;
-    if (argc != 9) {
-        (void)fprintf(stderr, "usage: test-light-credit profile credit adjacent-profile adjacent-credit later-credit retired-profile retired-credit did\n");
+    if (argc != 11) {
+        (void)fprintf(stderr, "usage: test-light-credit profile credit adjacent-profile adjacent-credit later-credit retired-profile retired-credit did skip-profile skip-credit\n");
         return 2;
     }
     CHECK(read_profile(argv[1], &profile) == 0 && read_profile(argv[3], &adjacent_profile) == 0);
     CHECK(load(argv[2], &original) == 0 && load(argv[4], &adjacent) == 0 && load(argv[5], &newer) == 0);
-    CHECK(read_profile(argv[6], &retired_profile) == 0 && load(argv[7], &retired) == 0);
+    CHECK(load(argv[6], &changed) == 0 && changed.length == 207U && load(argv[7], &retired) == 0);
+    (void)memset(&retired_profile, 0, sizeof(retired_profile));
+    (void)memcpy(retired_profile.bytes, changed.bytes, changed.length);
+    free(changed.bytes);
+    now_ms = number(newer.bytes + LXP_BRIDGE_CREDIT_BYTES + 29U, 8U) * 1000U;
     CHECK(read_file(argv[8], 256U, false, &did, &did_length) == 0);
     while (did_length > 0U && (did[did_length - 1U] == '\n' || did[did_length - 1U] == '\r')) --did_length;
     network = (uint32_t)number(profile.bytes + 201U, 4U);
@@ -185,7 +193,7 @@ int main(int argc, char **argv)
 
     lxp_bridge_profile_trust(&profile, &seeded);
     CHECK(number(credit.bytes + 287U, 8U) > seeded.height + 1U);
-    CHECK(lxp_bridge_credit_verify(&profile, &credit, network, 3U, NULL, nullifier, &first) == LXP_OK);
+    CHECK(lxp_bridge_credit_verify(&profile, &credit, network, 3U, NULL, now_ms, nullifier, &first) == LXP_OK);
     (void)memcpy(expected + 23U, credit.bytes + 43U, 32U);
     CHECK(lxp_hash_sha256(expected, sizeof(expected), digest) == LXP_OK &&
           memcmp(digest, nullifier, 32U) == 0);
@@ -236,7 +244,7 @@ int main(int argc, char **argv)
         changed_profile.bytes[index] ^= 1U;
         CHECK(verify(&changed_profile, &original, false, NULL, NULL) != LXP_OK);
         CHECK(verify(&changed_profile, &original, true, NULL, NULL) != LXP_OK ||
-              (index >= 161U && index < 169U));
+              (index >= 161U && index < 169U) || index >= 207U);
     }
     for (size_t index = 0U; index < bundle_length; ++index) {
         CHECK(copy(&original, &changed) == 0);
@@ -300,6 +308,65 @@ int main(int argc, char **argv)
     changed.length -= 2U;
     CHECK(verify(&profile, &changed, true, NULL, NULL) == LXP_ERR_DEPOSIT_PROOF_NOT_FINAL);
     free(changed.bytes);
+
+    now_ms = (number(profile.bytes + 207U, 8U) + number(profile.bytes + 215U, 8U)) * 1000U;
+    CHECK(verify(&profile, &original, false, NULL, NULL) == LXP_ERR_DEPOSIT_PROOF_NOT_FINAL);
+    now_ms -= 1U;
+    CHECK(verify(&profile, &original, false, NULL, NULL) == LXP_OK);
+    now_ms = (number(bundle + 29U, 8U) - LXP_BRIDGE_LIGHT_MAX_CLOCK_DRIFT_SECONDS) * 1000U - 1U;
+    CHECK(verify(&profile, &original, false, NULL, NULL) == LXP_ERR_DEPOSIT_PROOF_NOT_FINAL);
+    now_ms += 1U;
+    CHECK(verify(&profile, &original, false, NULL, NULL) == LXP_OK);
+    now_ms = number(newer.bytes + LXP_BRIDGE_CREDIT_BYTES + 29U, 8U) * 1000U;
+    for (uint32_t total = 0U; total <= 102U; total += 102U) {
+        CHECK(copy(&original, &changed) == 0);
+        changed.bytes[LXP_BRIDGE_CREDIT_BYTES + at.commit + 4U] = 0U;
+        changed.bytes[LXP_BRIDGE_CREDIT_BYTES + at.commit + 5U] = 0U;
+        changed.bytes[LXP_BRIDGE_CREDIT_BYTES + at.commit + 6U] = 0U;
+        changed.bytes[LXP_BRIDGE_CREDIT_BYTES + at.commit + 7U] = (uint8_t)total;
+        CHECK(verify(&profile, &changed, true, NULL, NULL) == LXP_ERR_DEPOSIT_PROOF_NOT_FINAL);
+        free(changed.bytes);
+    }
+    CHECK(copy(&original, &changed) == 0);
+    (void)memset(changed.bytes + LXP_BRIDGE_CREDIT_BYTES + at.first_signature - 12U, 0, 8U);
+    CHECK(verify(&profile, &changed, true, NULL, NULL) == LXP_ERR_DEPOSIT_PROOF_NOT_FINAL);
+    free(changed.bytes);
+
+    {
+        lxp_bridge_profile skip_profile;
+        payload skip;
+        layout skip_at;
+        size_t section;
+        CHECK(read_profile(argv[9], &skip_profile) == 0 && load(argv[10], &skip) == 0);
+        CHECK(locate(skip.bytes + LXP_BRIDGE_CREDIT_BYTES, skip.length - LXP_BRIDGE_CREDIT_BYTES,
+                     &skip_at) == 0);
+        section = LXP_BRIDGE_CREDIT_BYTES + skip_at.signatures_end;
+        now_ms = number(skip.bytes + LXP_BRIDGE_CREDIT_BYTES + 29U, 8U) * 1000U;
+        CHECK(number(skip.bytes + section, 2U) != 0U);
+        CHECK(number(skip.bytes + 287U, 8U) > number(skip_profile.bytes + 161U, 8U) + 1U);
+        CHECK(memcmp(skip.bytes + 295U, skip_profile.bytes + 65U, 32U) != 0);
+        CHECK(verify(&skip_profile, &skip, false, NULL, &unused) == LXP_OK &&
+              unused.height == number(skip.bytes + 287U, 8U));
+        CHECK(copy(&skip, &changed) == 0);
+        changed.bytes[section + 2U + 39U] ^= 1U;
+        CHECK(verify(&skip_profile, &changed, true, NULL, NULL) == LXP_ERR_DEPOSIT_PROOF_NOT_FINAL);
+        free(changed.bytes);
+        CHECK(copy(&skip, &changed) == 0);
+        changed.bytes[section + 2U] ^= 1U;
+        CHECK(verify(&skip_profile, &changed, true, NULL, NULL) == LXP_ERR_DEPOSIT_PROOF_NOT_FINAL);
+        free(changed.bytes);
+        changed.length = skip.length - 40U;
+        changed.bytes = malloc(changed.length);
+        CHECK(changed.bytes != NULL);
+        (void)memcpy(changed.bytes, skip.bytes, section);
+        changed.bytes[section] = 0U;
+        changed.bytes[section + 1U] = 0U;
+        (void)memcpy(changed.bytes + section + 2U, skip.bytes + section + 42U, skip.length - section - 42U);
+        CHECK(number(skip.bytes + section, 2U) == 1U);
+        CHECK(verify(&skip_profile, &changed, true, NULL, NULL) == LXP_ERR_DEPOSIT_PROOF_NOT_FINAL);
+        free(changed.bytes);
+        free(skip.bytes);
+    }
 
     CHECK(memcmp(retired_profile.bytes, "LXBC2", 5U) == 0 && retired.length == 427U &&
           memcmp(retired.bytes, "LXDC2", 5U) == 0);

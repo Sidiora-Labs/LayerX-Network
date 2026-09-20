@@ -13,7 +13,8 @@ enum {
     LXP_BRIDGE_LIGHT_MAX_RECORD = 4096,
     LXP_BRIDGE_LIGHT_MAX_IAVL_STEPS = 64,
     LXP_BRIDGE_LIGHT_MAX_STORE_STEPS = 32,
-    LXP_BRIDGE_LIGHT_TRUST_BYTES = 89
+    LXP_BRIDGE_LIGHT_TRUST_BYTES = 89,
+    LXP_BRIDGE_LIGHT_MAX_CLOCK_DRIFT_SECONDS = 10
 };
 
 typedef struct lxp_bridge_light_trust {
@@ -49,6 +50,7 @@ typedef struct lxp_bridge_light_deposit {
 lxp_result lxp_bridge_light_verify(const uint8_t *chain_id, size_t chain_id_length,
                                    const uint8_t *store, size_t store_length,
                                    const lxp_bridge_light_trust *trusted,
+                                   uint64_t trusting_period_seconds, uint64_t now_seconds,
                                    const uint8_t *bundle, size_t bundle_length,
                                    lxp_bridge_light_result *result);
 lxp_result lxp_bridge_light_deposit_decode(const uint8_t *value, size_t length,

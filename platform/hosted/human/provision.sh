@@ -252,6 +252,7 @@ human_custody_step() (
         --work-dir "$work" --rpc "$PAXEER_URL" --rpc "$PAXEER_OBSERVER_URL" \
         --ca-bundle "$CA_DIR/ca.pem" --disposable-identity "$WORK_DIR/paxeer/rpc-origins.json" \
         --comet-rpc "$PAXEER_URL/comet" --trusted-height "${PAXEER_TRUSTED_HEIGHT:-1}" \
+        --trusting-period-seconds "${PAXEER_TRUSTING_PERIOD_SECONDS:?Paxeer trusting period is required}" \
         --key-file "$SECRETS_DIR/paxeer-deployer.key" \
         --network-id "$NODE_NETWORK_ID" --asset "$NODE_ASSET_ID" "$@"
 )

@@ -62,7 +62,7 @@ def main():
         (work / 'request.lxgb').write_bytes(request)
         profile = (FIXTURES / 'custody.profile').read_bytes()
         credit = (FIXTURES / 'custody.credit').read_bytes()
-        if (len(profile) != 207 or profile[:5] != b'LXBC3' or profile[97:129] != asset
+        if (len(profile) != 223 or profile[:5] != b'LXBC3' or profile[97:129] != asset
                 or profile[201:207] != be(77, 4) + be(3, 2) or credit[:5] != b'LXDC3'
                 or credit[5:37] != hashlib.sha256(profile).digest() or credit[107:139] != beneficiary
                 or credit[139:171] != public or credit[191:207] != be(1000000, 16)

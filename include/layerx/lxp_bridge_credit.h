@@ -8,7 +8,7 @@
 
 enum {
     LXP_BRIDGE_CREDIT = (8U << 16U) | 1U,
-    LXP_BRIDGE_PROFILE_BYTES = 207,
+    LXP_BRIDGE_PROFILE_BYTES = 223,
     LXP_BRIDGE_CREDIT_BYTES = 363,
     LXP_BRIDGE_CREDIT_MIN_PAYLOAD_BYTES = LXP_BRIDGE_CREDIT_BYTES + 5,
     LXP_BRIDGE_LIGHT_PROOF_KIND = 2
@@ -47,6 +47,7 @@ lxp_result lxp_bridge_credit_verify(const lxp_bridge_profile *profile,
                                     uint32_t network_id,
                                     uint16_t protocol_version,
                                     const lxp_bridge_light_trust *trusted,
+                                    uint64_t now_ms,
                                     uint8_t nullifier[32],
                                     lxp_bridge_light_trust *advanced);
 const lxp_module_iface *lxp_bridge_module_iface(void);

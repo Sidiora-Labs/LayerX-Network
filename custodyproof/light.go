@@ -26,19 +26,21 @@ import (
 )
 
 const (
-	LightProfileMagic    = "LXBC3"
-	LightCreditMagic     = "LXDC3"
-	LightBundleMagic     = "LXLB1"
-	LightProfileBytes    = 207
-	LightCreditHeadBytes = 363
-	LightProtocol        = 3
-	LightProofKind       = 2
-	LightEVMChainID      = 125
-	LightMaxIAVLSteps    = 64
-	LightMaxStoreSteps   = 32
-	LightReserveAccount  = "system:paxeer-reserve"
-	LightAccountDomain   = "LX:ACCOUNT:v1"
-	LightNullifierDomain = "LX:DEPOSIT:NULLIFIER:v1"
+	LightProfileMagic      = "LXBC3"
+	LightCreditMagic       = "LXDC3"
+	LightBundleMagic       = "LXLB1"
+	LightProfileBytes      = 223
+	LightCreditHeadBytes   = 363
+	LightProtocol          = 3
+	LightProofKind         = 2
+	LightEVMChainID        = 125
+	LightMaxIAVLSteps      = 64
+	LightMaxStoreSteps     = 32
+	LightReserveAccount    = "system:paxeer-reserve"
+	LightAccountDomain     = "LX:ACCOUNT:v1"
+	LightNullifierDomain   = "LX:DEPOSIT:NULLIFIER:v1"
+	LightMaxTrustingPeriod = 4294967295
+	LightMaxClockDriftSecs = 10
 )
 
 var lightTrustLevel = tmmath.Fraction{Numerator: 1, Denominator: 3}
@@ -58,6 +60,8 @@ type LightProfile struct {
 	TrustedHeight  uint64
 	CometChainID   string
 	NetworkID      uint32
+	TrustingPeriod uint64
+	TrustedTime    uint64
 }
 
 // LightEvidence is what a Paxeer node returns for one deposit: the signed
@@ -134,11 +138,17 @@ func lightChainID(chainID string) error {
 	return nil
 }
 
-// BuildLightProfile serializes the 207-byte LXBC3 profile from the signed
-// header at the trusted height.
-func BuildLightProfile(trusted *types.SignedHeader, assetID [32]byte, networkID uint32) ([]byte, error) {
+// BuildLightProfile serializes the 223-byte LXBC3 profile from the signed
+// header at the trusted height and the trusting period in seconds.
+func BuildLightProfile(trusted *types.SignedHeader, assetID [32]byte, networkID uint32, trustingPeriod uint64) ([]byte, error) {
 	if trusted == nil || trusted.Header == nil || trusted.Commit == nil || networkID == 0 || assetID == ([32]byte{}) {
 		return nil, errors.New("light profile identity")
+	}
+	if trustingPeriod < 1 || trustingPeriod > LightMaxTrustingPeriod {
+		return nil, errors.New("light profile trusting period")
+	}
+	if trusted.Time.Unix() < 1 || trusted.Time.Unix() > lightMaxTimestampSeconds {
+		return nil, errors.New("trusted header time")
 	}
 	if err := lightChainID(trusted.ChainID); err != nil {
 		return nil, err
@@ -168,6 +178,8 @@ func BuildLightProfile(trusted *types.SignedHeader, assetID [32]byte, networkID 
 	out = append(out, chain...)
 	out = binary.BigEndian.AppendUint32(out, networkID)
 	out = binary.BigEndian.AppendUint16(out, LightProtocol)
+	out = binary.BigEndian.AppendUint64(out, trustingPeriod)
+	out = binary.BigEndian.AppendUint64(out, uint64(trusted.Time.Unix()))
 	if len(out) != LightProfileBytes {
 		return nil, errors.New("light profile size")
 	}
@@ -183,8 +195,10 @@ func DecodeLightProfile(profile []byte) (*LightProfile, error) {
 		return nil, errors.New("light profile size or magic")
 	}
 	out := &LightProfile{EVMChainID: binary.BigEndian.Uint64(profile[5:13]),
-		TrustedHeight: binary.BigEndian.Uint64(profile[161:169]),
-		NetworkID:     binary.BigEndian.Uint32(profile[201:205])}
+		TrustedHeight:  binary.BigEndian.Uint64(profile[161:169]),
+		NetworkID:      binary.BigEndian.Uint32(profile[201:205]),
+		TrustingPeriod: binary.BigEndian.Uint64(profile[207:215]),
+		TrustedTime:    binary.BigEndian.Uint64(profile[215:223])}
 	copy(out.Custody[:], profile[13:33])
 	copy(out.ModuleIdentity[:], profile[33:65])
 	copy(out.TrustedHash[:], profile[65:97])
@@ -213,12 +227,17 @@ func DecodeLightProfile(profile []byte) (*LightProfile, error) {
 		binary.BigEndian.Uint16(profile[205:207]) != LightProtocol {
 		return nil, errors.New("light profile identity")
 	}
+	if out.TrustingPeriod < 1 || out.TrustingPeriod > LightMaxTrustingPeriod ||
+		out.TrustedTime < 1 || out.TrustedTime > lightMaxTimestampSeconds {
+		return nil, errors.New("light profile trusting period or trusted time")
+	}
 	return out, nil
 }
 
 // TrustFromProfile seeds a verifier's trust state from its profile.
 func TrustFromProfile(profile *LightProfile) LightTrust {
-	return LightTrust{Height: int64(profile.TrustedHeight), NextValidatorsHash: append([]byte(nil), profile.TrustedHash[:]...)}
+	return LightTrust{Height: int64(profile.TrustedHeight), NextValidatorsHash: append([]byte(nil), profile.TrustedHash[:]...),
+		Time: time.Unix(int64(profile.TrustedTime), 0).UTC()}
 }
 
 type lightWriter struct{ bytes.Buffer }
@@ -255,13 +274,55 @@ func (w *lightWriter) validators(set *types.ValidatorSet) error {
 		return errors.New("validator count")
 	}
 	w.u16(len(set.Validators))
-	for _, validator := range set.Validators {
-		if validator == nil || validator.VotingPower <= 0 || len(validator.PubKey.Bytes()) != 32 ||
-			!bytes.Equal(validator.Address, validator.PubKey.Address()) {
+	var total int64
+	for index, validator := range set.Validators {
+		if validator == nil || validator.VotingPower <= 0 || validator.VotingPower > types.MaxTotalVotingPower-total ||
+			len(validator.PubKey.Bytes()) != 32 || !bytes.Equal(validator.Address, validator.PubKey.Address()) {
 			return errors.New("validator identity")
 		}
+		if _, err := ed25519.PublicKeyFromBytes(validator.PubKey.Bytes()); err != nil {
+			return errors.New("validator key")
+		}
+		if index > 0 && !lightValidatorOrder(set.Validators[index-1], validator) {
+			return errors.New("validators are not in validator-set order")
+		}
+		total += validator.VotingPower
 		w.Write(validator.PubKey.Bytes())
 		w.u64(uint64(validator.VotingPower))
+	}
+	return nil
+}
+
+// lightValidatorOrder is CometBFT validator-set order, strictly: voting power
+// descending, then address ascending.
+func lightValidatorOrder(before, after *types.Validator) bool {
+	if before.VotingPower != after.VotingPower {
+		return before.VotingPower > after.VotingPower
+	}
+	return bytes.Compare(before.Address, after.Address) < 0
+}
+
+func lightTimestamp(value time.Time) bool {
+	return value.Unix() >= 1 && value.Unix() <= lightMaxTimestampSeconds
+}
+
+// lightBounds are the header, commit and vote bounds both verifiers enforce.
+func lightBounds(header *types.Header, commit *types.Commit) error {
+	last := header.LastBlockID
+	if header.Version.Block != version.BlockProtocol || header.Height < 2 || !lightTimestamp(header.Time) ||
+		len(last.Hash) != 32 || last.PartSetHeader.Total < 1 || last.PartSetHeader.Total > types.MaxBlockPartsCount ||
+		len(last.PartSetHeader.Hash) != 32 || len(header.ValidatorsHash) != 32 || len(header.NextValidatorsHash) != 32 ||
+		len(header.AppHash) != 32 || len(header.ProposerAddress) != 20 {
+		return errors.New("header bounds")
+	}
+	if commit.Round < 0 || commit.BlockID.PartSetHeader.Total < 1 ||
+		commit.BlockID.PartSetHeader.Total > types.MaxBlockPartsCount || len(commit.BlockID.PartSetHeader.Hash) != 32 {
+		return errors.New("commit bounds")
+	}
+	for _, signature := range commit.Signatures {
+		if signature.BlockIDFlag != types.BlockIDFlagAbsent && !lightTimestamp(signature.Timestamp) {
+			return errors.New("vote timestamp bounds")
+		}
 	}
 	return nil
 }
@@ -320,9 +381,8 @@ func EncodeLightBundle(evidence *LightEvidence) ([]byte, error) {
 		return nil, errors.New("missing light evidence")
 	}
 	header, commit := evidence.Header.Header, evidence.Header.Commit
-	if header.Height < 1 || header.Time.Unix() <= 0 || header.Time.Unix() > lightMaxTimestampSeconds || len(header.ProposerAddress) != 20 || len(header.AppHash) != 32 ||
-		len(header.ValidatorsHash) != 32 || len(header.NextValidatorsHash) != 32 {
-		return nil, errors.New("header bounds")
+	if err := lightBounds(header, commit); err != nil {
+		return nil, err
 	}
 	if commit.Height != header.Height || commit.Round < 0 || !bytes.Equal(commit.BlockID.Hash, header.Hash()) ||
 		len(commit.BlockID.PartSetHeader.Hash) != 32 || commit.BlockID.PartSetHeader.Total == 0 ||
@@ -472,7 +532,7 @@ func lightRecord(value []byte, assetID [32]byte, stateHeight int64) (*lightDepos
 // verifyLightEvidence is the reference check: the existing Go light-client
 // and store-proof code decides whether evidence is acceptable under a trust
 // state. It returns the deposit and the trust state after the update.
-func verifyLightEvidence(profile *LightProfile, trust LightTrust, evidence *LightEvidence) (*lightDeposit, LightTrust, error) {
+func verifyLightEvidence(profile *LightProfile, trust LightTrust, evidence *LightEvidence, now time.Time) (*lightDeposit, LightTrust, error) {
 	none := LightTrust{}
 	if evidence == nil || evidence.Header == nil || evidence.Header.Header == nil || evidence.Header.Commit == nil ||
 		evidence.Validators == nil || evidence.Deposit == nil {
@@ -482,8 +542,23 @@ func verifyLightEvidence(profile *LightProfile, trust LightTrust, evidence *Ligh
 	if err := signed.ValidateBasic(profile.CometChainID); err != nil {
 		return nil, none, fmt.Errorf("signed header: %w", err)
 	}
-	if len(signed.AppHash) != 32 || signed.Height < 2 {
-		return nil, none, errors.New("signed header bounds")
+	if err := lightBounds(signed.Header, signed.Commit); err != nil {
+		return nil, none, err
+	}
+	if trust.Height < 1 || len(trust.NextValidatorsHash) != 32 || !lightTimestamp(trust.Time) {
+		return nil, none, errors.New("trust state")
+	}
+	if now.Unix() < 1 || now.Unix() > lightMaxTimestampSeconds {
+		return nil, none, errors.New("verification time")
+	}
+	if uint64(trust.Time.Unix())+profile.TrustingPeriod <= uint64(now.Unix()) {
+		return nil, none, errors.New("trusted header is outside the trusting period")
+	}
+	if signed.Time.Unix() > now.Unix()+LightMaxClockDriftSecs {
+		return nil, none, errors.New("header time is in the future")
+	}
+	if signed.Height > trust.Height && !signed.Time.After(trust.Time) {
+		return nil, none, errors.New("header time is not after the trusted header time")
 	}
 	if err := evidence.Validators.ValidateBasic(); err != nil {
 		return nil, none, err
@@ -495,8 +570,8 @@ func verifyLightEvidence(profile *LightProfile, trust LightTrust, evidence *Ligh
 		signed.Height, signed.Commit); err != nil {
 		return nil, none, fmt.Errorf("header quorum: %w", err)
 	}
-	if trust.Height < 1 || len(trust.NextValidatorsHash) != 32 {
-		return nil, none, errors.New("trust state")
+	if err := lightNilVotes(profile.CometChainID, evidence.Validators, signed.Commit); err != nil {
+		return nil, none, err
 	}
 	next := LightTrust{Height: signed.Height, HeaderHash: signed.Hash(), NextValidatorsHash: signed.NextValidatorsHash, Time: signed.Time}
 	switch {
@@ -540,9 +615,33 @@ func verifyLightEvidence(profile *LightProfile, trust LightTrust, evidence *Ligh
 	return deposit, next, nil
 }
 
+// lightNilVotes verifies every nil precommit over its canonical sign bytes,
+// which carry an empty block id. Nil votes never count toward a tally; a bad
+// one refuses the bundle.
+func lightNilVotes(chainID string, validators *types.ValidatorSet, commit *types.Commit) error {
+	if len(commit.Signatures) != len(validators.Validators) {
+		return errors.New("commit signature count")
+	}
+	for index, signature := range commit.Signatures {
+		if signature.BlockIDFlag != types.BlockIDFlagNil {
+			continue
+		}
+		validator := validators.Validators[index]
+		raw, present := signature.Signature.Get()
+		signBytes, ok := commit.VoteSignBytes(chainID, int32(index))
+		if !present || !ok || !bytes.Equal(signature.ValidatorAddress, validator.Address) {
+			return fmt.Errorf("nil vote %d is not aligned with its validator", index)
+		}
+		if err := validator.PubKey.Verify(signBytes, raw); err != nil {
+			return fmt.Errorf("nil vote %d signature", index)
+		}
+	}
+	return nil
+}
+
 // BuildLightCredit returns head||bundle for evidence the reference verifier
 // accepts under the profile's own trust state.
-func BuildLightCredit(profileBytes []byte, ownerKey [32]byte, networkID uint32, evidence *LightEvidence) ([]byte, error) {
+func BuildLightCredit(profileBytes []byte, ownerKey [32]byte, networkID uint32, evidence *LightEvidence, now time.Time) ([]byte, error) {
 	profile, err := DecodeLightProfile(profileBytes)
 	if err != nil {
 		return nil, err
@@ -557,7 +656,7 @@ func BuildLightCredit(profileBytes []byte, ownerKey [32]byte, networkID uint32, 
 		evidence.Header.Height <= int64(profile.TrustedHeight) {
 		return nil, errors.New("credit header is not above the profile's trusted height")
 	}
-	deposit, _, err := verifyLightEvidence(profile, TrustFromProfile(profile), evidence)
+	deposit, _, err := verifyLightEvidence(profile, TrustFromProfile(profile), evidence, now)
 	if err != nil {
 		return nil, err
 	}
@@ -566,7 +665,7 @@ func BuildLightCredit(profileBytes []byte, ownerKey [32]byte, networkID uint32, 
 		return nil, err
 	}
 	payload := append(lightHead(profileBytes, profile, ownerKey, deposit, evidence.Header, bundle), bundle...)
-	if _, err := VerifyLightCredit(profileBytes, payload, nil); err != nil {
+	if _, err := VerifyLightCredit(profileBytes, payload, nil, now); err != nil {
 		return nil, fmt.Errorf("serialized credit does not verify: %w", err)
 	}
 	return payload, nil
@@ -658,7 +757,12 @@ func (r *lightReader) validators(required bool) *types.ValidatorSet {
 			return nil
 		}
 		total += power
-		validators = append(validators, types.NewValidator(key, int64(power)))
+		validator := types.NewValidator(key, int64(power))
+		if len(validators) > 0 && !lightValidatorOrder(validators[len(validators)-1], validator) {
+			r.err = errors.New("validators are not in validator-set order")
+			return nil
+		}
+		validators = append(validators, validator)
 	}
 	if r.err != nil {
 		return nil
@@ -701,7 +805,7 @@ func DecodeLightBundle(bundle []byte, chainID string) (*LightEvidence, error) {
 	header := &types.Header{ChainID: chainID}
 	header.Version = version.Consensus{Block: r.u64(), App: r.u64()}
 	height := r.u64()
-	if height < 1 || height > uint64(^uint64(0)>>1) {
+	if height < 2 || height > uint64(^uint64(0)>>1) {
 		return nil, errors.New("header height")
 	}
 	header.Height = int64(height)
@@ -770,6 +874,9 @@ func DecodeLightBundle(bundle []byte, chainID string) (*LightEvidence, error) {
 	if len(r.data) != 0 {
 		return nil, errors.New("trailing light bundle bytes")
 	}
+	if err := lightBounds(header, commit); err != nil {
+		return nil, err
+	}
 	var err error
 	if store.Value, err = iavl.Calculate(); err != nil {
 		return nil, err
@@ -786,7 +893,9 @@ func DecodeLightBundle(bundle []byte, chainID string) (*LightEvidence, error) {
 // VerifyLightCredit decodes an LXDC3 payload and accepts it only when the
 // reference verifier accepts the evidence it carries and every head field is
 // the one that evidence authenticates. A nil trust state is the profile's.
-func VerifyLightCredit(profileBytes, payload []byte, trust *LightTrust) (*LightCredit, error) {
+// now is the verifier's clock (the LayerX sealed batch timestamp), never a
+// value taken from the payload.
+func VerifyLightCredit(profileBytes, payload []byte, trust *LightTrust, now time.Time) (*LightCredit, error) {
 	profile, err := DecodeLightProfile(profileBytes)
 	if err != nil {
 		return nil, err
@@ -803,7 +912,7 @@ func VerifyLightCredit(profileBytes, payload []byte, trust *LightTrust) (*LightC
 	if trust != nil {
 		state = *trust
 	}
-	deposit, next, err := verifyLightEvidence(profile, state, evidence)
+	deposit, next, err := verifyLightEvidence(profile, state, evidence, now)
 	if err != nil {
 		return nil, err
 	}

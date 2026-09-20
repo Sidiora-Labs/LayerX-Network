@@ -5,6 +5,7 @@
 #include <string.h>
 
 #define REFUSED LXP_ERR_DEPOSIT_PROOF_NOT_FINAL
+#define MAX_TIME_SECONDS INT64_C(253402300799)
 
 enum {
     VALIDATOR_BYTES = 40,
@@ -12,7 +13,9 @@ enum {
     FLAG_COMMIT = 2,
     FLAG_NIL = 3,
     HEADER_LEAVES = 14,
-    MAX_TOTAL_POWER_SHIFT = 3
+    MAX_TOTAL_POWER_SHIFT = 3,
+    BLOCK_PROTOCOL = 11,
+    MAX_BLOCK_PARTS = 101
 };
 
 typedef struct reader {
@@ -241,6 +244,8 @@ static lxp_result take_validators(reader *input, validator_set *set, bool requir
 {
     size_t count = (size_t)take_uint(input, 2U);
     const uint8_t *entries = take(input, count * VALIDATOR_BYTES);
+    uint64_t previous_power = 0U;
+    uint8_t previous_address[20] = {0};
     if (input->failed || count > LXP_BRIDGE_LIGHT_MAX_VALIDATORS || (required && count == 0U))
         return REFUSED;
     set->entries = entries;
@@ -248,9 +253,17 @@ static lxp_result take_validators(reader *input, validator_set *set, bool requir
     *total = 0U;
     for (size_t index = 0U; index < count; ++index) {
         uint64_t power = validator_power(set, index);
+        uint8_t address[32];
         if (!lxp_ed25519_pubkey_is_canonical(entries + index * VALIDATOR_BYTES) ||
-            power == 0U || power > ((uint64_t)INT64_MAX >> MAX_TOTAL_POWER_SHIFT) - *total)
+            power == 0U || power > ((uint64_t)INT64_MAX >> MAX_TOTAL_POWER_SHIFT) - *total ||
+            lxp_hash_sha256(entries + index * VALIDATOR_BYTES, 32U, address) != LXP_OK)
             return REFUSED;
+        if (index != 0U && (power > previous_power ||
+                            (power == previous_power &&
+                             memcmp(previous_address, address, 20U) >= 0)))
+            return REFUSED;
+        previous_power = power;
+        (void)memcpy(previous_address, address, 20U);
         *total += power;
     }
     return count == 0U ? LXP_OK : merkle(validator_leaf, set, 0U, count, hash);
@@ -265,13 +278,14 @@ static size_t vote_sign_bytes(uint8_t *out, const header_fields *header, const u
     uint8_t timestamp[24];
     size_t length = 0U;
     size_t prefix;
-    size_t block_id_length = put_block_id(block_id, header_hash, 32U, parts_total, parts_hash, 32U);
+    size_t block_id_length = header_hash == NULL ? 0U :
+        put_block_id(block_id, header_hash, 32U, parts_total, parts_hash, 32U);
     size_t timestamp_length = put_timestamp(timestamp, seconds, nanos);
     body[length++] = 0x08U;
     body[length++] = 0x02U;
     length += put_little(body + length, 0x11U, header->height);
     if (round != 0U) length += put_little(body + length, 0x19U, round);
-    length += put_bytes(body + length, 0x22U, block_id, block_id_length);
+    if (header_hash != NULL) length += put_bytes(body + length, 0x22U, block_id, block_id_length);
     length += put_bytes(body + length, 0x2aU, timestamp, timestamp_length);
     length += put_bytes(body + length, 0x32U, header->chain_id, header->chain_id_length);
     prefix = put_varint(out, length);
@@ -411,6 +425,7 @@ static bool later(int64_t seconds, uint32_t nanos, const lxp_bridge_light_trust 
 lxp_result lxp_bridge_light_verify(const uint8_t *chain_id, size_t chain_id_length,
                                    const uint8_t *store, size_t store_length,
                                    const lxp_bridge_light_trust *trusted,
+                                   uint64_t trusting_period_seconds, uint64_t now_seconds,
                                    const uint8_t *bundle, size_t bundle_length,
                                    lxp_bridge_light_result *result)
 {
@@ -435,7 +450,11 @@ lxp_result lxp_bridge_light_verify(const uint8_t *chain_id, size_t chain_id_leng
         store == NULL || store_length == 0U || store_length > UINT8_MAX || trusted == NULL ||
         bundle == NULL || result == NULL || trusted->height == 0U ||
         trusted->height >= (uint64_t)INT64_MAX ||
-        lxp_ct_is_zero(trusted->next_validators_hash, 32U))
+        lxp_ct_is_zero(trusted->next_validators_hash, 32U) ||
+        trusted->time_seconds <= 0 || trusted->time_seconds > MAX_TIME_SECONDS ||
+        trusted->time_nanos >= 1000000000U || trusting_period_seconds == 0U ||
+        trusting_period_seconds > UINT32_MAX || now_seconds > (uint64_t)MAX_TIME_SECONDS ||
+        (uint64_t)trusted->time_seconds + trusting_period_seconds <= now_seconds)
         return REFUSED;
     (void)memset(result, 0, sizeof(*result));
     (void)memset(&header, 0, sizeof(header));
@@ -453,17 +472,25 @@ lxp_result lxp_bridge_light_verify(const uint8_t *chain_id, size_t chain_id_leng
     header.last_parts_hash = take_hash(&input);
     for (size_t index = 0U; index < 8U; ++index) header.hashes[index] = take_hash(&input);
     header.proposer = take_span(&input, 1U);
-    if (input.failed || header.height == 0U || header.height >= (uint64_t)INT64_MAX ||
-        header.time_seconds <= 0 || header.time_nanos >= 1000000000U ||
+    if (input.failed || header.version_block != BLOCK_PROTOCOL ||
+        header.height < 2U || header.height >= (uint64_t)INT64_MAX ||
+        header.time_seconds <= 0 || header.time_seconds > MAX_TIME_SECONDS ||
+        header.time_nanos >= 1000000000U || header.last_block_hash.length != 32U ||
+        header.last_parts_total == 0U || header.last_parts_total > MAX_BLOCK_PARTS ||
+        header.last_parts_hash.length != 32U ||
         header.hashes[2].length != 32U || header.hashes[3].length != 32U ||
         header.hashes[5].length != 32U || header.proposer.length != 20U)
+        return REFUSED;
+    if ((uint64_t)header.time_seconds > now_seconds + LXP_BRIDGE_LIGHT_MAX_CLOCK_DRIFT_SECONDS)
         return REFUSED;
     status = merkle(header_leaf, &header, 0U, HEADER_LEAVES, hash);
     if (status != LXP_OK) return status;
     round = take_uint(&input, 4U);
     parts_total = take_uint(&input, 4U);
     parts_hash = take(&input, 32U);
-    if (input.failed || round > (uint64_t)INT32_MAX) return REFUSED;
+    if (input.failed || round > (uint64_t)INT32_MAX || parts_total == 0U ||
+        parts_total > MAX_BLOCK_PARTS)
+        return REFUSED;
     status = take_validators(&input, &validators, true, &total, root);
     if (status != LXP_OK) return status;
     if (lxp_ct_memcmp(root, header.hashes[2].bytes, 32U) != 0) return REFUSED;
@@ -478,13 +505,14 @@ lxp_result lxp_bridge_light_verify(const uint8_t *chain_id, size_t chain_id_leng
         seconds = (int64_t)take_uint(&input, 8U);
         nanos = (uint32_t)take_uint(&input, 4U);
         signature = take(&input, 64U);
-        if (input.failed || nanos >= 1000000000U) return REFUSED;
-        if (flag != FLAG_COMMIT) continue;
-        length = vote_sign_bytes(message, &header, hash, (uint32_t)round, (uint32_t)parts_total,
-                                 parts_hash, seconds, nanos);
+        if (input.failed || seconds <= 0 || seconds > MAX_TIME_SECONDS || nanos >= 1000000000U)
+            return REFUSED;
+        length = vote_sign_bytes(message, &header, flag == FLAG_COMMIT ? hash : NULL,
+                                 (uint32_t)round, (uint32_t)parts_total, parts_hash, seconds, nanos);
         if (lxp_ed25519_verify_raw(validators.entries + index * VALIDATOR_BYTES, signature,
                                    message, length) != LXP_OK)
             return REFUSED;
+        if (flag != FLAG_COMMIT) continue;
         signed_by[index] = 1U;
         tallied += validator_power(&validators, index);
     }
@@ -498,9 +526,7 @@ lxp_result lxp_bridge_light_verify(const uint8_t *chain_id, size_t chain_id_leng
             return REFUSED;
     } else {
         bool same = lxp_ct_memcmp(header.hashes[2].bytes, trusted->next_validators_hash, 32U) == 0;
-        if (!lxp_ct_is_zero(trusted->header_hash, 32U) &&
-            !later(header.time_seconds, header.time_nanos, trusted))
-            return REFUSED;
+        if (!later(header.time_seconds, header.time_nanos, trusted)) return REFUSED;
         if (same || header.height == trusted->height + 1U) {
             if (!same || previous.count != 0U) return REFUSED;
         } else {

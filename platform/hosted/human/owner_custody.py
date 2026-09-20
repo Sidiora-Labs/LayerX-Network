@@ -83,7 +83,7 @@ def deposit(args):
     account = signer(rpc, args.key_file)
     require(account == config['payer'] and args.asset == config['asset'], root, 'custody payer and asset')
     profile = (root / 'custody.profile').read_bytes()
-    require(len(profile) == 207 and profile[:5] == b'LXBC3' and profile[13:33] == unhex(config['vault'], 20)
+    require(len(profile) == 223 and profile[:5] == b'LXBC3' and profile[13:33] == unhex(config['vault'], 20)
             and profile[97:129] == bytes.fromhex(args.asset) and profile[201:207] == args.network_id.to_bytes(4, 'big') + b'\0\3',
             root, 'immutable custody profile binding')
     native = getattr(rpc, 'disposable', False)
@@ -125,6 +125,7 @@ if __name__ == '__main__':
     parser.add_argument('--vault-artifact')
     parser.add_argument('--comet-rpc', required=True)
     parser.add_argument('--trusted-height', type=int)
+    parser.add_argument('--trusting-period-seconds', type=int)
     parser.add_argument('--key-file', required=True)
     parser.add_argument('--network-id', type=int, required=True)
     parser.add_argument('--asset', required=True)

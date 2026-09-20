@@ -3184,8 +3184,8 @@ custody_profile_validate() {
     [ -n "$CUSTODY_PROFILE" ] || return 0
     [ -f "$CUSTODY_PROFILE" ] && [ ! -L "$CUSTODY_PROFILE" ] && [ -r "$CUSTODY_PROFILE" ] \
         || fail "LAYERX_BETA_CUSTODY_PROFILE must name a readable regular file, not a symlink"
-    [ "$(stat -c %s "$CUSTODY_PROFILE")" -eq 207 ] \
-        || fail "LAYERX_BETA_CUSTODY_PROFILE must contain exactly 207 bytes"
+    [ "$(stat -c %s "$CUSTODY_PROFILE")" -eq 223 ] \
+        || fail "LAYERX_BETA_CUSTODY_PROFILE must contain exactly 223 bytes"
     CUSTODY_PROFILE=$(readlink -f "$CUSTODY_PROFILE")
 }
 

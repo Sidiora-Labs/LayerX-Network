@@ -19,7 +19,34 @@ import (
 	custodytypes "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/types"
 )
 
-const lightTimeout = 60 * time.Second
+const (
+	lightTimeout    = 60 * time.Second
+	lightProofTries = 10
+	lightProofPause = 1100 * time.Millisecond
+	lightRateLimit  = "historical proof rate limited"
+)
+
+// depositProof queries the deposit record with its store proof. paxd serves
+// one historical proof per second; only that refusal is retried.
+func depositProof(ctx context.Context, client *rpchttp.HTTP, depositID [32]byte, height int64) (*coretypes.ResultABCIQuery, error) {
+	for try := 1; ; try++ {
+		query, err := client.ABCIQueryWithOptions(ctx, "/store/"+custodytypes.StoreKey+"/key", custodytypes.DepositKey(depositID),
+			rpcclient.ABCIQueryOptions{Height: height, Prove: true})
+		limited := (err != nil && strings.Contains(err.Error(), lightRateLimit)) ||
+			(err == nil && query.Response.Code != 0 && strings.Contains(query.Response.Log, lightRateLimit))
+		if !limited {
+			return query, err
+		}
+		if try == lightProofTries {
+			return nil, fmt.Errorf("deposit proof still rate limited after %d tries", lightProofTries)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(lightProofPause):
+		}
+	}
+}
 
 func hex32(name, value string) ([32]byte, error) {
 	var out [32]byte
@@ -64,12 +91,14 @@ func lightProfile(arguments []string) error {
 	asset := flags.String("asset", "", "32-byte asset id, hex")
 	network := flags.Uint("network-id", 0, "LayerX network id")
 	trusted := flags.Int64("trusted-height", 0, "trusted header height")
+	period := flags.Uint64("trusting-period-seconds", 0, "trusting period in seconds")
 	output := flags.String("output", "", "profile file to write")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || *rpc == "" || *output == "" || *trusted < 1 || *network == 0 || *network > 0xffffffff {
-		return errors.New("light-profile needs --rpc, --asset, --network-id, --trusted-height and --output")
+	if flags.NArg() != 0 || *rpc == "" || *output == "" || *trusted < 1 || *network == 0 || *network > 0xffffffff ||
+		*period < 1 || *period > custodyproof.LightMaxTrustingPeriod {
+		return errors.New("light-profile needs --rpc, --asset, --network-id, --trusted-height, --trusting-period-seconds and --output")
 	}
 	assetID, err := hex32("asset", *asset)
 	if err != nil {
@@ -96,7 +125,7 @@ func lightProfile(arguments []string) error {
 		header.Commit); err != nil {
 		return fmt.Errorf("trusted header quorum: %w", err)
 	}
-	profile, err := custodyproof.BuildLightProfile(header, assetID, uint32(*network))
+	profile, err := custodyproof.BuildLightProfile(header, assetID, uint32(*network), *period)
 	if err != nil {
 		return err
 	}
@@ -167,13 +196,12 @@ func lightCredit(arguments []string) error {
 			}
 		}
 	}
-	query, err := client.ABCIQueryWithOptions(ctx, "/store/"+custodytypes.StoreKey+"/key", custodytypes.DepositKey(depositID),
-		rpcclient.ABCIQueryOptions{Height: *height - 1, Prove: true})
+	query, err := depositProof(ctx, client, depositID, *height-1)
 	if err != nil {
 		return err
 	}
 	evidence.Deposit = &query.Response
-	credit, err := custodyproof.BuildLightCredit(profileBytes, ownerKey, profile.NetworkID, evidence)
+	credit, err := custodyproof.BuildLightCredit(profileBytes, ownerKey, profile.NetworkID, evidence, time.Now().UTC())
 	if err != nil {
 		return err
 	}

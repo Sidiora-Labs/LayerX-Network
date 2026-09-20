@@ -174,7 +174,7 @@ def main():
                             '--comet-rpc', comet]
                     run(sys.executable, 'tests/bridge/custody_credit.py', 'profile', *pair, '--chain-id', '125',
                         '--network-id', '77', '--vault', custody['vault'], '--runtime-sha256', custody['runtime_sha256'],
-                        '--asset', '0x' + ASSET, '--trusted-height', '1', '--output', work / 'profile')
+                        '--asset', '0x' + ASSET, '--trusted-height', '1', '--trusting-period-seconds', '1209600', '--output', work / 'profile')
                     run(sys.executable, 'tests/bridge/custody_credit.py', 'attest', *pair, '--profile', work / 'profile',
                         '--network-id', '77', '--transaction', custody['transaction'], '--beneficiary', '0x' + beneficiary,
                         '--beneficiary-key', '0x' + public.hex(), '--expected-amount', str(amount),

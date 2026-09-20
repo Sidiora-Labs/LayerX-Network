@@ -33,11 +33,13 @@ static int sign_activity(lxp_activity *activity, const uint8_t seed[32], uint8_t
     return ok && lxp_activity_verify_signature(activity) == LXP_OK ? 0 : 1;
 }
 
+static uint64_t batch_ms;
+
 static int begin(lxp_module_ctx *ctx, lxp_kernel *kernel, lxp_arena *arena,
                   lxp_effect_buffer *effects, uint64_t sequence)
 {
     CHECK(lxp_state_journal_open(kernel->state, sequence, kernel->journal) == LXP_OK);
-    CHECK(lxp_module_ctx_init(ctx, kernel, LXP_MODULE_BRIDGE, 1U, 1U,
+    CHECK(lxp_module_ctx_init(ctx, kernel, LXP_MODULE_BRIDGE, batch_ms, 1U,
                               sequence, 100000U, arena, true) == LXP_OK);
     ctx->protocol_version = 3U;
     CHECK(lxp_effect_buffer_init(effects) == LXP_OK);
@@ -171,22 +173,30 @@ int main(int argc, char **argv)
     CHECK(lxp_activity_decode(activity_bytes, activity_length, &activity) == LXP_OK);
     CHECK(lxp_activity_verify_signature(&activity) == LXP_OK);
     CHECK(lxp_bridge_credit_parse(activity.payload.bytes, activity.payload.length, &credit) == LXP_OK);
-    CHECK(lxp_bridge_credit_verify(&profile, &credit, manifest->network_id, 3U, NULL, nullifier, &advanced) == LXP_OK);
+    for (size_t index = 0U; index < 8U; ++index) batch_ms = (batch_ms << 8U) | credit.proof[29U + index];
+    batch_ms *= 1000U;
+    CHECK(lxp_bridge_credit_verify(&profile, &credit, manifest->network_id, 3U, NULL, batch_ms, nullifier, &advanced) == LXP_OK);
     CHECK(advanced.height == ((uint64_t)credit.bytes[291] << 24U | (uint64_t)credit.bytes[292] << 16U |
                               (uint64_t)credit.bytes[293] << 8U | credit.bytes[294]));
     CHECK(lxp_u128_from_be(credit.bytes + 191U, &amount) == LXP_OK);
     for (size_t index = 0U; index < sizeof(credit.bytes); ++index) {
         changed = credit;
         changed.bytes[index] ^= 1U;
-        CHECK(lxp_bridge_credit_verify(&profile, &changed, manifest->network_id, 3U, NULL, root, NULL) != LXP_OK);
+        if (index >= 139U && index < 171U)
+            CHECK(lxp_bridge_credit_owner_bound(activity.actor_did.bytes, activity.actor_did.length,
+                                                credit.bytes + 139U) &&
+                  !lxp_bridge_credit_owner_bound(activity.actor_did.bytes, activity.actor_did.length,
+                                                 changed.bytes + 139U));
+        else
+            CHECK(lxp_bridge_credit_verify(&profile, &changed, manifest->network_id, 3U, NULL, batch_ms, root, NULL) != LXP_OK);
     }
     for (size_t index = 0U; index < sizeof(profile.bytes); ++index) {
         changed_profile = profile;
         changed_profile.bytes[index] ^= 1U;
-        CHECK(lxp_bridge_credit_verify(&changed_profile, &credit, manifest->network_id, 3U, NULL, root, NULL) != LXP_OK);
+        CHECK(lxp_bridge_credit_verify(&changed_profile, &credit, manifest->network_id, 3U, NULL, batch_ms, root, NULL) != LXP_OK);
     }
-    CHECK(lxp_bridge_credit_verify(&profile, &credit, manifest->network_id ^ 1U, 3U, NULL, root, NULL) != LXP_OK);
-    CHECK(lxp_bridge_credit_verify(&profile, &credit, manifest->network_id, 2U, NULL, root, NULL) != LXP_OK);
+    CHECK(lxp_bridge_credit_verify(&profile, &credit, manifest->network_id ^ 1U, 3U, NULL, batch_ms, root, NULL) != LXP_OK);
+    CHECK(lxp_bridge_credit_verify(&profile, &credit, manifest->network_id, 2U, NULL, batch_ms, root, NULL) != LXP_OK);
     CHECK(lx_account_registry_init(accounts) == LXP_OK);
     CHECK(lxp_state_store_init(state, 1U) == LXP_OK);
     CHECK(lxp_state_store_bind_accounts(state, accounts) == LXP_OK);
@@ -225,7 +235,7 @@ int main(int argc, char **argv)
     (void)memcpy(authority.verified_key, activity.authority.bytes, 32U);
     (void)memcpy(supply_key + 15U, profile.bytes + 97U, 32U);
     (void)memcpy(replay_key + 18U, nullifier, 32U);
-    CHECK(lxp_module_ctx_init(ctx, kernel, LXP_MODULE_BRIDGE, 1U, 1U,
+    CHECK(lxp_module_ctx_init(ctx, kernel, LXP_MODULE_BRIDGE, batch_ms, 1U,
                               1U, 100000U, &arena, false) == LXP_OK);
     CHECK(lxp_ctx_account_find(ctx, profile.bytes + 129U, &reserve) == LXP_OK);
     CHECK(prove_balance(kernel, reserve, (lxp_u128){0U, 0U}, initial_root) == 0);

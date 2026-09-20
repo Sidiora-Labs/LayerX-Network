@@ -523,6 +523,14 @@ static int maintenance_noncall(maintenance_fixture *f)
     return 0;
 }
 
+static uint64_t credit_now_ms(const lxp_bridge_credit *credit)
+{
+    uint64_t seconds = 0U;
+    for (size_t index = 0U; index < 8U; ++index)
+        seconds = (seconds << 8U) | credit->proof[29U + index];
+    return seconds * 1000U;
+}
+
 static int maintenance_bridge(const char *manifest_path, const char *activity_path)
 {
     maintenance_fixture *f = calloc(1U, sizeof(*f));
@@ -551,7 +559,7 @@ static int maintenance_bridge(const char *manifest_path, const char *activity_pa
     CHECK(lxp_activity_decode(activity_bytes, activity_length, &activity) == LXP_OK);
     CHECK(lxp_activity_verify_signature(&activity) == LXP_OK && activity.activity_type == LXP_BRIDGE_CREDIT);
     CHECK(lxp_bridge_credit_parse(activity.payload.bytes, activity.payload.length, &credit) == LXP_OK);
-    CHECK(lxp_bridge_credit_verify(&profile, &credit, manifest->network_id, 3U, NULL, nullifier, NULL) == LXP_OK);
+    CHECK(lxp_bridge_credit_verify(&profile, &credit, manifest->network_id, 3U, NULL, credit_now_ms(&credit), nullifier, NULL) == LXP_OK);
     CHECK(lxp_u128_from_be(credit.bytes + 191U, &amount) == LXP_OK);
     CHECK(lx_account_registry_init(&f->accounts) == LXP_OK);
     CHECK(lxp_state_store_init(&f->state, 1U) == LXP_OK);

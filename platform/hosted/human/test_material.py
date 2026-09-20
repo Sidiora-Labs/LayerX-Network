@@ -238,7 +238,7 @@ class MaterialTests(unittest.TestCase):
             self.assertEqual(provision.protected_json(funding / 'owner-admission.json'),
                              dict(did=did.decode(), public_key=public.hex(), owner_account=account.hex()))
             self.assertEqual(provision.protected_json(funding / 'owner-custody.json'), custody)
-            self.assertEqual(provision.protected_bytes(funding / 'custody.profile', 207), profile)
+            self.assertEqual(provision.protected_bytes(funding / 'custody.profile', 223), profile)
             self.assertEqual((work / 'explorer-read-funding').stat().st_mode & 0o777, 0o700)
             with self.assertRaises(provision.Refused):
                 provision.explorer_read_funding(provision._explorer_read_funding_prepare, work, secrets)

@@ -3671,7 +3671,7 @@ test-light-credit: $(BUILD_DIR)/tests/bridge/test-light-credit
 		$(LIGHT_CREDIT_FIXTURES)/custody-adjacent.profile $(LIGHT_CREDIT_FIXTURES)/custody-adjacent.credit \
 		$(LIGHT_CREDIT_FIXTURES)/custody-later.credit \
 		tests/fixtures/custody/paxeer-state-v2/custody.profile tests/fixtures/custody/paxeer-state-v2/custody.credit \
-		$(LIGHT_CREDIT_FIXTURES)/did.txt
+		$(LIGHT_CREDIT_FIXTURES)/did.txt $(LIGHT_CREDIT_FIXTURES)/custody-skip.profile $(LIGHT_CREDIT_FIXTURES)/custody-skip.credit
 
 .PHONY: test-bridge-credit
 test-bridge-credit: $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit build/bin/layerx-genesis-build

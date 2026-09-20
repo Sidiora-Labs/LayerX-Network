@@ -659,8 +659,8 @@ def _explorer_read_funding_prepare(work_dir, secrets_dir):
     custody_path = source / 'owner-custody.json'
     custody = protected_json(custody_path)
     fields(custody, 'vault asset runtime_sha256 payer', custody_path, 'native custody binding')
-    profile = protected_bytes(source / 'custody.profile', 207)
-    require(len(profile) == 207 and profile[:5] == b'LXBC3'
+    profile = protected_bytes(source / 'custody.profile', 223)
+    require(len(profile) == 223 and profile[:5] == b'LXBC3'
             and profile[97:129].hex() == custody['asset'], source / 'custody.profile', 'custody profile asset binding')
     root = Path(work_dir) / EXPLORER_READ_FUNDING
     root.mkdir(mode=0o700)

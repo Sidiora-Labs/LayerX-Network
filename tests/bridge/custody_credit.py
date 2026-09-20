@@ -17,7 +17,7 @@ MAX_TRANSACTIONS = 4096
 MAX_ANCESTRY = 8192
 MAX_TOTAL_RESPONSE = 128 * 1024 * 1024
 MAX_RPC_CALLS = 20000
-PROFILE_BYTES = 207
+PROFILE_BYTES = 223
 DEPOSIT_TOPIC = "0x" + keccak(b"CustodyDeposit(bytes32,bytes32,address,bytes32,uint256,uint64)").hex()
 
 
@@ -411,6 +411,7 @@ def main():
     profile.add_argument("--runtime-sha256", required=True)
     profile.add_argument("--asset", required=True)
     profile.add_argument("--trusted-height", type=int, required=True)
+    profile.add_argument("--trusting-period-seconds", type=int, required=True)
     credit = commands.add_parser("attest")
     credit.add_argument("--profile", required=True)
     credit.add_argument("--network-id", type=int, required=True)

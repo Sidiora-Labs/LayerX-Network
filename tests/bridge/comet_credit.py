@@ -39,17 +39,21 @@ def create_profile(args, rpcs):
     require(unhex(args.vault, 20) == unhex(CUSTODY_ADDRESS, 20)
             and unhex(args.runtime_sha256, 32) == module_identity(), 'Paxeer custody is the native module')
     require(type(args.trusted_height) is int and 0 < args.trusted_height < 2**63, 'trusted Comet height')
+    period = getattr(args, 'trusting_period_seconds', None)
+    require(type(period) is int and 0 < period < 2**32, 'Comet trusting period')
     asset = unhex(args.asset, 32)
     scratch = args.output+'.produced'
     producer(rpcs[0], 'light-profile', '--rpc', comet_rpc(args), '--asset', '0x'+asset.hex(),
-             '--network-id', args.network_id, '--trusted-height', args.trusted_height, '--output', scratch)
+             '--network-id', args.network_id, '--trusted-height', args.trusted_height,
+             '--trusting-period-seconds', period, '--output', scratch)
     profile = Path(scratch).read_bytes()
     name = b'system:paxeer-reserve'
     reserve = sha(b'LX:ACCOUNT:v1'+big(len(name), 4)+name)
     require(len(profile) == PROFILE_BYTES and profile[:65] == b'LXBC3'+big(125, 8)+unhex(CUSTODY_ADDRESS, 20)+module_identity()
             and profile[97:169] == asset+reserve+big(args.trusted_height, 8)
             and profile[169:201] == chain_identity(rpcs[0])
-            and profile[201:207] == big(args.network_id, 4)+big(3, 2), 'Paxeer custody profile layout')
+            and profile[201:215] == big(args.network_id, 4)+big(3, 2)+big(period, 8)
+            and 0 < int.from_bytes(profile[215:223], 'big') <= 253402300799, 'Paxeer custody profile layout')
     write_new(args.output, profile)
     os.unlink(scratch)
 
