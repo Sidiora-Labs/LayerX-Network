@@ -12,6 +12,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/precompiles/gov"
 	"github.com/sidiora-labs/paxeer-network/precompiles/ibc"
 	"github.com/sidiora-labs/paxeer-network/precompiles/json"
+	"github.com/sidiora-labs/paxeer-network/precompiles/layerxanchor"
 	"github.com/sidiora-labs/paxeer-network/precompiles/layerxcustody"
 	"github.com/sidiora-labs/paxeer-network/precompiles/layerxverify"
 	"github.com/sidiora-labs/paxeer-network/precompiles/oracle"
@@ -39,6 +40,7 @@ var FailFastPrecompileAddresses = []common.Address{
 	common.HexToAddress(p256.P256VerifyAddress),
 	common.HexToAddress(layerxverify.LayerXVerifyAddress),
 	common.HexToAddress(layerxcustody.LayerXCustodyAddress),
+	common.HexToAddress(layerxanchor.LayerXAnchorAddress),
 }
 
 // InvalidPrecompileCallError is an error type that implements vm.AbortError,

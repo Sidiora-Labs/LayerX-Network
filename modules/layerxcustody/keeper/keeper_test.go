@@ -61,6 +61,10 @@ func newEnv(t *testing.T, withdrawalDelay uint64) *env {
 	fixture, err := testvectors.Load()
 	require.NoError(t, err)
 	e := &env{t: t, ctx: ctx, k: app.LayerXCustodyKeeper, withdrawal: fixture["withdrawal"][0], exit: fixture["exit"][0]}
+	// This harness exercises custody against its own authority-registered
+	// checkpoints; the app wires the anchor module's reader, which
+	// TestWithdrawalReadsAnchorFinalizedCheckpoint covers.
+	e.k.SetAnchorReader(nil)
 	e.payerAcc, e.payer = testkeeper.MockAddressPair()
 	app.EvmKeeper.SetAddressMapping(ctx, e.payerAcc, e.payer)
 	for _, denom := range []string{sdk.MustGetBaseDenom(), tokenDenom} {
@@ -297,6 +301,10 @@ func newEnvWithRoots(t *testing.T, stateRoot, receiptRoot [32]byte) *env {
 	fixture, err := testvectors.Load()
 	require.NoError(t, err)
 	e := &env{t: t, ctx: ctx, k: app.LayerXCustodyKeeper, withdrawal: fixture["withdrawal"][0], exit: fixture["exit"][0]}
+	// This harness exercises custody against its own authority-registered
+	// checkpoints; the app wires the anchor module's reader, which
+	// TestWithdrawalReadsAnchorFinalizedCheckpoint covers.
+	e.k.SetAnchorReader(nil)
 	batch := vectorNumber(t, e.withdrawal, "batch_number")
 	params := types.DefaultParams()
 	params.NetworkId = uint32(vectorNumber(t, e.withdrawal, "network_id")) //nolint:gosec

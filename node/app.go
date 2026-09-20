@@ -150,6 +150,9 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/querier"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/replay"
 	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
+	layerxanchormodule "github.com/sidiora-labs/paxeer-network/modules/layerxanchor"
+	layerxanchorkeeper "github.com/sidiora-labs/paxeer-network/modules/layerxanchor/keeper"
+	layerxanchortypes "github.com/sidiora-labs/paxeer-network/modules/layerxanchor/types"
 	layerxcustodymodule "github.com/sidiora-labs/paxeer-network/modules/layerxcustody"
 	layerxcustodykeeper "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/keeper"
 	layerxcustodytypes "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/types"
@@ -242,6 +245,7 @@ var (
 		epochmodule.AppModuleBasic{},
 		tokenfactorymodule.AppModuleBasic{},
 		layerxcustodymodule.AppModuleBasic{},
+		layerxanchormodule.AppModuleBasic{},
 		// this line is used by starport scaffolding # stargate/app/moduleBasic
 	)
 
@@ -259,6 +263,7 @@ var (
 		evmtypes.ModuleName:            {authtypes.Minter, authtypes.Burner},
 		tokenfactorytypes.ModuleName:   {authtypes.Minter, authtypes.Burner},
 		layerxcustodytypes.ModuleName:  nil,
+		layerxanchortypes.ModuleName:   {authtypes.Burner},
 		// this line is used by starport scaffolding # stargate/app/maccPerms
 	}
 
@@ -281,6 +286,7 @@ var (
 		epochmoduletypes.StoreKey,
 		tokenfactorytypes.StoreKey,
 		layerxcustodytypes.StoreKey,
+		layerxanchortypes.StoreKey,
 		// this line is used by starport scaffolding # stargate/app/storeKey
 	}
 
@@ -426,6 +432,7 @@ type App struct {
 	EpochKeeper epochmodulekeeper.Keeper
 
 	TokenFactoryKeeper tokenfactorykeeper.Keeper
+	LayerXAnchorKeeper layerxanchorkeeper.Keeper
 
 	LayerXCustodyKeeper *layerxcustodykeeper.Keeper
 
@@ -664,6 +671,8 @@ func New(
 		app.DistrKeeper,
 	)
 
+	app.LayerXAnchorKeeper = layerxanchorkeeper.NewKeeper(app.keys[layerxanchortypes.StoreKey], app.AccountKeeper, app.BankKeeper)
+
 	// The last arguments can contain custom message handlers, and custom query handlers,
 	// if we want to allow any custom callbacks
 	supportedFeatures := "iterator,staking,stargate,pax"
@@ -724,6 +733,9 @@ func New(
 	app.BankKeeper.RegisterRecipientChecker(app.EvmKeeper.CanAddressReceive)
 	app.LayerXCustodyKeeper = layerxcustodykeeper.NewKeeper(appCodec, keys[layerxcustodytypes.StoreKey],
 		app.AccountKeeper, app.BankKeeper, &app.EvmKeeper)
+	// Custody trusts only anchor-finalized checkpoints and anchor sequencer
+	// authorizations; its own authority-registered checkpoints are unused.
+	app.LayerXCustodyKeeper.SetAnchorReader(layerxanchorkeeper.NewCustodyAnchor(app.LayerXAnchorKeeper))
 
 	bApp.SetPreCommitHandler(app.HandlePreCommit)
 	bApp.SetCloseHandler(app.HandleClose)
@@ -896,6 +908,7 @@ func New(
 		transferModule,
 		epochModule,
 		tokenfactorymodule.NewAppModule(app.TokenFactoryKeeper, app.AccountKeeper, app.BankKeeper),
+		layerxanchormodule.NewAppModule(app.LayerXAnchorKeeper),
 		authzmodule.NewAppModule(appCodec, app.AuthzKeeper, app.AccountKeeper, app.BankKeeper, app.interfaceRegistry),
 		layerxcustodymodule.NewAppModule(app.LayerXCustodyKeeper),
 		// this line is used by starport scaffolding # stargate/app/appModule
@@ -971,6 +984,7 @@ func New(
 		wasm.ModuleName,
 		evmtypes.ModuleName,
 		layerxcustodytypes.ModuleName,
+		layerxanchortypes.ModuleName,
 		// this line is used by starport scaffolding # stargate/app/initGenesis
 	)
 
@@ -1228,7 +1242,7 @@ func (app *App) SetStoreUpgradeHandlers() {
 
 	if (upgradeInfo.Name == "v6.5") && !app.UpgradeKeeper.IsSkipHeight(upgradeInfo.Height) {
 		storeUpgrades := storetypes.StoreUpgrades{
-			Added: []string{layerxcustodytypes.StoreKey},
+			Added: []string{layerxcustodytypes.StoreKey, layerxanchortypes.StoreKey},
 		}
 
 		// configure store loader that checks if version == upgradeHeight and applies store upgrades

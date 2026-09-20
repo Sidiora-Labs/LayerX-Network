@@ -32,6 +32,7 @@ const (
 	TokenfactoryStoreKey = "tokenfactory" // modules/tokenfactory/types.StoreKey
 
 	LayerXCustodyStoreKey = "layerxcustody" // modules/layerxcustody/types.StoreKey
+	LayerXAnchorStoreKey  = "layerxanchor"  // modules/layerxanchor/types.StoreKey
 )
 
 // MemIAVLStoreKeys is the canonical list of module KV store keys that are
@@ -60,6 +61,7 @@ var MemIAVLStoreKeys = []string{
 	EpochStoreKey,
 	TokenfactoryStoreKey,
 	LayerXCustodyStoreKey,
+	LayerXAnchorStoreKey,
 }
 
 // memIAVLStoreKeySet is MemIAVLStoreKeys materialized as a set for O(1)

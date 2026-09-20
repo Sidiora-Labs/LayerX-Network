@@ -4,6 +4,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/sidiora-labs/paxeer-network/precompiles/bank"
 	"github.com/sidiora-labs/paxeer-network/precompiles/gov"
+	"github.com/sidiora-labs/paxeer-network/precompiles/layerxanchor"
 	"github.com/sidiora-labs/paxeer-network/precompiles/staking"
 	"github.com/sidiora-labs/paxeer-network/precompiles/wasmd"
 )
@@ -15,6 +16,8 @@ var payablePrecompiles = map[string]struct{}{
 	staking.StakingAddress: {},
 	gov.GovAddress:         {},
 	wasmd.WasmdAddress:     {},
+
+	layerxanchor.LayerXAnchorAddress: {},
 }
 
 func IsPayablePrecompile(addr *common.Address) bool {
