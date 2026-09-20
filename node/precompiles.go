@@ -27,6 +27,7 @@ type PrecompileKeepers struct {
 	putils.ClientKeeper
 	putils.ConnectionKeeper
 	putils.ChannelKeeper
+	putils.AnchorKeeper
 	txConf        client.TxConfig
 	layerxCustody *layerxcustodykeeper.Keeper
 }
@@ -49,6 +50,7 @@ func NewPrecompileKeepers(a *App) *PrecompileKeepers {
 		ClientKeeper:       a.IBCKeeper.ClientKeeper,
 		ConnectionKeeper:   a.IBCKeeper.ConnectionKeeper,
 		ChannelKeeper:      a.IBCKeeper.ChannelKeeper,
+		AnchorKeeper:       a.LayerXAnchorKeeper,
 		txConf:             a.GetTxConfig(),
 		layerxCustody:      a.LayerXCustodyKeeper,
 	}
@@ -70,6 +72,7 @@ func (pk *PrecompileKeepers) TransferK() putils.TransferKeeper         { return 
 func (pk *PrecompileKeepers) ClientK() putils.ClientKeeper             { return pk.ClientKeeper }
 func (pk *PrecompileKeepers) ConnectionK() putils.ConnectionKeeper     { return pk.ConnectionKeeper }
 func (pk *PrecompileKeepers) ChannelK() putils.ChannelKeeper           { return pk.ChannelKeeper }
+func (pk *PrecompileKeepers) AnchorK() putils.AnchorKeeper             { return pk.AnchorKeeper }
 func (pk *PrecompileKeepers) TxConfig() client.TxConfig                { return pk.txConf }
 func (pk *PrecompileKeepers) LayerXCustodyK() *layerxcustodykeeper.Keeper {
 	return pk.layerxCustody

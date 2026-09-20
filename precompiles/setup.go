@@ -12,6 +12,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/precompiles/gov"
 	"github.com/sidiora-labs/paxeer-network/precompiles/ibc"
 	"github.com/sidiora-labs/paxeer-network/precompiles/json"
+	"github.com/sidiora-labs/paxeer-network/precompiles/layerxanchor"
 	"github.com/sidiora-labs/paxeer-network/precompiles/layerxcustody"
 	"github.com/sidiora-labs/paxeer-network/precompiles/layerxverify"
 	"github.com/sidiora-labs/paxeer-network/precompiles/oracle"
@@ -62,6 +63,7 @@ func GetCustomPrecompiles(
 		ecommon.HexToAddress(solo.SoloAddress):                   solo.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(layerxverify.LayerXVerifyAddress):   layerxverify.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(layerxcustody.LayerXCustodyAddress): layerxcustody.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(layerxanchor.LayerXAnchorAddress):   layerxanchor.GetVersioned(latestUpgrade, keepers),
 	}
 }
 
@@ -129,6 +131,11 @@ func InitializePrecompiles(
 		return err
 	}
 
+	layerxanchorp, err := layerxanchor.NewPrecompile(keepers)
+	if err != nil {
+		return err
+	}
+
 	layerxcustodyp, err := layerxcustody.NewPrecompile(keepers)
 	if err != nil {
 		return err
@@ -148,6 +155,7 @@ func InitializePrecompiles(
 	PrecompileNamesToInfo[p256p.GetName()] = PrecompileInfo{ABI: p256p.GetABI(), Address: p256p.Address()}
 	PrecompileNamesToInfo[layerxverifyp.GetName()] = PrecompileInfo{ABI: layerxverifyp.GetABI(), Address: layerxverifyp.Address()}
 	PrecompileNamesToInfo[layerxcustodyp.GetName()] = PrecompileInfo{ABI: layerxcustodyp.GetABI(), Address: layerxcustodyp.Address()}
+	PrecompileNamesToInfo[layerxanchorp.GetName()] = PrecompileInfo{ABI: layerxanchorp.GetABI(), Address: layerxanchorp.Address()}
 
 	if !dryRun {
 		addPrecompileToVM(bankp)
@@ -164,6 +172,7 @@ func InitializePrecompiles(
 		addPrecompileToVM(p256p)
 		addPrecompileToVM(layerxverifyp)
 		addPrecompileToVM(layerxcustodyp)
+		addPrecompileToVM(layerxanchorp)
 		Initialized = true
 	}
 	return nil

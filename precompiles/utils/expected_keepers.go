@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	ibctypes "github.com/sidiora-labs/paxeer-network/interchain/modules/apps/transfer/types"
 	clienttypes "github.com/sidiora-labs/paxeer-network/interchain/modules/core/02-client/types"
+	anchortypes "github.com/sidiora-labs/paxeer-network/modules/layerxanchor/types"
 	layerxcustodykeeper "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/keeper"
 	oracletypes "github.com/sidiora-labs/paxeer-network/modules/oracle/types"
 	"github.com/sidiora-labs/paxeer-network/sdk/client"
@@ -41,6 +42,7 @@ type Keepers interface {
 	ClientK() ClientKeeper
 	ConnectionK() ConnectionKeeper
 	ChannelK() ChannelKeeper
+	AnchorK() AnchorKeeper
 	TxConfig() client.TxConfig
 	LayerXCustodyK() *layerxcustodykeeper.Keeper
 }
@@ -63,6 +65,7 @@ func (ek *EmptyKeepers) TransferK() TransferKeeper         { return nil }
 func (ek *EmptyKeepers) ClientK() ClientKeeper             { return nil }
 func (ek *EmptyKeepers) ConnectionK() ConnectionKeeper     { return nil }
 func (ek *EmptyKeepers) ChannelK() ChannelKeeper           { return nil }
+func (ek *EmptyKeepers) AnchorK() AnchorKeeper             { return nil }
 func (ek *EmptyKeepers) TxConfig() client.TxConfig         { return nil }
 func (ek *EmptyKeepers) LayerXCustodyK() *layerxcustodykeeper.Keeper {
 	return nil
@@ -219,4 +222,28 @@ type ConnectionKeeper interface {
 
 type ChannelKeeper interface {
 	GetChannel(ctx sdk.Context, portID, channelID string) (types.Channel, bool)
+}
+
+// AnchorKeeper is the LayerX anchor module as the layerxAnchor precompile uses it.
+type AnchorKeeper interface {
+	GetParams(ctx sdk.Context) anchortypes.Params
+	SubmitCheckpoint(ctx sdk.Context, submitter sdk.AccAddress, header []byte, headerSignature [64]byte, certificate []byte) (anchortypes.Checkpoint, error)
+	SubmitAvailabilityAttestation(ctx sdk.Context, attestation []byte) (anchortypes.Checkpoint, anchortypes.AvailabilityAttestation, error)
+	Finalize(ctx sdk.Context, batchNumber uint64) (anchortypes.Checkpoint, error)
+	RegisterGuarantor(ctx sdk.Context, operator sdk.AccAddress, id [32]byte, signer [20]byte, amount sdk.Int) (anchortypes.Guarantor, error)
+	ActivateGuarantor(ctx sdk.Context, authority sdk.AccAddress, id [32]byte) error
+	IncreaseBond(ctx sdk.Context, operator sdk.AccAddress, id [32]byte, amount sdk.Int) (anchortypes.Guarantor, error)
+	BeginUnbond(ctx sdk.Context, operator sdk.AccAddress, id [32]byte, amount sdk.Int) (anchortypes.UnbondingEntry, error)
+	CompleteUnbond(ctx sdk.Context, operator sdk.AccAddress, id [32]byte) (sdk.Int, error)
+	SubmitEquivocation(ctx sdk.Context, reporter sdk.AccAddress, evidenceA, evidenceB []byte) (anchortypes.SlashRecord, error)
+	OpenChallenge(ctx sdk.Context, challenger sdk.AccAddress, batchNumber uint64, kind uint8, evidenceHash [32]byte, bond sdk.Int) (anchortypes.Challenge, error)
+	ResolveChallenge(ctx sdk.Context, authority sdk.AccAddress, id uint64, upheld bool) (anchortypes.Challenge, []anchortypes.SlashRecord, error)
+	SetSequencerAuthorization(ctx sdk.Context, authority sdk.AccAddress, authorization anchortypes.SequencerAuthorization) error
+	GetCheckpoint(ctx sdk.Context, batchNumber uint64) (anchortypes.Checkpoint, bool)
+	GetGuarantor(ctx sdk.Context, id [32]byte) (anchortypes.Guarantor, bool)
+	GetUnbondings(ctx sdk.Context) []anchortypes.UnbondingEntry
+	FinalizedStateRoot(ctx sdk.Context, batchNumber uint64) ([32]byte, bool)
+	FinalizedReceiptRoot(ctx sdk.Context, batchNumber uint64) ([32]byte, bool)
+	LatestFinalizedBatch(ctx sdk.Context) (uint64, bool)
+	StatusOf(ctx sdk.Context, batchNumber uint64) uint8
 }

@@ -34,12 +34,20 @@ func RepositoryRoot() (string, error) {
 }
 
 // Load reads layerxproof/testdata/vectors.json.
-func Load() (Fixture, error) {
+func Load() (Fixture, error) { return loadFile("vectors.json") }
+
+// LoadAnchor reads layerxproof/testdata/anchor_vectors.json, emitted by
+// layerxproof/testdata/anchor_vectors.c linked against liblayerx and the
+// layerxd evidence encoder. Every byte string in it was produced by the C
+// implementation.
+func LoadAnchor() (Fixture, error) { return loadFile("anchor_vectors.json") }
+
+func loadFile(name string) (Fixture, error) {
 	root, err := RepositoryRoot()
 	if err != nil {
 		return nil, err
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "layerxproof", "testdata", "vectors.json"))
+	raw, err := os.ReadFile(filepath.Join(root, "layerxproof", "testdata", name))
 	if err != nil {
 		return nil, err
 	}
