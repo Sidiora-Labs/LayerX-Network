@@ -357,7 +357,7 @@ fn put_text(out: &mut Vec<u8>, v: &str) {
     );
     out.extend(v.as_bytes());
 }
-fn put_endpoint(out: &mut Vec<u8>, v: &Endpoint) {
+pub(super) fn put_endpoint(out: &mut Vec<u8>, v: &Endpoint) {
     match v {
         Endpoint::PaxeerWallet => out.push(0),
         Endpoint::Human(a) => {

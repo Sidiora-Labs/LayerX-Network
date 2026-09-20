@@ -5,6 +5,7 @@ mod engine;
 mod exit;
 mod move_money;
 mod resolver;
+mod router;
 mod wire;
 mod withdraw;
 
@@ -39,6 +40,14 @@ pub use resolver::{
     EndpointKind, LimitRefusal, LimitRefusalError, LimitSource, Mechanism, MovementTerm,
     PayerGrantRoute, Relationship, Route, RouteError, RouteLeg, RouteRequest, RouteResolver,
     SendRoute,
+};
+
+pub use router::{
+    plan, plan_with_advisor, Advice, AdvisedPlan, AllowanceId, AllowanceKind, AllowanceScope,
+    Annotation, BalanceEntry, BudgetBinding, CandidateRef, CandidateSet, Constraints,
+    CustodyContext, Domain, FeeSchedule, LegBinding, LegMechanism, ObservedState, PlannedLeg,
+    Refusal, RequiredAuthority, RouteAdvisor, SignedAllowance, SignedPlan, SigningRequirement,
+    TopUpRecord, UnifiedIntent, UnifiedPlan,
 };
 pub use withdraw::{
     CancellationPolicy, PaxeerAction, PaxeerActionOutcome, SettlementConfig, SettlementExpectation,
