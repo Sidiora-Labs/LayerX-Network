@@ -20,4 +20,5 @@ message GenesisState {
   repeated ConsumedBalance consumed_balances = 9 [(gogoproto.nullable) = false];
   repeated AssetTotals totals = 10 [(gogoproto.nullable) = false];
   bool emergency = 11;
+  repeated DepositRootRegistration deposit_roots = 12 [(gogoproto.nullable) = false];
 }

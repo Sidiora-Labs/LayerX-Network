@@ -55,6 +55,7 @@ def main():
     parser.add_argument('--forced-exit-delay-seconds', type=int, default=0)
     parser.add_argument('--liveness-bound-seconds', type=int, default=86400)
     parser.add_argument('--authority', default='')
+    parser.add_argument('--deposit-root-authority', default='')
     parser.add_argument('--asset', action='append', required=True, type=asset)
     parser.add_argument('--checkpoint', action='append', default=[], type=checkpoint)
     parser.add_argument('--output', required=True)
@@ -70,12 +71,15 @@ def main():
                     withdrawal_delay_seconds=str(args.withdrawal_delay_seconds),
                     forced_exit_delay_seconds=str(args.forced_exit_delay_seconds),
                     liveness_bound_seconds=str(args.liveness_bound_seconds),
+                    deposit_root_authority=hash32(args.deposit_root_authority, 'deposit root authority')
+                    if args.deposit_root_authority else '',
                     sequencer_authorizations=[dict(
                         sequencer_id=hash32(args.sequencer_id, 'sequencer id'),
                         public_key=hash32(args.sequencer_public_key, 'sequencer public key'),
                         first_batch_number=str(args.first_batch), last_batch_number=str(args.last_batch))]),
         assets=args.asset, deposit_count='0', deposits=[], deposit_nonces=[], claims=[], nullifiers=[],
-        checkpoints=args.checkpoint, consumed_balances=[], totals=[], emergency=False)
+        checkpoints=args.checkpoint, consumed_balances=[], totals=[], emergency=False,
+        deposit_roots=[])
     descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     with os.fdopen(descriptor, 'w') as output:
         json.dump(genesis, output, sort_keys=True, separators=(',', ':'))

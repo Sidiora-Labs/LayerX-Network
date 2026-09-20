@@ -32,6 +32,7 @@ var (
 	ConsumedPrefix     = []byte{0x42}
 	CheckpointPrefix   = []byte{0x50}
 	LatestCheckpoint   = []byte{0x51}
+	DepositRootPrefix  = []byte{0x60}
 )
 
 func join(prefix []byte, parts ...[]byte) []byte {
@@ -48,6 +49,9 @@ func AssetPointerKey(pointer [20]byte) []byte {
 	return join(AssetPointerPrefix, pointer[:])
 }
 func DepositKey(depositID [32]byte) []byte { return join(DepositPrefix, depositID[:]) }
+func DepositRootKey(checkpointID [32]byte) []byte {
+	return join(DepositRootPrefix, checkpointID[:])
+}
 func DepositIndexKey(index uint64) []byte {
 	return binary.BigEndian.AppendUint64(append([]byte(nil), DepositIndexPrefix...), index)
 }
