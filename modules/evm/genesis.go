@@ -26,6 +26,9 @@ func InitGenesis(ctx sdk.Context, k *keeper.Keeper, genState types.GenesisState)
 		k.SetNonce(ctx, common.HexToAddress(nonce.Address), nonce.Nonce)
 	}
 	for _, serialized := range genState.Serialized {
+		if err := types.ValidateLayerXGenesisEntry(serialized.Prefix, serialized.Key, serialized.Value); err != nil {
+			panic(err)
+		}
 		if len(serialized.Key) == 0 {
 			ctx.KVStore(k.GetStoreKey()).Set(serialized.Prefix, serialized.Value)
 			continue
@@ -73,6 +76,9 @@ func ExportGenesis(ctx sdk.Context, k *keeper.Keeper) *types.GenesisState {
 		types.PointerRegistryPrefix,
 		types.PointerCWCodePrefix,
 		types.PointerReverseRegistryPrefix,
+		types.EVMAddressToLayerXDidKeyPrefix,
+		types.LayerXDidToEVMAddressKeyPrefix,
+		types.LayerXBindNonceKeyPrefix,
 	} {
 		k.IterateAll(ctx, prefix, func(key, val []byte) bool {
 			genesis.Serialized = append(genesis.Serialized, &types.Serialized{
@@ -149,6 +155,9 @@ func ExportGenesisStream(ctx sdk.Context, k *keeper.Keeper) <-chan *types.Genesi
 			types.PointerRegistryPrefix,
 			types.PointerCWCodePrefix,
 			types.PointerReverseRegistryPrefix,
+			types.EVMAddressToLayerXDidKeyPrefix,
+			types.LayerXDidToEVMAddressKeyPrefix,
+			types.LayerXBindNonceKeyPrefix,
 		} {
 			genesis := types.DefaultGenesis()
 			genesis.Params = k.GetParams(ctx)

@@ -63,6 +63,10 @@ var (
 	EvmOnlyBlockBloomPrefix         = []byte{0x1d}
 	ZeroStorageCleanupCheckpointKey = []byte{0x1e}
 	NonceBumpPrefix                 = []byte{0x1f} // transient
+
+	EVMAddressToLayerXDidKeyPrefix = []byte{0x20}
+	LayerXDidToEVMAddressKeyPrefix = []byte{0x21}
+	LayerXBindNonceKeyPrefix       = []byte{0x22}
 )
 
 var (
@@ -81,6 +85,18 @@ func EVMAddressToPaxAddressKey(evmAddress common.Address) []byte {
 
 func PaxAddressToEVMAddressKey(paxAddress sdk.AccAddress) []byte {
 	return append(PaxAddressToEVMAddressKeyPrefix, paxAddress...)
+}
+
+func EVMAddressToLayerXDidKey(evmAddress common.Address) []byte {
+	return append(EVMAddressToLayerXDidKeyPrefix, evmAddress[:]...)
+}
+
+func LayerXDidToEVMAddressKey(didPublicKey [32]byte) []byte {
+	return append(LayerXDidToEVMAddressKeyPrefix, didPublicKey[:]...)
+}
+
+func LayerXBindNonceKey(evmAddress common.Address) []byte {
+	return append(LayerXBindNonceKeyPrefix, evmAddress[:]...)
 }
 
 func StateKey(evmAddress common.Address) []byte {

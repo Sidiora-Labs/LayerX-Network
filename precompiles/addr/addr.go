@@ -34,6 +34,23 @@ const (
 	GetEvmAddressMethod = "getEvmAddr"
 	Associate           = "associate"
 	AssociatePubKey     = "associatePubKey"
+
+	BindLayerXMethod         = "bindLayerX"
+	UnbindLayerXMethod       = "unbindLayerX"
+	GetLayerXDidMethod       = "getLayerXDid"
+	GetEvmAddrByLayerXMethod = "getEvmAddrByLayerX"
+	LayerXBindNonceMethod    = "layerXBindNonce"
+	GetUnifiedAccountMethod  = "getUnifiedAccount"
+)
+
+const (
+	LayerXBoundEvent   = "LayerXBound"
+	LayerXUnboundEvent = "LayerXUnbound"
+
+	// LayerXBindSignatureGas is the EVM gas charged for the strict Ed25519
+	// verification of a bind, on top of the metered store reads and writes. It
+	// equals the per-signature charge of the layerxVerify precompile.
+	LayerXBindSignatureGas uint64 = 4000
 )
 
 const (
@@ -54,6 +71,16 @@ type PrecompileExecutor struct {
 	GetEvmAddressID   []byte
 	AssociateID       []byte
 	AssociatePubKeyID []byte
+
+	BindLayerXID         []byte
+	UnbindLayerXID       []byte
+	GetLayerXDidID       []byte
+	GetEvmAddrByLayerXID []byte
+	LayerXBindNonceID    []byte
+	GetUnifiedAccountID  []byte
+
+	layerXBound   abi.Event
+	layerXUnbound abi.Event
 }
 
 func NewPrecompile(keepers putils.Keepers) (*pcommon.DynamicGasPrecompile, error) {
@@ -64,6 +91,8 @@ func NewPrecompile(keepers putils.Keepers) (*pcommon.DynamicGasPrecompile, error
 		evmKeeper:     keepers.EVMK(),
 		bankKeeper:    keepers.BankK(),
 		accountKeeper: keepers.AccountK(),
+		layerXBound:   newAbi.Events[LayerXBoundEvent],
+		layerXUnbound: newAbi.Events[LayerXUnboundEvent],
 	}
 
 	for name, m := range newAbi.Methods {
@@ -76,6 +105,18 @@ func NewPrecompile(keepers putils.Keepers) (*pcommon.DynamicGasPrecompile, error
 			p.AssociateID = m.ID
 		case AssociatePubKey:
 			p.AssociatePubKeyID = m.ID
+		case BindLayerXMethod:
+			p.BindLayerXID = m.ID
+		case UnbindLayerXMethod:
+			p.UnbindLayerXID = m.ID
+		case GetLayerXDidMethod:
+			p.GetLayerXDidID = m.ID
+		case GetEvmAddrByLayerXMethod:
+			p.GetEvmAddrByLayerXID = m.ID
+		case LayerXBindNonceMethod:
+			p.LayerXBindNonceID = m.ID
+		case GetUnifiedAccountMethod:
+			p.GetUnifiedAccountID = m.ID
 		}
 	}
 
@@ -90,7 +131,7 @@ func (p PrecompileExecutor) RequiredGas(input []byte, method *abi.Method) uint64
 	return pcommon.DefaultGasCost(input, p.IsTransaction(method.Name))
 }
 
-func (p PrecompileExecutor) Execute(ctx sdk.Context, method *abi.Method, _ common.Address, _ common.Address, args []interface{}, value *big.Int, readOnly bool, _ *vm.EVM, suppliedGas uint64, hooks *tracing.Hooks) (ret []byte, remainingGas uint64, err error) {
+func (p PrecompileExecutor) Execute(ctx sdk.Context, method *abi.Method, caller common.Address, _ common.Address, args []interface{}, value *big.Int, readOnly bool, evm *vm.EVM, suppliedGas uint64, hooks *tracing.Hooks) (ret []byte, remainingGas uint64, err error) {
 	// Needed to catch gas meter panics
 	defer func() {
 		if r := recover(); r != nil {
@@ -112,6 +153,30 @@ func (p PrecompileExecutor) Execute(ctx sdk.Context, method *abi.Method, _ commo
 			return nil, 0, errors.New("cannot call associate pub key precompile from staticcall")
 		}
 		return p.associatePublicKey(ctx, method, args, value)
+	case BindLayerXMethod:
+		if readOnly {
+			return nil, 0, errors.New("cannot call bindLayerX from staticcall")
+		}
+		if ctx.EVMPrecompileCalledFromDelegateCall() {
+			return nil, 0, errors.New("cannot delegatecall bindLayerX")
+		}
+		return p.bindLayerX(ctx, method, caller, args, value, evm)
+	case UnbindLayerXMethod:
+		if readOnly {
+			return nil, 0, errors.New("cannot call unbindLayerX from staticcall")
+		}
+		if ctx.EVMPrecompileCalledFromDelegateCall() {
+			return nil, 0, errors.New("cannot delegatecall unbindLayerX")
+		}
+		return p.unbindLayerX(ctx, method, caller, args, value, evm)
+	case GetLayerXDidMethod:
+		return p.getLayerXDid(ctx, method, args, value)
+	case GetEvmAddrByLayerXMethod:
+		return p.getEvmAddrByLayerX(ctx, method, args, value)
+	case LayerXBindNonceMethod:
+		return p.layerXBindNonce(ctx, method, args, value)
+	case GetUnifiedAccountMethod:
+		return p.getUnifiedAccount(ctx, method, args, value)
 	}
 	return
 }
@@ -256,11 +321,140 @@ func (p PrecompileExecutor) associateAddresses(ctx sdk.Context, method *abi.Meth
 
 func (PrecompileExecutor) IsTransaction(method string) bool {
 	switch method {
-	case Associate:
+	case Associate, BindLayerXMethod, UnbindLayerXMethod:
 		return true
 	default:
 		return false
 	}
+}
+
+// bindLayerX binds msg.sender to the did:layerx identity of didPublicKey. The
+// caller consents by sending the transaction; the DID key consents with a
+// strict Ed25519 signature over types.LayerXBindMessage for the chain id, the
+// caller and the caller's current layerXBindNonce.
+func (p PrecompileExecutor) bindLayerX(ctx sdk.Context, method *abi.Method, caller common.Address, args []interface{}, value *big.Int, evm *vm.EVM) (ret []byte, remainingGas uint64, err error) {
+	if err := pcommon.ValidateNonPayable(value); err != nil {
+		return nil, 0, err
+	}
+	if err := pcommon.ValidateArgsLength(args, 2); err != nil {
+		return nil, 0, err
+	}
+	didPublicKey := args[0].([32]byte)
+	rawSignature := args[1].([]byte)
+	var signature [64]byte
+	if len(rawSignature) != len(signature) {
+		return nil, 0, types.ErrLayerXSignatureLength
+	}
+	copy(signature[:], rawSignature)
+
+	ctx.GasMeter().ConsumeGas(p.evmKeeper.GetCosmosGasLimitFromEVMGas(ctx, LayerXBindSignatureGas), "layerx bind signature")
+	nonce, err := p.evmKeeper.BindLayerX(ctx, caller, didPublicKey, signature)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := p.emitLayerXEvent(evm, p.layerXBound, caller, didPublicKey, nonce); err != nil {
+		return nil, 0, err
+	}
+	ret, err = method.Outputs.Pack()
+	return ret, pcommon.GetRemainingGas(ctx, p.evmKeeper), err
+}
+
+// unbindLayerX removes msg.sender's binding on msg.sender's authority alone.
+func (p PrecompileExecutor) unbindLayerX(ctx sdk.Context, method *abi.Method, caller common.Address, args []interface{}, value *big.Int, evm *vm.EVM) (ret []byte, remainingGas uint64, err error) {
+	if err := pcommon.ValidateNonPayable(value); err != nil {
+		return nil, 0, err
+	}
+	if err := pcommon.ValidateArgsLength(args, 0); err != nil {
+		return nil, 0, err
+	}
+	didPublicKey, nonce, err := p.evmKeeper.UnbindLayerX(ctx, caller)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := p.emitLayerXEvent(evm, p.layerXUnbound, caller, didPublicKey, nonce); err != nil {
+		return nil, 0, err
+	}
+	ret, err = method.Outputs.Pack()
+	return ret, pcommon.GetRemainingGas(ctx, p.evmKeeper), err
+}
+
+// emitLayerXEvent logs LayerXBound or LayerXUnbound with the consumed nonce.
+func (p PrecompileExecutor) emitLayerXEvent(evm *vm.EVM, event abi.Event, evmAddress common.Address, didPublicKey [32]byte, nonce uint64) error {
+	data, err := event.Inputs.NonIndexed().Pack(nonce)
+	if err != nil {
+		return err
+	}
+	topics := []common.Hash{event.ID, common.BytesToHash(evmAddress.Bytes()), common.Hash(didPublicKey)}
+	return pcommon.EmitEVMLog(evm, common.HexToAddress(AddrAddress), topics, data)
+}
+
+func (p PrecompileExecutor) getLayerXDid(ctx sdk.Context, method *abi.Method, args []interface{}, value *big.Int) (ret []byte, remainingGas uint64, err error) {
+	if err := pcommon.ValidateNonPayable(value); err != nil {
+		return nil, 0, err
+	}
+	if err := pcommon.ValidateArgsLength(args, 1); err != nil {
+		return nil, 0, err
+	}
+	evmAddr := args[0].(common.Address)
+	didPublicKey, found := p.evmKeeper.GetLayerXDid(ctx, evmAddr)
+	if !found {
+		return nil, 0, fmt.Errorf("EVM address %s is not bound to a LayerX DID", evmAddr.Hex())
+	}
+	ret, err = method.Outputs.Pack(didPublicKey, types.LayerXDid(didPublicKey))
+	return ret, pcommon.GetRemainingGas(ctx, p.evmKeeper), err
+}
+
+func (p PrecompileExecutor) getEvmAddrByLayerX(ctx sdk.Context, method *abi.Method, args []interface{}, value *big.Int) (ret []byte, remainingGas uint64, err error) {
+	if err := pcommon.ValidateNonPayable(value); err != nil {
+		return nil, 0, err
+	}
+	if err := pcommon.ValidateArgsLength(args, 1); err != nil {
+		return nil, 0, err
+	}
+	didPublicKey := args[0].([32]byte)
+	evmAddr, found := p.evmKeeper.GetEVMAddressByLayerXDid(ctx, didPublicKey)
+	if !found {
+		return nil, 0, fmt.Errorf("LayerX DID %s is not bound to an EVM address", types.LayerXDid(didPublicKey))
+	}
+	ret, err = method.Outputs.Pack(evmAddr)
+	return ret, pcommon.GetRemainingGas(ctx, p.evmKeeper), err
+}
+
+func (p PrecompileExecutor) layerXBindNonce(ctx sdk.Context, method *abi.Method, args []interface{}, value *big.Int) (ret []byte, remainingGas uint64, err error) {
+	if err := pcommon.ValidateNonPayable(value); err != nil {
+		return nil, 0, err
+	}
+	if err := pcommon.ValidateArgsLength(args, 1); err != nil {
+		return nil, 0, err
+	}
+	ret, err = method.Outputs.Pack(p.evmKeeper.GetLayerXBindNonce(ctx, args[0].(common.Address)))
+	return ret, pcommon.GetRemainingGas(ctx, p.evmKeeper), err
+}
+
+// getUnifiedAccount joins the three identities of one account and returns what
+// exists: an empty paxAddr without an association, zero didPublicKey and
+// layerxMainAccountId without a binding.
+func (p PrecompileExecutor) getUnifiedAccount(ctx sdk.Context, method *abi.Method, args []interface{}, value *big.Int) (ret []byte, remainingGas uint64, err error) {
+	if err := pcommon.ValidateNonPayable(value); err != nil {
+		return nil, 0, err
+	}
+	if err := pcommon.ValidateArgsLength(args, 1); err != nil {
+		return nil, 0, err
+	}
+	evmAddr := args[0].(common.Address)
+	paxAddr := ""
+	if associated, found := p.evmKeeper.GetPaxAddress(ctx, evmAddr); found {
+		paxAddr = associated.String()
+	}
+	var mainAccountID [32]byte
+	didPublicKey, bound := p.evmKeeper.GetLayerXDid(ctx, evmAddr)
+	if bound {
+		if mainAccountID, err = types.LayerXMainAccountID(didPublicKey); err != nil {
+			return nil, 0, err
+		}
+	}
+	ret, err = method.Outputs.Pack(evmAddr, paxAddr, didPublicKey, mainAccountID)
+	return ret, pcommon.GetRemainingGas(ctx, p.evmKeeper), err
 }
 
 func (p PrecompileExecutor) EVMKeeper() putils.EVMKeeper {
