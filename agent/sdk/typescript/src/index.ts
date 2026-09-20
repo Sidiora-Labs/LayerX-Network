@@ -12,6 +12,9 @@ export * from "./native-program-call.js";
 export * from "./program-lifecycle.js";
 export * from "./native-capabilities.js";
 
+export * from "./intent.js";
+export * from "./px.js";
+
 export * from "./rpc.js";
 
 export * from "./wallet.js";
