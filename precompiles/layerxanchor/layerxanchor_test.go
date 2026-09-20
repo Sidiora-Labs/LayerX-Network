@@ -511,6 +511,55 @@ func TestUpheldChallengeSlashesThroughRun(t *testing.T) {
 	h.invariant()
 }
 
+// The bring-up names the authority in genesis as the cast of the deployer's EVM
+// address. The deployer's first signed transaction associates that address with
+// its public-key account; the authority must survive that.
+func TestCastAuthoritySurvivesAssociation(t *testing.T) {
+	var deployer, stranger party
+	h := newHarness(t, func(p *anchortypes.Params) {
+		for i := range deployer.address {
+			deployer.address[i], stranger.address[i] = 0xd1, 0xd2
+		}
+		p.Authority = sdk.AccAddress(deployer.address[:]).String()
+	})
+	deployer.account, stranger.account = sdk.AccAddress(deployer.address[:]), sdk.AccAddress(stranger.address[:])
+	operator := h.operators[0]
+
+	_, err := h.run(operator, bond, false, layerxanchor.RegisterGuarantorMethod, h.ids[0], h.signers[0])
+	require.NoError(t, err)
+	require.Equal(t, bond, h.balance(operator.account))
+	status := func(id [32]byte) *layerxanchor.GuarantorView {
+		return abi.ConvertType(h.view(layerxanchor.GuarantorMethod, id)[0], new(layerxanchor.GuarantorView)).(*layerxanchor.GuarantorView)
+	}
+	require.Equal(t, anchortypes.GuarantorPending, status(h.ids[0]).Status)
+
+	associated := make(sdk.AccAddress, 20)
+	for i := range associated {
+		associated[i] = 0xd3
+	}
+	h.app.EvmKeeper.SetAddressMapping(h.ctx(), associated, deployer.address)
+	account, ok := h.app.EvmKeeper.GetPaxAddress(h.ctx(), deployer.address)
+	require.True(t, ok)
+	require.NotEqual(t, deployer.account, account)
+
+	_, err = h.call(stranger, layerxanchor.ActivateGuarantorMethod, h.ids[0])
+	require.Error(t, err)
+	_, err = h.call(operator, layerxanchor.ActivateGuarantorMethod, h.ids[0])
+	require.Error(t, err)
+	require.Equal(t, anchortypes.GuarantorPending, status(h.ids[0]).Status)
+	_, err = h.call(deployer, layerxanchor.ActivateGuarantorMethod, h.ids[0])
+	require.NoError(t, err)
+	require.Equal(t, anchortypes.GuarantorActive, status(h.ids[0]).Status)
+	require.True(t, status(h.ids[0]).Eligible)
+	require.Equal(t, big.NewInt(bond), status(h.ids[0]).Bond)
+	sequencer := [32]byte{7}
+	_, err = h.call(stranger, layerxanchor.SetSequencerAuthorizationMethod, sequencer, [32]byte{8}, uint64(1), uint64(8))
+	require.Error(t, err)
+	_, err = h.call(deployer, layerxanchor.SetSequencerAuthorizationMethod, sequencer, [32]byte{8}, uint64(1), uint64(8))
+	require.NoError(t, err)
+	h.invariant()
+}
+
 func TestCallDiscipline(t *testing.T) {
 	h := newHarness(t, nil)
 	h.bootstrap()
