@@ -61,6 +61,14 @@ allowance inventory or the fee schedule cannot be read, the answer is a typed
 refusal naming that source — never a plan over a partial state. Progress is
 read through the existing journey status route, and done is still a receipt.
 
+Planning happens at `POST /v1/intents/plan`, which changes nothing and answers
+with the legs, the total fee, the plan digest and the exact list of what must
+be signed. Submitting the signed plan at `POST /v1/intents/submit` re-plans the
+same intent against the state as it stands at that moment and refuses when the
+recomputed digest no longer matches the one that was signed, so a plan that was
+agreed against a state which has since moved is refused rather than executed
+against a state the human never saw.
+
 ## Reclaim
 
 A human takes money back from a managed agent only by defunding a protocol

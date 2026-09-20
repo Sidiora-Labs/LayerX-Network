@@ -199,12 +199,24 @@ covers that exact leg; where none does, the plan is refused and no allowance is
 widened or synthesised.
 
 Both the human service and the explorer index read the gateway endpoint from
-`LAYERX_NETWORK_GATEWAY_ENDPOINT`.
+`LAYERX_NETWORK_GATEWAY_ENDPOINT`, and both decode the `px_*` answers with the
+same client, so there is one decoder for the gateway's declared shapes rather
+than one per reader.
+
+Two operations expose the planner. `POST /v1/intents/plan` states what would
+happen: the legs, the total fee, the plan digest, and exactly what must be
+signed for it to happen. It creates no journey and changes no state. `POST
+/v1/intents/submit` takes the signed plan, re-plans the intent server-side
+against the observed state at submission time, and refuses when the recomputed
+digest no longer matches the signed one — a plan signed against a state that
+has since moved never executes. Both authenticate as money movement, exactly as
+move, deposit and withdrawal do. Progress is then read through
+`GET /v1/journeys/{journey_id}` like every other journey: intent planning adds
+no new verb, and `planIntent` / `submitPlan` in the TypeScript and Python agent
+SDKs call these two operations and nothing else.
 
 ## Not yet built
 
 The following components are planned but not yet implemented:
 
-- **Intent HTTP endpoints** — `intent.plan` and `intent.submit` are not yet declared in the human API schema, so the planner is reachable in-process but not over HTTP.
-- **Intent bindings in the agent SDKs** — typed `planIntent`, `submitPlan` and `px_*` read helpers.
 - **Light-client verification of Paxeer deposits on LayerX** — a light-client proof that a deposit transaction was included in a Paxeer block, verifiable on the LayerX side without a full Paxeer node.
