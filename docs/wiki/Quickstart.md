@@ -128,8 +128,8 @@ separate export step. Source it:
 | `LAYERX_GATEWAY_CA_FILE` | same CA as `LAYERX_TEST_CA_FILE` |
 | `LAYERX_IDENTITY_URL` | identity port-forward |
 | `LAYERX_PAXEER_BOUNDARY_URL` | `$PAXEER_URL` |
-| `LAYERX_PAXEER_SETTLEMENT_CONTRACT` | GuarantorBond address |
-| `LAYERX_PAXEER_CHECKPOINT_REGISTRY` | CheckpointRegistry address |
+| `LAYERX_PAXEER_SETTLEMENT_CONTRACT` | layerxAnchor precompile `0x0000000000000000000000000000000000001014` (guarantor bond) |
+| `LAYERX_PAXEER_CHECKPOINT_REGISTRY` | layerxAnchor precompile `0x0000000000000000000000000000000000001014` (checkpoint settlement) |
 | `LAYERX_PAXEER_DEPLOYMENT_RECORD` | `build/beta-cluster/paxeer/deployment.json` |
 | `KUBECONFIG` | cluster kubeconfig |
 | `WEBHOOKS_URL` | developer port-forward |
@@ -627,8 +627,9 @@ methods include `eth_accounts`, `eth_sendTransaction`, `eth_sign`
 `eth_chainId` with `params` `[]` (`platform/hosted/paxeer/src/main.rs:448-449`).
 
 Env also exports `LAYERX_PAXEER_CHECKPOINT_REGISTRY` and
-`LAYERX_PAXEER_SETTLEMENT_CONTRACT` (`platform/hosted/tests/beta-cluster.sh:1129-1130`).
-There is no CLI command that reads those contracts.
+`LAYERX_PAXEER_SETTLEMENT_CONTRACT` (`platform/hosted/tests/beta-cluster.sh`, `env_write`).
+Both carry the layerxAnchor precompile address `0x0000000000000000000000000000000000001014`.
+There is no CLI command that reads the precompile.
 
 Testnet control journey routes are `/v1/journeys/funding`,
 `/v1/journeys/payment`, `/v1/journeys/receipt-inspection`, and

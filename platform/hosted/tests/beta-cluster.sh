@@ -279,6 +279,7 @@ RAMP_OPTIONAL_INPUTS=(LAYERX_BETA_RAMP_PORT LAYERX_BETA_RAMP_WORKER_ID LAYERX_BE
     LAYERX_BETA_RAMP_OFF_GRANT_JSON LAYERX_BETA_RAMP_ON_ACCOUNT_SEQUENCE
     LAYERX_BETA_RAMP_OFF_RECEIVER_SEQUENCE)
 PAXEER_CHAIN_ID=125
+ANCHOR_PRECOMPILE=0x0000000000000000000000000000000000001014
 MIRROR_SIGNER_SOCKET=/run/mirror-signer/signer.sock
 MIRROR_ETHEREUM_KEY_HANDLE=mirror/ethereum/beta
 MIRROR_SOLANA_KEY_HANDLE=mirror/solana/beta
@@ -1339,6 +1340,18 @@ secrets_apply() {
         --sequencer-id "$SEQUENCER_ID" --sequencer-public-key "$(cat "$CA_DIR/sequencer.pub.hex")" \
         --asset "$NODE_ASSET_ID:uhpx" --output "$WORK_DIR/paxeer-custody-genesis.json"
     apply_configmap "$ns" paxeer-custody-genesis --from-file=genesis.json="$WORK_DIR/paxeer-custody-genesis.json"
+    # Checkpoint settlement and the guarantor bond are the layerxanchor module behind the precompile
+    # at 0x…1014. The deployer is its authority, the EVM chain id and the anchor address are what
+    # guarantors sign, and the sequencer is authorized from batch 1 onwards. The guarantor set is
+    # registered through the precompile once the node has generated it (anchor_guarantors_register).
+    rm -f "$WORK_DIR/paxeer-anchor-genesis.json"
+    python3 "$REPO_ROOT/platform/hosted/paxeer/anchor-genesis.py" --authority-evm "$(cat "$s/paxeer-deployer.address")" \
+        --paxeer-chain-id "$PAXEER_CHAIN_ID" --network-id "$NODE_NETWORK_ID" \
+        --threshold "$(jq -er '.finality_policy.certificate_threshold' "$REPO_ROOT/contracts/config/checkpoint-settlement.json")" \
+        --max-attestation-delay-ms "$(($(jq -er '.finality_policy.maximum_attestation_delay_seconds' "$REPO_ROOT/contracts/config/checkpoint-settlement.json") * 1000))" \
+        --sequencer-id "$SEQUENCER_ID" --sequencer-public-key "$(cat "$CA_DIR/sequencer.pub.hex")" \
+        --output "$WORK_DIR/paxeer-anchor-genesis.json"
+    apply_configmap "$ns" paxeer-anchor-genesis --from-file=genesis.json="$WORK_DIR/paxeer-anchor-genesis.json"
     apply_tls_secret "$ns" layerx-testnet-ingress-tls testnet-control
     apply_tls_secret "$ns" layerx-gateway-ingress-tls gateway
     apply_tls_secret "$ns" layerx-faucet-ingress-tls faucet
@@ -2352,13 +2365,34 @@ paxeer_contracts_deploy() {
         tail -n 40 "$LOG_DIR/deploy-contracts.log" >&2
         fail "deploy-contracts.sh bootstrap failed (log $LOG_DIR/deploy-contracts.log)"
     fi
-    GUARANTOR_BOND=$(jq -r '.addresses.guarantor_bond' "$dir/deployment.json")
-    CHECKPOINT_REGISTRY=$(jq -r '.addresses.checkpoint_registry' "$dir/deployment.json")
-    [[ $GUARANTOR_BOND =~ ^0x[0-9a-fA-F]{40}$ ]] && [[ $CHECKPOINT_REGISTRY =~ ^0x[0-9a-fA-F]{40}$ ]] || fail "the deployment record lacks the GuarantorBond and CheckpointRegistry addresses"
-    [ "$(jq -r '.network_id' "$dir/deployment.json")" = "$NODE_NETWORK_ID" ] || fail "the deployed CheckpointRegistry network id differs from the node network id $NODE_NETWORK_ID"
+    [ "$(jq -r '.network_id' "$dir/deployment.json")" = "$NODE_NETWORK_ID" ] || fail "the deployment record network id differs from the node network id $NODE_NETWORK_ID"
     jq -e --arg authority "$authority" '.deposit_root_authority.public_key == $authority and .deposit_root_authority.executed == true' \
         "$dir/deployment.json" > /dev/null || fail "the deployment record does not carry the executed guarantor deposit-root authority $authority"
-    log "settlement contracts deployed: GuarantorBond $GUARANTOR_BOND, CheckpointRegistry $CHECKPOINT_REGISTRY"
+    log "contracts deployed from the node genesis (blueprint $(jq -r '.blueprint' "$dir/deployment.json"))"
+    anchor_guarantors_register
+}
+
+# Checkpoints settle and guarantors bond in the layerxanchor module behind the precompile at
+# 0x…1014: the settlement contract and the checkpoint registry of every LayerX configuration are
+# that one constant. The guarantor identities exist only after the node generated them, so they
+# register here through the precompile and the deployer, the anchor authority, activates them. The
+# beta settlement domain written by deploy-contracts.sh is replaced by the anchor domain.
+anchor_guarantors_register() {
+    local dir="$WORK_DIR/paxeer"
+    [ "$(jq -er '.params.network_id' "$WORK_DIR/paxeer-anchor-genesis.json")" = "$NODE_NETWORK_ID" ] \
+        || fail "the anchor genesis network id differs from the node network id $NODE_NETWORK_ID"
+    if ! LAYERX_PAXEER_BOUNDARY_URL="$PAXEER_URL" LAYERX_PAXEER_BOUNDARY_CA_DER="$CA_DIR/ca.der" LAYERX_PAXEER_CHAIN_ID="$PAXEER_CHAIN_ID" \
+        LAYERX_PAXEER_DEPLOYER_KEY_FILE="$SECRETS_DIR/paxeer-deployer.key" \
+        LAYERX_PAXEER_ANCHOR_GENESIS="$WORK_DIR/paxeer-anchor-genesis.json" LAYERX_PAXEER_GUARANTORS="$dir/guarantors.json" \
+        LAYERX_PAXEER_GUARANTOR_KEYS_DIR="$dir/guarantor-keys" LAYERX_PAXEER_SETTLEMENT_JSON="$dir/checkpoint-settlement.json" \
+        LAYERX_PAXEER_SETTLEMENT_DOMAIN=beta LAYERX_PAXEER_FOUNDRY_BIN="$FOUNDRY_BIN" \
+        bash "$REPO_ROOT/platform/hosted/paxeer/anchor-guarantors.sh" > "$LOG_DIR/anchor-guarantors.log" 2>&1; then
+        tail -n 40 "$LOG_DIR/anchor-guarantors.log" >&2
+        fail "anchor-guarantors.sh failed (log $LOG_DIR/anchor-guarantors.log)"
+    fi
+    GUARANTOR_BOND=$ANCHOR_PRECOMPILE
+    CHECKPOINT_REGISTRY=$ANCHOR_PRECOMPILE
+    log "guarantors registered and active in the anchor module at $ANCHOR_PRECOMPILE"
 }
 
 settlement_publish() {
@@ -2377,27 +2411,31 @@ settlement_publish() {
 }
 
 custody_registration_publish() {
-    local field
-    local -a roots=()
-    for field in genesisManifestDigest genesisCanonicalStateRoot genesisReceiptRoot; do
-        roots+=("$(SSL_CERT_FILE="$CA_DIR/ca.crt" "$FOUNDRY_BIN/cast" call --rpc-url "$PAXEER_URL" \
-            "$CHECKPOINT_REGISTRY" "$field()(bytes32)")")
-    done
+    # The anchor module starts a fresh network from genesis: no genesis anchor is set, the first
+    # checkpoint it accepts is batch 1 and nothing is final before it. The registration record is
+    # therefore built from the node's own descriptor and request once the anchor views show that
+    # state; the anchor holds no copy of the LayerX genesis roots to compare them with.
+    local latest first
+    latest=$(SSL_CERT_FILE="$CA_DIR/ca.crt" "$FOUNDRY_BIN/cast" call --rpc-url "$PAXEER_URL" --json \
+        "$ANCHOR_PRECOMPILE" 'latestFinalized()(uint64,bool)' | jq -r 'map(tostring) | join(" ")')
+    first=$(SSL_CERT_FILE="$CA_DIR/ca.crt" "$FOUNDRY_BIN/cast" call --rpc-url "$PAXEER_URL" \
+        "$ANCHOR_PRECOMPILE" 'statusOf(uint64)(uint8)' 1)
+    [ "$latest" = "0 false" ] && [ "$first" = 0 ] \
+        || fail "the anchor already holds checkpoints (latestFinalized $latest, statusOf(1) $first); a genesis registration needs a fresh network"
     python3 - "$WORK_DIR/genesis/paxeer-deployment-descriptor.lxgd" \
         "$WORK_DIR/genesis/paxeer-registration-request.lxrr" \
-        "$WORK_DIR/genesis/genesis.registration" "${roots[@]}" <<'PY'
+        "$WORK_DIR/genesis/genesis.registration" <<'PY'
 import pathlib
 import sys
 descriptor = pathlib.Path(sys.argv[1]).read_bytes()
 request = pathlib.Path(sys.argv[2]).read_bytes()
-roots = [bytes.fromhex(value.removeprefix("0x")) for value in sys.argv[4:]]
 if (len(descriptor) != 105 or descriptor[:5] != b"LXGD\x01" or
         len(request) != 73 or request[:5] != b"LXRR\x01" or
-        request[5:9] != descriptor[5:9] or
-        any(len(root) != 32 for root in roots) or
-        descriptor[9:] != b"".join(roots) or request[9:] != b"".join(roots[1:])):
-    raise SystemExit("custody genesis differs from the deployed CheckpointRegistry")
-registration = b"LXGR\x01" + request[5:9] + bytes(8) + roots[2] + roots[2] + b"\x01"
+        request[5:9] != descriptor[5:9] or request[9:] != descriptor[41:] or
+        descriptor[41:73] == bytes(32) or descriptor[73:] == bytes(32)):
+    raise SystemExit("the registration request differs from the deployment descriptor")
+receipt_root = descriptor[73:]
+registration = b"LXGR\x01" + request[5:9] + bytes(8) + receipt_root + receipt_root + b"\x01"
 with open(sys.argv[3], "xb") as output:
     output.write(registration)
 PY
@@ -3245,8 +3283,18 @@ sys.path.insert(0, str(Path(sys.argv[1]) / 'tests/bridge'))
 from custody_credit import eth_hash, unhex
 from deploy_local_custody import disposable_rpc
 rpcs = [disposable_rpc(url, sys.argv[4], sys.argv[5]) for url in sys.argv[2:4]]
-data = '0x' + eth_hash(b'latestCanonicalCheckpointHash()')[:4].hex()
-observed = {unhex(rpc.call('eth_call', [dict(to=sys.argv[6], data=data), 'latest']), 32) for rpc in rpcs}
+def latest(rpc):
+    block = rpc.call('eth_getBlockByNumber', ['latest', False])['number']
+    final = unhex(rpc.call('eth_call', [dict(to=sys.argv[6], data='0x' + eth_hash(b'latestFinalized()')[:4].hex()), block]), 64)
+    if final[32:] == bytes(32):
+        return bytes(32)
+    if final[:24] != bytes(24) or final[32:] != (1).to_bytes(32, 'big'):
+        raise SystemExit('the anchor returned a malformed latestFinalized record')
+    record = unhex(rpc.call('eth_call', [dict(to=sys.argv[6], data='0x' + eth_hash(b'checkpoint(uint64)')[:4].hex() + final[:32].hex()), block]), 576)
+    if record[:32] != final[:32] or record[12 * 32:13 * 32] != (2).to_bytes(32, 'big'):
+        raise SystemExit('the anchor record of the latest finalized batch is not final')
+    return record[32:64]
+observed = {latest(rpc) for rpc in rpcs}
 if len(observed) != 1:
     raise SystemExit('the Paxeer origins disagree on the latest canonical checkpoint')
 print('0x' + observed.pop().hex())
@@ -3284,12 +3332,12 @@ human_custody_evidence_publish() {
     credit="$input/credit-${transaction#0x}.bin"
     [ -f "$credit" ] && [ ! -L "$credit" ] && [ "$(stat -c %s "$credit")" -eq 427 ] \
         || fail "$credit: the attested custody credit for the owner deposit is missing; owner_custody.py deposit publishes it"
-    [[ $CHECKPOINT_REGISTRY =~ ^0x[0-9a-fA-F]{40}$ ]] || fail "the CheckpointRegistry address is required before evidence delivery"
+    [[ $CHECKPOINT_REGISTRY =~ ^0x[0-9a-fA-F]{40}$ ]] || fail "the anchor precompile address is required before evidence delivery"
     log "publishing the owner custody deposit proof for $transaction through the in-cluster movement provider"
     deadline=$((SECONDS + 600))
     while :; do
         checkpoint=$(custody_latest_checkpoint) \
-            || fail "the latest canonical checkpoint could not be read from CheckpointRegistry $CHECKPOINT_REGISTRY"
+            || fail "the latest finalized checkpoint could not be read from the anchor precompile $CHECKPOINT_REGISTRY"
         if [ "$checkpoint" != "$attempted" ] && [[ ! $checkpoint =~ ^0x0{64}$ ]]; then
             attempted=$checkpoint
             printf 'attempting deposit proof publication against checkpoint %s\n' "$checkpoint" >> "$log_file"

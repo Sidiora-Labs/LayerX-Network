@@ -3943,6 +3943,18 @@ test-paxeer-membership-sync: $(BUILD_DIR)/tests/test_paxeer_membership_sync
 
 test: test-paxeer-membership-sync
 
+.PHONY: test-paxeer-anchor-submit
+$(BUILD_DIR)/tests/test_paxeer_anchor_submit: tests/paxeer/test_anchor_submit.c $(LIBRARY)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -o $@
+
+test-paxeer-anchor-submit: $(BUILD_DIR)/tests/test_paxeer_anchor_submit
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_paxeer_anchor_submit \
+		layerxproof/testdata/anchor_vectors.json precompiles/layerxanchor/abi.json
+
+test: test-paxeer-anchor-submit
+
 $(BUILD_DIR)/tests/lxp_test_paxeer_membership_sync: tests/paxeer/membership_sync_driver.c \
 		$(filter-out $(BUILD_DIR)/obj/cmd/layerx-guarantor/main.o,$(GUARANTOR_OBJECTS)) \
 		$(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) \

@@ -15,6 +15,13 @@
 # LAYERX_PAXEER_CUSTODY_GENESIS_FILE names the section written by custody-genesis.py, and
 # paxd validate-genesis runs the module's own validation over it. Without the file the module
 # keeps its default genesis, which maps no asset and therefore accepts no deposit.
+#
+# Checkpoint settlement and the guarantor bond are the native layerxanchor module behind the
+# precompile at 0x0000000000000000000000000000000000001014; no checkpoint or bond contract is
+# deployed. LAYERX_PAXEER_ANCHOR_GENESIS_FILE names the section written by anchor-genesis.py. Its
+# authority must be the deployer's cast account and its paxeer_chain_id this chain's EVM chain id,
+# the two values guarantors and the bring-up depend on. Without the file the module keeps its
+# default genesis, which authorizes no sequencer and therefore accepts no checkpoint.
 set -euo pipefail
 
 PAXD=${PAXD:-paxd}
@@ -38,6 +45,7 @@ GRPC_PORT=${LAYERX_PAXEER_GRPC_PORT:-9090}
 GRPC_WEB_PORT=${LAYERX_PAXEER_GRPC_WEB_PORT:-9091}
 COMMIT_TIMEOUT_NANOSECONDS=${LAYERX_PAXEER_COMMIT_TIMEOUT_NANOSECONDS:-}
 CUSTODY_GENESIS=${LAYERX_PAXEER_CUSTODY_GENESIS_FILE:-}
+ANCHOR_GENESIS=${LAYERX_PAXEER_ANCHOR_GENESIS_FILE:-}
 MARKER="$HOME_DIR/config/.layerx-beta-initialised"
 
 fail() {
@@ -77,6 +85,15 @@ if [ -n "$CUSTODY_GENESIS" ]; then
         and (.assets | type == "array" and length > 0)' "$CUSTODY_GENESIS" >/dev/null \
         || fail "custody genesis must carry a network id, a sequencer authorization and an asset"
 fi
+if [ -n "$ANCHOR_GENESIS" ]; then
+    [ -r "$ANCHOR_GENESIS" ] || fail "anchor genesis $ANCHOR_GENESIS is not readable"
+    "$JQ" -e --argjson chain "$CHAIN_ID" '(.params.network_id | type == "number" and . > 0)
+        and .params.paxeer_chain_id == $chain
+        and .params.settlement_contract == "0000000000000000000000000000000000001014"
+        and (.params.threshold | type == "number" and . > 0)
+        and (.sequencers | type == "array" and length > 0)' "$ANCHOR_GENESIS" >/dev/null \
+        || fail "anchor genesis must carry a network id, this EVM chain id, the anchor address, a threshold and a sequencer authorization"
+fi
 
 if [ -f "$MARKER" ]; then
     if [ -n "$CUSTODY_GENESIS" ]; then
@@ -85,6 +102,13 @@ if [ -f "$MARKER" ]; then
              and ([.app_state.layerxcustody.assets[].asset_id] == [$custody[0].assets[].asset_id])' \
             "$HOME_DIR/config/genesis.json" >/dev/null \
             || fail "requested custody genesis differs from initialised genesis"
+    fi
+    if [ -n "$ANCHOR_GENESIS" ]; then
+        "$JQ" -e --slurpfile anchor "$ANCHOR_GENESIS" \
+            '.app_state.layerxanchor.params == $anchor[0].params
+             and .app_state.layerxanchor.sequencers == $anchor[0].sequencers' \
+            "$HOME_DIR/config/genesis.json" >/dev/null \
+            || fail "requested anchor genesis differs from initialised genesis"
     fi
     if [ -n "$COMMIT_TIMEOUT_NANOSECONDS" ]; then
         "$JQ" -e --arg commit_timeout "$COMMIT_TIMEOUT_NANOSECONDS" \
@@ -150,6 +174,12 @@ if [ -n "$CUSTODY_GENESIS" ]; then
     "$JQ" --slurpfile custody "$CUSTODY_GENESIS" '.app_state.layerxcustody = $custody[0]' "$GENESIS" > "$GENESIS.tmp"
     mv "$GENESIS.tmp" "$GENESIS"
 fi
+if [ -n "$ANCHOR_GENESIS" ]; then
+    "$JQ" -e --arg authority "$DEPLOYER_CAST" '.params.authority == $authority' "$ANCHOR_GENESIS" >/dev/null \
+        || fail "anchor genesis authority is not the deployer cast account $DEPLOYER_CAST"
+    "$JQ" --slurpfile anchor "$ANCHOR_GENESIS" '.app_state.layerxanchor = $anchor[0]' "$GENESIS" > "$GENESIS.tmp"
+    mv "$GENESIS.tmp" "$GENESIS"
+fi
 "$PAXD" collect-gentxs --home "$HOME_DIR" >/dev/null 2>&1
 "$PAXD" validate-genesis --home "$HOME_DIR" >/dev/null
 
@@ -185,6 +215,7 @@ grep -q "^http_port = ${EVM_PORT}$" "$APP" || fail "app.toml evm http_port was n
     printf 'deployer_cast=%s\n' "$DEPLOYER_CAST"
     printf 'usdl=%s\n' "$USDL_ADDRESS"
     printf 'custody=0x0000000000000000000000000000000000001013\n'
+    printf 'anchor=0x0000000000000000000000000000000000001014\n'
     printf 'evm_port=%s\n' "$EVM_PORT"
 } > "$MARKER"
 echo "init-chain: initialised $COSMOS_CHAIN_ID at $HOME_DIR (deployer $DEPLOYER_ADDRESS, cast $DEPLOYER_CAST)" >&2

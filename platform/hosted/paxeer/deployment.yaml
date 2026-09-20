@@ -18,11 +18,13 @@ spec:
             - {name: LAYERX_PAXEER_HOME, value: /var/lib/paxeer}
             - {name: LAYERX_PAXEER_DEPLOYER_ADDRESS_FILE, value: /run/layerx/deployer/address}
             - {name: LAYERX_PAXEER_CUSTODY_GENESIS_FILE, value: /run/layerx/custody/genesis.json}
+            - {name: LAYERX_PAXEER_ANCHOR_GENESIS_FILE, value: /run/layerx/anchor/genesis.json}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           volumeMounts:
             - {name: data, mountPath: /var/lib/paxeer}
             - {name: deployer, mountPath: /run/layerx/deployer, readOnly: true}
             - {name: custody-genesis, mountPath: /run/layerx/custody, readOnly: true}
+            - {name: anchor-genesis, mountPath: /run/layerx/anchor, readOnly: true}
             - {name: tmp, mountPath: /tmp}
       containers:
         - name: paxd
@@ -55,6 +57,7 @@ spec:
         - {name: tls, secret: {secretName: paxeer-boundary-tls}}
         - {name: deployer, secret: {secretName: paxeer-deployer-address}}
         - {name: custody-genesis, configMap: {name: paxeer-custody-genesis}}
+        - {name: anchor-genesis, configMap: {name: paxeer-anchor-genesis}}
         - {name: tmp, emptyDir: {}}
   volumeClaimTemplates:
     - metadata: {name: data}

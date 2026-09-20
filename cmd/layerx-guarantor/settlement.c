@@ -121,6 +121,14 @@ static lxp_result begin(const gp_settlement_config *config, gp_files *files, FIL
     hex(*output, config->settlement_contract, 20U);
     (void)fputs(",\"checkpoint_registry\":", *output);
     hex(*output, config->checkpoint_registry, 20U);
+    (void)fputs(",\"state_dir\":", *output);
+    quoted(*output, config->state_dir);
+    if (config->settlement_file != NULL && config->settlement_domain != NULL) {
+        (void)fputs(",\"settlement_file\":", *output);
+        quoted(*output, config->settlement_file);
+        (void)fputs(",\"settlement_domain\":", *output);
+        quoted(*output, config->settlement_domain);
+    }
     (void)fputs(",\"submitter_key_file\":", *output);
     quoted(*output, config->submitter_key_file);
     if (config->submitter_lock_file != NULL) {
@@ -463,7 +471,8 @@ static void attestation_json(FILE *file, const lxp_guarantor_attestation *a)
     (void)fprintf(file, ",%u]", (unsigned)a->signature_v);
 }
 lxp_result gp_settlement_register(const gp_settlement_config *config,
-                                  const lxp_guarantor_cert *certificate, gp_runtime *runtime,
+                                  const lxp_guarantor_cert *certificate,
+                                  const uint8_t header_signature[64], gp_runtime *runtime,
                                   lxp_daemon_settlement_registration_evidence *registration,
                                   bool *already_registered, uint64_t *registered_set_version)
 {
@@ -471,26 +480,51 @@ lxp_result gp_settlement_register(const gp_settlement_config *config,
     FILE *input;
     uint8_t wire[GP_REGISTRATION_WIRE], checkpoint_id[32];
     uint8_t *memory;
+    uint8_t *submit = NULL;
+    size_t submit_length = 0U;
     lxp_arena arena;
     size_t i, length;
     lxp_result status;
     lxp_daemon_settlement_registration_evidence result;
-    if (certificate == NULL || registration == NULL || already_registered == NULL ||
+    if (certificate == NULL || header_signature == NULL || registration == NULL || already_registered == NULL ||
         registered_set_version == NULL || certificate->attestation_count == 0U ||
         certificate->attestation_count > LXP_MAX_GUARANTOR_ATTESTATIONS)
         return LXP_ERR_NON_CANONICAL;
-    memory = malloc(LXP_MAX_VALIDITY_PROOF_BYTES + 4096U);
+    memory = malloc(4U * LXP_MAX_VALIDITY_PROOF_BYTES + 65536U);
     if (memory == NULL)
         return LXP_ERR_IO;
-    status = lxp_arena_init(&arena, memory, LXP_MAX_VALIDITY_PROOF_BYTES + 4096U);
+    status = lxp_arena_init(&arena, memory, 4U * LXP_MAX_VALIDITY_PROOF_BYTES + 65536U);
     if (status == LXP_OK)
         status = lxp_checkpoint_certificate_hash(&certificate->checkpoint, &arena, checkpoint_id);
+    if (status == LXP_OK) {
+        lxp_byte_span calldata;
+        status = lxp_checkpoint_submit_calldata(certificate, header_signature, &arena, &calldata);
+        if (status == LXP_OK) {
+            submit = malloc(calldata.length);
+            if (submit == NULL)
+                status = LXP_ERR_IO;
+            else {
+                (void)memcpy(submit, calldata.bytes, calldata.length);
+                submit_length = calldata.length;
+            }
+        }
+    }
     free(memory);
-    if (status != LXP_OK)
+    if (status != LXP_OK) {
+        free(submit);
         return status;
+    }
     status = begin(config, &files, &input);
-    if (status != LXP_OK)
+    if (status != LXP_OK) {
+        free(submit);
         return status;
+    }
+    (void)fputs(",\"header_signature\":", input);
+    hex(input, header_signature, 64U);
+    (void)fprintf(input, ",\"threshold\":%zu", certificate->threshold);
+    (void)fputs(",\"submit_calldata\":", input);
+    hex(input, submit, submit_length);
+    free(submit);
     (void)fputs(",\"header\":", input);
     header_json(input, &certificate->checkpoint.header);
     (void)fputs(",\"validity_proof\":", input);
@@ -569,6 +603,8 @@ lxp_result gp_settlement_config_from_env(gp_settlement_config *config, const cha
         config->helper = "/opt/layerx/guarantor/settlement.py";
     if (domain == NULL)
         domain = "beta";
+    config->settlement_file = file;
+    config->settlement_domain = domain;
     written = snprintf(config->rpc_url_storage, sizeof(config->rpc_url_storage),
                        "http://127.0.0.1:%lu", parsed_port);
     if (written < 0 || (size_t)written >= sizeof(config->rpc_url_storage))

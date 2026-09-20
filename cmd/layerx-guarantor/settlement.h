@@ -12,6 +12,8 @@ typedef struct gp_settlement_config {
     const char *submitter_key_file;
     const char *submitter_lock_file;
     const char *publication_inputs_dir;
+    const char *settlement_file;
+    const char *settlement_domain;
     char rpc_url_storage[128];
     uint32_t network_id;
     uint64_t chain_id;
@@ -44,7 +46,8 @@ lxp_result gp_settlement_bond_restore(const gp_settlement_config *, const lxp_pa
 lxp_result gp_settlement_bond_deposit(const gp_settlement_config *, const uint8_t *,
                                       const uint8_t *, lxp_paxeer_bond_state *,
                                       lxp_paxeer_bond_deposit_record *);
-lxp_result gp_settlement_register(const gp_settlement_config *, const lxp_guarantor_cert *, gp_runtime *,
+lxp_result gp_settlement_register(const gp_settlement_config *, const lxp_guarantor_cert *,
+                                  const uint8_t[64], gp_runtime *,
                                   lxp_daemon_settlement_registration_evidence *, bool *,
                                   uint64_t *);
 #endif

@@ -107,6 +107,11 @@ def write_domain(path, name, domain):
             for entry in domain["guarantor_set"]
         ],
     }
+    for key in ("minimum_bond", "maximum_attestation_delay_ms"):
+        if key in domain:
+            if type(domain[key]) is not int or domain[key] <= 0:
+                raise SystemExit(f"{key} must be a positive integer")
+            domains[name][key] = domain[key]
     if "protocol_version" in domain:
         domains[name]["protocol_version"] = protocol_version
         domains[name]["header_encoding_prefix"] = "0x" + protocol_version.to_bytes(2, "big").hex() + "17010f"

@@ -125,7 +125,8 @@ validate_settlement() {
             CHECKPOINT_REGISTRY) contract_value=$checkpoint_registry ;;
         esac
         [[ $contract_value =~ ^0x[0-9a-fA-F]{40}$ ]] || fail "LAYERX_NODE_$contract_name must be a 0x-prefixed address"
-        [[ $contract_value =~ [1-9a-fA-F] ]] || fail "LAYERX_NODE_$contract_name must not be zero"
+        [ "$contract_value" = 0x0000000000000000000000000000000000001014 ] \
+            || fail "LAYERX_NODE_$contract_name must be the anchor precompile 0x0000000000000000000000000000000000001014"
     done
     [ "$rpc_address" = 127.0.0.1 ] || fail "LAYERX_NODE_PAXEER_RPC_ADDRESS must be 127.0.0.1"
     [[ $rpc_port =~ ^[1-9][0-9]{0,4}$ ]] && [ "$rpc_port" -le 65535 ] || fail "LAYERX_NODE_PAXEER_RPC_PORT must be in 1..65535"

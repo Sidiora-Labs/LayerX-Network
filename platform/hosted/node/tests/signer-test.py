@@ -659,8 +659,8 @@ class BootstrapTreasuryCase(unittest.TestCase):
         environment = dict(
             {key: value for key, value in os.environ.items() if not key.startswith('LAYERX_')},
             LAYERX_NODE_PAXEER_CHAIN_ID='31337',
-            LAYERX_NODE_SETTLEMENT_CONTRACT='0x' + '1' * 40,
-            LAYERX_NODE_CHECKPOINT_REGISTRY='0x' + '2' * 40,
+            LAYERX_NODE_SETTLEMENT_CONTRACT='0x' + '0' * 36 + '1014',
+            LAYERX_NODE_CHECKPOINT_REGISTRY='0x' + '0' * 36 + '1014',
             LAYERX_NODE_PAXEER_RPC_ADDRESS='127.0.0.1',
             LAYERX_NODE_PAXEER_RPC_PORT=str(ports[2]))
         command = [

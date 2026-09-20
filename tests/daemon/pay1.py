@@ -105,8 +105,8 @@ def main():
         (work / 'ports').write_text(''.join(f'{port}\n' for port in ports))
     assert 18545 not in ports and 6379 not in ports
     environment = dict(os.environ, LAYERX_NODE_PAXEER_CHAIN_ID='31337',
-                       LAYERX_NODE_SETTLEMENT_CONTRACT='0x' + '1' * 40,
-                       LAYERX_NODE_CHECKPOINT_REGISTRY='0x' + '2' * 40,
+                       LAYERX_NODE_SETTLEMENT_CONTRACT='0x0000000000000000000000000000000000001014',
+                       LAYERX_NODE_CHECKPOINT_REGISTRY='0x0000000000000000000000000000000000001014',
                        LAYERX_NODE_PAXEER_RPC_ADDRESS='127.0.0.1',
                        LAYERX_NODE_PAXEER_RPC_PORT=str(ports[2]))
     bootstrap = ['bash', 'platform/hosted/node/bootstrap.sh', '--data-dir', str(work / 'data'),

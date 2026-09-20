@@ -46,5 +46,7 @@ lxp_result lxp_secp256k1_recover_address(const uint8_t signature[64],
 lxp_result lxp_secp256k1_address(const uint8_t *public_key,
                                  size_t public_key_length,
                                  uint8_t address[20]);
+lxp_result lxp_keccak256(const uint8_t *data, size_t length,
+                         uint8_t out[32]);
 
 #endif
