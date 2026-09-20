@@ -14,8 +14,16 @@ from custody_credit import (DEPOSIT_TOPIC, MAX_ANCESTRY, MAX_RESPONSE, MAX_RPC_C
                             read_key, require, sha, unhex, write_new)
 
 ROOT = Path(__file__).resolve().parents[2]
-VERSION = 'paxeer-custody-state-v2'
+VERSION = 'paxeer-custody-state-v3'
 PROOF_KIND = 1
+CUSTODY_ADDRESS = '0x0000000000000000000000000000000000001013'
+CUSTODY_STORE = 'layerxcustody'
+ASSET_PREFIX = b'\x10'
+DEPOSIT_PREFIX = b'\x20'
+
+
+def module_identity():
+    return sha(b'LX:CUSTODY:MODULE:v1'+CUSTODY_STORE.encode()+unhex(CUSTODY_ADDRESS, 20))
 
 
 def unique_object(pairs):
@@ -109,45 +117,10 @@ def validators(rpc, height):
 
 
 def state_query(rpc, height, key):
-    result = comet(rpc, 'abci_query', dict(path='/store/evm/key', data='0x'+key.hex(),
+    result = comet(rpc, 'abci_query', dict(path='/store/'+CUSTODY_STORE+'/key', data='0x'+key.hex(),
                                         height=str(height), prove=True))
     require(set(result) == {'response'}, 'ABCI response fields')
     return result['response']
-
-
-def layout(args, runtime):
-    artifact_path = Path(getattr(args, 'vault_artifact', None) or
-        os.environ.get('LAYERX_CUSTODY_VAULT_ARTIFACT', ROOT/'build/forge-artifacts/LayerXVault.sol/LayerXVault.json'))
-    encoded = artifact_path.read_bytes()
-    require(len(encoded) <= 16*1024*1024, 'vault compiler artifact bound')
-    artifact = json.loads(encoded, object_pairs_hook=unique_object)
-    deployed = artifact['deployedBytecode']
-    compiled = bytearray(unhex(deployed['object']))
-    observed = bytearray(runtime)
-    require(len(compiled) == len(observed) and len(compiled) > 0, 'vault compiler runtime length')
-    ranges = set()
-    for references in deployed['immutableReferences'].values():
-        for reference in references:
-            start, length = reference['start'], reference['length']
-            require(type(start) is int and type(length) is int and length == 32
-                    and 0 <= start <= len(compiled)-length, 'vault immutable reference bounds')
-            indexes = set(range(start, start+length))
-            require(not ranges.intersection(indexes), 'overlapping vault immutable references')
-            ranges.update(indexes)
-            require(compiled[start:start+length] == bytes(length), 'vault compiler immutable bytes')
-            observed[start:start+length] = bytes(length)
-    require(compiled == observed, 'vault compiler runtime binding')
-    storage = artifact['storageLayout']
-    matches = [entry for entry in storage['storage'] if entry['label'] == 'recordedDeposit']
-    require(len(matches) == 1 and matches[0]['offset'] == 0, 'recordedDeposit compiler layout')
-    entry = matches[0]
-    mapping = storage['types'][entry['type']]
-    require(mapping['encoding'] == 'mapping' and
-            storage['types'][mapping['key']]['label'] == 'bytes32' and
-            storage['types'][mapping['value']]['label'] == 'bool', 'recordedDeposit compiler type')
-    slot = int(entry['slot'])
-    require(0 <= slot < 2**256 and str(slot) == entry['slot'], 'recordedDeposit compiler slot')
-    return big(slot, 32), sha(encoded)
 
 
 def verifier(request):
@@ -185,7 +158,7 @@ def catch_up(rpcs, args, genesis_hash, final):
     documents = [genesis_document(rpc, 'boundary') for rpc in rpcs]
     require(documents[0] == documents[1] and sha(documents[0]) == genesis_hash, 'Comet pinned genesis bytes')
     expected = dict(genesis_sha256='0x'+genesis_hash.hex(), comet_chain_id=rpcs[0].comet_chain_id, chain_id=125,
-                    vault='', runtime_sha256='', confirmations=0)
+                    custody='', module_sha256='', asset_id='', confirmations=0)
     bundle = dict(version=VERSION, genesis=base64.b64encode(documents[0]).decode(), history=[], state_height=0,
                   finalized_height=0, state=[])
     request = dict(operation='status', expected=expected, bundle=bundle)
@@ -215,7 +188,7 @@ def catch_up(rpcs, args, genesis_hash, final):
     return documents
 
 
-def verified_state(rpcs, args, genesis_hash, vault, runtime_hash, confirmations, deposit_id=None, minimum_height=2):
+def verified_state(rpcs, args, genesis_hash, asset_id, confirmations, deposit_id=None, minimum_height=2):
     require(len(rpcs) == 2 and 0 < confirmations < MAX_ANCESTRY, 'Comet quorum and confirmation bound')
     deadline = time.monotonic()+30
     while True:
@@ -230,7 +203,6 @@ def verified_state(rpcs, args, genesis_hash, vault, runtime_hash, confirmations,
     documents = catch_up(rpcs, args, genesis_hash, final)
     points = sorted({height, final})
     requests, results = [], []
-    compiler_hash = None
     for rpc, genesis in zip(rpcs, documents, strict=True):
         history = []
         for number in range(max(1, final-126), final+2):
@@ -239,35 +211,28 @@ def verified_state(rpcs, args, genesis_hash, vault, runtime_hash, confirmations,
                     'Comet requested commit height')
             history.append(dict(commit=commit, validators=validators(rpc, number)))
         state = []
-        address = unhex(vault, 20)
-        slot = None
         for number in points:
-            code = state_query(rpc, number, b'\x07'+address)
-            runtime = base64.b64decode(code['value'], validate=True)
-            require(sha(runtime) == runtime_hash, 'vault runtime pin')
-            selected_slot, selected_hash = layout(args, runtime)
-            require((slot is None or slot == selected_slot) and
-                    (compiler_hash is None or compiler_hash == selected_hash), 'vault compiler consistency')
-            slot, compiler_hash = selected_slot, selected_hash
-            point = dict(height=number, code=code, code_hash=state_query(rpc, number, b'\x08'+address))
+            point = dict(height=number, asset=state_query(rpc, number, ASSET_PREFIX+asset_id))
             if deposit_id is not None:
-                point['deposit'] = state_query(rpc, number, b'\x03'+address+eth_hash(deposit_id+slot))
+                point['deposit'] = state_query(rpc, number, DEPOSIT_PREFIX+deposit_id)
             state.append(point)
         expected = dict(genesis_sha256='0x'+genesis_hash.hex(), comet_chain_id=rpc.comet_chain_id,
-                        chain_id=125, vault=vault, runtime_sha256='0x'+runtime_hash.hex(), confirmations=confirmations)
+                        chain_id=125, custody=CUSTODY_ADDRESS, module_sha256='0x'+module_identity().hex(),
+                        asset_id='0x'+asset_id.hex(), confirmations=confirmations)
         if deposit_id is not None:
-            expected.update(deposit_id='0x'+deposit_id.hex(), deposit_slot='0x'+slot.hex())
+            expected.update(deposit_id='0x'+deposit_id.hex())
         request = dict(operation='verify', expected=expected, bundle=dict(version=VERSION,
             genesis=base64.b64encode(genesis).decode(), history=history,
             state_height=height, finalized_height=final, state=state))
         result = verifier(request)
         require(result['state_height'] == height and result['finalized_height'] == final
-                and unhex(result['runtime_sha256'], 32) == runtime_hash, 'verified state identity')
+                and unhex(result['module_sha256'], 32) == module_identity(), 'verified state identity')
         requests.append(request)
         results.append(result)
-    for field in ('state_header_hash', 'application_root', 'finalized_header_hash', 'runtime_sha256', 'runtime', 'deposit_id'):
+    for field in ('state_header_hash', 'application_root', 'finalized_header_hash', 'module_sha256', 'denom',
+                  'deposit_id', 'depositor', 'beneficiary', 'amount', 'nonce'):
         require(results[0].get(field) == results[1].get(field), 'verified Comet state quorum')
-    evidence = dict(version=VERSION, requests=requests, results=results, compiler_artifact_sha256='0x'+compiler_hash.hex())
+    evidence = dict(version=VERSION, requests=requests, results=results)
     encoded = canonical(evidence)+b'\n'
     result = results[0] | {'proof_sha256': '0x'+sha(encoded).hex()}
     return result, encoded
@@ -275,12 +240,13 @@ def verified_state(rpcs, args, genesis_hash, vault, runtime_hash, confirmations,
 
 def create_profile(args, rpcs, genesis):
     require(args.chain_id == 125 and args.network_id > 0, 'Paxeer custody profile identity')
-    result, evidence = verified_state(rpcs, args, genesis, args.vault,
-        unhex(args.runtime_sha256, 32), args.confirmations)
+    require(unhex(args.vault, 20) == unhex(CUSTODY_ADDRESS, 20)
+            and unhex(args.runtime_sha256, 32) == module_identity(), 'Paxeer custody is the native module')
+    result, evidence = verified_state(rpcs, args, genesis, unhex(args.asset, 32), args.confirmations)
     public = read_key(args.attestor_key).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     name = b'system:paxeer-reserve'
     reserve = sha(b'LX:ACCOUNT:v1'+big(len(name), 4)+name)
-    profile = (b'LXBC2'+big(125, 8)+unhex(args.vault, 20)+unhex(result['runtime_sha256'], 32)+public+
+    profile = (b'LXBC2'+big(125, 8)+unhex(CUSTODY_ADDRESS, 20)+unhex(result['module_sha256'], 32)+public+
                unhex(args.asset, 32)+reserve+big(args.confirmations, 8)+genesis+big(args.network_id, 4)+big(3, 2))
     require(len(profile) == PROFILE_BYTES, 'Paxeer custody profile layout')
     write_new(args.output+'.proof.json', evidence)
@@ -290,7 +256,8 @@ def create_profile(args, rpcs, genesis):
 def attest(args, rpcs, genesis, profile):
     require(len(profile) == PROFILE_BYTES and profile[:5] == b'LXBC2'
             and int.from_bytes(profile[5:13], 'big') == 125 and profile[169:201] == genesis
-            and args.network_id > 0 and profile[201:207] == big(args.network_id, 4)+big(3, 2),
+            and args.network_id > 0 and profile[201:207] == big(args.network_id, 4)+big(3, 2)
+            and profile[13:33] == unhex(CUSTODY_ADDRESS, 20) and profile[33:65] == module_identity(),
             'Paxeer custody profile identity')
     transaction = '0x'+unhex(args.transaction, 32).hex()
     receipts = [rpc.call('eth_getTransactionReceipt', [transaction]) for rpc in rpcs]
@@ -319,8 +286,11 @@ def attest(args, rpcs, genesis, profile):
     deposit_id, asset, beneficiary, payer, amount, nonce = deposits[0]
     owner = unhex(args.beneficiary_key, 32)
     minimum = max(quantity(receipt['blockNumber']) for receipt in receipts)
-    result, evidence = verified_state(rpcs, args, genesis, '0x'+profile[13:33].hex(), profile[33:65],
-                                     int.from_bytes(profile[161:169], 'big'), deposit_id, minimum)
+    result, evidence = verified_state(rpcs, args, genesis, asset, int.from_bytes(profile[161:169], 'big'),
+                                     deposit_id, minimum)
+    require(unhex(result['deposit_id'], 32) == deposit_id and unhex(result['depositor'], 20) == payer
+            and unhex(result['beneficiary'], 32) == beneficiary and result['amount'] == str(amount)
+            and result['nonce'] == nonce, 'custody record and deposit log binding')
     unsigned = (b'LXDC2'+sha(profile)+big(args.network_id, 4)+big(3, 2)+deposit_id+asset+beneficiary+
         owner+payer+big(amount, 16)+big(nonce, 8)+big(result['state_height'], 8)+
         unhex(result['state_header_hash'], 32)+unhex(result['application_root'], 32)+

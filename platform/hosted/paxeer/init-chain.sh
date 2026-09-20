@@ -8,6 +8,13 @@
 # (contracts/libraries/Constants.sol USDL_TOKEN) with the deployer as its owner, and binds the
 # Tendermint, gRPC and API listeners to loopback. The EVM JSON-RPC listener is served by paxd on
 # port ${LAYERX_PAXEER_EVM_PORT} and is reached only through the boundary container.
+#
+# LayerX custody is the native layerxcustody module behind the precompile at
+# 0x0000000000000000000000000000000000001013; no custody contract is deployed. Its network id,
+# sequencer authorization, payout delays and asset map are genesis state:
+# LAYERX_PAXEER_CUSTODY_GENESIS_FILE names the section written by custody-genesis.py, and
+# paxd validate-genesis runs the module's own validation over it. Without the file the module
+# keeps its default genesis, which maps no asset and therefore accepts no deposit.
 set -euo pipefail
 
 PAXD=${PAXD:-paxd}
@@ -30,6 +37,7 @@ P2P_PORT=${LAYERX_PAXEER_P2P_PORT:-26656}
 GRPC_PORT=${LAYERX_PAXEER_GRPC_PORT:-9090}
 GRPC_WEB_PORT=${LAYERX_PAXEER_GRPC_WEB_PORT:-9091}
 COMMIT_TIMEOUT_NANOSECONDS=${LAYERX_PAXEER_COMMIT_TIMEOUT_NANOSECONDS:-}
+CUSTODY_GENESIS=${LAYERX_PAXEER_CUSTODY_GENESIS_FILE:-}
 MARKER="$HOME_DIR/config/.layerx-beta-initialised"
 
 fail() {
@@ -62,8 +70,22 @@ DEPLOYER_HEX=$(printf '%s' "${DEPLOYER_ADDRESS#0x}" | tr 'A-F' 'a-f')
 command -v "$PAXD" >/dev/null 2>&1 || fail "paxd binary $PAXD is not available"
 command -v "$JQ" >/dev/null 2>&1 || fail "jq is not available"
 [ -r "$USDL_RUNTIME" ] || fail "USDL runtime bytecode $USDL_RUNTIME is not readable"
+if [ -n "$CUSTODY_GENESIS" ]; then
+    [ -r "$CUSTODY_GENESIS" ] || fail "custody genesis $CUSTODY_GENESIS is not readable"
+    "$JQ" -e '(.params.network_id | type == "number" and . > 0)
+        and (.params.sequencer_authorizations | type == "array" and length > 0)
+        and (.assets | type == "array" and length > 0)' "$CUSTODY_GENESIS" >/dev/null \
+        || fail "custody genesis must carry a network id, a sequencer authorization and an asset"
+fi
 
 if [ -f "$MARKER" ]; then
+    if [ -n "$CUSTODY_GENESIS" ]; then
+        "$JQ" -e --slurpfile custody "$CUSTODY_GENESIS" \
+            '.app_state.layerxcustody.params.network_id == $custody[0].params.network_id
+             and ([.app_state.layerxcustody.assets[].asset_id] == [$custody[0].assets[].asset_id])' \
+            "$HOME_DIR/config/genesis.json" >/dev/null \
+            || fail "requested custody genesis differs from initialised genesis"
+    fi
     if [ -n "$COMMIT_TIMEOUT_NANOSECONDS" ]; then
         "$JQ" -e --arg commit_timeout "$COMMIT_TIMEOUT_NANOSECONDS" \
             '.consensus_params.timeout.commit == $commit_timeout' \
@@ -124,6 +146,10 @@ VALIDATOR_PUBKEY=$("$JQ" -c '.pub_key' "$HOME_DIR/config/priv_validator_key.json
         "base": "uhpx", "display": "uhpx", "name": "UHPX", "symbol": "UHPX"}]
 ' "$GENESIS" > "$GENESIS.tmp"
 mv "$GENESIS.tmp" "$GENESIS"
+if [ -n "$CUSTODY_GENESIS" ]; then
+    "$JQ" --slurpfile custody "$CUSTODY_GENESIS" '.app_state.layerxcustody = $custody[0]' "$GENESIS" > "$GENESIS.tmp"
+    mv "$GENESIS.tmp" "$GENESIS"
+fi
 "$PAXD" collect-gentxs --home "$HOME_DIR" >/dev/null 2>&1
 "$PAXD" validate-genesis --home "$HOME_DIR" >/dev/null
 
@@ -158,6 +184,7 @@ grep -q "^http_port = ${EVM_PORT}$" "$APP" || fail "app.toml evm http_port was n
     printf 'deployer=%s\n' "$DEPLOYER_ADDRESS"
     printf 'deployer_cast=%s\n' "$DEPLOYER_CAST"
     printf 'usdl=%s\n' "$USDL_ADDRESS"
+    printf 'custody=0x0000000000000000000000000000000000001013\n'
     printf 'evm_port=%s\n' "$EVM_PORT"
 } > "$MARKER"
 echo "init-chain: initialised $COSMOS_CHAIN_ID at $HOME_DIR (deployer $DEPLOYER_ADDRESS, cast $DEPLOYER_CAST)" >&2
