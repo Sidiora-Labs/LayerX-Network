@@ -116,6 +116,14 @@ static void keccak256(const uint8_t *data, size_t length, uint8_t out[32])
     lxp_secure_zero(state,sizeof(state)); lxp_secure_zero(block,sizeof(block));
 }
 
+lxp_result lxp_keccak256(const uint8_t *data, size_t length, uint8_t out[32])
+{
+    static const uint8_t empty = 0U;
+    if (out == NULL || (data == NULL && length != 0U)) return LXP_ERR_NON_CANONICAL;
+    keccak256(data == NULL ? &empty : data, length, out);
+    return LXP_OK;
+}
+
 lxp_result lxp_secp256k1_address(const uint8_t *public_key,
                                  size_t public_key_length,
                                  uint8_t address[20])

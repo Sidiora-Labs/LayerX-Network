@@ -11,6 +11,18 @@ typedef struct lxp_daemon_finality_authority {
     uint16_t rpc_port;
 } lxp_daemon_finality_authority;
 
+#define LXP_DAEMON_ANCHOR_STATUS_OF "statusOf(uint64)"
+#define LXP_DAEMON_ANCHOR_CHECKPOINT "checkpoint(uint64)"
+
+typedef enum lxp_daemon_anchor_ladder {
+    LXP_DAEMON_ANCHOR_INSTANT = 0,
+    LXP_DAEMON_ANCHOR_SEALED = 1,
+    LXP_DAEMON_ANCHOR_FINAL = 2
+} lxp_daemon_anchor_ladder;
+
+lxp_result lxp_daemon_finality_authority_ladder(
+    const lxp_daemon_finality_authority *authority, uint64_t batch_number,
+    lxp_daemon_anchor_ladder *ladder);
 lxp_result lxp_daemon_finality_authority_init(
     lxp_daemon_finality_authority *authority,
     lxp_daemon_evidence_store *store);

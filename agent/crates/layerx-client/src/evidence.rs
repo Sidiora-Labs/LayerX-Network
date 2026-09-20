@@ -39,6 +39,11 @@ const ERROR_RESPONSE_TAG: u16 = 25;
 const REGISTER_REQUEST_TAG: u16 = 28;
 const REGISTER_RESPONSE_TAG: u16 = 29;
 const WIRE_VERSION: u16 = 1;
+/// The native anchor precompile every settlement reference and guarantor
+/// attestation must name as its settlement contract.
+pub const ANCHOR_SETTLEMENT_CONTRACT: [u8; 20] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10, 0x14,
+];
 const MAX_RECEIPT_BYTES: usize = 4_096;
 const MAINTENANCE_WIRE_VERSION: u16 = 2;
 const BATCH_MAINTENANCE_WIRE_VERSION: u16 = 3;
@@ -1325,7 +1330,7 @@ fn check_checkpoint_bytes(
         || context.registration.resulting_state_root != header.resulting_state_root()
         || context.registration.batch_number != header.batch_number()
         || context.registration.chain_id == 0
-        || context.registration.contract == [0; 20]
+        || context.registration.contract != ANCHOR_SETTLEMENT_CONTRACT
         || context.registration.reference != checkpoint.settlement_reference
     {
         return Err(EvidenceError::Registration);
@@ -1736,7 +1741,7 @@ fn decode_settlement_reference(bytes: &[u8]) -> Result<SettlementReference, Evid
     let settled_at_ms = reader.u64()?;
     reader.finish()?;
     if reference.chain_id == 0
-        || reference.contract == [0; 20]
+        || reference.contract != ANCHOR_SETTLEMENT_CONTRACT
         || reference.checkpoint_id == [0; 32]
         || tx_id == [0; 32]
         || settled_block == 0
@@ -1968,7 +1973,7 @@ mod tests {
         bytes.extend_from_slice(&1_u128.to_be_bytes());
         bytes.push(1);
         let checkpoint_id = [3; 32];
-        let contract = [5; 20];
+        let contract = ANCHOR_SETTLEMENT_CONTRACT;
         bytes.extend_from_slice(&checkpoint_id);
         bytes.extend_from_slice(&[4; 32]);
         bytes.extend_from_slice(&1_u64.to_be_bytes());
@@ -2041,6 +2046,39 @@ mod tests {
             equivocation_detected: false,
         };
         assert!(requirements_satisfied(&requirements, 2, 1));
+    }
+
+    fn settlement_reference(contract: [u8; 20]) -> Vec<u8> {
+        let mut reference = Vec::with_capacity(SETTLEMENT_REFERENCE_BYTES);
+        reference.extend_from_slice(&WIRE_VERSION.to_be_bytes());
+        reference.extend_from_slice(&125_u64.to_be_bytes());
+        reference.extend_from_slice(&contract);
+        reference.extend_from_slice(&[3; 32]);
+        reference.extend_from_slice(&[6; 32]);
+        reference.extend_from_slice(&9_u64.to_be_bytes());
+        reference.extend_from_slice(&10_u64.to_be_bytes());
+        reference
+    }
+
+    #[test]
+    fn evidence_settlement_reference_names_the_anchor_precompile() {
+        assert_eq!(
+            ANCHOR_SETTLEMENT_CONTRACT,
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10, 0x14]
+        );
+        let accepted =
+            decode_settlement_reference(&settlement_reference(ANCHOR_SETTLEMENT_CONTRACT))
+                .unwrap_or_else(|error| panic!("anchor settlement reference refused: {error:?}"));
+        assert_eq!(accepted.chain_id, 125);
+        assert_eq!(accepted.contract, ANCHOR_SETTLEMENT_CONTRACT);
+        let mut custody = ANCHOR_SETTLEMENT_CONTRACT;
+        custody[19] = 0x13;
+        for contract in [[0; 20], [5; 20], custody] {
+            assert!(matches!(
+                decode_settlement_reference(&settlement_reference(contract)),
+                Err(EvidenceError::Settlement)
+            ));
+        }
     }
 
     #[test]

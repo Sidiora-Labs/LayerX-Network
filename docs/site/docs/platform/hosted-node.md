@@ -279,8 +279,8 @@ these `KEY=VALUE` lines with no repeats and no other keys
 | Key | Rule |
 | --- | --- |
 | `LAYERX_NODE_PAXEER_CHAIN_ID` | Positive decimal `uint64` (`platform/hosted/node/bootstrap.sh:94-97`) |
-| `LAYERX_NODE_SETTLEMENT_CONTRACT` | `0x` plus 40 hex, not zero (`platform/hosted/node/bootstrap.sh:98-105`) |
-| `LAYERX_NODE_CHECKPOINT_REGISTRY` | same address rule |
+| `LAYERX_NODE_SETTLEMENT_CONTRACT` | the layerxAnchor precompile `0x0000000000000000000000000000000000001014`, the address guarantors sign and bond at (`platform/hosted/node/bootstrap.sh` `validate_settlement`) |
+| `LAYERX_NODE_CHECKPOINT_REGISTRY` | the same precompile address; checkpoints are submitted to and read back from it |
 | `LAYERX_NODE_PAXEER_RPC_ADDRESS` | exactly `127.0.0.1` (`platform/hosted/node/bootstrap.sh:106`) |
 | `LAYERX_NODE_PAXEER_RPC_PORT` | `1..=65535` (`platform/hosted/node/bootstrap.sh:107`) |
 

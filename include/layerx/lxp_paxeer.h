@@ -158,6 +158,20 @@ typedef enum lxp_paxeer_membership_sync_availability {
 } lxp_paxeer_membership_sync_availability;
 
 lxp_result lxp_paxeer_custody_abi_init(lxp_paxeer_custody_abi *abi);
+#define LXP_PAXEER_ANCHOR_SUBMIT_CHECKPOINT "submitCheckpoint(bytes,bytes,bytes)"
+#define LXP_PAXEER_CERTIFICATE_WIRE_VERSION 1U
+#define LXP_PAXEER_CERTIFICATE_ATTESTATION_BYTES 274U
+extern const uint8_t lxp_paxeer_anchor_address[20];
+lxp_result lxp_paxeer_abi_selector(const char *signature, uint8_t selector[4]);
+lxp_result lxp_paxeer_checkpoint_certificate_encode(
+    const lxp_guarantor_cert *certificate, lxp_arena *arena,
+    lxp_byte_span *encoded);
+lxp_result lxp_paxeer_abi_encode_bytes(
+    const uint8_t selector[4], const lxp_byte_span *arguments,
+    size_t argument_count, lxp_arena *arena, lxp_byte_span *calldata);
+lxp_result lxp_checkpoint_submit_calldata(
+    const lxp_guarantor_cert *certificate, const uint8_t header_signature[64],
+    lxp_arena *arena, lxp_byte_span *calldata);
 lxp_result lxp_paxeer_guarantor_attestation_from_core(
     const lxp_guarantor_attestation *source,
     lxp_paxeer_guarantor_attestation *target);

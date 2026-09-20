@@ -26,11 +26,93 @@ class SettlementTests(unittest.TestCase):
             signature = s.raw(a['signature'], 64)
             self.attestations.append((2, 42, 31337, self.bond, self.header[2], self.digest, self.digest, s.raw(a['guarantor_id']), self.header[3], self.header[11], True, True, 31, a['attested_at_ms'], a['signer'], signature[:32], signature[32:], a['signature_v']))
 
-    def test_canonical_hash_and_abi_roundtrip(self):
+    def anchor_vector(self):
+        document = json.loads((ROOT / 'layerxproof/testdata/anchor_vectors.json').read_text())
+        case = next(v for v in document['checkpoints'] if v['name'] == 'batch_1_quorum' and v['valid'])
+        context = document['context'][0]
+        encoded = bytes.fromhex(case['header'])
+        self.assertEqual((len(encoded), encoded[:5]), (354, bytes.fromhex('000217010f')))
+        header, cursor = [], 5
+        for index, kind in enumerate(s.HEADER_TYPES, 1):
+            self.assertEqual(encoded[cursor], index)
+            cursor += 1
+            if kind == 'bytes32':
+                self.assertEqual(encoded[cursor:cursor + 4], (32).to_bytes(4, 'big'))
+                header.append(encoded[cursor + 4:cursor + 36])
+                cursor += 36
+            else:
+                width = int(kind[4:]) // 8
+                header.append(int.from_bytes(encoded[cursor:cursor + width], 'big'))
+                cursor += width
+        self.assertEqual(cursor, 354)
+        certificate = bytes.fromhex(case['certificate'])
+        self.assertEqual(certificate[:6] + certificate[6:360], (1).to_bytes(2, 'big') + (354).to_bytes(4, 'big') + encoded)
+        proof_length = int.from_bytes(certificate[360:364], 'big')
+        proof = certificate[364:364 + proof_length]
+        cursor = 364 + proof_length
+        count = certificate[cursor]
+        cursor += 1
+        attestations = []
+        for _ in range(count):
+            w = certificate[cursor:cursor + 274]
+            cursor += 274
+            u = lambda begin, end: int.from_bytes(w[begin:end], 'big')
+            attestations.append((u(0, 2), u(2, 6), u(6, 14), '0x' + w[14:34].hex(), u(34, 42), w[42:74], w[74:106], w[106:138], u(138, 146), w[146:178],
+                                 w[178] == 1, w[179] == 1, w[180], u(181, 189), s.to_checksum_address(w[189:209]), w[209:241], w[241:273], w[273]))
+        threshold = certificate[cursor]
+        self.assertEqual((count, threshold), (int(case['signers']), int(case['threshold'])))
+        self.assertEqual(int.from_bytes(certificate[cursor + 1:cursor + 3], 'big'), len(certificate) - cursor - 3)
+        return case, context, tuple(header), proof, attestations, threshold, certificate[:cursor + 1]
+
+    def test_canonical_hash_and_vector_hash(self):
         self.assertEqual(s.checkpoint_hash(self.header, s.raw(self.vector['certificate']['validity_proof'])), self.digest)
-        encoded = s.calldata('registerCheckpoint(' + s.HEADER + ',bytes,' + s.ATTESTATION + '[])', (s.HEADER, 'bytes', s.ATTESTATION + '[]'), (self.header, b'PROOF', self.attestations))
-        decoded = s.decode((s.HEADER, 'bytes', s.ATTESTATION + '[]'), s.raw(encoded)[4:])
-        self.assertEqual(decoded, (self.header, b'PROOF', tuple(self.attestations)))
+        case, _, header, proof, _, _, _ = self.anchor_vector()
+        self.assertEqual(s.header_encode(header).hex(), case['header'])
+        self.assertEqual(s.checkpoint_hash(header, proof).hex(), case['checkpoint_id'])
+
+    def test_anchor_certificate_and_submit_calldata_match_the_c_payload(self):
+        case, context, header, proof, attestations, threshold, prefix = self.anchor_vector()
+        self.assertEqual(s.raw(s.ANCHOR, 20).hex(), context['settlement_contract'])
+        certificate = s.certificate_encode(header, proof, attestations, threshold)
+        self.assertEqual(certificate, prefix + bytes(2))
+        digest = bytes.fromhex(case['checkpoint_id'])
+        for a in attestations:
+            s.validate_attestation(a, header, digest, int(context['paxeer_chain_id']), s.ANCHOR, int(context['maximum_attestation_delay_ms']))
+            with self.assertRaises(ValueError):
+                s.validate_attestation(a, header, digest, int(context['paxeer_chain_id']), self.bond, int(context['maximum_attestation_delay_ms']))
+        signature = bytes.fromhex(case['header_signature'])
+        data = s.raw(s.submit_calldata(header, signature, proof, attestations, threshold))
+        self.assertEqual(data[:4], s.keccak(text='submitCheckpoint(bytes,bytes,bytes)')[:4])
+        self.assertEqual(s.decode(('bytes', 'bytes', 'bytes'), data[4:]), (bytes.fromhex(case['header']), signature, certificate))
+        self.assertEqual(int.from_bytes(data[4:36], 'big'), 96)
+        self.assertEqual(int.from_bytes(data[36:68], 'big'), 96 + 32 + 384)
+        self.assertEqual(int.from_bytes(data[68:100], 'big'), 96 + 32 + 384 + 32 + 64)
+        with self.assertRaises(ValueError):
+            s.submit_calldata(header, bytes(64), proof, attestations, threshold)
+        with self.assertRaises(ValueError):
+            s.certificate_encode(header, proof, attestations, len(attestations) + 1)
+
+    def test_signatures_and_topics_are_the_precompile_abi(self):
+        entries = json.loads((ROOT / 'precompiles/layerxanchor/abi.json').read_text())
+
+        def kind(item):
+            return '(' + ','.join(kind(c) for c in item['components']) + ')' if item['type'] == 'tuple' else item['type']
+
+        def signature(entry):
+            return entry['name'] + '(' + ','.join(kind(i) for i in entry['inputs']) + ')'
+
+        functions = {e['name']: e for e in entries if e['type'] == 'function'}
+        events = {e['name']: e for e in entries if e['type'] == 'event'}
+        self.assertEqual(signature(functions['submitCheckpoint']), s.SUBMIT)
+        self.assertEqual(kind(functions['checkpoint']['outputs'][0]), s.CHECKPOINT_TUPLE)
+        self.assertEqual(kind(functions['guarantor']['outputs'][0]), s.GUARANTOR_TUPLE)
+        self.assertEqual([functions[name]['stateMutability'] for name in ('registerGuarantor', 'increaseBond', 'openChallenge')], ['payable'] * 3)
+        for name in ('registerGuarantor', 'increaseBond', 'openChallenge', 'submitEquivocation', 'finalize', 'statusOf', 'threshold', 'guarantor', 'checkpoint'):
+            self.assertIn("'" + signature(functions[name]) + "'", (ROOT / 'cmd/layerx-guarantor/settlement.py').read_text())
+        for name, value in [('CheckpointSubmitted', s.SUBMITTED_EVENT), ('CheckpointFinalized', s.FINALIZED_EVENT), ('GuarantorRegistered', s.REGISTERED_EVENT),
+                            ('GuarantorActivated', s.ACTIVATED_EVENT), ('BondIncreased', s.BOND_EVENT), ('UnbondBegun', s.UNBOND_EVENT), ('GuarantorSlashed', s.SLASHED_EVENT)]:
+            self.assertEqual(s.topic(signature(events[name])), value)
+        self.assertEqual(s.UNIT_WEI, 10 ** 12)
 
     def test_real_vector_signatures(self):
         for a in self.attestations:
@@ -46,27 +128,46 @@ class SettlementTests(unittest.TestCase):
                     s.validate_attestation(tuple(altered), self.header, self.digest, 31337, self.bond, 3_600_000)
 
     def test_exact_receipt_event_and_negative_fields(self):
-        registry = '0x' + '12' * 20
         tx = '0x' + '34' * 32
         block_hash = '0x' + '56' * 32
-        data = s.encode(['uint64', 'uint64', 'bytes32', 'bytes32', 'bytes32', 'uint64'], [self.header[4], self.header[5], self.header[6], self.header[7], self.header[11], 4])
-        log = {'address': registry, 'transactionHash': tx, 'blockHash': block_hash, 'blockNumber': '0x1', 'removed': False, 'topics': [s.EVENT, '0x' + self.digest.hex(), '0x' + s.encode(['uint64'], [1]).hex(), '0x' + s.encode(['uint64'], [1]).hex()], 'data': '0x' + data.hex()}
-        receipt = {'status': '0x1', 'transactionHash': tx, 'to': registry, 'blockHash': block_hash, 'blockNumber': '0x1', 'logs': [log]}
-        self.assertEqual(s.validate_receipt(receipt, registry, tx, self.digest, self.header, 4), 1)
-        for key, value in [('removed', True), ('data', '0x' + bytes(192).hex()), ('transactionHash', '0x' + 'ff' * 32), ('blockHash', '0x' + 'ff' * 32), ('blockNumber', '0x2')]:
-            changed = copy.deepcopy(receipt)
-            changed['logs'][0][key] = value
-            with self.subTest(key=key), self.assertRaises(ValueError):
-                s.validate_receipt(changed, registry, tx, self.digest, self.header, 4)
-        for logs in [[], [log, log]]:
+        indexed = ['0x' + s.encode(['uint64'], [self.header[3]]).hex(), '0x' + self.digest.hex()]
+        common = {'address': s.ANCHOR, 'transactionHash': tx, 'blockHash': block_hash, 'blockNumber': '0x1', 'removed': False}
+        submitted = dict(common, topics=[s.SUBMITTED_EVENT] + indexed, data='0x' + s.encode(['bytes32', 'bytes32', 'uint8'], [self.header[7], self.header[9], 3]).hex())
+        finalized = dict(common, topics=[s.FINALIZED_EVENT] + indexed, data='0x' + s.encode(['bytes32', 'bytes32'], [self.header[7], self.header[9]]).hex())
+        receipt = {'status': '0x1', 'transactionHash': tx, 'to': s.ANCHOR, 'blockHash': block_hash, 'blockNumber': '0x1', 'logs': [submitted, finalized]}
+        self.assertEqual(s.validate_receipt(receipt, tx, self.digest, self.header, 3), (1, True))
+        self.assertEqual(s.validate_receipt(dict(receipt, logs=[submitted]), tx, self.digest, self.header, 3), (1, False))
+        for key, value in [('removed', True), ('data', '0x' + bytes(96).hex()), ('transactionHash', '0x' + 'ff' * 32), ('blockHash', '0x' + 'ff' * 32), ('blockNumber', '0x2')]:
+            for position in (0, 1):
+                changed = copy.deepcopy(receipt)
+                changed['logs'][position][key] = value
+                with self.subTest(key=key, position=position), self.assertRaises(ValueError):
+                    s.validate_receipt(changed, tx, self.digest, self.header, 3)
+        for logs in [[], [finalized], [submitted, submitted], [submitted, finalized, finalized]]:
             with self.assertRaises(ValueError):
-                s.validate_receipt(dict(receipt, logs=logs), registry, tx, self.digest, self.header, 4)
+                s.validate_receipt(dict(receipt, logs=logs), tx, self.digest, self.header, 3)
         with self.assertRaises(ValueError):
-            s.validate_receipt(dict(receipt, status='0x0'), registry, tx, self.digest, self.header, 4)
+            s.validate_receipt(receipt, tx, self.digest, self.header, 2)
+        with self.assertRaises(ValueError):
+            s.validate_receipt(dict(receipt, status='0x0'), tx, self.digest, self.header, 3)
+        with self.assertRaises(ValueError):
+            s.validate_receipt(dict(receipt, to='0x' + '12' * 20), tx, self.digest, self.header, 3)
+
+    def test_anchor_checkpoint_record_comparison(self):
+        h = self.header
+        record = (h[3], self.digest, bytes(32), h[2], h[4], h[5], h[6], h[7], h[9], h[11], h[14], h[13], 2, 3, 31, 0, 9, 9)
+        s.require_checkpoint(record, self.digest, h, 3)
+        for index in (1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13):
+            changed = list(record)
+            changed[index] = bytes([1]) * 32 if isinstance(changed[index], bytes) else changed[index] + 1
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                s.require_checkpoint(tuple(changed), self.digest, h, 3)
+        with self.assertRaises(ValueError):
+            s.require_checkpoint(None, self.digest, h, 3)
 
     def test_real_submitter_transaction_signing(self):
         account = s.Account.create()
-        transaction = {'chainId': 31337, 'nonce': 0, 'to': s.to_checksum_address(self.bond), 'value': 0, 'gas': 100000, 'gasPrice': 1000000000, 'data': s.calldata('membershipVersion()')}
+        transaction = {'chainId': 31337, 'nonce': 0, 'to': s.to_checksum_address(self.bond), 'value': 0, 'gas': 100000, 'gasPrice': 1000000000, 'data': s.calldata('increaseBond(bytes32)', ('bytes32',), (bytes([7]) * 32,))}
         signed = account.sign_transaction(transaction)
         self.assertEqual(s.Account.recover_transaction(signed.raw_transaction), account.address)
         self.assertEqual(s.keccak(bytes(signed.raw_transaction)), signed.hash)
@@ -96,10 +197,12 @@ class SettlementTests(unittest.TestCase):
     def test_configuration_real_vector_public_keys_and_environment(self):
         document = json.loads((ROOT / 'contracts/config/checkpoint-settlement.json').read_text())
         domain = copy.deepcopy(document['settlement_domains']['vectors'])
-        domain['guarantor_bond'] = domain['settlement_contract']
-        domain['settlement_contract'] = '0x' + '23' * 20
+        domain['guarantor_bond'] = s.ANCHOR
+        domain['settlement_contract'] = s.ANCHOR
+        domain['minimum_bond'] = 1_000_000
+        domain['maximum_attestation_delay_ms'] = 3_600_000
         document['settlement_domains']['beta'] = domain
-        environment = {'LAYERX_NODE_PAXEER_CHAIN_ID': str(domain['paxeer_chain_id']), 'LAYERX_NODE_SETTLEMENT_CONTRACT': domain['guarantor_bond'], 'LAYERX_NODE_CHECKPOINT_REGISTRY': domain['settlement_contract']}
+        environment = {'LAYERX_NODE_PAXEER_CHAIN_ID': str(domain['paxeer_chain_id']), 'LAYERX_NODE_SETTLEMENT_CONTRACT': s.ANCHOR, 'LAYERX_NODE_CHECKPOINT_REGISTRY': s.ANCHOR}
         previous = {key: os.environ.get(key) for key in environment}
         try:
             os.environ.update(environment)
@@ -114,6 +217,19 @@ class SettlementTests(unittest.TestCase):
                 os.environ['LAYERX_NODE_PAXEER_CHAIN_ID'] = '125'
                 with self.assertRaises(ValueError):
                     s.configuration(request)
+                os.environ['LAYERX_NODE_PAXEER_CHAIN_ID'] = str(domain['paxeer_chain_id'])
+                for key in ('guarantor_bond', 'settlement_contract'):
+                    solidity = copy.deepcopy(document)
+                    solidity['settlement_domains']['beta'][key] = '0x' + '23' * 20
+                    path.write_text(json.dumps(solidity))
+                    with self.subTest(key=key), self.assertRaises(ValueError):
+                        s.configuration(request)
+                for key in ('minimum_bond', 'maximum_attestation_delay_ms'):
+                    missing = copy.deepcopy(document)
+                    del missing['settlement_domains']['beta'][key]
+                    path.write_text(json.dumps(missing))
+                    with self.subTest(key=key), self.assertRaises(ValueError):
+                        s.configuration(request)
         finally:
             for key, value in previous.items():
                 if value is None:
