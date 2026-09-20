@@ -72,7 +72,8 @@ fn exchange(
     maximum_frame_bytes: usize,
     protocol: u16,
 ) -> Result<Outcome, Error> {
-    let codec = NativeMovementCodec::for_protocol(protocol).map_err(|_| Error::Configuration)?;
+    crate::config::validated_protocol(protocol)?;
+    let codec = NativeMovementCodec::new();
     let payload = codec
         .encode_request(&MovementProviderRequest::Readiness)
         .map_err(|_| Error::Configuration)?;
@@ -110,7 +111,8 @@ fn exchange(
 
 /// Only the provider's own `Ready` answer counts as ready.
 pub(crate) fn interpret(protocol: u16, response: &[u8]) -> Result<Outcome, Error> {
-    let codec = NativeMovementCodec::for_protocol(protocol).map_err(|_| Error::Configuration)?;
+    crate::config::validated_protocol(protocol)?;
+    let codec = NativeMovementCodec::new();
     match codec.decode_response(response) {
         Ok(MovementProviderResponse::Ready) => Ok(Outcome::Ready),
         Ok(_) => Ok(Outcome::NotReady),

@@ -232,8 +232,6 @@ pub struct ProductionComponentsConfig {
     paxeer_endpoint: EndpointConfig,
     paxeer_finality_endpoints: Vec<EndpointConfig>,
     paxeer_minimum_agreement: usize,
-    exit_contract: EvmAddress,
-    withdrawal_claims_contract: EvmAddress,
     exit_required_confirmations: u64,
     activity_freshness_seconds: u64,
     activity_export_maximum_bytes: usize,
@@ -333,10 +331,6 @@ impl ProductionComponentsConfig {
             },
             paxeer_finality_endpoints: finality_endpoints()?,
             paxeer_minimum_agreement: finality_minimum_agreement()?,
-            exit_contract: EvmAddress::new(hex20("LAYERX_HUMAN_PAXEER_EXIT_CONTRACT")?),
-            withdrawal_claims_contract: EvmAddress::new(hex20(
-                "LAYERX_HUMAN_PAXEER_WITHDRAWAL_CLAIMS_CONTRACT",
-            )?),
             exit_required_confirmations: number("LAYERX_HUMAN_EXIT_REQUIRED_CONFIRMATIONS")?,
             activity_freshness_seconds: number("LAYERX_HUMAN_ACTIVITY_FRESHNESS_SECONDS")?,
             activity_export_maximum_bytes: number("LAYERX_HUMAN_ACTIVITY_EXPORT_MAXIMUM_BYTES")?,
@@ -448,10 +442,7 @@ impl ProductionComponents {
             .map_err(|_| "identity provider configuration was refused".to_owned())?;
         let mut movement = UnixMovementProvider::new(
             config.movement,
-            Arc::new(
-                NativeMovementCodec::for_protocol(config.protocol_version)
-                    .map_err(|_| "unsupported Human protocol version".to_owned())?,
-            ),
+            Arc::new(NativeMovementCodec::new()),
             withdrawal_boundary,
         )
         .map_err(|_| "movement provider refused startup".to_owned())?;
@@ -461,14 +452,16 @@ impl ProductionComponents {
         let emergency_exit = EmergencyExit::new(ExitConfig {
             endpoints: config.paxeer_finality_endpoints.clone(),
             minimum_endpoint_agreement: config.paxeer_minimum_agreement,
-            exit_contract: config.exit_contract,
+            network_id: config.network_id,
             required_confirmations: config.exit_required_confirmations,
             poll_cadence: config.exit_poll_cadence,
             delayed_after_polls: config.exit_delayed_after_polls,
         })
         .map_err(|_| "Paxeer exit boundary refused startup".to_owned())?;
-        let settlement_domain =
-            SettlementDomain::new(config.settlement_chain_id, config.exit_contract.bytes());
+        let settlement_domain = SettlementDomain::new(
+            config.settlement_chain_id,
+            layerx_paxeer_client::CUSTODY_PRECOMPILE.bytes(),
+        );
         let event_outbox = crate::event_producer::HumanOutbox::start(Arc::clone(&store))?;
         Ok(Self {
             clock,
@@ -1150,8 +1143,7 @@ fn movement_request(
         },
         action_key,
     );
-    let codec =
-        NativeMovementCodec::for_protocol(components.protocol_version).map_err(movement_failure)?;
+    let codec = NativeMovementCodec::new();
     let key = RowKey::new(format!(
         "movement-authority-{}",
         hex_bytes(&idempotency_key)
@@ -1942,30 +1934,19 @@ fn hex_bytes(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn hex20(name: &str) -> Result<[u8; 20], String> {
-    let value = required(name)?;
-    let digits = value
-        .strip_prefix("0x")
-        .ok_or_else(|| format!("{name} is invalid"))?;
-    if digits.len() != 40 {
-        return Err(format!("{name} is invalid"));
-    }
-    let mut output = [0; 20];
-    for (slot, pair) in output.iter_mut().zip(digits.as_bytes().chunks_exact(2)) {
-        let pair = std::str::from_utf8(pair).map_err(|_| format!("{name} is invalid"))?;
-        *slot = u8::from_str_radix(pair, 16).map_err(|_| format!("{name} is invalid"))?;
-    }
-    Ok(output)
-}
-
 fn selected_protocol(value: Option<&str>) -> Result<u16, String> {
     let protocol = value.map_or(Ok(layerx_intents::canonical::PROTOCOL_VERSION), |value| {
         value
             .parse::<u16>()
             .map_err(|_| "LAYERX_HUMAN_PROTOCOL_VERSION is invalid".to_owned())
     })?;
-    NativeMovementCodec::for_protocol(protocol)
-        .map_err(|_| "LAYERX_HUMAN_PROTOCOL_VERSION is unsupported".to_owned())?;
+    if !matches!(
+        protocol,
+        layerx_intents::canonical::PROTOCOL_VERSION
+            | layerx_intents::canonical::STATE_COMMITMENT_PROTOCOL_VERSION
+    ) {
+        return Err("LAYERX_HUMAN_PROTOCOL_VERSION is unsupported".to_owned());
+    }
     Ok(protocol)
 }
 
@@ -5340,7 +5321,6 @@ fn production_withdrawal_boundary(
         layerx_paxeer_client::WithdrawalConfig {
             endpoints: config.paxeer_finality_endpoints.clone(),
             minimum_endpoint_agreement: config.paxeer_minimum_agreement,
-            claims_contract: config.withdrawal_claims_contract,
             required_confirmations: config.exit_required_confirmations,
             poll_cadence: config.exit_poll_cadence,
             delayed_after_polls: config.exit_delayed_after_polls,

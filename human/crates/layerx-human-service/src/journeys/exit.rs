@@ -3,8 +3,9 @@
 use std::fmt::{Display, Formatter};
 
 use layerx_paxeer_client::{
-    EmergencyExit, ExecutionOutcome, ExitClaim, ExitEligibility, ExitError, ExitEvidence,
-    ExitProgress, ExitRefusal, GuarantorAttestation, TransactionHash, TransactionInclusion,
+    CustodyClaim, EmergencyExit, ExecutionOutcome, ExitClaim, ExitEligibility, ExitError,
+    ExitEvidence, ExitProgress, ExitRefusal, ForcedExitMaterial, TransactionHash,
+    TransactionInclusion,
 };
 use layerx_types::intent::EvmAddress;
 use serde::{Deserialize, Serialize};
@@ -19,12 +20,19 @@ use crate::redaction::{Label, RedactionError};
 use crate::store::{EvidenceRef, PrincipalScope, RowKey, StoreError, Table};
 use crate::trace::TraceId;
 
-const RECORD_VERSION: u8 = 1;
+const RECORD_VERSION: u8 = 2;
 const RECORD_PREFIX: &str = "exit-journey-";
 const SNAPSHOT_PREFIX: &str = "exit-evidence-";
 const WALLET_ACTION_DOMAIN: &[u8] = b"layerx-human-exit-wallet/v1\0";
+const EXECUTE_ACTION_DOMAIN: &[u8] = b"layerx-human-exit-execute/v1\0";
 const PLAN_DIGEST_DOMAIN: &[u8] = b"layerx-human-exit-plan/v1\0";
 const CONFIRMATION_DOMAIN: &[u8] = b"layerx-human-exit-confirmation/v1\0";
+/// Wire tag of the forced-exit plan. Plans of the removed checkpoint-proof
+/// shape are refused rather than reinterpreted.
+const PLAN_TAG: u8 = 5;
+/// Bound on one encoded [`ForcedExitMaterial`]: the custody evidence bound
+/// plus the fixed-size material header.
+const MAX_MATERIAL_BYTES: usize = 131_072;
 
 /// Settings location of the guided flow.
 pub const EXIT_SETTINGS_SURFACE: &str = "Settings";
@@ -83,148 +91,56 @@ pub struct ExitPlan {
 }
 
 /// Encodes all owner-visible exit evidence without JSON or debug projections.
+///
+/// # Errors
+///
+/// Refuses an invalid plan and material outside the custody evidence bounds.
 pub(crate) fn encode_exit_plan(plan: &ExitPlan) -> Result<Vec<u8>, ExitJourneyError> {
     validate_plan(plan)?;
     validate_exit_evidence(&plan.evidence)?;
-    let mut out = super::wire::Writer::new(if plan.evidence.native.is_some() { 4 } else { 3 });
+    let material = encode_material(&plan.evidence.material)?;
+    let mut out = super::wire::Writer::new(PLAN_TAG);
     out.text(plan.journey_id.as_str())
         .map_err(|()| ExitJourneyError::InvalidPlan)?;
     out.fixed(&plan.idempotency_key);
-    out.fixed(&plan.evidence.account);
-    out.fixed(&plan.evidence.asset_id);
     out.u128(plan.evidence.finalised_balance);
-    out.fixed(&plan.evidence.recipient.bytes());
-    out.u64(plan.evidence.leaf_index);
-    out.u16(
-        u16::try_from(plan.evidence.siblings.len()).map_err(|_| ExitJourneyError::InvalidPlan)?,
-    );
-    for sibling in &plan.evidence.siblings {
-        out.fixed(sibling);
-    }
-    out.u16(
-        u16::try_from(plan.evidence.attestations.len())
-            .map_err(|_| ExitJourneyError::InvalidPlan)?,
-    );
-    for value in &plan.evidence.attestations {
-        out.u16(value.protocol_version);
-        out.u32(value.network_id);
-        out.u64(value.paxeer_chain_id);
-        out.fixed(&value.settlement_contract.bytes());
-        out.u64(value.epoch);
-        out.fixed(&value.checkpoint_id);
-        out.fixed(&value.checkpoint_hash);
-        out.fixed(&value.guarantor_id);
-        out.u64(value.batch_number);
-        out.fixed(&value.data_availability_root);
-        out.boolean(value.replayed);
-        out.boolean(value.data_available);
-        out.fixed(&[value.availability_class_mask]);
-        out.u64(value.attested_at);
-        out.fixed(&value.signer.bytes());
-        out.fixed(&value.signature_r);
-        out.fixed(&value.signature_s);
-        out.fixed(&[value.signature_v]);
-    }
-    if let Some(native) = &plan.evidence.native {
-        let bytes = layerx_paxeer_client::wire::encode_native_evidence(native, 1_048_576)
-            .map_err(|_| ExitJourneyError::InvalidPlan)?;
-        out.u32(u32::try_from(bytes.len()).map_err(|_| ExitJourneyError::InvalidPlan)?);
-        out.fixed(&bytes);
-    }
+    out.u32(u32::try_from(material.len()).map_err(|_| ExitJourneyError::InvalidPlan)?);
+    out.fixed(&material);
     Ok(out.finish())
 }
 
 /// Decodes an exact bounded exit plan and constructs only validated evidence.
+///
+/// # Errors
+///
+/// Refuses another wire shape, trailing bytes and unvalidated material.
 pub(crate) fn decode_exit_plan(bytes: &[u8]) -> Result<ExitPlan, ExitJourneyError> {
-    let mut input = super::wire::Reader::new(bytes, if bytes.get(1) == Some(&4) { 4 } else { 3 })
-        .map_err(|()| ExitJourneyError::InvalidPlan)?;
+    let mut input =
+        super::wire::Reader::new(bytes, PLAN_TAG).map_err(|()| ExitJourneyError::InvalidPlan)?;
     let journey_id = JourneyId::new(input.text().map_err(|()| ExitJourneyError::InvalidPlan)?)
         .map_err(|_| ExitJourneyError::InvalidPlan)?;
     let idempotency_key = input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?;
-    let account = input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?;
-    let asset_id = input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?;
     let finalised_balance = input.u128().map_err(|()| ExitJourneyError::InvalidPlan)?;
-    let recipient = EvmAddress::new(input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?);
-    let leaf_index = input.u64().map_err(|()| ExitJourneyError::InvalidPlan)?;
-    let sibling_count = usize::from(input.u16().map_err(|()| ExitJourneyError::InvalidPlan)?);
-    if sibling_count > super::wire::MAX_PROOF_ITEMS {
+    let length = usize::try_from(input.u32().map_err(|()| ExitJourneyError::InvalidPlan)?)
+        .map_err(|_| ExitJourneyError::InvalidPlan)?;
+    if length == 0 || length > MAX_MATERIAL_BYTES {
         return Err(ExitJourneyError::InvalidPlan);
     }
-    let mut siblings = Vec::with_capacity(sibling_count);
-    for _ in 0..sibling_count {
-        siblings.push(input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?);
-    }
-    let attestation_count = usize::from(input.u16().map_err(|()| ExitJourneyError::InvalidPlan)?);
-    if attestation_count == 0 || attestation_count > super::wire::MAX_PROOF_ITEMS {
-        return Err(ExitJourneyError::InvalidPlan);
-    }
-    let mut attestations = Vec::with_capacity(attestation_count);
-    for _ in 0..attestation_count {
-        attestations.push(GuarantorAttestation {
-            protocol_version: input.u16().map_err(|()| ExitJourneyError::InvalidPlan)?,
-            network_id: input.u32().map_err(|()| ExitJourneyError::InvalidPlan)?,
-            paxeer_chain_id: input.u64().map_err(|()| ExitJourneyError::InvalidPlan)?,
-            settlement_contract: EvmAddress::new(
-                input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?,
-            ),
-            epoch: input.u64().map_err(|()| ExitJourneyError::InvalidPlan)?,
-            checkpoint_id: input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?,
-            checkpoint_hash: input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?,
-            guarantor_id: input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?,
-            batch_number: input.u64().map_err(|()| ExitJourneyError::InvalidPlan)?,
-            data_availability_root: input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?,
-            replayed: input
-                .boolean()
-                .map_err(|()| ExitJourneyError::InvalidPlan)?,
-            data_available: input
-                .boolean()
-                .map_err(|()| ExitJourneyError::InvalidPlan)?,
-            availability_class_mask: input
+    let mut encoded = Vec::with_capacity(length);
+    for _ in 0..length {
+        encoded.push(
+            input
                 .fixed::<1>()
                 .map_err(|()| ExitJourneyError::InvalidPlan)?[0],
-            attested_at: input.u64().map_err(|()| ExitJourneyError::InvalidPlan)?,
-            signer: EvmAddress::new(input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?),
-            signature_r: input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?,
-            signature_s: input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?,
-            signature_v: input
-                .fixed::<1>()
-                .map_err(|()| ExitJourneyError::InvalidPlan)?[0],
-        });
+        );
     }
-    let native = if bytes.get(1) == Some(&4) {
-        let count = usize::try_from(input.u32().map_err(|()| ExitJourneyError::InvalidPlan)?)
-            .map_err(|_| ExitJourneyError::InvalidPlan)?;
-        if count > 1_048_576 {
-            return Err(ExitJourneyError::InvalidPlan);
-        }
-        let mut encoded = Vec::with_capacity(count);
-        for _ in 0..count {
-            encoded.push(
-                input
-                    .fixed::<1>()
-                    .map_err(|()| ExitJourneyError::InvalidPlan)?[0],
-            );
-        }
-        Some(
-            layerx_paxeer_client::wire::decode_native_evidence(&encoded, 1_048_576)
-                .map_err(|_| ExitJourneyError::InvalidPlan)?,
-        )
-    } else {
-        None
-    };
     input.finish().map_err(|()| ExitJourneyError::InvalidPlan)?;
     let plan = ExitPlan {
         journey_id,
         idempotency_key,
         evidence: ExitEvidence {
-            native,
-            account,
-            asset_id,
+            material: decode_material(&encoded)?,
             finalised_balance,
-            recipient,
-            leaf_index,
-            siblings,
-            attestations,
         },
     };
     validate_plan(&plan)?;
@@ -232,62 +148,29 @@ pub(crate) fn decode_exit_plan(bytes: &[u8]) -> Result<ExitPlan, ExitJourneyErro
     Ok(plan)
 }
 
+fn encode_material(material: &ForcedExitMaterial) -> Result<Vec<u8>, ExitJourneyError> {
+    layerx_paxeer_client::wire::encode_forced_exit_material(material, MAX_MATERIAL_BYTES)
+        .map_err(|_| ExitJourneyError::InvalidPlan)
+}
+
+fn decode_material(bytes: &[u8]) -> Result<ForcedExitMaterial, ExitJourneyError> {
+    layerx_paxeer_client::wire::decode_forced_exit_material(bytes, MAX_MATERIAL_BYTES)
+        .map_err(|_| ExitJourneyError::InvalidPlan)
+}
+
+/// Validates the forced-exit material the owner confirmed, without inventing
+/// any chain fact: the whole-balance and recipient-authority proofs are made
+/// against the anchor the custody precompile reports, in
+/// [`ExitJourney::validate_claim`].
 fn validate_exit_evidence(evidence: &ExitEvidence) -> Result<(), ExitJourneyError> {
-    if let Some(native) = &evidence.native {
-        let witness = layerx_paxeer_client::state_proof::StateWitness::decode(&native.witness)
-            .map_err(|_| ExitJourneyError::InvalidPlan)?;
-        let signature = native
-            .recipient_signature
-            .as_slice()
-            .try_into()
-            .map_err(|_| ExitJourneyError::InvalidPlan)?;
-        if evidence.leaf_index != 0
-            || !evidence.siblings.is_empty()
-            || evidence.attestations.iter().any(|a| {
-                a.checkpoint_hash != native.inclusion_checkpoint
-                    || a.network_id != native.network_id
-            })
-        {
-            return Err(ExitJourneyError::InvalidPlan);
-        }
-        evidence
-            .verify_native_balance(
-                &witness,
-                witness.root().map_err(|_| ExitJourneyError::InvalidPlan)?,
-                native.network_id,
-                native.request_anchor,
-                signature,
-            )
-            .map_err(|_| ExitJourneyError::InvalidPlan)?;
-    }
-    let depth = evidence.siblings.len();
-    if evidence.account == [0; 32]
-        || evidence.asset_id == [0; 32]
-        || evidence.finalised_balance == 0
-        || evidence.recipient.bytes() == [0; 20]
-        || depth > super::wire::MAX_PROOF_ITEMS
-        || evidence
-            .leaf_index
-            .checked_shr(u32::try_from(depth).unwrap_or(u32::MAX))
-            .unwrap_or(0)
-            != 0
-        || evidence.attestations.is_empty()
-        || evidence.attestations.len() > super::wire::MAX_PROOF_ITEMS
-    {
-        return Err(ExitJourneyError::InvalidPlan);
-    }
-    if evidence.attestations.iter().any(|value| {
-        value.protocol_version == 0
-            || value.network_id == 0
-            || value.paxeer_chain_id == 0
-            || value.settlement_contract.bytes() == [0; 20]
-            || value.checkpoint_id == [0; 32]
-            || value.checkpoint_hash == [0; 32]
-            || value.guarantor_id == [0; 32]
-            || value.signer.bytes() == [0; 20]
-            || value.signature_r == [0; 32]
-            || value.signature_s == [0; 32]
-    }) {
+    let material = evidence
+        .material
+        .clone()
+        .validated()
+        .map_err(|_| ExitJourneyError::InvalidPlan)?;
+    layerx_paxeer_client::state_proof::StateWitness::decode(&material.witness)
+        .map_err(|_| ExitJourneyError::InvalidPlan)?;
+    if evidence.finalised_balance == 0 {
         return Err(ExitJourneyError::InvalidPlan);
     }
     Ok(())
@@ -308,7 +191,7 @@ pub struct ExitWalletRequest {
     pub finalised_balance: u128,
 }
 
-/// Result of the one user-controlled Paxeer transaction.
+/// Result of one user-controlled Paxeer transaction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExitWalletOutcome {
     Submitted(TransactionHash),
@@ -322,7 +205,7 @@ pub enum ExitBoundaryError {
     ContractViolation,
 }
 
-/// Wallet boundary for the real Paxeer exit transaction.
+/// Wallet boundary for the real Paxeer exit transactions.
 pub trait ExitWallet {
     /// Opens or resolves the transaction under its stable action key.
     ///
@@ -364,6 +247,12 @@ pub enum ExitStage {
         transaction: TransactionHash,
         confirmations: u64,
         required: u64,
+    },
+    /// The custody precompile queued the exit; it pays only after its
+    /// forced-exit delay elapsed.
+    WaitingForForcedExitDelay {
+        claim_id: [u8; 32],
+        available_at: u64,
     },
     Done(ExitFinalityEvidence),
     UnavailableWhileNetworkOperatingNormally {
@@ -424,6 +313,9 @@ enum Phase {
     Constructing,
     WalletOpening,
     Confirming,
+    AwaitingExecution,
+    ExecuteWalletOpening,
+    ExecuteConfirming,
     Done,
     NormalOperation,
     Failed,
@@ -435,6 +327,9 @@ impl Phase {
             Self::Constructing => "constructing",
             Self::WalletOpening => "wallet-opening",
             Self::Confirming => "confirming",
+            Self::AwaitingExecution => "awaiting-execution",
+            Self::ExecuteWalletOpening => "execute-wallet-opening",
+            Self::ExecuteConfirming => "execute-confirming",
             Self::Done => "done",
             Self::NormalOperation => "normal-operation",
             Self::Failed => "failed",
@@ -443,8 +338,11 @@ impl Phase {
 
     const fn audit_state(self) -> AuditJourneyState {
         match self {
-            Self::Constructing | Self::Confirming => AuditJourneyState::Processing,
-            Self::WalletOpening => AuditJourneyState::WaitingForYou,
+            Self::Constructing | Self::Confirming | Self::ExecuteConfirming => {
+                AuditJourneyState::Processing
+            }
+            Self::AwaitingExecution => AuditJourneyState::StillChecking,
+            Self::WalletOpening | Self::ExecuteWalletOpening => AuditJourneyState::WaitingForYou,
             Self::Done => AuditJourneyState::DoneFinalised,
             Self::NormalOperation | Self::Failed => AuditJourneyState::Refused,
         }
@@ -452,10 +350,15 @@ impl Phase {
 
     const fn audit_from(self) -> AuditJourneyState {
         match self {
-            Self::Constructing | Self::Confirming => AuditJourneyState::WaitingForYou,
-            Self::WalletOpening | Self::Done | Self::NormalOperation | Self::Failed => {
-                AuditJourneyState::Processing
+            Self::Constructing | Self::Confirming | Self::ExecuteConfirming => {
+                AuditJourneyState::WaitingForYou
             }
+            Self::ExecuteWalletOpening => AuditJourneyState::StillChecking,
+            Self::WalletOpening
+            | Self::AwaitingExecution
+            | Self::Done
+            | Self::NormalOperation
+            | Self::Failed => AuditJourneyState::Processing,
         }
     }
 }
@@ -488,122 +391,32 @@ impl StoredFailure {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct StoredAttestation {
-    protocol_version: u16,
-    network_id: u32,
-    paxeer_chain_id: u64,
-    settlement_contract: [u8; 20],
-    epoch: u64,
-    checkpoint_id: [u8; 32],
-    checkpoint_hash: [u8; 32],
-    guarantor_id: [u8; 32],
-    batch_number: u64,
-    data_availability_root: [u8; 32],
-    replayed: bool,
-    data_available: bool,
-    availability_class_mask: u8,
-    attested_at: u64,
-    signer: [u8; 20],
-    signature_r: [u8; 32],
-    signature_s: [u8; 32],
-    signature_v: u8,
-}
-
-impl From<&GuarantorAttestation> for StoredAttestation {
-    fn from(value: &GuarantorAttestation) -> Self {
-        Self {
-            protocol_version: value.protocol_version,
-            network_id: value.network_id,
-            paxeer_chain_id: value.paxeer_chain_id,
-            settlement_contract: value.settlement_contract.bytes(),
-            epoch: value.epoch,
-            checkpoint_id: value.checkpoint_id,
-            checkpoint_hash: value.checkpoint_hash,
-            guarantor_id: value.guarantor_id,
-            batch_number: value.batch_number,
-            data_availability_root: value.data_availability_root,
-            replayed: value.replayed,
-            data_available: value.data_available,
-            availability_class_mask: value.availability_class_mask,
-            attested_at: value.attested_at,
-            signer: value.signer.bytes(),
-            signature_r: value.signature_r,
-            signature_s: value.signature_s,
-            signature_v: value.signature_v,
-        }
-    }
-}
-
-impl StoredAttestation {
-    const fn public(&self) -> GuarantorAttestation {
-        GuarantorAttestation {
-            protocol_version: self.protocol_version,
-            network_id: self.network_id,
-            paxeer_chain_id: self.paxeer_chain_id,
-            settlement_contract: EvmAddress::new(self.settlement_contract),
-            epoch: self.epoch,
-            checkpoint_id: self.checkpoint_id,
-            checkpoint_hash: self.checkpoint_hash,
-            guarantor_id: self.guarantor_id,
-            batch_number: self.batch_number,
-            data_availability_root: self.data_availability_root,
-            replayed: self.replayed,
-            data_available: self.data_available,
-            availability_class_mask: self.availability_class_mask,
-            attested_at: self.attested_at,
-            signer: EvmAddress::new(self.signer),
-            signature_r: self.signature_r,
-            signature_s: self.signature_s,
-            signature_v: self.signature_v,
-        }
-    }
-}
-
+/// The confirmed forced-exit material in its canonical, self-validating wire
+/// form, with the whole balance it proves.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct StoredEvidence {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    native: Option<StoredNativeEvidence>,
-    account: [u8; 32],
-    asset_id: [u8; 32],
+    material: Vec<u8>,
     finalised_balance: u128,
-    recipient: [u8; 20],
-    leaf_index: u64,
-    siblings: Vec<[u8; 32]>,
-    attestations: Vec<StoredAttestation>,
-}
-
-impl From<&ExitEvidence> for StoredEvidence {
-    fn from(value: &ExitEvidence) -> Self {
-        Self {
-            native: value.native.as_ref().map(StoredNativeEvidence::from_public),
-            account: value.account,
-            asset_id: value.asset_id,
-            finalised_balance: value.finalised_balance,
-            recipient: value.recipient.bytes(),
-            leaf_index: value.leaf_index,
-            siblings: value.siblings.clone(),
-            attestations: value.attestations.iter().map(Into::into).collect(),
-        }
-    }
 }
 
 impl StoredEvidence {
-    fn public(&self) -> ExitEvidence {
-        ExitEvidence {
-            native: self.native.as_ref().map(StoredNativeEvidence::public),
-            account: self.account,
-            asset_id: self.asset_id,
+    fn from_public(value: &ExitEvidence) -> Result<Self, ExitJourneyError> {
+        Ok(Self {
+            material: encode_material(&value.material)?,
+            finalised_balance: value.finalised_balance,
+        })
+    }
+
+    fn material(&self) -> Result<ForcedExitMaterial, ExitJourneyError> {
+        layerx_paxeer_client::wire::decode_forced_exit_material(&self.material, MAX_MATERIAL_BYTES)
+            .map_err(|_| ExitJourneyError::Corrupt("stored exit material is invalid"))
+    }
+
+    fn public(&self) -> Result<ExitEvidence, ExitJourneyError> {
+        Ok(ExitEvidence {
+            material: self.material()?,
             finalised_balance: self.finalised_balance,
-            recipient: EvmAddress::new(self.recipient),
-            leaf_index: self.leaf_index,
-            siblings: self.siblings.clone(),
-            attestations: self
-                .attestations
-                .iter()
-                .map(StoredAttestation::public)
-                .collect(),
-        }
+        })
     }
 }
 
@@ -611,7 +424,9 @@ impl StoredEvidence {
 struct StoredClaim {
     contract: [u8; 20],
     calldata: Vec<u8>,
-    checkpoint: [u8; 32],
+    execute_calldata: Vec<u8>,
+    claim_id: [u8; 32],
+    batch_number: u64,
     state_root: [u8; 32],
     withdrawal_id: [u8; 32],
     nullifier: [u8; 32],
@@ -626,7 +441,9 @@ impl From<&ExitClaim> for StoredClaim {
         Self {
             contract: value.contract.bytes(),
             calldata: value.calldata.clone(),
-            checkpoint: value.checkpoint,
+            execute_calldata: value.execute_calldata.clone(),
+            claim_id: value.claim_id,
+            batch_number: value.batch_number,
             state_root: value.state_root,
             withdrawal_id: value.withdrawal_id,
             nullifier: value.nullifier,
@@ -639,17 +456,35 @@ impl From<&ExitClaim> for StoredClaim {
 }
 
 impl StoredClaim {
+    fn public(&self) -> ExitClaim {
+        ExitClaim {
+            contract: EvmAddress::new(self.contract),
+            calldata: self.calldata.clone(),
+            execute_calldata: self.execute_calldata.clone(),
+            claim_id: self.claim_id,
+            batch_number: self.batch_number,
+            state_root: self.state_root,
+            withdrawal_id: self.withdrawal_id,
+            nullifier: self.nullifier,
+            account: self.account,
+            asset_id: self.asset_id,
+            finalised_balance: self.finalised_balance,
+            recipient: EvmAddress::new(self.recipient),
+        }
+    }
+
     fn wallet_request(
         &self,
         action_key: [u8; 32],
         identity: super::MovementExecutionIdentity,
+        calldata: Vec<u8>,
     ) -> ExitWalletRequest {
         ExitWalletRequest {
             identity,
             action_key,
             contract: EvmAddress::new(self.contract),
-            calldata: self.calldata.clone(),
-            checkpoint: self.checkpoint,
+            calldata,
+            checkpoint: self.state_root,
             withdrawal_id: self.withdrawal_id,
             nullifier: self.nullifier,
             recipient: EvmAddress::new(self.recipient),
@@ -666,9 +501,12 @@ struct Record {
     plan_digest: [u8; 32],
     confirmation_digest: [u8; 32],
     wallet_action_key: [u8; 32],
+    execute_action_key: [u8; 32],
     evidence: StoredEvidence,
     claim: Option<StoredClaim>,
     transaction: Option<[u8; 32]>,
+    execute_transaction: Option<[u8; 32]>,
+    available_at: Option<u64>,
     confirmations: u64,
     required: u64,
     finality: Option<ExitFinalityEvidence>,
@@ -699,6 +537,7 @@ impl ExitJourney {
         now: u64,
     ) -> Result<Self, ExitJourneyError> {
         validate_plan(plan)?;
+        validate_exit_evidence(&plan.evidence)?;
         let row = record_row(plan.idempotency_key)?;
         let plan_hash = plan_digest(plan)?;
         let confirmed_digest = digest(&[CONFIRMATION_DOMAIN, &plan_hash, &confirmation.digest()]);
@@ -723,9 +562,12 @@ impl ExitJourney {
             plan_digest: plan_hash,
             confirmation_digest: confirmed_digest,
             wallet_action_key: derive_key(WALLET_ACTION_DOMAIN, &plan.idempotency_key),
-            evidence: StoredEvidence::from(&plan.evidence),
+            execute_action_key: derive_key(EXECUTE_ACTION_DOMAIN, &plan.idempotency_key),
+            evidence: StoredEvidence::from_public(&plan.evidence)?,
             claim: None,
             transaction: None,
+            execute_transaction: None,
+            available_at: None,
             confirmations: 0,
             required: 0,
             finality: None,
@@ -772,6 +614,12 @@ impl ExitJourney {
 
     /// Advances at most one durable stage over the concrete Paxeer exit client.
     ///
+    /// The exit is two user transactions against the custody precompile:
+    /// `requestForcedExit` queues the claim and starts its forced-exit delay,
+    /// `executeForcedExit` pays it once the delay elapsed. Settlement is
+    /// reported only after the execute transaction is final on Paxeer *and*
+    /// the precompile's `EmergencyExitExecuted` log binds to the claim.
+    ///
     /// # Errors
     ///
     /// Transient endpoint/wallet errors preserve the last durable state. Evidence
@@ -791,7 +639,7 @@ impl ExitJourney {
         }
         self.ensure_phase_audited(scope, audit, trace, now)?;
         match self.record.phase {
-            Phase::Constructing => match exit.construct_claim(&self.record.evidence.public()) {
+            Phase::Constructing => match exit.construct_claim(&self.evidence()?) {
                 Ok(claim) => {
                     self.validate_claim(exit, &claim)?;
                     self.record.claim = Some(StoredClaim::from(&claim));
@@ -813,12 +661,6 @@ impl ExitJourney {
                         now,
                     )?;
                 }
-                Err(ExitError::Endpoint(error)) => {
-                    return Err(ExitJourneyError::Paxeer(ExitError::Endpoint(error)));
-                }
-                Err(ExitError::Contract { detail }) => {
-                    return Err(ExitJourneyError::Paxeer(ExitError::Contract { detail }));
-                }
                 Err(ExitError::Refused(_)) => {
                     self.fail(
                         scope,
@@ -828,9 +670,10 @@ impl ExitJourney {
                         now,
                     )?;
                 }
+                Err(error) => return Err(ExitJourneyError::Paxeer(error)),
             },
             Phase::WalletOpening => {
-                let request = self.wallet_request(scope)?;
+                let request = self.wallet_request(scope, false)?;
                 match wallet.submit_or_resolve(&request)? {
                     ExitWalletOutcome::Submitted(transaction) => {
                         if transaction.bytes() == [0; 32] {
@@ -849,22 +692,62 @@ impl ExitJourney {
             }
             Phase::Confirming => {
                 let transaction = self.transaction()?;
-                let mut tracker = exit
-                    .track(transaction)
-                    .map_err(ExitJourneyError::TrackerConfig)?;
-                let report = tracker.poll();
-                if report.transaction() != transaction {
-                    return Err(ExitJourneyError::Boundary(
-                        ExitBoundaryError::ContractViolation,
-                    ));
+                match self.poll(exit, transaction)?.0 {
+                    ExitProgress::Settled { .. } => {
+                        let queued = self.queued(exit)?;
+                        self.record.available_at = Some(queued.available_at);
+                        self.transition(scope, audit, trace, Phase::AwaitingExecution, now)?;
+                    }
+                    ExitProgress::Refused { .. } => {
+                        self.fail(scope, audit, trace, StoredFailure::PaxeerRefused, now)?;
+                    }
+                    ExitProgress::Displaced { requeued } => {
+                        self.displaced(scope, audit, trace, requeued, now)?;
+                    }
+                    ExitProgress::Pending | ExitProgress::Confirming { .. } => {
+                        self.persist_at(scope, now)?;
+                    }
                 }
-                self.record.confirmations = report.progress().confirmed;
-                self.record.required = report.progress().required;
-                match ExitProgress::of(&report) {
+            }
+            Phase::AwaitingExecution => {
+                let queued = self.queued(exit)?;
+                self.record.available_at = Some(queued.available_at);
+                if now >= queued.available_at {
+                    self.transition(scope, audit, trace, Phase::ExecuteWalletOpening, now)?;
+                } else {
+                    self.persist_at(scope, now)?;
+                }
+            }
+            Phase::ExecuteWalletOpening => {
+                let request = self.wallet_request(scope, true)?;
+                match wallet.submit_or_resolve(&request)? {
+                    ExitWalletOutcome::Submitted(transaction) => {
+                        if transaction.bytes() == [0; 32] {
+                            return Err(ExitJourneyError::Boundary(
+                                ExitBoundaryError::ContractViolation,
+                            ));
+                        }
+                        self.record.execute_transaction = Some(transaction.bytes());
+                        self.record.required = exit.required_confirmations();
+                        self.transition(scope, audit, trace, Phase::ExecuteConfirming, now)?;
+                    }
+                    ExitWalletOutcome::Rejected => {
+                        self.fail(scope, audit, trace, StoredFailure::WalletRejected, now)?;
+                    }
+                }
+            }
+            Phase::ExecuteConfirming => {
+                let transaction = self.execute_transaction()?;
+                let (progress, logs) = self.poll(exit, transaction)?;
+                match progress {
                     ExitProgress::Settled {
                         inclusion,
                         confirmations,
                     } => {
+                        let claim = self.claim()?;
+                        let logs = logs.ok_or(ExitJourneyError::MissingReceiptLogs)?;
+                        EmergencyExit::verify_executed(&claim, &logs)
+                            .map_err(ExitJourneyError::Paxeer)?;
                         self.record.finality =
                             Some(finality(transaction, inclusion, confirmations));
                         self.transition(scope, audit, trace, Phase::Done, now)?;
@@ -873,17 +756,7 @@ impl ExitJourney {
                         self.fail(scope, audit, trace, StoredFailure::PaxeerRefused, now)?;
                     }
                     ExitProgress::Displaced { requeued } => {
-                        self.fail(
-                            scope,
-                            audit,
-                            trace,
-                            if requeued {
-                                StoredFailure::TransactionDisplacedRequeued
-                            } else {
-                                StoredFailure::TransactionDisplacedDropped
-                            },
-                            now,
-                        )?;
+                        self.displaced(scope, audit, trace, requeued, now)?;
                     }
                     ExitProgress::Pending | ExitProgress::Confirming { .. } => {
                         self.persist_at(scope, now)?;
@@ -905,11 +778,28 @@ impl ExitJourney {
             .map_err(|_| ExitJourneyError::Corrupt("invalid exit journey id"))?;
         let stage = match self.record.phase {
             Phase::Constructing => ExitStage::ConstructingLastFinalisedCheckpoint,
-            Phase::WalletOpening => ExitStage::WaitingForWallet,
+            Phase::WalletOpening | Phase::ExecuteWalletOpening => ExitStage::WaitingForWallet,
             Phase::Confirming => ExitStage::ConfirmingPaxeer {
                 transaction: self.transaction()?,
                 confirmations: self.record.confirmations,
                 required: self.record.required,
+            },
+            Phase::ExecuteConfirming => ExitStage::ConfirmingPaxeer {
+                transaction: self.execute_transaction()?,
+                confirmations: self.record.confirmations,
+                required: self.record.required,
+            },
+            Phase::AwaitingExecution => ExitStage::WaitingForForcedExitDelay {
+                claim_id: self
+                    .record
+                    .claim
+                    .as_ref()
+                    .ok_or(ExitJourneyError::Corrupt("queued exit has no claim"))?
+                    .claim_id,
+                available_at: self
+                    .record
+                    .available_at
+                    .ok_or(ExitJourneyError::Corrupt("queued exit has no delay"))?,
             },
             Phase::Done => ExitStage::Done(
                 self.record
@@ -929,55 +819,122 @@ impl ExitJourney {
         Ok(ExitStatus { journey_id, stage })
     }
 
+    /// Polls one submitted transaction and records its confirmation progress.
+    /// The receipt logs are returned only when the tracked receipt carried them.
+    fn poll(
+        &mut self,
+        exit: &EmergencyExit,
+        transaction: TransactionHash,
+    ) -> Result<(ExitProgress, Option<Vec<layerx_paxeer_client::LogRecord>>), ExitJourneyError>
+    {
+        let mut tracker = exit
+            .track(transaction)
+            .map_err(ExitJourneyError::TrackerConfig)?;
+        let report = tracker.poll();
+        if report.transaction() != transaction {
+            return Err(ExitJourneyError::Boundary(
+                ExitBoundaryError::ContractViolation,
+            ));
+        }
+        self.record.confirmations = report.progress().confirmed;
+        self.record.required = report.progress().required;
+        let logs = report.receipt_logs().map(<[_]>::to_vec);
+        Ok((ExitProgress::of(&report), logs))
+    }
+
+    /// Reads the custody precompile's stored record for the constructed exit.
+    fn queued(&self, exit: &EmergencyExit) -> Result<CustodyClaim, ExitJourneyError> {
+        let claim = self.claim()?;
+        let record = exit
+            .claim_record(&claim)
+            .map_err(ExitJourneyError::Paxeer)?
+            .ok_or(ExitJourneyError::ClaimNotQueued)?;
+        match record.status {
+            1 => Ok(record),
+            2 => Err(ExitJourneyError::ClaimPaidElsewhere),
+            3 => Err(ExitJourneyError::ClaimCancelled),
+            _ => Err(ExitJourneyError::ClaimMismatch),
+        }
+    }
+
+    /// Re-derives every claim fact from the confirmed material and the anchor
+    /// the custody precompile reports, independently of the client's own
+    /// construction.
     fn validate_claim(
         &self,
         exit: &EmergencyExit,
         claim: &ExitClaim,
     ) -> Result<(), ExitJourneyError> {
-        let evidence = &self.record.evidence;
-        if let Some(native) = &evidence.native {
-            if native.inclusion_checkpoint != claim.checkpoint
-                || native.public().decoded(claim.state_root).is_err()
-            {
-                return Err(ExitJourneyError::ClaimMismatch);
-            }
-        }
+        let evidence = self.evidence()?;
+        layerx_paxeer_client::verify_exit_balance(&evidence, exit.network_id(), claim.state_root)
+            .map_err(|_| ExitJourneyError::ClaimMismatch)?;
+        let material = &evidence.material;
         if claim.contract != exit.contract()
-            || claim.account != evidence.account
-            || claim.asset_id != evidence.asset_id
+            || claim.batch_number != material.batch_number
+            || claim.account != material.account
+            || claim.asset_id != material.asset_id
+            || claim.recipient != material.recipient
             || claim.finalised_balance != evidence.finalised_balance
-            || claim.recipient.bytes() != evidence.recipient
-            || claim.calldata.is_empty()
-            || claim.checkpoint == [0; 32]
+            || claim.calldata != material.request_calldata()
+            || claim.execute_calldata != material.execute_calldata()
+            || claim.claim_id == [0; 32]
             || claim.state_root == [0; 32]
             || claim.withdrawal_id == [0; 32]
             || claim.nullifier == [0; 32]
         {
             return Err(ExitJourneyError::ClaimMismatch);
         }
-        Ok(())
+        match exit.eligibility().map_err(ExitJourneyError::Paxeer)? {
+            ExitEligibility::Eligible {
+                batch_number,
+                state_root,
+            } if batch_number == claim.batch_number && state_root == claim.state_root => Ok(()),
+            _ => Err(ExitJourneyError::ClaimMismatch),
+        }
+    }
+
+    fn evidence(&self) -> Result<ExitEvidence, ExitJourneyError> {
+        self.record.evidence.public()
+    }
+
+    fn claim(&self) -> Result<ExitClaim, ExitJourneyError> {
+        self.record
+            .claim
+            .as_ref()
+            .map(StoredClaim::public)
+            .ok_or(ExitJourneyError::Corrupt("exit has no claim"))
     }
 
     fn wallet_request(
         &self,
         scope: &PrincipalScope<'_>,
+        execute: bool,
     ) -> Result<ExitWalletRequest, ExitJourneyError> {
-        self.record
+        let stored = self
+            .record
             .claim
             .as_ref()
-            .map(|claim| {
-                claim.wallet_request(
-                    self.record.wallet_action_key,
-                    super::MovementExecutionIdentity {
-                        principal: scope.principal().clone(),
-                        tenant: scope.tenant().clone(),
-                        account: self.record.evidence.account,
-                        wallet: EvmAddress::new(self.record.evidence.recipient),
-                        plan_id: self.record.idempotency_key,
-                    },
-                )
-            })
-            .ok_or(ExitJourneyError::Corrupt("wallet stage has no claim"))
+            .ok_or(ExitJourneyError::Corrupt("wallet stage has no claim"))?;
+        let material = self.record.evidence.material()?;
+        let (action_key, calldata) = if execute {
+            (
+                self.record.execute_action_key,
+                stored.execute_calldata.clone(),
+            )
+        } else {
+            (self.record.wallet_action_key, stored.calldata.clone())
+        };
+        Ok(stored.wallet_request(
+            action_key,
+            super::MovementExecutionIdentity {
+                principal: scope.principal().clone(),
+                tenant: scope.tenant().clone(),
+                account: material.account,
+                wallet: material.recipient,
+                plan_id: self.record.idempotency_key,
+            },
+            calldata,
+        ))
     }
 
     fn transaction(&self) -> Result<TransactionHash, ExitJourneyError> {
@@ -985,6 +942,34 @@ impl ExitJourney {
             .transaction
             .map(TransactionHash::new)
             .ok_or(ExitJourneyError::Corrupt("exit has no transaction"))
+    }
+
+    fn execute_transaction(&self) -> Result<TransactionHash, ExitJourneyError> {
+        self.record
+            .execute_transaction
+            .map(TransactionHash::new)
+            .ok_or(ExitJourneyError::Corrupt("exit has no execute transaction"))
+    }
+
+    fn displaced(
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        audit: &mut AuditChain,
+        trace: &TraceId,
+        requeued: bool,
+        now: u64,
+    ) -> Result<(), ExitJourneyError> {
+        self.fail(
+            scope,
+            audit,
+            trace,
+            if requeued {
+                StoredFailure::TransactionDisplacedRequeued
+            } else {
+                StoredFailure::TransactionDisplacedDropped
+            },
+            now,
+        )
     }
 
     fn fail(
@@ -1163,21 +1148,43 @@ fn validate_plan(plan: &ExitPlan) -> Result<(), ExitJourneyError> {
 }
 
 fn validate_record(record: &Record) -> Result<(), ExitJourneyError> {
+    let claimed = matches!(
+        record.phase,
+        Phase::WalletOpening
+            | Phase::Confirming
+            | Phase::AwaitingExecution
+            | Phase::ExecuteWalletOpening
+            | Phase::ExecuteConfirming
+            | Phase::Done
+    );
+    let submitted = matches!(
+        record.phase,
+        Phase::Confirming
+            | Phase::AwaitingExecution
+            | Phase::ExecuteWalletOpening
+            | Phase::ExecuteConfirming
+            | Phase::Done
+    );
+    let queued = matches!(
+        record.phase,
+        Phase::AwaitingExecution | Phase::ExecuteWalletOpening | Phase::ExecuteConfirming
+    ) || record.phase == Phase::Done;
+    let executing = matches!(record.phase, Phase::ExecuteConfirming | Phase::Done);
     if record.version != RECORD_VERSION
         || JourneyId::new(record.journey_id.clone()).is_err()
         || record.idempotency_key == [0; 32]
         || record.plan_digest == [0; 32]
         || record.confirmation_digest == [0; 32]
         || record.wallet_action_key == [0; 32]
+        || record.execute_action_key == [0; 32]
+        || record.wallet_action_key == record.execute_action_key
         || record.updated_at < record.started_at
-        || (matches!(
-            record.phase,
-            Phase::WalletOpening | Phase::Confirming | Phase::Done
-        ) && record.claim.is_none())
-        || (matches!(record.phase, Phase::Confirming | Phase::Done) && record.transaction.is_none())
+        || (claimed && record.claim.is_none())
+        || (submitted && record.transaction.is_none())
+        || (queued && record.available_at.is_none())
+        || (executing && record.execute_transaction.is_none())
         || (record.phase == Phase::Done) != record.finality.is_some()
         || (record.phase == Phase::Failed) != record.failure.is_some()
-        || (record.phase != Phase::Failed && record.failure.is_some())
     {
         return Err(ExitJourneyError::Corrupt("exit invariants are invalid"));
     }
@@ -1204,7 +1211,7 @@ fn derive_key(domain: &[u8], key: &[u8; 32]) -> [u8; 32] {
 }
 
 fn plan_digest(plan: &ExitPlan) -> Result<[u8; 32], ExitJourneyError> {
-    let stored = StoredEvidence::from(&plan.evidence);
+    let stored = StoredEvidence::from_public(&plan.evidence)?;
     let encoded = serde_json::to_vec(&stored)
         .map_err(|_| ExitJourneyError::Corrupt("exit plan cannot be encoded"))?;
     Ok(digest(&[
@@ -1260,6 +1267,16 @@ pub enum ExitJourneyError {
     IdempotencyConflict,
     TimeRegressed,
     ClaimMismatch,
+    /// The request transaction is final but the precompile holds no queued
+    /// claim for it yet.
+    ClaimNotQueued,
+    /// The queued claim was already paid by a transaction this journey did not
+    /// submit, so no finality evidence of this journey's own can bind it.
+    ClaimPaidElsewhere,
+    /// The authority cancelled the queued claim.
+    ClaimCancelled,
+    /// A final execute transaction was reported without its receipt logs.
+    MissingReceiptLogs,
     EvidenceConflict,
     Corrupt(&'static str),
 }
@@ -1281,7 +1298,16 @@ impl Display for ExitJourneyError {
             }
             Self::TimeRegressed => formatter.write_str("exit journey time regressed"),
             Self::ClaimMismatch => {
-                formatter.write_str("exit claim differs from the confirmed checkpoint evidence")
+                formatter.write_str("exit claim differs from the confirmed exit material")
+            }
+            Self::ClaimNotQueued => {
+                formatter.write_str("the custody precompile holds no queued exit claim yet")
+            }
+            Self::ClaimPaidElsewhere => formatter
+                .write_str("the queued exit was paid by a transaction this journey did not submit"),
+            Self::ClaimCancelled => formatter.write_str("the queued exit claim was cancelled"),
+            Self::MissingReceiptLogs => {
+                formatter.write_str("the final exit transaction reported no receipt logs")
             }
             Self::EvidenceConflict => formatter.write_str("exit audit evidence conflicts"),
             Self::Corrupt(reason) => write!(formatter, "corrupt exit journey: {reason}"),
@@ -1315,114 +1341,214 @@ impl From<ExitBoundaryError> for ExitJourneyError {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(super) struct StoredNativeEvidence {
-    request_anchor: [u8; 32],
-    inclusion_checkpoint: [u8; 32],
-    network_id: u32,
-    witness: Vec<u8>,
-    recipient_signature: Vec<u8>,
-}
-impl StoredNativeEvidence {
-    pub(super) fn from_public(value: &layerx_paxeer_client::state_proof::NativeEvidence) -> Self {
-        Self {
-            request_anchor: value.request_anchor,
-            inclusion_checkpoint: value.inclusion_checkpoint,
-            network_id: value.network_id,
-            witness: value.witness.clone(),
-            recipient_signature: value.recipient_signature.clone(),
-        }
-    }
-    pub(super) fn public(&self) -> layerx_paxeer_client::state_proof::NativeEvidence {
-        layerx_paxeer_client::state_proof::NativeEvidence {
-            request_anchor: self.request_anchor,
-            inclusion_checkpoint: self.inclusion_checkpoint,
-            network_id: self.network_id,
-            witness: self.witness.clone(),
-            recipient_signature: self.recipient_signature.clone(),
-        }
-    }
-}
-
 #[cfg(test)]
-mod native_persistence_tests {
+mod forced_exit_persistence_tests {
     use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
-    use layerx_paxeer_client::state_proof::{NativeEvidence, StateWitness};
+    use layerx_crypto::settlement_recipient::RecipientAuthorization;
+    use layerx_paxeer_client::custody::exit_recipient_message;
+    use layerx_paxeer_client::state_proof::{AccountPath, StateWitness};
+    use layerx_types::ids::Did;
+
+    type Outcome = Result<(), Box<dyn std::error::Error>>;
+
+    const NETWORK_ID: u32 = 7332;
+    const BALANCE: u128 = 5_000_000;
+    const DID: &[u8] = b"exit-holder";
+    const RECIPIENT: [u8; 20] = [0x42; 20];
+    const ASSET: [u8; 32] = [0x24; 32];
+
+    fn state_leaf(key: &[u8], value: &[u8]) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+        let mut hasher = Sha256::new();
+        hasher.update(b"LXP/v1/state-leaf\0");
+        hasher.update(u32::try_from(key.len())?.to_be_bytes());
+        hasher.update(u32::try_from(value.len())?.to_be_bytes());
+        hasher.update(key);
+        hasher.update(value);
+        Ok(hasher.finalize().into())
+    }
+
+    /// The exact native account value layout the custody module's balance
+    /// verifier reads, with the account authority key in place.
+    fn account_value(
+        name: &[u8],
+        authority: [u8; 32],
+    ) -> Result<([u8; 32], Vec<u8>), Box<dyn std::error::Error>> {
+        let mut hasher = Sha256::new();
+        hasher.update(b"LX:ACCOUNT:v1");
+        hasher.update(u32::try_from(name.len())?.to_be_bytes());
+        hasher.update(name);
+        let account_id: [u8; 32] = hasher.finalize().into();
+        let mut value = u16::try_from(name.len())?.to_be_bytes().to_vec();
+        value.extend_from_slice(name);
+        value.push(1);
+        value.extend_from_slice(&BALANCE.to_be_bytes());
+        value.extend_from_slice(&ASSET);
+        value.push(1);
+        value.extend_from_slice(&9_u64.to_be_bytes());
+        value.extend_from_slice(&2_u64.to_be_bytes());
+        value.extend_from_slice(&[0, 0]);
+        value.extend_from_slice(&authority);
+        value.push(1);
+        layerx_proof::state::decode_account_value(account_id, &value)
+            .map_err(|error| format!("account value: {error:?}"))?;
+        Ok((account_id, value))
+    }
+
+    /// Builds a real account state witness, derives its state root, and signs
+    /// the recipient authorization over that root with the account authority.
+    fn evidence() -> Result<(ExitEvidence, [u8; 32]), Box<dyn std::error::Error>> {
+        let authority = SigningKey::from_bytes(&[0x61; 32]);
+        let public = authority.verifying_key().to_bytes();
+        let (account_id, value) = account_value(b"agent:exit-holder:main", public)?;
+        let mut key = vec![4_u8];
+        key.extend_from_slice(&account_id);
+        let witness = StateWitness {
+            module_id: 0,
+            key,
+            value,
+            account_path: Some(AccountPath {
+                index: 0,
+                count: 2,
+                siblings: vec![state_leaf(&[4; 33], b"neighbour")?],
+            }),
+            leaf_index_a: 0,
+            leaf_count_a: 2,
+            siblings_a: vec![state_leaf(b"sequence", &21_u64.to_be_bytes())?],
+            leaf_count_b: 10,
+            siblings_b: vec![[0xd1; 32], [0xd2; 32], [0xd3; 32], [0xd4; 32]],
+        };
+        let root = witness.root()?;
+        let encoded = witness.encode()?;
+        let recipient = EvmAddress::new(RECIPIENT);
+
+        // The message the human service's recipient-authorization signer
+        // produces must be byte-identical to the one the custody precompile
+        // verifies, anchored on the finalized state root.
+        let authorization = RecipientAuthorization {
+            network_id: NETWORK_ID,
+            binding_digest: [0x11; 32],
+            did: Did::new(DID).map_err(|error| format!("did: {error:?}"))?,
+            public_key: public,
+            asset: ASSET,
+            checkpoint: root,
+            recipient: RECIPIENT,
+        };
+        let message = authorization
+            .message()
+            .map_err(|error| format!("{error:?}"))?;
+        assert_eq!(
+            message,
+            exit_recipient_message(NETWORK_ID, &account_id, &ASSET, recipient, &root)
+        );
+        assert_eq!(
+            authorization
+                .account()
+                .map_err(|error| format!("{error:?}"))?,
+            account_id
+        );
+        let signature = authority.sign(&message).to_bytes();
+        authorization
+            .verify_signature(&signature)
+            .map_err(|error| format!("{error:?}"))?;
+
+        Ok((
+            ExitEvidence {
+                material: ForcedExitMaterial {
+                    witness: encoded,
+                    batch_number: 21,
+                    account: account_id,
+                    asset_id: ASSET,
+                    recipient,
+                    recipient_signature: signature,
+                },
+                finalised_balance: BALANCE,
+            },
+            root,
+        ))
+    }
 
     #[test]
-    fn stored_exit_preserves_native_witness_and_recipient_authority(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let document: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../layerx-paxeer-client/tests/vectors/native-state-proofs.json"
-        ))?;
-        let encoded = document["vectors"][7]["proof"]
-            .as_str()
-            .ok_or("proof")?
-            .strip_prefix("0x")
-            .ok_or("hex")?;
-        let bytes = (0..encoded.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&encoded[i..i + 2], 16))
-            .collect::<Result<Vec<_>, _>>()?;
-        let witness = StateWitness::decode(&bytes)?;
-        let mut evidence = ExitEvidence {
-            native: None,
-            account: witness.key[1..].try_into()?,
-            asset_id: {
-                let mut asset = [0; 32];
-                asset[0] = 1;
-                asset
-            },
-            finalised_balance: 100,
-            recipient: EvmAddress::new([9; 20]),
-            leaf_index: 0,
-            siblings: Vec::new(),
-            attestations: Vec::new(),
-        };
-        let mut seed = [0; 32];
-        seed[0] = 1;
-        let signing = SigningKey::from_bytes(&seed);
-        let mut message = b"LX:SETTLE:RECIPIENT:v1\0".to_vec();
-        message.extend_from_slice(&7_u32.to_be_bytes());
-        message.extend_from_slice(&evidence.account);
-        message.extend_from_slice(&evidence.asset_id);
-        message.extend_from_slice(&evidence.recipient.bytes());
-        message.extend_from_slice(&[3; 32]);
-        let signature = signing.sign(&message).to_bytes();
-        evidence.native = Some(NativeEvidence {
-            request_anchor: [3; 32],
-            inclusion_checkpoint: [4; 32],
-            network_id: 7,
-            witness: bytes,
-            recipient_signature: signature.to_vec(),
-        });
-        let stored = StoredEvidence::from(&evidence);
+    fn stored_exit_preserves_forced_exit_material_and_recipient_authority() -> Outcome {
+        let (evidence, root) = evidence()?;
+        layerx_paxeer_client::verify_exit_balance(&evidence, NETWORK_ID, root)
+            .map_err(|error| format!("{error:?}"))?;
+
+        let stored = StoredEvidence::from_public(&evidence)?;
         let bytes = serde_json::to_vec(&stored)?;
         let restored: StoredEvidence = serde_json::from_slice(&bytes)?;
-        let restored = restored.public();
+        let restored = restored.public()?;
         assert_eq!(restored, evidence);
-        let native = restored.native.as_ref().ok_or("native")?;
-        restored
-            .verify_native_balance(
-                &witness,
-                witness.root()?,
-                native.network_id,
-                native.request_anchor,
-                &signature,
-            )
-            .map_err(|e| format!("{e:?}"))?;
-        let mut altered = restored.clone();
-        altered.recipient = EvmAddress::new([8; 20]);
-        assert!(altered
-            .verify_native_balance(
-                &witness,
-                witness.root()?,
-                native.network_id,
-                native.request_anchor,
-                &signature
-            )
-            .is_err());
+        layerx_paxeer_client::verify_exit_balance(&restored, NETWORK_ID, root)
+            .map_err(|error| format!("{error:?}"))?;
+
+        let mut other_recipient = restored.clone();
+        other_recipient.material.recipient = EvmAddress::new([0x43; 20]);
+        assert!(
+            layerx_paxeer_client::verify_exit_balance(&other_recipient, NETWORK_ID, root).is_err()
+        );
+
+        let mut other_balance = restored.clone();
+        other_balance.finalised_balance = BALANCE + 1;
+        assert!(
+            layerx_paxeer_client::verify_exit_balance(&other_balance, NETWORK_ID, root).is_err()
+        );
+
+        let mut other_anchor = root;
+        other_anchor[0] ^= 0x01;
+        assert!(
+            layerx_paxeer_client::verify_exit_balance(&restored, NETWORK_ID, other_anchor).is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exit_plans_round_trip_only_through_the_forced_exit_codec() -> Outcome {
+        let (evidence, _) = evidence()?;
+        let plan = ExitPlan {
+            journey_id: JourneyId::new("jrn_exitcodec000001")?,
+            idempotency_key: [0x41; 32],
+            evidence,
+        };
+        let encoded = encode_exit_plan(&plan)?;
+        assert_eq!(encoded.get(..2), Some([1, PLAN_TAG].as_slice()));
+        assert_eq!(decode_exit_plan(&encoded)?, plan);
+
+        let mut truncated = encoded.clone();
+        truncated.pop();
+        assert!(decode_exit_plan(&truncated).is_err());
+
+        let mut trailing = encoded.clone();
+        trailing.push(0);
+        assert!(decode_exit_plan(&trailing).is_err());
+
+        // The removed checkpoint-proof plan shapes are refused, never reread.
+        for tag in [3_u8, 4] {
+            let mut retagged = encoded.clone();
+            retagged[1] = tag;
+            assert!(decode_exit_plan(&retagged).is_err());
+        }
+
+        // A plan whose recipient signature was altered cannot be constructed
+        // back out of the wire: the material codec revalidates every field.
+        let mut tampered = encoded;
+        let at = tampered.len() - 1;
+        tampered[at] ^= 0x01;
+        let decoded = decode_exit_plan(&tampered);
+        assert!(decoded.is_err() || decoded.ok().as_ref() != Some(&plan));
+        Ok(())
+    }
+
+    #[test]
+    fn the_two_forced_exit_wallet_actions_are_distinct_and_stable() -> Outcome {
+        let key = [0x41_u8; 32];
+        let request = derive_key(WALLET_ACTION_DOMAIN, &key);
+        let execute = derive_key(EXECUTE_ACTION_DOMAIN, &key);
+        assert_ne!(request, execute);
+        assert_eq!(request, derive_key(WALLET_ACTION_DOMAIN, &key));
+        assert_eq!(execute, derive_key(EXECUTE_ACTION_DOMAIN, &key));
+        assert_ne!(request, [0; 32]);
+        assert_ne!(execute, [0; 32]);
         Ok(())
     }
 }

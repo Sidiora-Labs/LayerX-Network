@@ -49,7 +49,7 @@ pub use withdraw::{
 
 pub(crate) use deposit::{decode_deposit_plan, encode_deposit_plan};
 pub(crate) use exit::{decode_exit_plan, encode_exit_plan};
-pub(crate) use withdraw::{decode_withdrawal_plan, encode_withdrawal_plan};
+pub(crate) use withdraw::{decode_withdrawal_plan, encode_withdrawal_plan, MATERIAL_WIRE_BYTES};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MovementExecutionIdentity {

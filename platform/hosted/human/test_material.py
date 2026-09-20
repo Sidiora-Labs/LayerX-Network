@@ -50,6 +50,49 @@ class MaterialTests(unittest.TestCase):
                                          Path(directory) / 'output.json', 402, 31337)
             self.assertFalse((Path(directory) / 'output.json').exists())
 
+    def test_custody_bindings_resolve_to_the_native_custody_precompile(self):
+        precompile = '0x0000000000000000000000000000000000001013'
+        self.assertEqual(material.CUSTODY_PRECOMPILE, precompile)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            evidence = root / 'human-evidence'
+            evidence.mkdir(mode=0o700)
+            for name, value in (
+                    ('components.json', {'AGENT_ACTOR': 'did:layerx:' + '01' * 32}),
+                    ('agent.json', {'HUMAN_PEERS': 'uid=4020;tenant=beta;principal=did:layerx:' + '01' * 32}),
+                    ('purpose-catalog.json', {'purposes': []}),
+                    ('authority.json', {'tenant': 'beta', 'principal': 'did:layerx:' + '01' * 32,
+                                        'core-clock-horizon': 60}),
+                    ('principal-policy.json', {'principals': []}),
+                    ('recovery-policy.json', {'root': list(range(1, 33)), 'threshold': 2,
+                                              'delay_seconds': 86400}),
+                    ('movement-policy.json', {'CUSTODY_REFERENCE': '0x' + 'ab' * 32,
+                                              'PAXEER_CHECKPOINT_AUTHORITY': '0x' + 'cd' * 32,
+                                              'PAXEER_CONFIRMATIONS': 12,
+                                              'CHECKPOINT_INTERVAL_SECONDS': 60,
+                                              'PAXEER_BLOCK_SECONDS': 2,
+                                              'REMINDER_INTERVAL_SECONDS': 300})):
+                material.write(evidence, name, json.dumps(value))
+            registry = root / 'module-registry.json'
+            registry.write_text(json.dumps({'schema_version': 2, 'assets': [{'asset': 'a' * 64}],
+                                            'modules': [{'module': 8, 'ordinals': [1, 2]}]}))
+            deployment = root / 'deployment.json'
+            deployed = {'vault': '0x' + '11' * 20, 'withdrawal_claims': '0x' + '22' * 20,
+                        'emergency_exit': '0x' + '33' * 20, 'checkpoint_registry': '0x' + '44' * 20}
+            deployment.write_text(json.dumps({'network_id': 402, 'chain_id': 125, 'addresses': deployed}))
+            output = root / 'policy.json'
+            material.assemble_policy(evidence, deployment, registry, output, 402, 125)
+            policy = json.loads(output.read_text())
+            for name in ('PAXEER_EXIT_CONTRACT', 'PAXEER_WITHDRAWAL_CLAIMS_CONTRACT'):
+                self.assertEqual(policy['components'][name], precompile)
+            for name in ('PAXEER_VAULT', 'PAXEER_CLAIMS_CONTRACT', 'PAXEER_EXIT_CONTRACT'):
+                self.assertEqual(policy['movement'][name], precompile)
+            self.assertEqual(policy['movement']['PAXEER_CHECKPOINT_REGISTRY'], deployed['checkpoint_registry'])
+            self.assertEqual(policy['movement']['CUSTODY_REFERENCE'], '0x' + 'ab' * 32)
+            written = output.read_text()
+            for name in ('vault', 'withdrawal_claims', 'emergency_exit'):
+                self.assertNotIn(deployed[name], written)
+
     def test_passkey_relying_party_follows_the_deployed_web_origin(self):
         self.assertEqual(material.passkey_relying_party(''),
                          ('human.testnet.layerx.network', 'https://human.testnet.layerx.network'))

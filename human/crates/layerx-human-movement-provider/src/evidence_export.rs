@@ -3,6 +3,7 @@ use layerx_human_service::server::movement_provider::{
 };
 use layerx_paxeer_client::{
     DepositProof, DepositProofVerifier, FinalityTracker, PublishedDepositProof, TransactionHash,
+    CUSTODY_PRECOMPILE,
 };
 use layerx_types::account::AccountId;
 
@@ -59,15 +60,15 @@ pub(crate) fn publish(config: &Config, request: &Request) -> Result<(), Error> {
     let verifier =
         DepositProofVerifier::new(config.proof.clone()).map_err(|_| Error::Configuration)?;
     let custody = verifier
-        .admit_custody(&report, config.vault, &request.recipient)
+        .admit_custody(&report, CUSTODY_PRECOMPILE, &request.recipient)
         .map_err(|_| Error::Integrity)?;
-    let codec = NativeMovementCodec::for_protocol(config.listener.protocol)
-        .map_err(|_| Error::Configuration)?;
+    crate::config::validated_protocol(config.listener.protocol)?;
+    let codec = NativeMovementCodec::new();
     let mut candidates = Vec::new();
     for endpoint in &config.proof.endpoints {
         let Ok(published) = PublishedDepositProof::fetch_published(
             endpoint,
-            config.vault,
+            CUSTODY_PRECOMPILE,
             config.checkpoint_registry,
             request.checkpoint,
             custody.custody(),
@@ -75,7 +76,7 @@ pub(crate) fn publish(config: &Config, request: &Request) -> Result<(), Error> {
         ) else {
             continue;
         };
-        let Ok(proof) = verifier.obtain(&report, config.vault, published) else {
+        let Ok(proof) = verifier.obtain(&report, CUSTODY_PRECOMPILE, published) else {
             continue;
         };
         let bytes = codec

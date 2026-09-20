@@ -1,184 +1,86 @@
-use layerx_paxeer_client::{
-    raw_call, CheckpointProof, EndpointConfig, ExecutionOutcome, FinalityStage, FinalityTracker,
-    Json, TrackerConfig, TransactionHash,
-};
-use layerx_types::intent::EvmAddress;
-use sha3::{Digest, Keccak256};
+use layerx_paxeer_client::{raw_call, EndpointConfig, Json, TrackerConfig, ANCHOR_PRECOMPILE};
 
 use crate::config::{hex, hex_string};
 use crate::Error;
 
-pub(crate) fn verify_checkpoint_registration(
+/// `finalizedStateRoot(uint64)` on the anchor precompile.
+const SELECTOR_FINALIZED_STATE_ROOT: [u8; 4] = [0x0f, 0x60, 0x7f, 0xe4];
+/// `finalizedReceiptRoot(uint64)` on the anchor precompile.
+const SELECTOR_FINALIZED_RECEIPT_ROOT: [u8; 4] = [0xe0, 0xa3, 0xcc, 0xaa];
+
+/// Confirms, with the configured endpoint agreement, that the anchor
+/// precompile reports `batch_number` finalized with exactly the state and
+/// receipt roots the sequencer-signed batch header commits to.
+///
+/// This replaces the registry-publication check the Solidity checkpoint
+/// registry used to answer: finalized roots are now native chain state served
+/// by `0x…1014`, not an event a registry contract published.
+pub(crate) fn verify_finalised_batch(
     tracker: &TrackerConfig,
-    registry: EvmAddress,
-    proof: &CheckpointProof,
+    batch_number: u64,
+    state_root: [u8; 32],
+    receipt_root: [u8; 32],
 ) -> Result<(), Error> {
-    if registry.bytes() == [0; 20] {
-        return Err(Error::Configuration);
+    if batch_number == 0 || state_root == [0; 32] || receipt_root == [0; 32] {
+        return Err(Error::Integrity);
     }
-    let mut observations = Vec::new();
+    let mut agreement = 0;
     for endpoint in &tracker.endpoints {
-        if let Ok(observation) = registration(endpoint, registry, proof) {
-            observations.push(observation);
+        if matches!(
+            finalised_root(endpoint, SELECTOR_FINALIZED_STATE_ROOT, batch_number),
+            Ok(Some(observed)) if observed == state_root
+        ) && matches!(
+            finalised_root(endpoint, SELECTOR_FINALIZED_RECEIPT_ROOT, batch_number),
+            Ok(Some(observed)) if observed == receipt_root
+        ) {
+            agreement += 1;
         }
     }
-    let observation = observations
-        .iter()
-        .find(|observation| {
-            observations
-                .iter()
-                .filter(|other| other == observation)
-                .count()
-                >= tracker.minimum_endpoint_agreement
-        })
-        .ok_or(Error::Integrity)?;
-    let mut finality = FinalityTracker::new(tracker.clone(), observation.transaction)
-        .map_err(|_| Error::Configuration)?;
-    let report = finality.poll();
-    match report.stage() {
-        FinalityStage::Final { inclusion, .. }
-            if inclusion.execution == ExecutionOutcome::Succeeded
-                && inclusion.block.number == observation.block_number
-                && inclusion.block.hash == observation.block_hash =>
-        {
-            Ok(())
-        }
+    if agreement < tracker.minimum_endpoint_agreement {
+        return Err(Error::Integrity);
+    }
+    Ok(())
+}
+
+/// Reads one anchored root for `batch_number` from a single origin. `None`
+/// means the origin reports the batch is not finalized yet.
+fn finalised_root(
+    endpoint: &EndpointConfig,
+    selector: [u8; 4],
+    batch_number: u64,
+) -> Result<Option<[u8; 32]>, Error> {
+    let mut data = selector.to_vec();
+    data.extend([0; 24]);
+    data.extend(batch_number.to_be_bytes());
+    let call = Json::Object(vec![
+        ("to".to_owned(), text_hex(&ANCHOR_PRECOMPILE.bytes())),
+        ("data".to_owned(), text_hex(&data)),
+    ]);
+    let answer = raw_call(
+        endpoint,
+        "eth_call",
+        &[call, Json::Text("latest".to_owned())],
+    )
+    .map_err(|_| Error::Integrity)?;
+    decode_finalised_root(answer.as_text().ok_or(Error::Integrity)?)
+}
+
+/// Decodes the `(bytes32 root, bool finalized)` answer of an anchor root view.
+///
+/// Anything but the two declared canonical words is refused: a short or long
+/// return, a boolean word outside `{0, 1}` and a root claimed for a batch the
+/// anchor does not report finalized.
+fn decode_finalised_root(answer: &str) -> Result<Option<[u8; 32]>, Error> {
+    let words = hex::<64>(answer).map_err(|_| Error::Integrity)?;
+    let root: [u8; 32] = words[..32].try_into().map_err(|_| Error::Integrity)?;
+    if words[32..63] != [0; 31] {
+        return Err(Error::Integrity);
+    }
+    match words[63] {
+        0 if root == [0; 32] => Ok(None),
+        1 if root != [0; 32] => Ok(Some(root)),
         _ => Err(Error::Integrity),
     }
-}
-
-#[derive(Eq, PartialEq)]
-struct Registration {
-    transaction: TransactionHash,
-    block_number: u64,
-    block_hash: [u8; 32],
-    log_index: u64,
-}
-
-fn registration(
-    endpoint: &EndpointConfig,
-    registry: EvmAddress,
-    proof: &CheckpointProof,
-) -> Result<Registration, Error> {
-    let topic: [u8; 32] = Keccak256::digest(
-        b"CheckpointRegistered(bytes32,uint64,uint64,uint64,uint64,bytes32,bytes32,bytes32,uint64)",
-    )
-    .into();
-    let filter = Json::Object(vec![
-        ("address".to_owned(), text_hex(&registry.bytes())),
-        ("fromBlock".to_owned(), Json::Text("0x0".to_owned())),
-        ("toBlock".to_owned(), Json::Text("latest".to_owned())),
-        (
-            "topics".to_owned(),
-            Json::Array(vec![text_hex(&topic), text_hex(&proof.checkpoint_hash)]),
-        ),
-    ]);
-    let response = raw_call(endpoint, "eth_getLogs", &[filter]).map_err(|_| Error::Integrity)?;
-    let Json::Array(logs) = response else {
-        return Err(Error::Integrity);
-    };
-    if logs.len() != 1 {
-        return Err(Error::Integrity);
-    }
-    let log = logs.first().ok_or(Error::Integrity)?;
-    let observed = decode_registration(log, registry, proof, topic)?;
-    let receipt = raw_call(
-        endpoint,
-        "eth_getTransactionReceipt",
-        &[Json::Text(observed.transaction.to_hex())],
-    )
-    .map_err(|_| Error::Integrity)?;
-    if array_member::<32>(&receipt, "transactionHash")? != observed.transaction.bytes()
-        || array_member::<32>(&receipt, "blockHash")? != observed.block_hash
-        || quantity_member(&receipt, "blockNumber")? != observed.block_number
-        || quantity_member(&receipt, "status")? != 1
-    {
-        return Err(Error::Integrity);
-    }
-    let Some(Json::Array(receipt_logs)) = receipt.member("logs") else {
-        return Err(Error::Integrity);
-    };
-    let matching = receipt_logs.iter().filter(|candidate| {
-        decode_registration(candidate, registry, proof, topic).is_ok_and(|value| value == observed)
-    });
-    if matching.count() != 1 {
-        return Err(Error::Integrity);
-    }
-    let block = raw_call(
-        endpoint,
-        "eth_getBlockByNumber",
-        &[
-            Json::Text(format!("0x{:x}", observed.block_number)),
-            Json::Bool(false),
-        ],
-    )
-    .map_err(|_| Error::Integrity)?;
-    if array_member::<32>(&block, "hash")? != observed.block_hash
-        || quantity_member(&block, "number")? != observed.block_number
-    {
-        return Err(Error::Integrity);
-    }
-    Ok(observed)
-}
-
-fn decode_registration(
-    log: &Json,
-    registry: EvmAddress,
-    proof: &CheckpointProof,
-    topic: [u8; 32],
-) -> Result<Registration, Error> {
-    let Some(Json::Array(topics)) = log.member("topics") else {
-        return Err(Error::Integrity);
-    };
-    let mut epoch = [0; 32];
-    epoch[24..].copy_from_slice(&proof.epoch.to_be_bytes());
-    let mut batch = [0; 32];
-    batch[24..].copy_from_slice(&proof.batch_number.to_be_bytes());
-    let expected = [topic, proof.checkpoint_hash, epoch, batch];
-    if topics.len() != expected.len()
-        || topics.iter().zip(expected).any(|(actual, expected)| {
-            actual.as_text().and_then(|text| hex::<32>(text).ok()) != Some(expected)
-        })
-        || array_member::<20>(log, "address")? != registry.bytes()
-        || log.member("removed") != Some(&Json::Bool(false))
-    {
-        return Err(Error::Integrity);
-    }
-    let data = array_member::<192>(log, "data")?;
-    if data[96..128] != proof.state_root
-        || data[128..160] != proof.data_availability_root
-        || data[..24] != [0; 24]
-        || data[32..56] != [0; 24]
-        || data[160..184] != [0; 24]
-    {
-        return Err(Error::Integrity);
-    }
-    Ok(Registration {
-        transaction: TransactionHash::new(array_member(log, "transactionHash")?),
-        block_number: quantity_member(log, "blockNumber")?,
-        block_hash: array_member(log, "blockHash")?,
-        log_index: quantity_member(log, "logIndex")?,
-    })
-}
-
-fn array_member<const N: usize>(value: &Json, field: &str) -> Result<[u8; N], Error> {
-    let text = value
-        .member(field)
-        .and_then(Json::as_text)
-        .ok_or(Error::Integrity)?;
-    hex(text).map_err(|_| Error::Integrity)
-}
-
-fn quantity_member(value: &Json, field: &str) -> Result<u64, Error> {
-    let digits = value
-        .member(field)
-        .and_then(Json::as_text)
-        .and_then(|text| text.strip_prefix("0x"))
-        .ok_or(Error::Integrity)?;
-    if digits.is_empty() || (digits.len() > 1 && digits.starts_with('0')) {
-        return Err(Error::Integrity);
-    }
-    u64::from_str_radix(digits, 16).map_err(|_| Error::Integrity)
 }
 
 fn text_hex(bytes: &[u8]) -> Json {
@@ -187,78 +89,59 @@ fn text_hex(bytes: &[u8]) -> Json {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_registration, text_hex};
-    use layerx_paxeer_client::Json;
-    use layerx_types::intent::EvmAddress;
-    use sha3::{Digest, Keccak256};
+    use super::{decode_finalised_root, verify_finalised_batch};
+
+    /// The exact `cast abi-encode "f(bytes32,bool)" 0x2222…22 true` answer of a
+    /// finalized batch, and the `0x00…00 false` answer of one that is not.
+    const FINALIZED: &str = concat!(
+        "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "0000000000000000000000000000000000000000000000000000000000000001"
+    );
+    const NOT_FINALIZED: &str = concat!(
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000"
+    );
 
     #[test]
-    fn checkpoint_event_abi_requires_exact_roots_topics_and_canonical_log(
+    fn anchor_answers_are_only_accepted_in_the_declared_two_word_abi_shape(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let proof = crate::tests::signed_checkpoint(2)?;
-        let registry = EvmAddress::new([12; 20]);
-        let topic: [u8; 32] = Keccak256::digest(
-            b"CheckpointRegistered(bytes32,uint64,uint64,uint64,uint64,bytes32,bytes32,bytes32,uint64)",
-        ).into();
-        let mut epoch = [0; 32];
-        epoch[24..].copy_from_slice(&proof.epoch.to_be_bytes());
-        let mut batch = [0; 32];
-        batch[24..].copy_from_slice(&proof.batch_number.to_be_bytes());
-        let mut data = [0; 192];
-        data[31] = 1;
-        data[63] = 1;
-        data[64..96].copy_from_slice(&[4; 32]);
-        data[96..128].copy_from_slice(&proof.state_root);
-        data[128..160].copy_from_slice(&proof.data_availability_root);
-        data[191] = 1;
-        let fields = vec![
-            ("address".to_owned(), text_hex(&registry.bytes())),
-            ("removed".to_owned(), Json::Bool(false)),
-            (
-                "topics".to_owned(),
-                Json::Array(vec![
-                    text_hex(&topic),
-                    text_hex(&proof.checkpoint_hash),
-                    text_hex(&epoch),
-                    text_hex(&batch),
-                ]),
-            ),
-            ("data".to_owned(), text_hex(&data)),
-            ("transactionHash".to_owned(), text_hex(&[6; 32])),
-            ("blockHash".to_owned(), text_hex(&[7; 32])),
-            ("blockNumber".to_owned(), Json::Text("0x42".to_owned())),
-            ("logIndex".to_owned(), Json::Text("0x0".to_owned())),
+        assert_eq!(decode_finalised_root(FINALIZED)?, Some([0x22; 32]));
+        assert_eq!(decode_finalised_root(NOT_FINALIZED)?, None);
+        let refusals = vec![
+            // One word only: the boolean is missing.
+            FINALIZED[..66].to_owned(),
+            // Three words: the anchor view returns exactly two.
+            format!("{FINALIZED}{}", "00".repeat(32)),
+            // A boolean word outside {0, 1}.
+            format!("0x{}{}02", "22".repeat(32), "00".repeat(31)),
+            // A non-canonical boolean carrying high bits.
+            format!("0x{}01{}01", "22".repeat(32), "00".repeat(30)),
+            // A root claimed while the anchor reports the batch unfinalized.
+            format!("0x{}{}", "22".repeat(32), "00".repeat(32)),
+            // The finalized flag without a root.
+            format!("0x{}{}01", "00".repeat(32), "00".repeat(31)),
+            // Not hexadecimal at all.
+            "0xzz".to_owned(),
+            String::new(),
         ];
-        let registration =
-            decode_registration(&Json::Object(fields.clone()), registry, &proof, topic)?;
-        assert_eq!(registration.transaction.bytes(), [6; 32]);
-        assert_eq!(registration.block_number, 66);
-        for (field, replacement) in [
-            ("removed", Json::Bool(true)),
-            ("address", text_hex(&[13; 20])),
-            ("topics", Json::Array(vec![text_hex(&topic)])),
-            ("data", text_hex(&data[..160])),
-            ("blockNumber", Json::Text("0x042".to_owned())),
-        ] {
-            let mut altered = fields.clone();
-            let value = altered
-                .iter_mut()
-                .find(|(name, _)| name == field)
-                .ok_or("missing field")?;
-            value.1 = replacement;
-            assert!(decode_registration(&Json::Object(altered), registry, &proof, topic).is_err());
+        for refused in &refusals {
+            assert!(
+                decode_finalised_root(refused).is_err(),
+                "accepted a malformed anchor answer: {refused}"
+            );
         }
-        for offset in [96, 128] {
-            let mut altered = fields.clone();
-            let mut wrong_root = data;
-            wrong_root[offset] ^= 1;
-            let value = altered
-                .iter_mut()
-                .find(|(name, _)| name == "data")
-                .ok_or("missing data")?;
-            value.1 = text_hex(&wrong_root);
-            assert!(decode_registration(&Json::Object(altered), registry, &proof, topic).is_err());
-        }
+        Ok(())
+    }
+
+    #[test]
+    fn an_origin_that_does_not_anchor_the_batch_never_reaches_agreement(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let dir = crate::tests::Directory::new()?;
+        let config = crate::tests::config(&dir)?;
+        assert!(verify_finalised_batch(&config.tracker, 2, [0x22; 32], [0x33; 32]).is_err());
+        assert!(verify_finalised_batch(&config.tracker, 0, [0x22; 32], [0x33; 32]).is_err());
+        assert!(verify_finalised_batch(&config.tracker, 2, [0; 32], [0x33; 32]).is_err());
+        assert!(verify_finalised_batch(&config.tracker, 2, [0x22; 32], [0; 32]).is_err());
         Ok(())
     }
 }

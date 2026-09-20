@@ -5,10 +5,10 @@ use std::fmt::{Display, Formatter};
 use layerx_agent_api::identity::{AgentDid, AuthorityRef, ContractError};
 use layerx_intents::{BridgeWithdrawRequest, Intent, IntentKind};
 use layerx_paxeer_client::{
-    CancellationEvidence, CancelledFundsDisposition, ChallengeHold, ChallengeKind, CheckpointProof,
-    ClaimProgress, CommittedWithdrawalDebit, DebitExpectation, DebitFault, FinalityStage,
-    PaxeerFundsDisposition, PayoutEvidence, ProtocolDebitDisposition, SubmittedWithdrawalClaim,
-    TransactionHash, WithdrawalAttestation, WithdrawalBoundary, WithdrawalError,
+    CancellationEvidence, CancelledFundsDisposition, ClaimProgress, CommittedWithdrawalDebit,
+    DebitExpectation, DebitFault, FinalityStage, PaxeerFundsDisposition, PayoutEvidence,
+    ProtocolDebitDisposition, SubmittedWithdrawalClaim, TransactionHash, WithdrawalBoundary,
+    WithdrawalError, WithdrawalMaterial,
 };
 use layerx_proof::receipt::AuthorizedBatch;
 use layerx_sdk::Client as AgentClient;
@@ -29,7 +29,7 @@ use crate::notify::JourneyId;
 use crate::store::{AuditDisposition, EvidenceRef, PrincipalScope, RowKey, StoreError, Table};
 use crate::trace::TraceId;
 
-const RECORD_VERSION: u8 = 4;
+const RECORD_VERSION: u8 = 5;
 const STATE_PREFIX: &str = "withdraw-state-";
 const PIN_PREFIX: &str = "withdraw-pin-";
 const PLAN_DIGEST_DOMAIN: &[u8] = b"layerx-human-withdraw-plan/v2\0";
@@ -37,7 +37,12 @@ const DEBIT_PLAN_DOMAIN: &[u8] = b"layerx-human-withdraw-debit-plan/v2\0";
 const DEBIT_ACTION_DOMAIN: &[u8] = b"layerx-human-withdraw-debit/v1\0";
 const CLAIM_ACTION_DOMAIN: &[u8] = b"layerx-human-withdraw-claim/v1\0";
 const PAYOUT_ACTION_DOMAIN: &[u8] = b"layerx-human-withdraw-payout/v1\0";
-const CANCEL_ACTION_DOMAIN: &[u8] = b"layerx-human-withdraw-cancel/v1\0";
+
+/// Bound of one encoded [`WithdrawalMaterial`]: the version and tag bytes, the
+/// three length-prefixed evidence parts at the custody evidence bound and the
+/// sequencer header signature.
+pub(crate) const MATERIAL_WIRE_BYTES: usize =
+    2 + 3 * (4 + layerx_paxeer_client::custody::MAX_EVIDENCE_BYTES) + 64;
 
 /// Agent preparation facts for the protocol withdrawal debit.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -287,7 +292,6 @@ pub enum CancellationPolicy {
 pub enum PaxeerAction {
     QueueClaim,
     FinalisePayout,
-    CancelChallengedPayout,
 }
 
 /// Exact wallet or permissionless transaction request. An adapter must bind
@@ -338,15 +342,17 @@ pub trait WithdrawalRuntime {
         signature: &[u8],
     ) -> Result<Vec<u8>, WithdrawalBoundaryError>;
 
-    /// Returns a real finalised checkpoint proof, or `None` while settlement is pending.
+    /// Returns the real withdrawal material the custody precompile takes - the
+    /// receipt, its inclusion path, the batch header and the sequencer
+    /// signature - or `None` while settlement is pending.
     ///
     /// # Errors
     ///
-    /// Returns a stable boundary failure without manufacturing proof material.
-    fn checkpoint_proof(
+    /// Returns a stable boundary failure without manufacturing evidence.
+    fn withdrawal_material(
         &mut self,
         debit: &DebitExpectation,
-    ) -> Result<Option<CheckpointProof>, WithdrawalBoundaryError>;
+    ) -> Result<Option<WithdrawalMaterial>, WithdrawalBoundaryError>;
 
     /// Broadcasts or resolves a transaction under its stable action key.
     ///
@@ -383,19 +389,10 @@ pub struct WithdrawalReminder {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WithdrawalStage {
     Processing,
-    WaitingForSettlement {
-        expectation: SettlementExpectation,
-    },
+    WaitingForSettlement { expectation: SettlementExpectation },
     ReadyToClaim,
     ClaimSubmitting,
-    WaitingForChallengeWindow {
-        available_at: u64,
-        observed_at: u64,
-    },
-    ChallengeHeld(ChallengeHold),
-    ChallengeUpheldAwaitingCancellation {
-        disposition: CancelledFundsDisposition,
-    },
+    WaitingForChallengeWindow { available_at: u64, observed_at: u64 },
     ReadyToFinalise,
     VerifyingPayout,
     PaidOut(PayoutEvidence),
@@ -455,15 +452,10 @@ enum Phase {
     ClaimStillChecking,
     ClaimConfirming,
     ClaimQueued,
-    ChallengeHeld,
     ReadyToFinalise,
     PayoutSubmitting,
     PayoutStillChecking,
     PayoutConfirming,
-    CancellationReady,
-    CancellationSubmitting,
-    CancellationStillChecking,
-    CancellationConfirming,
     Paid,
     Cancelled,
 }
@@ -499,176 +491,28 @@ impl StoredBatch {
     }
 }
 
+/// Persisted custody withdrawal material in the canonical privilege-boundary
+/// wire form, so a restored journey reconstructs exactly the evidence the
+/// precompile accepted.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct StoredAttestation {
-    protocol_version: u16,
-    network_id: u32,
-    paxeer_chain_id: u64,
-    settlement_contract: [u8; 20],
-    epoch: u64,
-    checkpoint_id: [u8; 32],
-    checkpoint_hash: [u8; 32],
-    guarantor_id: [u8; 32],
-    batch_number: u64,
-    data_availability_root: [u8; 32],
-    replayed: bool,
-    data_available: bool,
-    availability_class_mask: u8,
-    attested_at: u64,
-    signer: [u8; 20],
-    signature_r: [u8; 32],
-    signature_s: [u8; 32],
-    signature_v: u8,
+struct StoredMaterial {
+    wire: Vec<u8>,
 }
 
-impl StoredAttestation {
-    fn from_public(value: &WithdrawalAttestation) -> Self {
-        Self {
-            protocol_version: value.protocol_version,
-            network_id: value.network_id,
-            paxeer_chain_id: value.paxeer_chain_id,
-            settlement_contract: value.settlement_contract.bytes(),
-            epoch: value.epoch,
-            checkpoint_id: value.checkpoint_id,
-            checkpoint_hash: value.checkpoint_hash,
-            guarantor_id: value.guarantor_id,
-            batch_number: value.batch_number,
-            data_availability_root: value.data_availability_root,
-            replayed: value.replayed,
-            data_available: value.data_available,
-            availability_class_mask: value.availability_class_mask,
-            attested_at: value.attested_at,
-            signer: value.signer.bytes(),
-            signature_r: value.signature_r,
-            signature_s: value.signature_s,
-            signature_v: value.signature_v,
-        }
-    }
-
-    const fn public(&self) -> WithdrawalAttestation {
-        WithdrawalAttestation {
-            protocol_version: self.protocol_version,
-            network_id: self.network_id,
-            paxeer_chain_id: self.paxeer_chain_id,
-            settlement_contract: EvmAddress::new(self.settlement_contract),
-            epoch: self.epoch,
-            checkpoint_id: self.checkpoint_id,
-            checkpoint_hash: self.checkpoint_hash,
-            guarantor_id: self.guarantor_id,
-            batch_number: self.batch_number,
-            data_availability_root: self.data_availability_root,
-            replayed: self.replayed,
-            data_available: self.data_available,
-            availability_class_mask: self.availability_class_mask,
-            attested_at: self.attested_at,
-            signer: EvmAddress::new(self.signer),
-            signature_r: self.signature_r,
-            signature_s: self.signature_s,
-            signature_v: self.signature_v,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct StoredProof {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    native: Option<super::exit::StoredNativeEvidence>,
-    checkpoint_hash: [u8; 32],
-    state_root: [u8; 32],
-    epoch: u64,
-    batch_number: u64,
-    data_availability_root: [u8; 32],
-    leaf_index: u64,
-    siblings: Vec<[u8; 32]>,
-    attestations: Vec<StoredAttestation>,
-}
-
-impl StoredProof {
-    fn from_public(value: &CheckpointProof) -> Self {
-        Self {
-            native: value
-                .native
-                .as_ref()
-                .map(super::exit::StoredNativeEvidence::from_public),
-            checkpoint_hash: value.checkpoint_hash,
-            state_root: value.state_root,
-            epoch: value.epoch,
-            batch_number: value.batch_number,
-            data_availability_root: value.data_availability_root,
-            leaf_index: value.leaf_index,
-            siblings: value.siblings.clone(),
-            attestations: value
-                .attestations
-                .iter()
-                .map(StoredAttestation::from_public)
-                .collect(),
-        }
-    }
-
-    fn public(&self) -> CheckpointProof {
-        CheckpointProof {
-            native: self
-                .native
-                .as_ref()
-                .map(super::exit::StoredNativeEvidence::public),
-            checkpoint_hash: self.checkpoint_hash,
-            state_root: self.state_root,
-            epoch: self.epoch,
-            batch_number: self.batch_number,
-            data_availability_root: self.data_availability_root,
-            leaf_index: self.leaf_index,
-            siblings: self.siblings.clone(),
-            attestations: self
-                .attestations
-                .iter()
-                .map(StoredAttestation::public)
-                .collect(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct StoredHold {
-    kind: u8,
-    evidence_hash: [u8; 32],
-    raised_at: u64,
-    window_closes_at: u64,
-    observed_at: u64,
-    window_elapsed: bool,
-}
-
-impl StoredHold {
-    const fn from_public(value: ChallengeHold) -> Self {
-        Self {
-            kind: match value.kind {
-                ChallengeKind::Fraud => 1,
-                ChallengeKind::DataAvailability => 2,
-                ChallengeKind::Equivocation => 3,
-            },
-            evidence_hash: value.evidence_hash,
-            raised_at: value.raised_at,
-            window_closes_at: value.window_closes_at,
-            observed_at: value.observed_at,
-            window_elapsed: value.window_elapsed,
-        }
-    }
-
-    fn public(self) -> Result<ChallengeHold, WithdrawalJourneyError> {
-        let kind = match self.kind {
-            1 => ChallengeKind::Fraud,
-            2 => ChallengeKind::DataAvailability,
-            3 => ChallengeKind::Equivocation,
-            _ => return Err(WithdrawalJourneyError::Corrupt("unknown challenge kind")),
-        };
-        Ok(ChallengeHold {
-            kind,
-            evidence_hash: self.evidence_hash,
-            raised_at: self.raised_at,
-            window_closes_at: self.window_closes_at,
-            observed_at: self.observed_at,
-            window_elapsed: self.window_elapsed,
-            resolution_has_no_on_chain_deadline: true,
+impl StoredMaterial {
+    fn from_public(value: &WithdrawalMaterial) -> Result<Self, WithdrawalJourneyError> {
+        Ok(Self {
+            wire: layerx_paxeer_client::wire::encode_withdrawal_material(
+                value,
+                MATERIAL_WIRE_BYTES,
+            )
+            .map_err(|_| WithdrawalJourneyError::Corrupt("withdrawal material is unencodable"))?,
         })
+    }
+
+    fn public(&self) -> Result<WithdrawalMaterial, WithdrawalJourneyError> {
+        layerx_paxeer_client::wire::decode_withdrawal_material(&self.wire, MATERIAL_WIRE_BYTES)
+            .map_err(|_| WithdrawalJourneyError::Corrupt("withdrawal material is invalid"))
     }
 }
 
@@ -698,8 +542,7 @@ struct StoredCancellation {
     debit_receipt_reference: [u8; 32],
     checkpoint_hash: [u8; 32],
     claim_id: [u8; 32],
-    transaction: [u8; 32],
-    inclusion: StoredInclusion,
+    observed_head: u64,
     vault: [u8; 20],
     asset: [u8; 32],
     amount: u128,
@@ -739,20 +582,16 @@ struct Record {
     debit_journey_id: String,
     claim_action_key: [u8; 32],
     payout_action_key: [u8; 32],
-    cancellation_action_key: [u8; 32],
     phase: Phase,
     debit_activity_id: Option<[u8; 32]>,
     debit_receipt: Option<Vec<u8>>,
     debit_batch: Option<StoredBatch>,
     debit_receipt_reference: Option<[u8; 32]>,
-    proof: Option<StoredProof>,
+    material: Option<StoredMaterial>,
     claim_transaction: Option<[u8; 32]>,
     claim_id: Option<[u8; 32]>,
     claim_available_at: Option<u64>,
     payout_transaction: Option<[u8; 32]>,
-    cancellation_transaction: Option<[u8; 32]>,
-    challenge_hold: Option<StoredHold>,
-    challenged_disposition_vault: Option<[u8; 20]>,
     payout: Option<StoredPayout>,
     cancellation: Option<StoredCancellation>,
     reminder_count: u64,
@@ -872,20 +711,16 @@ impl WithdrawalJourney {
             debit_journey_id,
             claim_action_key: derive_key(CLAIM_ACTION_DOMAIN, &plan.idempotency_key),
             payout_action_key: derive_key(PAYOUT_ACTION_DOMAIN, &plan.idempotency_key),
-            cancellation_action_key: derive_key(CANCEL_ACTION_DOMAIN, &plan.idempotency_key),
             phase: Phase::Processing,
             debit_activity_id: None,
             debit_receipt: None,
             debit_batch: None,
             debit_receipt_reference: None,
-            proof: None,
+            material: None,
             claim_transaction: None,
             claim_id: None,
             claim_available_at: None,
             payout_transaction: None,
-            cancellation_transaction: None,
-            challenge_hold: None,
-            challenged_disposition_vault: None,
             payout: None,
             cancellation: None,
             reminder_count: 0,
@@ -1066,12 +901,13 @@ impl WithdrawalJourney {
             }
             Phase::WaitingSettlement => {
                 let expectation = self.debit_expectation(self.debit_activity_id()?)?;
-                if let Some(proof) = runtime.checkpoint_proof(&expectation)? {
-                    let claim = boundary.construct_claim(self.committed_debit()?, proof.clone())?;
+                if let Some(material) = runtime.withdrawal_material(&expectation)? {
+                    let claim =
+                        boundary.construct_claim(self.committed_debit()?, material.clone())?;
                     if claim.debit().receipt_reference() != self.debit_receipt_reference()? {
                         return Err(WithdrawalJourneyError::EvidenceConflict);
                     }
-                    self.record.proof = Some(StoredProof::from_public(&proof));
+                    self.record.material = Some(StoredMaterial::from_public(&material)?);
                     self.transition(scope, Phase::ClaimReady, now)?;
                 }
             }
@@ -1088,6 +924,11 @@ impl WithdrawalJourney {
                 }
             }
             Phase::ClaimSubmitting => {
+                if let Some(transaction) = runtime.lookup(self.record.claim_action_key)? {
+                    self.record.claim_transaction = Some(transaction.bytes());
+                    self.transition(scope, Phase::ClaimConfirming, now)?;
+                    return self.status();
+                }
                 let request = self.claim_request(scope, boundary)?;
                 match runtime.submit_or_resolve(&request) {
                     Ok(PaxeerActionOutcome::Submitted(transaction)) => {
@@ -1110,33 +951,19 @@ impl WithdrawalJourney {
             Phase::ClaimConfirming => {
                 let transaction = self.claim_transaction()?;
                 if let Some(report) = final_report(boundary, transaction)? {
-                    let submitted = boundary.accept_submission(self.claim(boundary)?, &report)?;
+                    let submitted =
+                        boundary.accept_submission(self.restored_claim(boundary)?, &report)?;
                     self.record.claim_id = Some(submitted.claim_id());
                     self.record.claim_available_at = Some(submitted.available_at());
                     self.transition(scope, Phase::ClaimQueued, now)?;
                 }
             }
-            Phase::ClaimQueued | Phase::ChallengeHeld => {
+            Phase::ClaimQueued => {
                 let submitted = self.submitted_claim(boundary)?;
                 match boundary.progress(&submitted)? {
-                    ClaimProgress::WaitingForChallengeWindow { .. } => {
-                        if self.record.phase != Phase::ClaimQueued {
-                            self.record.challenge_hold = None;
-                            self.transition(scope, Phase::ClaimQueued, now)?;
-                        }
-                    }
+                    ClaimProgress::WaitingForChallengeWindow { .. } => {}
                     ClaimProgress::ReadyToFinalise { .. } => {
-                        self.record.challenge_hold = None;
                         self.transition(scope, Phase::ReadyToFinalise, now)?;
-                    }
-                    ClaimProgress::ChallengeHeld(hold) => {
-                        self.record.challenge_hold = Some(StoredHold::from_public(hold));
-                        self.transition(scope, Phase::ChallengeHeld, now)?;
-                    }
-                    ClaimProgress::ChallengeUpheldAwaitingCancellation { disposition } => {
-                        self.record.challenged_disposition_vault =
-                            Some(disposition_vault(disposition));
-                        self.transition(scope, Phase::CancellationReady, now)?;
                     }
                     ClaimProgress::PaidAwaitingPayoutVerification => {
                         if self.record.payout_transaction.is_none() {
@@ -1151,18 +978,16 @@ impl WithdrawalJourney {
                         self.transition(scope, Phase::PayoutConfirming, now)?;
                     }
                     ClaimProgress::Cancelled { disposition } => {
-                        self.record.challenged_disposition_vault =
-                            Some(disposition_vault(disposition));
-                        if self.record.cancellation_transaction.is_none() {
-                            if let Some(transaction) =
-                                runtime.lookup(self.record.cancellation_action_key)?
-                            {
-                                self.record.cancellation_transaction = Some(transaction.bytes());
-                            } else {
-                                return Err(WithdrawalJourneyError::EvidenceConflict);
-                            }
+                        let cancellation = boundary.verify_cancellation(&submitted)?;
+                        if cancellation.disposition != disposition
+                            || cancellation.debit_receipt_reference
+                                != self.debit_receipt_reference()?
+                        {
+                            return Err(WithdrawalJourneyError::EvidenceConflict);
                         }
-                        self.transition(scope, Phase::CancellationConfirming, now)?;
+                        self.record.cancellation =
+                            Some(StoredCancellation::from_public(&cancellation));
+                        self.transition(scope, Phase::Cancelled, now)?;
                     }
                 }
             }
@@ -1196,38 +1021,6 @@ impl WithdrawalJourney {
                         boundary.verify_payout(&self.submitted_claim(boundary)?, &report)?;
                     self.record.payout = Some(StoredPayout::from_public(&payout));
                     self.transition(scope, Phase::Paid, now)?;
-                }
-            }
-            Phase::CancellationReady => {
-                self.transition(scope, Phase::CancellationSubmitting, now)?;
-            }
-            Phase::CancellationSubmitting => {
-                let request = self.cancellation_request(scope, boundary)?;
-                match runtime.submit_or_resolve(&request) {
-                    Ok(PaxeerActionOutcome::Submitted(transaction)) => {
-                        self.record.cancellation_transaction = Some(transaction.bytes());
-                        self.transition(scope, Phase::CancellationConfirming, now)?;
-                    }
-                    Ok(PaxeerActionOutcome::Unknown)
-                    | Err(WithdrawalBoundaryError::Unavailable) => {
-                        self.transition(scope, Phase::CancellationStillChecking, now)?;
-                    }
-                    Err(error) => return Err(error.into()),
-                }
-            }
-            Phase::CancellationStillChecking => {
-                if let Some(transaction) = runtime.lookup(self.record.cancellation_action_key)? {
-                    self.record.cancellation_transaction = Some(transaction.bytes());
-                    self.transition(scope, Phase::CancellationConfirming, now)?;
-                }
-            }
-            Phase::CancellationConfirming => {
-                let transaction = self.cancellation_transaction()?;
-                if let Some(report) = final_report(boundary, transaction)? {
-                    let cancellation =
-                        boundary.verify_cancellation(&self.submitted_claim(boundary)?, &report)?;
-                    self.record.cancellation = Some(StoredCancellation::from_public(&cancellation));
-                    self.transition(scope, Phase::Cancelled, now)?;
                 }
             }
             Phase::Paid | Phase::Cancelled => {}
@@ -1274,20 +1067,6 @@ impl WithdrawalJourney {
                 available_at: self.claim_available_at()?,
                 observed_at: self.record.updated_at,
             },
-            Phase::ChallengeHeld => WithdrawalStage::ChallengeHeld(
-                self.record
-                    .challenge_hold
-                    .ok_or(WithdrawalJourneyError::Corrupt("challenge hold absent"))?
-                    .public()?,
-            ),
-            Phase::CancellationReady
-            | Phase::CancellationSubmitting
-            | Phase::CancellationStillChecking
-            | Phase::CancellationConfirming => {
-                WithdrawalStage::ChallengeUpheldAwaitingCancellation {
-                    disposition: self.cancelled_disposition()?,
-                }
-            }
             Phase::ReadyToFinalise | Phase::PayoutSubmitting => WithdrawalStage::ReadyToFinalise,
             Phase::PayoutStillChecking | Phase::PayoutConfirming => {
                 WithdrawalStage::VerifyingPayout
@@ -1440,13 +1219,34 @@ impl WithdrawalJourney {
         &self,
         boundary: &WithdrawalBoundary,
     ) -> Result<layerx_paxeer_client::WithdrawalClaim, WithdrawalJourneyError> {
-        let proof = self
+        let material = self
             .record
-            .proof
+            .material
             .as_ref()
-            .ok_or(WithdrawalJourneyError::Corrupt("checkpoint proof absent"))?
-            .public();
-        Ok(boundary.construct_claim(self.committed_debit()?, proof)?)
+            .ok_or(WithdrawalJourneyError::Corrupt(
+                "withdrawal material absent",
+            ))?
+            .public()?;
+        Ok(boundary.construct_claim(self.committed_debit()?, material)?)
+    }
+
+    /// The same claim, rebuilt for a withdrawal already on the custody ledger.
+    /// Its nullifier is reserved, consumed or cancelled by then, so the
+    /// admission gates of a new claim cannot apply; the custody state is proved
+    /// instead by the restore, progress, payout and cancellation checks.
+    fn restored_claim(
+        &self,
+        boundary: &WithdrawalBoundary,
+    ) -> Result<layerx_paxeer_client::WithdrawalClaim, WithdrawalJourneyError> {
+        let material = self
+            .record
+            .material
+            .as_ref()
+            .ok_or(WithdrawalJourneyError::Corrupt(
+                "withdrawal material absent",
+            ))?
+            .public()?;
+        Ok(boundary.restore_claim(self.committed_debit()?, material)?)
     }
 
     fn submitted_claim(
@@ -1456,7 +1256,7 @@ impl WithdrawalJourney {
         let transaction = self.claim_transaction()?;
         let report =
             final_report(boundary, transaction)?.ok_or(WithdrawalJourneyError::EvidencePending)?;
-        let submitted = boundary.restore_submission(self.claim(boundary)?, &report)?;
+        let submitted = boundary.restore_submission(self.restored_claim(boundary)?, &report)?;
         if self.record.claim_id != Some(submitted.claim_id())
             || self.record.claim_available_at != Some(submitted.available_at())
         {
@@ -1512,34 +1312,8 @@ impl WithdrawalJourney {
             },
             action_key: self.record.payout_action_key,
             action: PaxeerAction::FinalisePayout,
-            target: boundary.claims_contract(),
+            target: boundary.custody_precompile(),
             calldata: submitted.finalise_calldata(),
-        })
-    }
-
-    fn cancellation_request(
-        &self,
-        scope: &PrincipalScope<'_>,
-        boundary: &WithdrawalBoundary,
-    ) -> Result<WithdrawalTransactionRequest, WithdrawalJourneyError> {
-        let submitted = self.submitted_claim(boundary)?;
-        Ok(WithdrawalTransactionRequest {
-            signed_transaction: None,
-            identity: super::MovementExecutionIdentity {
-                principal: scope.principal().clone(),
-                tenant: scope.tenant().clone(),
-                account: layerx_paxeer_client::account_address_for_protocol(
-                    &self.owner()?,
-                    self.record.layerx_protocol_version,
-                )
-                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
-                wallet: EvmAddress::new(self.record.payout_address),
-                plan_id: self.record.idempotency_key,
-            },
-            action_key: self.record.cancellation_action_key,
-            action: PaxeerAction::CancelChallengedPayout,
-            target: boundary.claims_contract(),
-            calldata: submitted.cancellation_calldata(),
         })
     }
 
@@ -1550,21 +1324,6 @@ impl WithdrawalJourney {
             required_confirmations: self.record.required_confirmations,
         }
         .expectation()
-    }
-
-    fn cancelled_disposition(&self) -> Result<CancelledFundsDisposition, WithdrawalJourneyError> {
-        Ok(CancelledFundsDisposition {
-            paxeer: PaxeerFundsDisposition::RetainedInVault {
-                vault: EvmAddress::new(self.record.challenged_disposition_vault.ok_or(
-                    WithdrawalJourneyError::Corrupt("challenged vault disposition absent"),
-                )?),
-                asset_id: self.record.asset,
-                amount: self.record.amount,
-            },
-            layerx: ProtocolDebitDisposition::RemainsCommittedPendingProtocolRecovery {
-                debit_receipt_reference: self.debit_receipt_reference()?,
-            },
-        })
     }
 
     fn owner(&self) -> Result<AccountId, WithdrawalJourneyError> {
@@ -1603,15 +1362,6 @@ impl WithdrawalJourney {
             .payout_transaction
             .map(TransactionHash::new)
             .ok_or(WithdrawalJourneyError::Corrupt("payout transaction absent"))
-    }
-
-    fn cancellation_transaction(&self) -> Result<TransactionHash, WithdrawalJourneyError> {
-        self.record
-            .cancellation_transaction
-            .map(TransactionHash::new)
-            .ok_or(WithdrawalJourneyError::Corrupt(
-                "cancellation transaction absent",
-            ))
     }
 
     fn claim_available_at(&self) -> Result<u64, WithdrawalJourneyError> {
@@ -1721,8 +1471,7 @@ impl StoredCancellation {
             debit_receipt_reference: value.debit_receipt_reference,
             checkpoint_hash: value.checkpoint_hash,
             claim_id: value.claim_id,
-            transaction: value.cancellation_transaction.bytes(),
-            inclusion: StoredInclusion::from_public(value.cancellation_inclusion),
+            observed_head: value.observed_head,
             vault: vault.bytes(),
             asset: asset_id,
             amount,
@@ -1734,8 +1483,7 @@ impl StoredCancellation {
             debit_receipt_reference: self.debit_receipt_reference,
             checkpoint_hash: self.checkpoint_hash,
             claim_id: self.claim_id,
-            cancellation_transaction: TransactionHash::new(self.transaction),
-            cancellation_inclusion: self.inclusion.public(),
+            observed_head: self.observed_head,
             disposition: CancelledFundsDisposition {
                 paxeer: PaxeerFundsDisposition::RetainedInVault {
                     vault: EvmAddress::new(self.vault),
@@ -1788,11 +1536,6 @@ fn final_report(
     }
 }
 
-fn disposition_vault(disposition: CancelledFundsDisposition) -> [u8; 20] {
-    let PaxeerFundsDisposition::RetainedInVault { vault, .. } = disposition.paxeer;
-    vault.bytes()
-}
-
 fn validate_plan(plan: &WithdrawalPlan) -> Result<(), WithdrawalJourneyError> {
     if !matches!(plan.layerx_protocol_version, 2 | 3)
         || plan.idempotency_key == [0; 32]
@@ -1839,7 +1582,6 @@ fn validate_record(record: &Record) -> Result<(), WithdrawalJourneyError> {
         || record.debit_action_key == [0; 32]
         || record.claim_action_key == [0; 32]
         || record.payout_action_key == [0; 32]
-        || record.cancellation_action_key == [0; 32]
         || record.network_id == 0
         || record.request_anchor == [0; 32]
         || record.fee_limit > u128::from(u64::MAX)
@@ -1871,46 +1613,31 @@ fn validate_record(record: &Record) -> Result<(), WithdrawalJourneyError> {
                 | Phase::ClaimStillChecking
                 | Phase::ClaimConfirming
                 | Phase::ClaimQueued
-                | Phase::ChallengeHeld
                 | Phase::ReadyToFinalise
                 | Phase::PayoutSubmitting
                 | Phase::PayoutStillChecking
                 | Phase::PayoutConfirming
-                | Phase::CancellationReady
-                | Phase::CancellationSubmitting
-                | Phase::CancellationStillChecking
-                | Phase::CancellationConfirming
                 | Phase::Paid
                 | Phase::Cancelled
-        ) && record.proof.is_none()
+        ) && record.material.is_none()
         || matches!(
             record.phase,
             Phase::ClaimConfirming
                 | Phase::ClaimQueued
-                | Phase::ChallengeHeld
                 | Phase::ReadyToFinalise
                 | Phase::PayoutSubmitting
                 | Phase::PayoutStillChecking
                 | Phase::PayoutConfirming
-                | Phase::CancellationReady
-                | Phase::CancellationSubmitting
-                | Phase::CancellationStillChecking
-                | Phase::CancellationConfirming
                 | Phase::Paid
                 | Phase::Cancelled
         ) && record.claim_transaction.is_none()
         || matches!(
             record.phase,
             Phase::ClaimQueued
-                | Phase::ChallengeHeld
                 | Phase::ReadyToFinalise
                 | Phase::PayoutSubmitting
                 | Phase::PayoutStillChecking
                 | Phase::PayoutConfirming
-                | Phase::CancellationReady
-                | Phase::CancellationSubmitting
-                | Phase::CancellationStillChecking
-                | Phase::CancellationConfirming
                 | Phase::Paid
                 | Phase::Cancelled
         ) && (record.claim_id.is_none() || record.claim_available_at.is_none())
@@ -2139,52 +1866,65 @@ impl From<layerx_paxeer_client::TrackerConfigError> for WithdrawalJourneyError {
 }
 
 #[cfg(test)]
-mod native_persistence_tests {
+mod material_persistence_tests {
     use super::*;
-    use layerx_paxeer_client::state_proof::{NativeEvidence, StateWitness};
+
+    const RECEIPT: &[u8] =
+        include_bytes!("../../../../../tests/fixtures/asset/bound-native-withdrawal/receipt");
+    const PROOF: &[u8] =
+        include_bytes!("../../../../../tests/fixtures/asset/bound-native-withdrawal/receipt.proof");
+    const HEADER: &[u8] =
+        include_bytes!("../../../../../tests/fixtures/asset/bound-native-withdrawal/header");
+    const HEADER_SIGNATURE: &[u8] = include_bytes!(
+        "../../../../../tests/fixtures/asset/bound-native-withdrawal/header.signature"
+    );
+
+    fn fixture_material() -> Result<WithdrawalMaterial, Box<dyn std::error::Error>> {
+        Ok(WithdrawalMaterial {
+            receipt: RECEIPT.to_vec(),
+            proof: PROOF.to_vec(),
+            header: HEADER.to_vec(),
+            header_signature: HEADER_SIGNATURE.try_into()?,
+        }
+        .validated()
+        .map_err(|error| format!("real withdrawal material: {error:?}"))?)
+    }
 
     #[test]
-    fn stored_withdrawal_preserves_request_anchor_and_inclusion_checkpoint(
+    fn stored_material_round_trips_the_real_node_withdrawal_evidence(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let document: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../layerx-paxeer-client/tests/vectors/native-withdrawal-proof.json"
-        ))?;
-        let encoded = document["proof"]
-            .as_str()
-            .ok_or("proof")?
-            .strip_prefix("0x")
-            .ok_or("hex")?;
-        let bytes = (0..encoded.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&encoded[i..i + 2], 16))
-            .collect::<Result<Vec<_>, _>>()?;
-        let witness = StateWitness::decode(&bytes)?;
-        let anchor = witness.value[150..182].try_into()?;
-        let proof = CheckpointProof {
-            native: Some(NativeEvidence {
-                request_anchor: anchor,
-                inclusion_checkpoint: [4; 32],
-                network_id: 7,
-                witness: bytes,
-                recipient_signature: Vec::new(),
-            }),
-            checkpoint_hash: [4; 32],
-            state_root: witness.root()?,
-            epoch: 1,
-            batch_number: 1,
-            data_availability_root: [5; 32],
-            leaf_index: 0,
-            siblings: Vec::new(),
-            attestations: Vec::new(),
-        };
-        let stored = StoredProof::from_public(&proof);
+        let material = fixture_material()?;
+        let stored = StoredMaterial::from_public(&material)?;
         let bytes = serde_json::to_vec(&stored)?;
-        let restored: StoredProof = serde_json::from_slice(&bytes)?;
-        assert_eq!(restored.public(), proof);
-        let restored = restored.public();
-        let native = restored.native.ok_or("native")?;
-        assert_ne!(native.request_anchor, native.inclusion_checkpoint);
-        native.decoded(restored.state_root)?;
+        let restored: StoredMaterial = serde_json::from_slice(&bytes)?;
+        let restored = restored.public()?;
+        assert_eq!(restored, material);
+        assert_eq!(
+            restored.finalise_calldata(),
+            material.finalise_calldata(),
+            "restored material must finalise exactly the submitted claim"
+        );
+        assert_ne!(restored.request_calldata(), restored.finalise_calldata());
+        Ok(())
+    }
+
+    #[test]
+    fn stored_material_refuses_evidence_that_was_altered_at_rest(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut stored = StoredMaterial::from_public(&fixture_material()?)?;
+        let last = stored
+            .wire
+            .len()
+            .checked_sub(1)
+            .ok_or("encoded material is empty")?;
+        stored.wire[last] ^= 0x01;
+        let altered = stored.public()?;
+        assert_ne!(&altered.header_signature[..], HEADER_SIGNATURE);
+        stored.wire.truncate(last);
+        assert!(matches!(
+            stored.public(),
+            Err(WithdrawalJourneyError::Corrupt(_))
+        ));
         Ok(())
     }
 }

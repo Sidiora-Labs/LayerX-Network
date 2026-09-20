@@ -122,7 +122,7 @@ pub(crate) fn publish_private(path: &Path, bytes: &[u8]) -> Result<bool, Error> 
 
 impl Journal {
     pub fn open(root: &Path, protocol: u16) -> Result<Self, Error> {
-        NativeMovementCodec::for_protocol(protocol).map_err(|_| Error::Configuration)?;
+        crate::config::validated_protocol(protocol)?;
         if !root.is_absolute() {
             return Err(Error::Configuration);
         }
@@ -209,8 +209,7 @@ impl Journal {
         if !self.healthy {
             return Err(Error::Integrity);
         }
-        let codec =
-            NativeMovementCodec::for_protocol(self.protocol).map_err(|_| Error::Integrity)?;
+        let codec = NativeMovementCodec::new();
         for record in self.records.values() {
             codec
                 .decode_request(&record.request)
@@ -231,8 +230,7 @@ impl Journal {
         if !self.healthy {
             return Err(Error::Integrity);
         }
-        let codec =
-            NativeMovementCodec::for_protocol(self.protocol).map_err(|_| Error::Integrity)?;
+        let codec = NativeMovementCodec::new();
         let mut result = None;
         for record in self.records.values() {
             let Some(response) = &record.response else {
@@ -281,8 +279,7 @@ impl Journal {
         if !self.healthy {
             return Err(Error::Integrity);
         }
-        let codec =
-            NativeMovementCodec::for_protocol(self.protocol).map_err(|_| Error::Integrity)?;
+        let codec = NativeMovementCodec::new();
         let mut found = None;
         for record in self.records.values() {
             let request = codec
@@ -304,9 +301,7 @@ impl Journal {
         if !self.healthy {
             return false;
         }
-        let Ok(codec) = NativeMovementCodec::for_protocol(self.protocol) else {
-            return false;
-        };
+        let codec = NativeMovementCodec::new();
         self.records.values().any(|record| {
             matches!(codec.decode_request(&record.request), Ok(Request::BindWithdrawalDebit { debit, .. }) if debit == *expected)
                 && record.response.as_ref().is_some_and(|bytes| matches!(codec.decode_response(bytes), Ok(Response::Ready)))
@@ -322,8 +317,7 @@ impl Journal {
         if !self.healthy {
             return Err(Error::Integrity);
         }
-        let codec =
-            NativeMovementCodec::for_protocol(self.protocol).map_err(|_| Error::Integrity)?;
+        let codec = NativeMovementCodec::new();
         for record in self.records.values() {
             let Some(bytes) = &record.response else {
                 continue;
@@ -400,7 +394,8 @@ fn validate_response(request: &[u8], bytes: &[u8], protocol: u16) -> Result<(), 
     if bytes.len() > MAX_FRAME {
         return Err(Error::Capacity);
     }
-    let codec = NativeMovementCodec::for_protocol(protocol).map_err(|_| Error::Integrity)?;
+    crate::config::validated_protocol(protocol).map_err(|_| Error::Integrity)?;
+    let codec = NativeMovementCodec::new();
     let request = codec
         .decode_request(request)
         .map_err(|_| Error::Integrity)?;
@@ -433,7 +428,10 @@ fn validate_response(request: &[u8], bytes: &[u8], protocol: u16) -> Result<(), 
                 Request::BindWithdrawalDebit { .. } | Request::Readiness,
                 Response::Ready
             )
-            | (Request::CheckpointProof(_), Response::CheckpointProof(_))
+            | (
+                Request::WithdrawalMaterial(_),
+                Response::WithdrawalMaterial(_)
+            )
             | (Request::SubmitWithdrawal(_), Response::Withdrawal(_))
             | (Request::LookupWithdrawal(_), Response::WithdrawalLookup(_))
             | (Request::SubmitExit(_), Response::Exit(_))

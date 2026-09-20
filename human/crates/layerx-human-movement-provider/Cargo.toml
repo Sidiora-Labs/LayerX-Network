@@ -9,6 +9,7 @@ license.workspace = true
 layerx-human-service = { path = "../layerx-human-service" }
 layerx-paxeer-client.workspace = true
 layerx-types.workspace = true
+layerx-wire.workspace = true
 layerx-agent-api.workspace = true
 layerx-client.workspace = true
 rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }

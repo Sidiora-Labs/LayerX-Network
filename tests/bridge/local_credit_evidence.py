@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
+from comet_credit import CUSTODY_ADDRESS, module_identity
 from custody_credit import Rpc, attest, create_profile, read_key, require, sha, unhex, write_new
 from deploy_local_custody import ROOT, command, disposable_rpc
 
@@ -53,6 +54,11 @@ def existing_evidence(args, directory):
     require(rpcs[0].identity != rpcs[1].identity, 'distinct trusted RPC origins required')
     custody = json.loads(Path(args.custody).read_text())
     require(unhex(custody['asset'], 32) == unhex(args.asset, 32), 'configured asset binding')
+    # Paxeer custody is the native layerxcustody module behind the precompile at 0x…1013: the
+    # custody record must name it and the module identity, never a deployed vault runtime.
+    require(unhex(custody['vault'], 20) == unhex(CUSTODY_ADDRESS, 20)
+            and unhex(custody['runtime_sha256'], 32) == module_identity(),
+            'cluster custody must name the native custody precompile')
     public = unhex(args.beneficiary_key, 32)
     did = 'did:layerx:' + public.hex()
     name = ('agent:' + did + ':main').encode()
@@ -74,14 +80,14 @@ def existing_evidence(args, directory):
                        chain_id=identity['chain_id'], network_id=args.network_id,
                        vault=custody['vault'], runtime_sha256=custody['runtime_sha256'], asset=args.asset,
                        confirmations=args.confirmations, attestor_key=args.attestor_key, output=profile,
-                       vault_artifact=args.vault_artifact, history_state=args.history_state))
+                       history_state=args.history_state))
         encoded = Path(profile).read_bytes()
         require(encoded[169:201] == unhex(identity['genesis_sha256'], 32), 'profile disposable genesis binding')
         attest(SimpleNamespace(rpc=args.rpc, ca_bundle=args.ca_bundle,
                disposable_identity=args.disposable_identity, profile=profile, network_id=args.network_id,
                transaction=custody['transaction'], beneficiary=beneficiary, beneficiary_key=args.beneficiary_key,
                attestor_key=args.attestor_key, expected_amount=int(custody['amount']),
-               vault_artifact=args.vault_artifact, history_state=args.history_state,
+               history_state=args.history_state,
                output=str(directory / 'custody.credit')))
     finally:
         if previous_ca is None:
@@ -111,7 +117,6 @@ def main():
     parser.add_argument('--beneficiary-key')
     parser.add_argument('--network-id', type=int)
     parser.add_argument('--confirmations', type=int)
-    parser.add_argument('--vault-artifact')
     parser.add_argument('--history-state')
     args = parser.parse_args()
     directory = Path(args.output).resolve()
@@ -121,7 +126,7 @@ def main():
         return
     require(not any((args.ca_bundle, args.disposable_identity, args.custody, args.asset,
                      args.attestor_key, args.attestor_public_key, args.beneficiary_key,
-                     args.network_id, args.confirmations, args.vault_artifact, args.history_state)), 'cluster inputs require explicit RPC origins')
+                     args.network_id, args.confirmations, args.history_state)), 'cluster inputs require explicit RPC origins')
     actor = Ed25519PrivateKey.generate()
     public = actor.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     did = 'did:layerx:' + public.hex()

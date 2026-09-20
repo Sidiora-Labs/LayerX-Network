@@ -26,10 +26,11 @@ pub(crate) struct Config {
     pub custody_profile: Option<[u8; 207]>,
     pub tracker: TrackerConfig,
     pub proof: DepositProofConfig,
-    pub vault: EvmAddress,
+    /// Address of the `LayerX` deposit-root checkpoint registry. Custody itself
+    /// is the `0x…1013` precompile and needs no configured address, but the
+    /// deposit-root publication a deposit proof is drawn from still lives in
+    /// this registry.
     pub checkpoint_registry: EvmAddress,
-    pub claims_contract: EvmAddress,
-    pub exit_contract: EvmAddress,
     pub executor: Option<Arc<RemoteKmsProvider>>,
     pub checkpoint_interval_seconds: u64,
     pub paxeer_block_seconds: u64,
@@ -95,10 +96,7 @@ impl Config {
             } else {
                 None
             },
-            vault: EvmAddress::new(hex(&required("PAXEER_VAULT")?)?),
             checkpoint_registry: EvmAddress::new(hex(&required("PAXEER_CHECKPOINT_REGISTRY")?)?),
-            claims_contract: EvmAddress::new(hex(&required("PAXEER_CLAIMS_CONTRACT")?)?),
-            exit_contract: EvmAddress::new(hex(&required("PAXEER_EXIT_CONTRACT")?)?),
             executor: if mode == "movement" {
                 Some(Arc::new(executor(deadline)?))
             } else {
@@ -219,6 +217,15 @@ pub(crate) fn hex<const N: usize>(value: &str) -> Result<[u8; N], Error> {
             u8::from_str_radix(&digits[i * 2..i * 2 + 2], 16).map_err(|_| Error::Configuration)?;
     }
     Ok(out)
+}
+/// The `LayerX` protocol versions this provider serves. The movement codec no
+/// longer carries a protocol version of its own, so the range every codec
+/// construction used to assert is asserted here instead.
+pub(crate) fn validated_protocol(protocol: u16) -> Result<u16, Error> {
+    if !matches!(protocol, 2 | 3) {
+        return Err(Error::Configuration);
+    }
+    Ok(protocol)
 }
 pub(crate) fn hex_string(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";

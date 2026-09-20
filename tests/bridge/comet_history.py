@@ -60,7 +60,6 @@ if __name__ == '__main__':
     parser.add_argument('--rpc', action='append', required=True)
     parser.add_argument('--ca-bundle', required=True)
     parser.add_argument('--disposable-identity', required=True)
-    parser.add_argument('--vault-artifact', required=True)
     parser.add_argument('--history-state', required=True)
     parser.add_argument('--evidence', required=True)
     parser.add_argument('--profile', required=True)

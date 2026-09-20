@@ -11,6 +11,7 @@ layerx-agent-api.workspace = true
 layerx-types.workspace = true
 layerx-crypto.workspace = true
 layerx-proof.workspace = true
+layerx-wire.workspace = true
 layerx-client.workspace = true
 layerx-sdk.workspace = true
 layerx-intents = { path = "../layerx-intents" }

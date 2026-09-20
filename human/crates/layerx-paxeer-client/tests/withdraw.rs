@@ -1,404 +1,300 @@
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::{Mutex, OnceLock};
+//! The Paxeer withdrawal boundary against the native custody precompile.
+//!
+//! Every test drives the real [`WithdrawalBoundary`] over real HTTP against an
+//! in-process JSON-RPC server that answers the custody precompile (`0x…1013`)
+//! and anchor precompile (`0x…1014`) views the boundary reads. The withdrawal
+//! evidence is the real `bound-native-withdrawal` fixture, so the receipt
+//! signature, the Merkle path under the sequencer-signed header and the
+//! withdrawal effect body all verify locally for real.
+
+use std::collections::HashMap;
+use std::io::{Read as _, Write as _};
+use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use ed25519_dalek::{Signer as _, SigningKey};
-use layerx_intents::canonical::receipt_digest;
-use layerx_intents::canonical::PROTOCOL_VERSION;
-use layerx_paxeer_client::{
-    raw_call, CancelledFundsDisposition, ChallengeKind, CheckpointProof, ClaimProgress,
-    CommittedWithdrawalDebit, DebitExpectation, DebitFault, EndpointConfig, EndpointTransport,
-    ExecutionOutcome, FinalityReport, FinalityStage, Json, PaxeerFundsDisposition, PayoutEvidence,
-    ProtocolDebitDisposition, SubmittedWithdrawalClaim, TransactionHash, TransactionInclusion,
-    WithdrawalAttestation, WithdrawalBoundary, WithdrawalConfig, WithdrawalError,
+use layerx_paxeer_client::custody::{
+    exit_eligible_calldata, get_asset_calldata, get_claim_calldata, native_asset_id_calldata,
+    nullifier_status_calldata, withdrawal_claim_id, withdrawal_nullifier, CustodyAsset,
+    CustodyClaim, CLAIM_FINALISED_TOPIC, CLAIM_QUEUED_TOPIC, CUSTODY_RELEASE_TOPIC,
 };
-use layerx_proof::receipt::{AuthorizedBatch, ReceiptCheck, VerificationFailure};
+use layerx_paxeer_client::{
+    parse_json, CancelledFundsDisposition, ClaimProgress, ClaimRefusal, CommittedWithdrawalDebit,
+    DebitExpectation, EndpointConfig, EndpointTransport, FinalityReport, FinalityStage,
+    FinalityTracker, Json, PaxeerFundsDisposition, ProtocolDebitDisposition, TransactionHash,
+    WithdrawalBoundary, WithdrawalClaim, WithdrawalConfig, WithdrawalError, WithdrawalMaterial,
+    ANCHOR_PRECOMPILE, CUSTODY_PRECOMPILE, WEI_PER_BASE_UNIT,
+};
+use layerx_proof::receipt::AuthorizedBatch;
 use layerx_types::intent::EvmAddress;
 use sha2::{Digest as _, Sha256};
 
-const FUNDED: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
-const FUNDED_PRIVATE_KEY: &str =
-    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-const CHALLENGER: &str = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
-const RECIPIENT: &str = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
+type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-const NETWORK_ID: u32 = 17;
-const USDL_TOKEN: EvmAddress = EvmAddress::new([
-    0x85, 0xfc, 0xd1, 0x37, 0x35, 0xf4, 0x30, 0x98, 0x33, 0xa5, 0x03, 0xee, 0x80, 0x4e, 0xa3, 0x23,
-    0x95, 0x85, 0x14, 0x79,
-]);
-const ASSET: [u8; 32] = [
-    0x70, 0xf5, 0xb6, 0x3a, 0x98, 0x55, 0xdd, 0x2b, 0xe2, 0xba, 0x94, 0x1c, 0x04, 0xa3, 0x3a, 0x1f,
-    0x0e, 0xeb, 0x97, 0x50, 0xcc, 0xeb, 0x32, 0x4c, 0x22, 0x37, 0x64, 0xf0, 0xfd, 0xc5, 0x01, 0xd8,
-];
-const AMOUNT: u128 = 25;
-const VAULT_BALANCE: u128 = 100;
-const BOND: u128 = 1;
-const GENESIS_MANIFEST: [u8; 32] = [0x12; 32];
-const GENESIS_CANONICAL_STATE: [u8; 32] = [0x11; 32];
-const GENESIS: [u8; 32] = [0x10; 32];
-const GUARANTOR_ID: [u8; 32] = quantity_const(1);
-const WITHDRAW_RECEIPT_HEX: &str = "0x0001520100010000002031313131313131313131313131313131313131313131313131313131313131310000000000000001000000204141414141414141414141414141414141414141414141414141414141414141000000204242424242424242424242424242424242424242424242424242424242424242000000204444444444444444444444444444444444444444444444444444444444444444000000000000000000000000000000000000000000000001000000204343434343434343434343434343434343434343434343434343434343434343000800000002000000010100000020424242424242424242424242424242424242424242424242424242424242424200000000000000000000000000000019000000203333333333333333333333333333333333333333333333333333333333333333000000000000000000000000000000640000000000000000000000000000004b0000000000000001000000203434343434343434343434343434343434343434343434343434343434343434000000000000000000000000000000000000000000000000000000000000001900000020454545454545454545454545454545454545454545454545454545454545454500000020464646464646464646464646464646464646464646464646464646464646464600000020474747474747474747474747474747474747474747474747474747474747474700000000000003e80100000040a3c5df8259d413eaddaab76e7c1efd2a5ffc8a7beefc7b28ffca71e44d830c79e9763f0c8f4dfec8ecbf7e6ce61a8a5de40b1d6c0ff19c313da85982df118f06";
+const RECEIPT: &[u8] =
+    include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/receipt");
+const PROOF: &[u8] =
+    include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/receipt.proof");
+const HEADER: &[u8] =
+    include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/header");
+const HEADER_SIGNATURE: &[u8; 64] =
+    include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/header.signature");
+const SEQUENCER_PUBLIC: [u8; 32] =
+    *include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/sequencer.public");
+const MAINTENANCE_RECEIPT: &[u8] =
+    include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/maintenance.receipt");
 
-const REGISTER_ASSET: [u8; 4] = [0xea, 0x24, 0x92, 0x88];
-const SET_SETTLEMENT_MODULE: [u8; 4] = [0x0f, 0x2f, 0x5f, 0x64];
-const SET_CONSUMER: [u8; 4] = [0x02, 0xc9, 0xef, 0x45];
-const SET_SLASHING_AUTHORITY: [u8; 4] = [0xef, 0x45, 0x5c, 0x4c];
-const MINT: [u8; 4] = [0x40, 0xc1, 0x0f, 0x19];
-const APPROVE: [u8; 4] = [0x09, 0x5e, 0xa7, 0xb3];
-const DEPOSIT: [u8; 4] = [0x8a, 0x9e, 0x53, 0x2c];
-const ACTIVATE_GUARANTOR: [u8; 4] = [0x23, 0x7d, 0xd0, 0x4f];
-const DEPOSIT_BOND: [u8; 4] = [0x09, 0xe0, 0x86, 0x44];
-const SET_GUARANTOR_BOND: [u8; 4] = [0x05, 0xc3, 0xd9, 0xea];
-const REGISTER_CHECKPOINT: [u8; 4] = [0xc7, 0x2a, 0x88, 0x43];
-const RAISE_CHALLENGE: [u8; 4] = [0x0c, 0xfc, 0xd9, 0x2c];
-const RESOLVE_CHALLENGE: [u8; 4] = [0x7d, 0x89, 0x12, 0x2d];
-const BALANCE_OF: [u8; 4] = [0x70, 0xa0, 0x82, 0x31];
+const CHAIN_ID: u64 = 31_337;
+const REQUIRED_CONFIRMATIONS: u64 = 2;
+const SUBMISSION_BLOCK: u64 = 41;
+const PAYOUT_BLOCK: u64 = 44;
+const AVAILABLE_AT: u64 = 1_893_456_000;
+const FINALIZED_STATE_ROOT: [u8; 4] = [0x0f, 0x60, 0x7f, 0xe4];
+const FINALIZED_RECEIPT_ROOT: [u8; 4] = [0xe0, 0xa3, 0xcc, 0xaa];
 
-static NEXT_PORT: AtomicU16 = AtomicU16::new(0);
-static BYTECODE: OnceLock<Mutex<BTreeMap<&'static str, String>>> = OnceLock::new();
+// ---------------------------------------------------------------------------
+// In-process JSON-RPC server
+// ---------------------------------------------------------------------------
 
-struct Anvil {
-    child: Child,
+#[derive(Clone, Debug, Default)]
+struct Chain {
+    head: u64,
+    timestamp: u64,
+    calls: HashMap<(String, String), String>,
+    receipts: HashMap<String, Json>,
+    transactions: HashMap<String, Json>,
+    balances: HashMap<String, String>,
+}
+
+impl Chain {
+    fn view(&mut self, target: EvmAddress, calldata: &[u8], answer: &[u8]) {
+        self.calls
+            .insert((hex(&target.bytes()), hex(calldata)), hex(answer));
+    }
+
+    fn answer(&self, method: &str, params: &[Json]) -> Json {
+        match method {
+            "eth_chainId" => text(&format!("0x{CHAIN_ID:x}")),
+            "eth_blockNumber" => text(&format!("0x{:x}", self.head)),
+            "eth_getBlockByNumber" => match params.first().and_then(Json::as_text) {
+                Some("latest") => block(self.head, self.timestamp),
+                Some(tag) => match quantity(tag) {
+                    Some(number) if number <= self.head => block(number, self.timestamp),
+                    _ => Json::Null,
+                },
+                None => Json::Null,
+            },
+            "eth_getTransactionReceipt" => params
+                .first()
+                .and_then(Json::as_text)
+                .and_then(|hash| self.receipts.get(hash))
+                .cloned()
+                .unwrap_or(Json::Null),
+            "eth_getTransactionByHash" => params
+                .first()
+                .and_then(Json::as_text)
+                .and_then(|hash| self.transactions.get(hash))
+                .cloned()
+                .unwrap_or(Json::Null),
+            "eth_getBalance" => params
+                .first()
+                .and_then(Json::as_text)
+                .and_then(|address| self.balances.get(address))
+                .map_or_else(|| text("0x0"), |value| text(value)),
+            "eth_call" => {
+                let request = params.first();
+                let to = request
+                    .and_then(|value| value.member("to"))
+                    .and_then(Json::as_text)
+                    .unwrap_or_default()
+                    .to_owned();
+                let data = request
+                    .and_then(|value| value.member("data"))
+                    .and_then(Json::as_text)
+                    .unwrap_or_default()
+                    .to_owned();
+                self.calls
+                    .get(&(to, data))
+                    .map_or_else(|| text("0x"), |value| text(value))
+            }
+            _ => Json::Null,
+        }
+    }
+}
+
+struct Node {
+    chain: Arc<Mutex<Chain>>,
     endpoint: EndpointConfig,
 }
 
-impl Anvil {
-    fn launch() -> Self {
-        for _ in 0..8 {
-            let offset = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
-            let lane = u16::try_from(std::process::id() % 7_000).unwrap_or(0);
-            let port = 24_000_u16
-                .saturating_add(lane)
-                .saturating_add(offset.saturating_mul(11));
-            let endpoint = EndpointConfig {
-                url: format!("http://127.0.0.1:{port}"),
-                request_timeout: Duration::from_secs(10),
-                transport: EndpointTransport::LocalEmulator,
-                expected_chain_id: 31_337,
-            };
-            let child = Command::new(anvil_binary())
-                .arg("--port")
-                .arg(port.to_string())
-                .arg("--chain-id")
-                .arg("31337")
-                .arg("--gas-limit")
-                .arg("100000000")
-                .arg("--silent")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .unwrap_or_else(|error| panic!("spawn anvil: {error}"));
-            let mut anvil = Self { child, endpoint };
-            if anvil.ready() {
-                return anvil;
+impl Node {
+    fn launch(chain: Chain) -> Result<Self, Box<dyn std::error::Error>> {
+        let shared = Arc::new(Mutex::new(chain));
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let served = Arc::clone(&shared);
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let Some(body) = read_request(&mut stream) else {
+                    continue;
+                };
+                let Ok(request) = parse_json(&body) else {
+                    continue;
+                };
+                let method = request
+                    .member("method")
+                    .and_then(Json::as_text)
+                    .unwrap_or_default()
+                    .to_owned();
+                let params = match request.member("params") {
+                    Some(Json::Array(items)) => items.clone(),
+                    _ => Vec::new(),
+                };
+                let result = match served.lock() {
+                    Ok(chain) => chain.answer(&method, &params),
+                    Err(_) => Json::Null,
+                };
+                let payload = Json::Object(vec![
+                    member("jsonrpc", text("2.0")),
+                    member("id", Json::Number("1".to_owned())),
+                    member("result", result),
+                ])
+                .render();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                    payload.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
             }
-            anvil.halt();
-        }
-        panic!("no free port for anvil");
+        });
+        Ok(Self {
+            chain: shared,
+            endpoint: endpoint(&format!("http://{address}")),
+        })
     }
 
-    fn ready(&self) -> bool {
-        for _ in 0..200 {
-            if raw_call(&self.endpoint, "eth_blockNumber", &[]).is_ok() {
-                return true;
-            }
-            thread::sleep(Duration::from_millis(25));
-        }
-        false
+    fn boundary(&self) -> Result<WithdrawalBoundary, Box<dyn std::error::Error>> {
+        WithdrawalBoundary::new(configuration(self.endpoint.clone()))
+            .map_err(|error| format!("{error:?}").into())
     }
 
-    fn call(&self, method: &str, params: &[Json]) -> Json {
-        raw_call(&self.endpoint, method, params)
-            .unwrap_or_else(|failure| panic!("{method}: {failure:?}"))
+    fn edit(&self, change: impl FnOnce(&mut Chain)) -> Result<(), Box<dyn std::error::Error>> {
+        let mut chain = self.chain.lock().map_err(|_| "chain lock poisoned")?;
+        change(&mut chain);
+        Ok(())
     }
 
-    fn send(
+    fn report(
         &self,
-        from: &str,
-        to: Option<EvmAddress>,
-        data: &[u8],
-        value: u128,
-    ) -> TransactionHash {
-        let mut fields = vec![
-            text_member("from", from),
-            text_member("data", &bytes_hex(data)),
-            text_member("gas", "0x3938700"),
-        ];
-        if let Some(address) = to {
-            fields.push(text_member("to", &address_hex(address)));
+        boundary: &WithdrawalBoundary,
+        transaction: TransactionHash,
+    ) -> Result<FinalityReport, Box<dyn std::error::Error>> {
+        let mut tracker: FinalityTracker = boundary
+            .track(transaction)
+            .map_err(|error| format!("{error:?}"))?;
+        let report = tracker.poll();
+        match report.stage() {
+            FinalityStage::Final { .. } => Ok(report),
+            stage => Err(format!("expected a final stage, observed {stage:?}").into()),
         }
-        if value != 0 {
-            fields.push(text_member("value", &format!("0x{value:x}")));
+    }
+}
+
+fn endpoint(url: &str) -> EndpointConfig {
+    EndpointConfig {
+        url: url.to_owned(),
+        request_timeout: Duration::from_secs(5),
+        transport: EndpointTransport::LocalEmulator,
+        expected_chain_id: CHAIN_ID,
+    }
+}
+
+fn configuration(endpoint: EndpointConfig) -> WithdrawalConfig {
+    WithdrawalConfig {
+        endpoints: vec![endpoint],
+        minimum_endpoint_agreement: 1,
+        required_confirmations: REQUIRED_CONFIRMATIONS,
+        poll_cadence: Duration::from_millis(10),
+        delayed_after_polls: 8,
+    }
+}
+
+fn read_request(stream: &mut TcpStream) -> Option<String> {
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 4_096];
+    loop {
+        let read = stream.read(&mut chunk).ok()?;
+        if read == 0 {
+            return None;
         }
-        let result = self.call("eth_sendTransaction", &[Json::Object(fields)]);
-        let hash = result
-            .as_text()
-            .unwrap_or_else(|| panic!("eth_sendTransaction: expected hash"));
-        TransactionHash::from_hex(hash)
-            .unwrap_or_else(|error| panic!("transaction hash: {error:?}"))
-    }
-
-    fn deploy(&self, contract: &'static str, arguments: &[[u8; 32]]) -> EvmAddress {
-        let mut creation = hex_bytes(&contract_bytecode(contract));
-        for argument in arguments {
-            creation.extend_from_slice(argument);
+        buffer.extend_from_slice(chunk.get(..read)?);
+        let Some(position) = buffer
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|position| position.saturating_add(4))
+        else {
+            continue;
+        };
+        let headers = String::from_utf8_lossy(buffer.get(..position)?).to_ascii_lowercase();
+        let length: usize = headers
+            .split("content-length:")
+            .nth(1)
+            .and_then(|rest| rest.split("\r\n").next())
+            .and_then(|value| value.trim().parse().ok())?;
+        let end = position.checked_add(length)?;
+        if buffer.len() >= end {
+            return String::from_utf8(buffer.get(position..end)?.to_vec()).ok();
         }
-        let transaction = self.send(FUNDED, None, &creation, 0);
-        let receipt = wait_receipt(self, transaction);
-        assert_eq!(
-            receipt.execution,
-            ExecutionOutcome::Succeeded,
-            "{contract} deployment reverted"
-        );
-        receipt
-            .deployed_contract
-            .unwrap_or_else(|| panic!("{contract}: no deployed address"))
-    }
-
-    fn install_code(&self, source: EvmAddress, target: EvmAddress) {
-        let code = self.call(
-            "eth_getCode",
-            &[
-                Json::Text(address_hex(source)),
-                Json::Text("latest".to_owned()),
-            ],
-        );
-        let code = code
-            .as_text()
-            .unwrap_or_else(|| panic!("eth_getCode: expected text"));
-        let _ = self.call(
-            "anvil_setCode",
-            &[Json::Text(address_hex(target)), Json::Text(code.to_owned())],
-        );
-    }
-
-    fn send_checked(
-        &self,
-        from: &str,
-        to: EvmAddress,
-        data: &[u8],
-        value: u128,
-    ) -> TransactionHash {
-        let transaction = self.send(from, Some(to), data, value);
-        let receipt = wait_receipt(self, transaction);
-        assert_eq!(
-            receipt.execution,
-            ExecutionOutcome::Succeeded,
-            "transaction to {} with selector {} reverted",
-            address_hex(to),
-            bytes_hex(data.get(..4).unwrap_or(data))
-        );
-        transaction
-    }
-
-    fn mine(&self) {
-        self.call("evm_mine", &[]);
-    }
-
-    fn advance(&self, seconds: u64) {
-        self.call("evm_increaseTime", &[Json::Number(seconds.to_string())]);
-        self.mine();
-    }
-
-    fn latest_timestamp(&self) -> u64 {
-        let block = self.call(
-            "eth_getBlockByNumber",
-            &[Json::Text("latest".to_owned()), Json::Bool(false)],
-        );
-        let text = block
-            .member("timestamp")
-            .and_then(Json::as_text)
-            .unwrap_or_else(|| panic!("latest timestamp absent"));
-        u64::from_str_radix(text.trim_start_matches("0x"), 16)
-            .unwrap_or_else(|error| panic!("latest timestamp: {error}"))
-    }
-
-    fn token_balance(&self, token: EvmAddress, owner: EvmAddress) -> u128 {
-        let result = self.call(
-            "eth_call",
-            &[
-                Json::Object(vec![
-                    text_member("to", &address_hex(token)),
-                    text_member(
-                        "data",
-                        &bytes_hex(&call_data(BALANCE_OF, &[address_word(owner)])),
-                    ),
-                ]),
-                Json::Text("latest".to_owned()),
-            ],
-        );
-        let bytes = hex_bytes(
-            result
-                .as_text()
-                .unwrap_or_else(|| panic!("balanceOf result is not hex")),
-        );
-        let word: [u8; 32] = bytes
-            .try_into()
-            .unwrap_or_else(|bytes: Vec<u8>| panic!("balance word length {}", bytes.len()));
-        word_u128(word)
-    }
-
-    fn halt(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }
 
-impl Drop for Anvil {
-    fn drop(&mut self) {
-        self.halt();
-    }
-}
+// ---------------------------------------------------------------------------
+// Encoding helpers
+// ---------------------------------------------------------------------------
 
-struct Fixture {
-    anvil: Anvil,
-    boundary: WithdrawalBoundary,
-    challenge_manager: EvmAddress,
-    token: EvmAddress,
-    vault: EvmAddress,
-    recipient: EvmAddress,
-    checkpoint_hash: [u8; 32],
-    submitted: SubmittedWithdrawalClaim,
-}
-
-#[derive(Clone)]
-struct Header {
-    protocol_version: u16,
-    network_id: u32,
-    epoch: u64,
-    batch_number: u64,
-    first_sequence: u64,
-    last_sequence: u64,
-    previous_state_root: [u8; 32],
-    resulting_state_root: [u8; 32],
-    activity_merkle_root: [u8; 32],
-    receipt_merkle_root: [u8; 32],
-    event_merkle_root: [u8; 32],
-    data_availability_root: [u8; 32],
-    oracle_root: [u8; 32],
-    timestamp: u64,
-    sequencer_id: [u8; 32],
-}
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .unwrap_or_else(|| panic!("repository root absent"))
-        .to_path_buf()
-}
-
-fn foundry_binary(name: &str) -> PathBuf {
-    let binary = PathBuf::from(format!("/root/.foundry/bin/{name}"));
-    if binary.exists() {
-        binary
-    } else {
-        PathBuf::from(name)
-    }
-}
-
-fn anvil_binary() -> PathBuf {
-    foundry_binary("anvil")
-}
-
-fn contract_bytecode(contract: &'static str) -> String {
-    let cache = BYTECODE.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let mut cache = cache
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(bytecode) = cache.get(contract) {
-        return bytecode.clone();
-    }
-    let output = Command::new(foundry_binary("forge"))
-        .arg("inspect")
-        .arg(contract)
-        .arg("bytecode")
-        .current_dir(repo_root())
-        .output()
-        .unwrap_or_else(|error| panic!("forge inspect {contract}: {error}"));
-    assert!(
-        output.status.success(),
-        "forge inspect {contract}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let bytecode = String::from_utf8(output.stdout)
-        .unwrap_or_else(|error| panic!("forge bytecode utf8: {error}"))
-        .trim()
-        .to_owned();
-    assert!(bytecode.starts_with("0x"));
-    cache.insert(contract, bytecode.clone());
-    bytecode
-}
-
-fn text_member(name: &str, value: &str) -> (String, Json) {
-    (name.to_owned(), Json::Text(value.to_owned()))
-}
-
-fn parse_address(text: &str) -> EvmAddress {
-    let bytes = hex_bytes(text);
-    EvmAddress::new(
-        bytes
-            .try_into()
-            .unwrap_or_else(|bytes: Vec<u8>| panic!("address length {}", bytes.len())),
-    )
-}
-
-fn address_hex(address: EvmAddress) -> String {
-    bytes_hex(&address.bytes())
-}
-
-fn hex_bytes(text: &str) -> Vec<u8> {
-    let digits = text
-        .trim()
-        .strip_prefix("0x")
-        .unwrap_or_else(|| panic!("hex prefix absent"));
-    assert_eq!(digits.len() % 2, 0);
-    digits
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| (hex_nibble(pair[0]) << 4) | hex_nibble(pair[1]))
-        .collect()
-}
-
-fn hex_nibble(byte: u8) -> u8 {
-    match byte {
-        b'0'..=b'9' => byte - b'0',
-        b'a'..=b'f' => byte - b'a' + 10,
-        b'A'..=b'F' => byte - b'A' + 10,
-        _ => panic!("non-hex digit"),
-    }
-}
-
-fn bytes_hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+fn hex(bytes: &[u8]) -> String {
     let mut text = String::from("0x");
     for byte in bytes {
-        text.push(char::from(DIGITS[usize::from(byte >> 4)]));
-        text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+        text.push_str(&format!("{byte:02x}"));
     }
     text
 }
 
-const fn quantity_const(value: u8) -> [u8; 32] {
-    let mut word = [0_u8; 32];
-    word[31] = value;
-    word
+fn quantity(value: &str) -> Option<u64> {
+    u64::from_str_radix(value.strip_prefix("0x")?, 16).ok()
 }
 
-fn quantity_word(bytes: &[u8]) -> [u8; 32] {
-    let mut word = [0_u8; 32];
-    word[32_usize.saturating_sub(bytes.len())..].copy_from_slice(bytes);
-    word
+fn text(value: &str) -> Json {
+    Json::Text(value.to_owned())
 }
 
-fn usize_word(value: usize) -> [u8; 32] {
-    quantity_word(&value.to_be_bytes())
+fn member(name: &str, value: Json) -> (String, Json) {
+    (name.to_owned(), value)
+}
+
+fn block_hash(number: u64) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"paxeer-test-block\0");
+    hasher.update(number.to_be_bytes());
+    hasher.finalize().into()
+}
+
+fn block(number: u64, timestamp: u64) -> Json {
+    Json::Object(vec![
+        member("number", text(&format!("0x{number:x}"))),
+        member("hash", text(&hex(&block_hash(number)))),
+        member("timestamp", text(&format!("0x{timestamp:x}"))),
+    ])
+}
+
+fn number_word(value: &[u8]) -> [u8; 32] {
+    let mut word = [0_u8; 32];
+    let start = 32_usize.saturating_sub(value.len());
+    word[start..].copy_from_slice(value);
+    word
 }
 
 fn address_word(address: EvmAddress) -> [u8; 32] {
@@ -407,1486 +303,1111 @@ fn address_word(address: EvmAddress) -> [u8; 32] {
     word
 }
 
-fn bool_word(value: bool) -> [u8; 32] {
-    quantity_word(&[u8::from(value)])
+fn boolean_word(value: bool) -> [u8; 32] {
+    number_word(&[u8::from(value)])
 }
 
-fn call_data(selector: [u8; 4], words: &[[u8; 32]]) -> Vec<u8> {
-    let mut data = Vec::with_capacity(4_usize.saturating_add(words.len().saturating_mul(32)));
-    data.extend_from_slice(&selector);
-    for word in words {
-        data.extend_from_slice(word);
-    }
-    data
-}
-
-fn word_u128(word: [u8; 32]) -> u128 {
-    assert_eq!(word[..16], [0; 16]);
-    let mut bytes = [0_u8; 16];
-    bytes.copy_from_slice(&word[16..]);
-    u128::from_be_bytes(bytes)
-}
-
-fn wait_receipt(anvil: &Anvil, transaction: TransactionHash) -> TransactionInclusion {
-    let client = layerx_paxeer_client::PaxeerClient::new(vec![anvil.endpoint.clone()])
-        .unwrap_or_else(|error| panic!("client: {error:?}"));
-    for _ in 0..300 {
-        if let Some(receipt) = client
-            .transaction_receipt(transaction)
-            .unwrap_or_else(|error| panic!("receipt: {error:?}"))
-        {
-            return receipt;
+/// Encodes one dynamic Solidity tuple whose single `string` member sits at
+/// `text_index`, exactly as the precompile returns `getClaim` and `getAsset`.
+fn tuple(head: &[[u8; 32]], text_index: usize, value: &str) -> Vec<u8> {
+    let mut out = number_word(&32_u64.to_be_bytes()).to_vec();
+    let offset = head.len().saturating_mul(32);
+    for (index, word) in head.iter().enumerate() {
+        if index == text_index {
+            out.extend_from_slice(&number_word(&offset.to_be_bytes()));
+        } else {
+            out.extend_from_slice(word);
         }
-        thread::sleep(Duration::from_millis(20));
     }
-    panic!("transaction was not included");
-}
-
-fn final_report(
-    anvil: &Anvil,
-    boundary: &WithdrawalBoundary,
-    transaction: TransactionHash,
-) -> FinalityReport {
-    let mut tracker = boundary
-        .track(transaction)
-        .unwrap_or_else(|error| panic!("tracker: {error:?}"));
-    for _ in 0..300 {
-        let report = tracker.poll();
-        if matches!(report.stage(), FinalityStage::Final { .. }) {
-            return report;
-        }
-        if matches!(report.stage(), FinalityStage::Confirming { .. }) {
-            anvil.mine();
-        }
-        thread::sleep(Duration::from_millis(20));
+    out.extend_from_slice(&number_word(&value.len().to_be_bytes()));
+    let mut data = value.as_bytes().to_vec();
+    while data.len() % 32 != 0 {
+        data.push(0);
     }
-    panic!("transaction did not reach finality");
-}
-
-fn deploy_suite_for_protocol(
-    anvil: &Anvil,
-    protocol_version: u16,
-) -> (
-    EvmAddress,
-    EvmAddress,
-    EvmAddress,
-    EvmAddress,
-    EvmAddress,
-    EvmAddress,
-) {
-    deploy_suite_for_asset_network(anvil, protocol_version, ASSET, NETWORK_ID)
-}
-
-fn deploy_suite_for_asset_network(
-    anvil: &Anvil,
-    protocol_version: u16,
-    asset: [u8; 32],
-    network_id: u32,
-) -> (
-    EvmAddress,
-    EvmAddress,
-    EvmAddress,
-    EvmAddress,
-    EvmAddress,
-    EvmAddress,
-) {
-    deploy_suite_for_genesis(
-        anvil,
-        protocol_version,
-        asset,
-        network_id,
-        [GENESIS_MANIFEST, GENESIS_CANONICAL_STATE, GENESIS],
-    )
-}
-
-#[allow(clippy::too_many_lines)]
-fn deploy_suite_for_genesis(
-    anvil: &Anvil,
-    protocol_version: u16,
-    asset: [u8; 32],
-    network_id: u32,
-    genesis: [[u8; 32]; 3],
-) -> (
-    EvmAddress,
-    EvmAddress,
-    EvmAddress,
-    EvmAddress,
-    EvmAddress,
-    EvmAddress,
-) {
-    let owner = parse_address(FUNDED);
-    let challenger = parse_address(CHALLENGER);
-    let token_template = anvil.deploy("IntegrationToken", &[address_word(owner)]);
-    anvil.install_code(token_template, USDL_TOKEN);
-    let token = USDL_TOKEN;
-    let asset_registry = anvil.deploy(
-        "AssetRegistry",
-        &[
-            address_word(owner),
-            address_word(challenger),
-            [0x21; 32],
-            quantity_word(&1_u128.to_be_bytes()),
-        ],
-    );
-    let vault = anvil.deploy(
-        "LayerXVault",
-        &[
-            address_word(asset_registry),
-            address_word(owner),
-            address_word(challenger),
-            [0x22; 32],
-            quantity_word(&1_u128.to_be_bytes()),
-        ],
-    );
-    let bond = anvil.deploy(
-        "GuarantorBond",
-        &[
-            address_word(owner),
-            address_word(owner),
-            address_word(token),
-            address_word(vault),
-            ASSET,
-            quantity_word(&protocol_version.to_be_bytes()),
-            quantity_word(&network_id.to_be_bytes()),
-            quantity_word(&100_u32.to_be_bytes()),
-            quantity_word(&86_400_u64.to_be_bytes()),
-            [0x23; 32],
-            quantity_word(&1_u128.to_be_bytes()),
-        ],
-    );
-    let checkpoint_registry = anvil.deploy(
-        "CheckpointRegistry",
-        &[
-            address_word(bond),
-            quantity_word(&protocol_version.to_be_bytes()),
-            quantity_word(&network_id.to_be_bytes()),
-            quantity_word(&1_u16.to_be_bytes()),
-            quantity_word(&1_u16.to_be_bytes()),
-            quantity_word(&3_600_u64.to_be_bytes()),
-            quantity_word(&300_u64.to_be_bytes()),
-            genesis[0],
-            genesis[1],
-            genesis[2],
-            [0x24; 32],
-            quantity_word(&1_u128.to_be_bytes()),
-        ],
-    );
-    let challenge_manager = anvil.deploy(
-        "CheckpointChallengeManager",
-        &[
-            address_word(checkpoint_registry),
-            address_word(bond),
-            address_word(owner),
-            address_word(challenger),
-            quantity_word(&3_600_u64.to_be_bytes()),
-            quantity_word(&1_u128.to_be_bytes()),
-            [0x25; 32],
-            quantity_word(&1_u128.to_be_bytes()),
-        ],
-    );
-    let nullifier_registry = anvil.deploy(
-        "WithdrawalNullifierRegistry",
-        &[
-            address_word(owner),
-            address_word(challenger),
-            [0x26; 32],
-            quantity_word(&1_u128.to_be_bytes()),
-        ],
-    );
-    let claims = anvil.deploy(
-        "WithdrawalClaims",
-        &[
-            address_word(checkpoint_registry),
-            address_word(challenge_manager),
-            address_word(nullifier_registry),
-            address_word(vault),
-            [0x27; 32],
-            quantity_word(&1_u128.to_be_bytes()),
-        ],
-    );
-
-    for (target, data) in [
-        (
-            asset_registry,
-            call_data(
-                REGISTER_ASSET,
-                &[
-                    asset,
-                    address_word(token),
-                    quantity_word(&6_u8.to_be_bytes()),
-                    quantity_word(&1_u128.to_be_bytes()),
-                    quantity_word(&1_000_u128.to_be_bytes()),
-                ],
-            ),
-        ),
-        (vault, call_data(SET_GUARANTOR_BOND, &[address_word(bond)])),
-        (
-            vault,
-            call_data(
-                SET_SETTLEMENT_MODULE,
-                &[address_word(claims), bool_word(true)],
-            ),
-        ),
-        (
-            nullifier_registry,
-            call_data(SET_CONSUMER, &[address_word(claims), bool_word(true)]),
-        ),
-        (
-            bond,
-            call_data(SET_SLASHING_AUTHORITY, &[address_word(challenge_manager)]),
-        ),
-        (
-            token,
-            call_data(
-                MINT,
-                &[
-                    address_word(owner),
-                    quantity_word(&VAULT_BALANCE.to_be_bytes()),
-                ],
-            ),
-        ),
-        (
-            token,
-            call_data(
-                APPROVE,
-                &[
-                    address_word(vault),
-                    quantity_word(&VAULT_BALANCE.to_be_bytes()),
-                ],
-            ),
-        ),
-        (
-            vault,
-            call_data(
-                DEPOSIT,
-                &[
-                    asset,
-                    quantity_word(&VAULT_BALANCE.to_be_bytes()),
-                    [0x28; 32],
-                ],
-            ),
-        ),
-    ] {
-        anvil.send_checked(FUNDED, target, &data, 0);
-    }
-    anvil.send_checked(
-        FUNDED,
-        bond,
-        &call_data(
-            ACTIVATE_GUARANTOR,
-            &[
-                GUARANTOR_ID,
-                address_word(owner),
-                address_word(owner),
-                quantity_word(&1_u64.to_be_bytes()),
-                quantity_word(&1_u64.to_be_bytes()),
-            ],
-        ),
-        0,
-    );
-    anvil.send_checked(
-        FUNDED,
-        token,
-        &call_data(
-            MINT,
-            &[address_word(owner), quantity_word(&BOND.to_be_bytes())],
-        ),
-        0,
-    );
-    anvil.send_checked(
-        FUNDED,
-        token,
-        &call_data(
-            APPROVE,
-            &[address_word(bond), quantity_word(&BOND.to_be_bytes())],
-        ),
-        0,
-    );
-    anvil.send_checked(
-        FUNDED,
-        bond,
-        &call_data(
-            DEPOSIT_BOND,
-            &[GUARANTOR_ID, quantity_word(&BOND.to_be_bytes())],
-        ),
-        0,
-    );
-    (
-        token,
-        vault,
-        bond,
-        checkpoint_registry,
-        challenge_manager,
-        claims,
-    )
-}
-
-fn debit_expectation(recipient: EvmAddress) -> DebitExpectation {
-    DebitExpectation {
-        activity_id: [0x31; 32],
-        network_id: NETWORK_ID,
-        withdrawal_id: [0x32; 32],
-        account: [0x33; 32],
-        withdrawals_account: [0x34; 32],
-        asset_id: ASSET,
-        amount: AMOUNT,
-        recipient,
-    }
-}
-
-fn committed_debit(expectation: DebitExpectation) -> CommittedWithdrawalDebit {
-    committed_debit_for_protocol(expectation, PROTOCOL_VERSION)
-}
-
-fn committed_debit_for_protocol(
-    expectation: DebitExpectation,
-    protocol_version: u16,
-) -> CommittedWithdrawalDebit {
-    assert_eq!(expectation.activity_id, [0x31; 32]);
-    assert_eq!(expectation.asset_id, ASSET);
-    assert_eq!(expectation.amount, AMOUNT);
-    assert_eq!(expectation.account, [0x33; 32]);
-    assert_eq!(expectation.withdrawals_account, [0x34; 32]);
-    let signer = SigningKey::from_bytes(&[0x51; 32]);
-    let batch = AuthorizedBatch::new(
-        [0x43; 32],
-        ASSET,
-        [0x41; 32],
-        [0x42; 32],
-        signer.verifying_key().to_bytes(),
-    );
-    CommittedWithdrawalDebit::verify(
-        &withdraw_receipt_for_protocol(protocol_version),
-        &batch,
-        expectation,
-    )
-    .unwrap_or_else(|error| panic!("committed debit: {error:?}"))
-}
-
-fn withdraw_receipt_for_protocol(protocol_version: u16) -> Vec<u8> {
-    let signer = SigningKey::from_bytes(&[0x51; 32]);
-    let encode = |signature| {
-        layerx_intents::vectors::withdrawal_receipt(
-            protocol_version,
-            ASSET,
-            AMOUNT,
-            VAULT_BALANCE,
-            signature,
-        )
-    };
-    let unsigned = encode(None);
-    let digest = receipt_digest(&unsigned)
-        .unwrap_or_else(|error| panic!("withdraw receipt digest: {error:?}"));
-    encode(Some(signer.sign(&digest).to_bytes()))
-}
-
-#[test]
-fn legacy_withdrawal_receipts_decode_but_are_not_accepted_as_beta_debits() {
-    let signer = SigningKey::from_bytes(&[0x51; 32]);
-    let batch = AuthorizedBatch::new(
-        [0x43; 32],
-        ASSET,
-        [0x41; 32],
-        [0x42; 32],
-        signer.verifying_key().to_bytes(),
-    );
-    assert_eq!(
-        CommittedWithdrawalDebit::verify(
-            &hex_bytes(WITHDRAW_RECEIPT_HEX),
-            &batch,
-            debit_expectation(EvmAddress::new([1; 20])),
-        ),
-        Err(DebitFault::Unverifiable(VerificationFailure {
-            check: ReceiptCheck::ProtocolVersion,
-        }))
-    );
-}
-
-fn withdrawal_leaf(expectation: DebitExpectation) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(b"LXP/v1/merkle-leaf\0");
-    hasher.update(expectation.withdrawal_id);
-    hasher.update(expectation.account);
-    hasher.update(expectation.asset_id);
-    hasher.update(expectation.amount.to_be_bytes());
-    hasher.update(address_word(expectation.recipient));
-    hasher.finalize().into()
-}
-
-fn checkpoint_header(state_root: [u8; 32], timestamp: u64) -> Header {
-    Header {
-        protocol_version: PROTOCOL_VERSION,
-        network_id: NETWORK_ID,
-        epoch: 1,
-        batch_number: 1,
-        first_sequence: 1,
-        last_sequence: 1,
-        previous_state_root: GENESIS,
-        resulting_state_root: state_root,
-        activity_merkle_root: [0x61; 32],
-        receipt_merkle_root: [0x62; 32],
-        event_merkle_root: [0x63; 32],
-        data_availability_root: [0x64; 32],
-        oracle_root: [0x65; 32],
-        timestamp,
-        sequencer_id: [0x66; 32],
-    }
-}
-
-fn encoded_header(header: &Header) -> Vec<u8> {
-    let mut bytes = header.protocol_version.to_be_bytes().to_vec();
-    bytes.extend_from_slice(&[0x17, 0x01, 0x0f]);
-    bytes.push(1);
-    bytes.extend_from_slice(&header.protocol_version.to_be_bytes());
-    bytes.push(2);
-    bytes.extend_from_slice(&header.network_id.to_be_bytes());
-    for (tag, value) in [
-        (3, header.epoch),
-        (4, header.batch_number),
-        (5, header.first_sequence),
-        (6, header.last_sequence),
-    ] {
-        bytes.push(tag);
-        bytes.extend_from_slice(&value.to_be_bytes());
-    }
-    for (tag, value) in [
-        (7, header.previous_state_root),
-        (8, header.resulting_state_root),
-        (9, header.activity_merkle_root),
-        (10, header.receipt_merkle_root),
-        (11, header.event_merkle_root),
-        (12, header.data_availability_root),
-        (13, header.oracle_root),
-    ] {
-        bytes.push(tag);
-        bytes.extend_from_slice(&32_u32.to_be_bytes());
-        bytes.extend_from_slice(&value);
-    }
-    bytes.push(14);
-    bytes.extend_from_slice(&header.timestamp.to_be_bytes());
-    bytes.push(15);
-    bytes.extend_from_slice(&32_u32.to_be_bytes());
-    bytes.extend_from_slice(&header.sequencer_id);
-    assert_eq!(bytes.len(), 354);
-    bytes
-}
-
-fn checkpoint_hash(header: &Header) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(b"LXP/v2/checkpoint-certificate\0");
-    hasher.update(encoded_header(header));
-    hasher.update(0_u32.to_be_bytes());
-    hasher.finalize().into()
-}
-
-fn signed_attestation(
-    header: &Header,
-    checkpoint: [u8; 32],
-    settlement_contract: EvmAddress,
-) -> WithdrawalAttestation {
-    let attested_at = header
-        .timestamp
-        .checked_add(1)
-        .unwrap_or_else(|| panic!("checkpoint timestamp cannot advance attestation milliseconds"));
-    let mut message = Vec::with_capacity(189);
-    message.extend_from_slice(&header.protocol_version.to_be_bytes());
-    message.extend_from_slice(&header.network_id.to_be_bytes());
-    message.extend_from_slice(&31_337_u64.to_be_bytes());
-    message.extend_from_slice(&settlement_contract.bytes());
-    message.extend_from_slice(&header.epoch.to_be_bytes());
-    message.extend_from_slice(&checkpoint);
-    message.extend_from_slice(&checkpoint);
-    message.extend_from_slice(&GUARANTOR_ID);
-    message.extend_from_slice(&header.batch_number.to_be_bytes());
-    message.extend_from_slice(&header.data_availability_root);
-    message.extend_from_slice(&[1, 1, 0x1f]);
-    message.extend_from_slice(&attested_at.to_be_bytes());
-    assert_eq!(message.len(), 189);
-    let mut hasher = Sha256::new();
-    hasher.update(b"LXP/v2/guarantor-attestation\0");
-    hasher.update(message);
-    let digest: [u8; 32] = hasher.finalize().into();
-    let signature = sign_digest(digest);
-    let mut r = [0_u8; 32];
-    let mut s = [0_u8; 32];
-    r.copy_from_slice(&signature[..32]);
-    s.copy_from_slice(&signature[32..64]);
-    WithdrawalAttestation {
-        protocol_version: header.protocol_version,
-        network_id: header.network_id,
-        paxeer_chain_id: 31_337,
-        settlement_contract,
-        epoch: header.epoch,
-        checkpoint_id: checkpoint,
-        checkpoint_hash: checkpoint,
-        guarantor_id: GUARANTOR_ID,
-        batch_number: header.batch_number,
-        data_availability_root: header.data_availability_root,
-        replayed: true,
-        data_available: true,
-        availability_class_mask: 0x1f,
-        attested_at,
-        signer: parse_address(FUNDED),
-        signature_r: r,
-        signature_s: s,
-        signature_v: signature[64],
-    }
-}
-
-fn sign_digest(digest: [u8; 32]) -> Vec<u8> {
-    let output = Command::new(foundry_binary("cast"))
-        .args([
-            "wallet",
-            "sign",
-            "--no-hash",
-            "--private-key",
-            FUNDED_PRIVATE_KEY,
-            &bytes_hex(&digest),
-        ])
-        .output()
-        .unwrap_or_else(|error| panic!("cast wallet sign: {error}"));
-    assert!(
-        output.status.success(),
-        "cast wallet sign: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let signature = hex_bytes(
-        String::from_utf8(output.stdout)
-            .unwrap_or_else(|error| panic!("signature utf8: {error}"))
-            .trim(),
-    );
-    assert_eq!(signature.len(), 65);
-    assert!(matches!(signature[64], 27 | 28));
-    signature
-}
-
-fn header_words(header: &Header) -> [[u8; 32]; 15] {
-    [
-        quantity_word(&header.protocol_version.to_be_bytes()),
-        quantity_word(&header.network_id.to_be_bytes()),
-        quantity_word(&header.epoch.to_be_bytes()),
-        quantity_word(&header.batch_number.to_be_bytes()),
-        quantity_word(&header.first_sequence.to_be_bytes()),
-        quantity_word(&header.last_sequence.to_be_bytes()),
-        header.previous_state_root,
-        header.resulting_state_root,
-        header.activity_merkle_root,
-        header.receipt_merkle_root,
-        header.event_merkle_root,
-        header.data_availability_root,
-        header.oracle_root,
-        quantity_word(&header.timestamp.to_be_bytes()),
-        header.sequencer_id,
-    ]
-}
-
-fn attestation_words(attestation: &WithdrawalAttestation) -> [[u8; 32]; 18] {
-    [
-        quantity_word(&attestation.protocol_version.to_be_bytes()),
-        quantity_word(&attestation.network_id.to_be_bytes()),
-        quantity_word(&attestation.paxeer_chain_id.to_be_bytes()),
-        address_word(attestation.settlement_contract),
-        quantity_word(&attestation.epoch.to_be_bytes()),
-        attestation.checkpoint_id,
-        attestation.checkpoint_hash,
-        attestation.guarantor_id,
-        quantity_word(&attestation.batch_number.to_be_bytes()),
-        attestation.data_availability_root,
-        bool_word(attestation.replayed),
-        bool_word(attestation.data_available),
-        quantity_word(&[attestation.availability_class_mask]),
-        quantity_word(&attestation.attested_at.to_be_bytes()),
-        address_word(attestation.signer),
-        attestation.signature_r,
-        attestation.signature_s,
-        quantity_word(&[attestation.signature_v]),
-    ]
-}
-
-fn register_checkpoint_calldata(header: &Header, attestation: &WithdrawalAttestation) -> Vec<u8> {
-    let mut words = Vec::new();
-    words.extend_from_slice(&header_words(header));
-    words.push(usize_word(17 * 32));
-    words.push(usize_word(18 * 32));
-    words.push([0; 32]);
-    words.push(usize_word(1));
-    words.extend_from_slice(&attestation_words(attestation));
-    call_data(REGISTER_CHECKPOINT, &words)
-}
-
-fn verify_checkpoint_codec(proof: &CheckpointProof, protocol_version: u16) {
-    let encoded_proof = layerx_paxeer_client::wire::encode_checkpoint_proof_for_protocol(
-        proof,
-        65_536,
-        protocol_version,
-    )
-    .unwrap_or_else(|error| panic!("encode checkpoint proof: {error:?}"));
-    assert_eq!(
-        layerx_paxeer_client::wire::decode_checkpoint_proof_for_protocol(
-            &encoded_proof,
-            65_536,
-            protocol_version,
-        ),
-        Ok(proof.clone())
-    );
-    let other_version = if protocol_version == 3 { 2 } else { 3 };
-    assert!(
-        layerx_paxeer_client::wire::decode_checkpoint_proof_for_protocol(
-            &encoded_proof,
-            65_536,
-            other_version,
-        )
-        .is_err()
-    );
-}
-
-fn fixture() -> Fixture {
-    fixture_for_protocol(PROTOCOL_VERSION)
-}
-
-fn fixture_for_protocol(protocol_version: u16) -> Fixture {
-    let anvil = Anvil::launch();
-    let (token, vault, bond, checkpoint_registry, challenge_manager, claims) =
-        deploy_suite_for_protocol(&anvil, protocol_version);
-    let recipient = parse_address(RECIPIENT);
-    let expectation = debit_expectation(recipient);
-    let debit = committed_debit_for_protocol(expectation, protocol_version);
-    let leaf = withdrawal_leaf(expectation);
-    let timestamp_ms = anvil
-        .latest_timestamp()
-        .checked_mul(1_000)
-        .unwrap_or_else(|| panic!("latest block timestamp exceeds canonical milliseconds"));
-    let mut header = checkpoint_header(leaf, timestamp_ms);
-    header.protocol_version = protocol_version;
-    let checkpoint_hash = checkpoint_hash(&header);
-    let attestation = signed_attestation(&header, checkpoint_hash, bond);
-    anvil.send_checked(
-        FUNDED,
-        checkpoint_registry,
-        &register_checkpoint_calldata(&header, &attestation),
-        0,
-    );
-    let boundary = WithdrawalBoundary::new_for_protocol(
-        WithdrawalConfig {
-            endpoints: vec![anvil.endpoint.clone()],
-            minimum_endpoint_agreement: 1,
-            claims_contract: claims,
-            required_confirmations: 2,
-            poll_cadence: Duration::from_millis(20),
-            delayed_after_polls: 100,
-        },
-        protocol_version,
-    )
-    .unwrap_or_else(|error| panic!("withdrawal boundary: {error:?}"));
-    let proof = CheckpointProof {
-        native: None,
-        checkpoint_hash,
-        state_root: leaf,
-        epoch: header.epoch,
-        batch_number: header.batch_number,
-        data_availability_root: header.data_availability_root,
-        leaf_index: 0,
-        siblings: Vec::new(),
-        attestations: vec![attestation],
-    };
-    verify_checkpoint_codec(&proof, protocol_version);
-    let mut wrong = proof.clone();
-    wrong.state_root[0] ^= 0xff;
-    assert!(matches!(
-        boundary.construct_claim(debit.clone(), wrong),
-        Err(WithdrawalError::Refused(
-            layerx_paxeer_client::ClaimRefusal::RootMismatch { .. }
-        ))
-    ));
-    let mut invalid_signature = proof.clone();
-    invalid_signature.attestations[0].signature_r[0] ^= 1;
-    assert!(matches!(
-        boundary.construct_claim(debit.clone(), invalid_signature),
-        Err(WithdrawalError::Refused(
-            layerx_paxeer_client::ClaimRefusal::CertificateNotRecorded { .. }
-        ))
-    ));
-    let mut wrong_version = proof.clone();
-    wrong_version.attestations[0].protocol_version = if protocol_version == 3 { 2 } else { 3 };
-    assert!(boundary
-        .construct_claim(debit.clone(), wrong_version)
-        .is_err());
-    if protocol_version == 3 {
-        assert!(matches!(
-            boundary.construct_claim(committed_debit(expectation), proof.clone()),
-            Err(WithdrawalError::Refused(
-                layerx_paxeer_client::ClaimRefusal::DebitProtocolMismatch { .. }
-            ))
-        ));
-    }
-    let claim = boundary
-        .construct_claim(debit, proof)
-        .unwrap_or_else(|error| panic!("construct claim: {error:?}"));
-    assert_eq!(claim.leaf(), leaf);
-    assert_ne!(claim.nullifier(), [0; 32]);
-    let transaction = anvil.send(FUNDED, Some(claims), claim.calldata(), 0);
-    let report = final_report(&anvil, &boundary, transaction);
-    let submitted = boundary
-        .accept_submission(claim, &report)
-        .unwrap_or_else(|error| panic!("accept submission: {error:?}"));
-    assert_eq!(submitted.claim().proof().checkpoint_hash, checkpoint_hash);
-    Fixture {
-        anvil,
-        boundary,
-        challenge_manager,
-        token,
-        vault,
-        recipient,
-        checkpoint_hash,
-        submitted,
-    }
-}
-
-#[test]
-fn real_claim_waits_then_verifies_the_actual_vault_and_token_payout() {
-    verify_real_payout(&fixture());
-}
-
-#[test]
-fn protocol_three_real_claim_verifies_vault_payout_and_rejects_legacy_debit() {
-    verify_real_payout(&fixture_for_protocol(3));
-}
-
-fn verify_real_payout(fixture: &Fixture) {
-    assert_eq!(
-        fixture
-            .anvil
-            .token_balance(fixture.token, fixture.recipient),
-        0
-    );
-    let progress = fixture
-        .boundary
-        .progress(&fixture.submitted)
-        .unwrap_or_else(|error| panic!("initial progress: {error:?}"));
-    assert!(matches!(
-        progress,
-        ClaimProgress::WaitingForChallengeWindow { remaining, .. } if !remaining.is_zero()
-    ));
-
-    let premature = fixture.anvil.send(
-        FUNDED,
-        Some(fixture.boundary.claims_contract()),
-        &fixture.submitted.finalise_calldata(),
-        0,
-    );
-    let premature_report = final_report(&fixture.anvil, &fixture.boundary, premature);
-    assert!(matches!(
-        fixture
-            .boundary
-            .verify_payout(&fixture.submitted, &premature_report),
-        Err(WithdrawalError::Reverted { .. })
-    ));
-    assert_eq!(
-        fixture
-            .anvil
-            .token_balance(fixture.token, fixture.recipient),
-        0
-    );
-
-    fixture.anvil.advance(3_601);
-    assert!(matches!(
-        fixture
-            .boundary
-            .progress(&fixture.submitted)
-            .unwrap_or_else(|error| panic!("ready progress: {error:?}")),
-        ClaimProgress::ReadyToFinalise { .. }
-    ));
-    let payout_transaction = fixture.anvil.send(
-        FUNDED,
-        Some(fixture.boundary.claims_contract()),
-        &fixture.submitted.finalise_calldata(),
-        0,
-    );
-    let report = final_report(&fixture.anvil, &fixture.boundary, payout_transaction);
-    assert_eq!(
-        fixture
-            .boundary
-            .progress(&fixture.submitted)
-            .unwrap_or_else(|error| panic!("paid contract state: {error:?}")),
-        ClaimProgress::PaidAwaitingPayoutVerification
-    );
-    let payout = fixture
-        .boundary
-        .verify_payout(&fixture.submitted, &report)
-        .unwrap_or_else(|error| panic!("payout evidence: {error:?}"));
-    assert_eq!(
-        payout,
-        PayoutEvidence {
-            debit_receipt_reference: fixture.submitted.claim().debit().receipt_reference(),
-            checkpoint_hash: fixture.checkpoint_hash,
-            claim_id: fixture.submitted.claim_id(),
-            payout_transaction,
-            payout_inclusion: match report.stage() {
-                FinalityStage::Final { inclusion, .. } => inclusion,
-                stage => panic!("expected final payout, got {stage:?}"),
-            },
-            vault: fixture.vault,
-            token: fixture.token,
-            asset_id: ASSET,
-            recipient: fixture.recipient,
-            amount: AMOUNT,
-        }
-    );
-    assert_eq!(
-        fixture
-            .anvil
-            .token_balance(fixture.token, fixture.recipient),
-        AMOUNT
-    );
-    assert_eq!(
-        fixture.anvil.token_balance(fixture.token, fixture.vault),
-        VAULT_BALANCE - AMOUNT
-    );
-}
-
-#[test]
-fn real_pending_challenge_reports_timing_and_upheld_challenge_cancels_without_payout() {
-    let fixture = fixture();
-    let evidence_hash = [0x91; 32];
-    fixture.anvil.send_checked(
-        CHALLENGER,
-        fixture.challenge_manager,
-        &call_data(
-            RAISE_CHALLENGE,
-            &[
-                fixture.checkpoint_hash,
-                quantity_word(&1_u8.to_be_bytes()),
-                evidence_hash,
-            ],
-        ),
-        1,
-    );
-    let progress = fixture
-        .boundary
-        .progress(&fixture.submitted)
-        .unwrap_or_else(|error| panic!("challenge hold: {error:?}"));
-    let ClaimProgress::ChallengeHeld(hold) = progress else {
-        panic!("expected challenge hold, got {progress:?}");
-    };
-    assert_eq!(hold.kind, ChallengeKind::DataAvailability);
-    assert_eq!(hold.evidence_hash, evidence_hash);
-    assert_eq!(hold.window_closes_at, fixture.submitted.available_at());
-    assert!(hold.raised_at <= hold.observed_at);
-    assert!(hold.resolution_has_no_on_chain_deadline);
-
-    fixture.anvil.send_checked(
-        FUNDED,
-        fixture.challenge_manager,
-        &call_data(
-            RESOLVE_CHALLENGE,
-            &[fixture.checkpoint_hash, bool_word(true)],
-        ),
-        0,
-    );
-    let expected_disposition = CancelledFundsDisposition {
-        paxeer: PaxeerFundsDisposition::RetainedInVault {
-            vault: fixture.vault,
-            asset_id: ASSET,
-            amount: AMOUNT,
-        },
-        layerx: ProtocolDebitDisposition::RemainsCommittedPendingProtocolRecovery {
-            debit_receipt_reference: fixture.submitted.claim().debit().receipt_reference(),
-        },
-    };
-    assert_eq!(
-        fixture
-            .boundary
-            .progress(&fixture.submitted)
-            .unwrap_or_else(|error| panic!("upheld progress: {error:?}")),
-        ClaimProgress::ChallengeUpheldAwaitingCancellation {
-            disposition: expected_disposition,
-        }
-    );
-
-    let cancellation_transaction = fixture.anvil.send(
-        FUNDED,
-        Some(fixture.boundary.claims_contract()),
-        &fixture.submitted.cancellation_calldata(),
-        0,
-    );
-    let report = final_report(&fixture.anvil, &fixture.boundary, cancellation_transaction);
-    let cancellation = fixture
-        .boundary
-        .verify_cancellation(&fixture.submitted, &report)
-        .unwrap_or_else(|error| panic!("cancellation evidence: {error:?}"));
-    assert_eq!(cancellation.disposition, expected_disposition);
-    assert_eq!(
-        cancellation.cancellation_transaction,
-        cancellation_transaction
-    );
-    assert_eq!(
-        fixture
-            .boundary
-            .progress(&fixture.submitted)
-            .unwrap_or_else(|error| panic!("cancelled progress: {error:?}")),
-        ClaimProgress::Cancelled {
-            disposition: expected_disposition,
-        }
-    );
-    assert_eq!(
-        fixture
-            .anvil
-            .token_balance(fixture.token, fixture.recipient),
-        0
-    );
-    assert_eq!(
-        fixture.anvil.token_balance(fixture.token, fixture.vault),
-        VAULT_BALANCE
-    );
-}
-
-fn publication_calldata(selector: [u8; 4], heads: &[[u8; 32]], tails: &[Vec<u8>]) -> Vec<u8> {
-    let mut words = heads.to_vec();
-    let mut offset = (heads.len() + tails.len()) * 32;
-    for tail in tails {
-        words.push(usize_word(offset));
-        offset += tail.len();
-    }
-    let mut data = call_data(selector, &words);
-    for tail in tails {
-        data.extend_from_slice(tail);
-    }
-    data
-}
-fn publication_bytes(bytes: &[u8]) -> Vec<u8> {
-    let mut out = usize_word(bytes.len()).to_vec();
-    out.extend_from_slice(bytes);
-    out.resize(out.len().div_ceil(32) * 32, 0);
+    out.extend_from_slice(&data);
     out
 }
-fn exit_attestation(v: &WithdrawalAttestation) -> layerx_paxeer_client::GuarantorAttestation {
-    layerx_paxeer_client::GuarantorAttestation {
-        protocol_version: v.protocol_version,
-        network_id: v.network_id,
-        paxeer_chain_id: v.paxeer_chain_id,
-        settlement_contract: v.settlement_contract,
-        epoch: v.epoch,
-        checkpoint_id: v.checkpoint_id,
-        checkpoint_hash: v.checkpoint_hash,
-        guarantor_id: v.guarantor_id,
-        batch_number: v.batch_number,
-        data_availability_root: v.data_availability_root,
-        replayed: v.replayed,
-        data_available: v.data_available,
-        availability_class_mask: v.availability_class_mask,
-        attested_at: v.attested_at,
-        signer: v.signer,
-        signature_r: v.signature_r,
-        signature_s: v.signature_s,
-        signature_v: v.signature_v,
-    }
-}
 
-struct PublicationFixture {
-    anvil: Anvil,
-    vault: EvmAddress,
-    registry: EvmAddress,
-    challenge: EvmAddress,
-    claims: EvmAddress,
-    debit: DebitExpectation,
-    withdrawal: [u8; 32],
-    proof: CheckpointProof,
-    evidence: layerx_paxeer_client::ExitEvidence,
-    withdrawals: Vec<u8>,
-    balances: Vec<u8>,
-}
-fn publication_fixture() -> PublicationFixture {
-    use layerx_paxeer_client::ExitEvidence;
-    let anvil = Anvil::launch();
-    let (_, vault, bond, registry, challenge, claims) = deploy_suite_for_protocol(&anvil, 3);
-    let debit = debit_expectation(parse_address(RECIPIENT));
-    let withdrawal = withdrawal_leaf(debit);
-    let balance =
-        layerx_paxeer_client::balance_leaf(&debit.account, &ASSET, AMOUNT, debit.recipient);
-    let state_root = layerx_paxeer_client::merkle_node(&withdrawal, &balance);
-    let mut header = checkpoint_header(state_root, anvil.latest_timestamp() * 1000);
-    header.protocol_version = 3;
-    let checkpoint = checkpoint_hash(&header);
-    let attestation = signed_attestation(&header, checkpoint, bond);
-    anvil.send_checked(
-        FUNDED,
-        registry,
-        &register_checkpoint_calldata(&header, &attestation),
-        0,
-    );
-    let proof = CheckpointProof {
-        native: None,
-        checkpoint_hash: checkpoint,
-        state_root,
-        epoch: 1,
-        batch_number: 1,
-        data_availability_root: header.data_availability_root,
-        leaf_index: 0,
-        siblings: vec![balance],
-        attestations: vec![attestation],
-    };
-    let balance_proof = CheckpointProof {
-        native: None,
-        leaf_index: 1,
-        siblings: vec![withdrawal],
-        ..proof.clone()
-    };
-    let evidence = ExitEvidence {
-        native: None,
-        account: debit.account,
-        asset_id: ASSET,
-        finalised_balance: AMOUNT,
-        recipient: debit.recipient,
-        leaf_index: 1,
-        siblings: vec![withdrawal],
-        attestations: vec![exit_attestation(&attestation)],
-    };
-    let withdrawals = CheckpointProof::encode_publication(&[(debit, proof.clone())], 3)
-        .unwrap_or_else(|e| panic!("withdrawals: {e:?}"));
-    let balances = ExitEvidence::encode_publication(&[(evidence.clone(), balance_proof)], 3)
-        .unwrap_or_else(|e| panic!("balances: {e:?}"));
-    PublicationFixture {
-        anvil,
-        vault,
-        registry,
-        challenge,
-        claims,
-        debit,
-        withdrawal,
-        proof,
-        evidence,
-        withdrawals,
-        balances,
-    }
-}
-
-fn verify_published_exit(
-    anvil: &Anvil,
-    registry: EvmAddress,
-    challenge: EvmAddress,
-    vault: EvmAddress,
-    fetched: layerx_paxeer_client::ExitEvidence,
-) {
-    use layerx_paxeer_client::{EmergencyExit, ExitConfig};
-    let nullifiers = anvil.deploy(
-        "WithdrawalNullifierRegistry",
+fn encode_claim(claim: &CustodyClaim) -> Vec<u8> {
+    tuple(
         &[
-            address_word(parse_address(FUNDED)),
-            address_word(parse_address(CHALLENGER)),
-            [0x71; 32],
-            quantity_const(1),
+            claim.claim_id,
+            number_word(&[claim.kind]),
+            number_word(&[claim.status]),
+            claim.nullifier,
+            claim.withdrawal_id,
+            claim.account,
+            claim.asset_id,
+            [0; 32],
+            address_word(claim.recipient),
+            number_word(&claim.amount.to_be_bytes()),
+            number_word(&claim.batch_number.to_be_bytes()),
+            claim.anchor,
+            number_word(&claim.available_at.to_be_bytes()),
         ],
-    );
-    let exit = anvil.deploy(
-        "EmergencyExit",
+        7,
+        &claim.denom,
+    )
+}
+
+fn encode_asset(asset: &CustodyAsset) -> Vec<u8> {
+    tuple(
         &[
-            address_word(registry),
-            address_word(challenge),
-            address_word(nullifiers),
-            address_word(vault),
-            address_word(parse_address(FUNDED)),
-            address_word(parse_address(CHALLENGER)),
-            quantity_word(&3600_u64.to_be_bytes()),
-            [0x72; 32],
-            quantity_const(1),
+            asset.asset_id,
+            [0; 32],
+            address_word(asset.pointer),
+            boolean_word(asset.enabled),
+            boolean_word(asset.paused),
+            number_word(&asset.minimum_deposit.to_be_bytes()),
+            number_word(&asset.custody_cap.to_be_bytes()),
+            number_word(&asset.custodied.to_be_bytes()),
+            number_word(&asset.released.to_be_bytes()),
+            number_word(&asset.pending.to_be_bytes()),
         ],
-    );
-    let exit = EmergencyExit::new(ExitConfig {
-        endpoints: vec![anvil.endpoint.clone()],
-        minimum_endpoint_agreement: 1,
-        exit_contract: exit,
-        required_confirmations: 1,
-        poll_cadence: Duration::from_millis(20),
-        delayed_after_polls: 100,
-    })
-    .unwrap_or_else(|e| panic!("exit: {e:?}"));
-    anvil.advance(3601);
-    assert!(exit.construct_claim(&fetched).is_ok());
-    let mut wrong = fetched;
-    wrong.finalised_balance += 1;
-    assert!(exit.construct_claim(&wrong).is_err());
-}
-
-#[test]
-fn real_published_checkpoint_withdrawal_and_balance_witnesses() {
-    use layerx_paxeer_client::ExitEvidence;
-    let PublicationFixture {
-        anvil,
-        vault,
-        registry,
-        challenge,
-        claims,
-        debit,
-        withdrawal,
-        proof,
-        evidence,
-        withdrawals,
-        balances,
-    } = publication_fixture();
-    let checkpoint = proof.checkpoint_hash;
-    assert!(
-        CheckpointProof::fetch_published(&anvil.endpoint, registry, checkpoint, &debit, 3, 1)
-            .is_err()
-    );
-    let snapshot = anvil.call("evm_snapshot", &[]);
-    anvil.send_checked(
-        FUNDED,
-        registry,
-        &publication_calldata(
-            [0x69, 0x92, 0x97, 0x38],
-            &[checkpoint],
-            &[
-                publication_bytes(&withdrawals),
-                publication_bytes(&balances),
-            ],
-        ),
-        0,
-    );
-    assert!(
-        CheckpointProof::fetch_published(&anvil.endpoint, registry, checkpoint, &debit, 3, 2)
-            .is_err()
-    );
-    anvil.mine();
-    let fetched =
-        CheckpointProof::fetch_published(&anvil.endpoint, registry, checkpoint, &debit, 3, 2)
-            .unwrap_or_else(|e| panic!("published withdrawal: {e:?}"));
-    assert_eq!(fetched, proof);
-    anvil.call("anvil_mine", &[Json::Text("0x201".into())]);
-    let historical =
-        CheckpointProof::fetch_published(&anvil.endpoint, registry, checkpoint, &debit, 3, 2)
-            .unwrap_or_else(|e| panic!("historical published withdrawal: {e:?}"));
-    assert_eq!(historical, proof);
-    let boundary = WithdrawalBoundary::new_for_protocol(
-        WithdrawalConfig {
-            endpoints: vec![anvil.endpoint.clone()],
-            minimum_endpoint_agreement: 1,
-            claims_contract: claims,
-            required_confirmations: 1,
-            poll_cadence: Duration::from_millis(20),
-            delayed_after_polls: 100,
-        },
-        3,
-    )
-    .unwrap_or_else(|e| panic!("boundary: {e:?}"));
-    let claim = boundary
-        .construct_claim(committed_debit_for_protocol(debit, 3), fetched)
-        .unwrap_or_else(|e| panic!("claim: {e:?}"));
-    assert_eq!(claim.leaf(), withdrawal);
-    let fetched = ExitEvidence::fetch_published(
-        &anvil.endpoint,
-        registry,
-        checkpoint,
-        (debit.account, ASSET, debit.recipient),
-        3,
-        2,
-    )
-    .unwrap_or_else(|e| panic!("published balance: {e:?}"));
-    assert_eq!(fetched, evidence);
-    verify_published_exit(&anvil, registry, challenge, vault, fetched);
-    assert_eq!(anvil.call("evm_revert", &[snapshot]), Json::Bool(true));
-    assert!(
-        CheckpointProof::fetch_published(&anvil.endpoint, registry, checkpoint, &debit, 3, 1)
-            .is_err()
-    );
-    let mut corrupt = withdrawals;
-    let last = corrupt.len() - 1;
-    corrupt[last] ^= 1;
-    anvil.send_checked(
-        FUNDED,
-        registry,
-        &publication_calldata(
-            [0x69, 0x92, 0x97, 0x38],
-            &[checkpoint],
-            &[publication_bytes(&corrupt), publication_bytes(&balances)],
-        ),
-        0,
-    );
-    let fetched =
-        CheckpointProof::fetch_published(&anvil.endpoint, registry, checkpoint, &debit, 3, 1);
-    if let Ok(fetched) = fetched {
-        assert!(boundary
-            .construct_claim(committed_debit_for_protocol(debit, 3), fetched)
-            .is_err());
-    }
-}
-
-fn published_custody(
-    anvil: &Anvil,
-    vault: EvmAddress,
-) -> (layerx_paxeer_client::CustodyDeposit, TransactionHash) {
-    use layerx_paxeer_client::CustodyDeposit;
-    use layerx_types::{amount::Amount, ids::AssetId};
-    let logs = anvil.call(
-        "eth_getLogs",
-        &[Json::Object(vec![
-            text_member("address", &address_hex(vault)),
-            text_member("fromBlock", "0x0"),
-            (
-                "topics".into(),
-                Json::Array(vec![Json::Text(
-                    "0x7edb71c9100c656847896d0b5b194f69f7da287eb57964a81e7f807a6a944028".into(),
-                )]),
-            ),
-        ])],
-    );
-    let Json::Array(logs) = logs else {
-        panic!("custody logs");
-    };
-    assert_eq!(logs.len(), 1);
-    let log = &logs[0];
-    let Json::Array(topics) = log.member("topics").unwrap_or_else(|| panic!("topics")) else {
-        panic!("topics");
-    };
-    let id: [u8; 32] = hex_bytes(topics[1].as_text().unwrap_or_else(|| panic!("id")))
-        .try_into()
-        .unwrap_or_else(|_| panic!("id length"));
-    let transaction = TransactionHash::from_hex(
-        log.member("transactionHash")
-            .and_then(Json::as_text)
-            .unwrap_or_else(|| panic!("tx hash")),
-    )
-    .unwrap_or_else(|e| panic!("tx: {e:?}"));
-    let custody = CustodyDeposit {
-        deposit_id: id,
-        asset: AssetId::new(ASSET),
-        payer: parse_address(FUNDED),
-        beneficiary: [0x28; 32],
-        amount: Amount::from_u128(VAULT_BALANCE),
-        nonce: 1,
-    };
-    (custody, transaction)
-}
-
-fn publish_signed_deposit(
-    anvil: &Anvil,
-    vault: EvmAddress,
-    checkpoint: [u8; 32],
-    state_root: [u8; 32],
-    custody: layerx_paxeer_client::CustodyDeposit,
-) -> (layerx_paxeer_client::DepositRootRegistration, SigningKey) {
-    use layerx_paxeer_client::{
-        deposit_leaf_bytes, deposit_root_registration_message, DepositRootRegistration,
-    };
-    let custody_reference = [0x74; 32];
-    let leaf = layerx_proof::merkle::leaf_hash(
-        &deposit_leaf_bytes(
-            custody.deposit_id,
-            custody_reference,
-            custody.asset,
-            custody.amount,
-            checkpoint,
-            NETWORK_ID,
-            3,
-        )
-        .unwrap_or_else(|e| panic!("leaf bytes: {e:?}")),
-    )
-    .unwrap_or_else(|e| panic!("leaf: {e:?}"));
-    let authority = SigningKey::from_bytes(&[0x75; 32]);
-    anvil.send_checked(
-        FUNDED,
-        vault,
-        &call_data(
-            [0xe9, 0x46, 0x5c, 0x84],
-            &[authority.verifying_key().to_bytes()],
-        ),
-        0,
-    );
-    let mut registration = DepositRootRegistration {
-        checkpoint_id: checkpoint,
-        checkpoint_state_root: state_root,
-        deposit_root: leaf,
-        custody_reference,
-        network_id: NETWORK_ID,
-        protocol_version: 3,
-        signature: [0; 64],
-    };
-    let canonical = deposit_root_registration_message(&registration)
-        .unwrap_or_else(|e| panic!("registration: {e:?}"));
-    registration.signature = authority.sign(&canonical).to_bytes();
-    let mut ordering = quantity_const(1).to_vec();
-    ordering.extend_from_slice(&leaf);
-    anvil.send_checked(
-        FUNDED,
-        vault,
-        &publication_calldata(
-            [0x8f, 0xf1, 0xfa, 0xc9],
-            &[],
-            &[
-                publication_bytes(&canonical),
-                publication_bytes(&registration.signature),
-                ordering,
-            ],
-        ),
-        0,
-    );
-    (registration, authority)
-}
-
-#[test]
-fn real_published_deposit_registration_verifies_existing_signature_and_custody_rules() {
-    use layerx_paxeer_client::{
-        DepositProofConfig, DepositProofVerifier, FinalityTracker, PublishedDepositProof,
-        TrackerConfig,
-    };
-    use layerx_types::amount::Amount;
-    let anvil = Anvil::launch();
-    let (_, vault, bond, registry, _, _) = deploy_suite_for_protocol(&anvil, 3);
-    let header = {
-        let mut h = checkpoint_header([0x73; 32], anvil.latest_timestamp() * 1000);
-        h.protocol_version = 3;
-        h
-    };
-    let checkpoint = checkpoint_hash(&header);
-    let attestation = signed_attestation(&header, checkpoint, bond);
-    anvil.send_checked(
-        FUNDED,
-        registry,
-        &register_checkpoint_calldata(&header, &attestation),
-        0,
-    );
-    let (custody, transaction) = published_custody(&anvil, vault);
-    let (registration, authority) = publish_signed_deposit(
-        &anvil,
-        vault,
-        checkpoint,
-        header.resulting_state_root,
-        custody,
-    );
-    let custody_reference = registration.custody_reference;
-    let leaf = registration.deposit_root;
-    let fetched = PublishedDepositProof::fetch_published(
-        &anvil.endpoint,
-        vault,
-        registry,
-        checkpoint,
-        custody,
         1,
+        &asset.denom,
     )
-    .unwrap_or_else(|e| panic!("fetch deposit: {e:?}"));
-    assert_eq!(fetched.registration, registration);
-    let verifier = DepositProofVerifier::new(DepositProofConfig {
-        endpoints: vec![anvil.endpoint.clone()],
-        minimum_endpoint_agreement: 1,
-        required_confirmations: 1,
-        paxeer_chain_id: 31337,
-        paxeer_checkpoint_authority: authority.verifying_key().to_bytes(),
-        custody_reference,
-        layerx_network_id: NETWORK_ID,
-        layerx_protocol_version: 3,
+}
+
+/// `(value, present)` exactly as the anchor precompile returns its roots.
+fn two_words(value: [u8; 32], present: bool) -> Vec<u8> {
+    let mut out = value.to_vec();
+    out.extend_from_slice(&boolean_word(present));
+    out
+}
+
+fn anchor_call(selector: [u8; 4], batch_number: u64) -> Vec<u8> {
+    let mut data = selector.to_vec();
+    data.extend_from_slice(&number_word(&batch_number.to_be_bytes()));
+    data
+}
+
+fn log(
+    transaction: &str,
+    number: u64,
+    address: EvmAddress,
+    topics: &[[u8; 32]],
+    data: &[u8],
+) -> Json {
+    Json::Object(vec![
+        member("address", text(&hex(&address.bytes()))),
+        member(
+            "topics",
+            Json::Array(topics.iter().map(|topic| text(&hex(topic))).collect()),
+        ),
+        member("data", text(&hex(data))),
+        member("transactionHash", text(transaction)),
+        member("blockHash", text(&hex(&block_hash(number)))),
+        member("blockNumber", text(&format!("0x{number:x}"))),
+        member("transactionIndex", text("0x0")),
+        member("removed", Json::Bool(false)),
+    ])
+}
+
+fn receipt_json(transaction: &str, number: u64, status: u64, logs: Vec<Json>) -> Json {
+    Json::Object(vec![
+        member("transactionHash", text(transaction)),
+        member("blockNumber", text(&format!("0x{number:x}"))),
+        member("blockHash", text(&hex(&block_hash(number)))),
+        member("transactionIndex", text("0x0")),
+        member("status", text(&format!("0x{status:x}"))),
+        member("contractAddress", Json::Null),
+        member("logs", Json::Array(logs)),
+    ])
+}
+
+fn transaction_json(transaction: &str, to: Option<EvmAddress>, input: &[u8], value: &str) -> Json {
+    Json::Object(vec![
+        member("hash", text(transaction)),
+        member(
+            "to",
+            to.map_or(Json::Null, |address| text(&hex(&address.bytes()))),
+        ),
+        member("input", text(&hex(input))),
+        member("value", text(value)),
+    ])
+}
+
+fn hash(value: &str) -> Result<TransactionHash, Box<dyn std::error::Error>> {
+    TransactionHash::from_hex(value).map_err(|error| format!("{error:?}").into())
+}
+
+// ---------------------------------------------------------------------------
+// The real withdrawal evidence
+// ---------------------------------------------------------------------------
+
+struct Fixture {
+    debit: CommittedWithdrawalDebit,
+    material: WithdrawalMaterial,
+    expectation: DebitExpectation,
+    batch_number: u64,
+    state_root: [u8; 32],
+    receipt_root: [u8; 32],
+    anchor: [u8; 32],
+    nullifier: [u8; 32],
+    claim_id: [u8; 32],
+    transaction: String,
+    payout_transaction: String,
+}
+
+fn fixture_proof() -> Result<layerx_proof::merkle::Proof, Box<dyn std::error::Error>> {
+    let wire =
+        layerx_wire::receipt::decode_merkle_proof(PROOF).map_err(|error| format!("{error:?}"))?;
+    layerx_proof::merkle::Proof::new(
+        wire.leaf_index(),
+        wire.leaf_count(),
+        wire.siblings().to_vec(),
+    )
+    .map_err(|error| format!("{error:?}").into())
+}
+
+fn withdrawal_effect() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let decoded = layerx_wire::receipt::decode(RECEIPT).map_err(|error| format!("{error:?}"))?;
+    let protocol = decoded
+        .protocol()
+        .ok_or("fixture is not a protocol receipt")?;
+    let body = protocol
+        .effects()
+        .get(1)
+        .map(layerx_wire::receipt::Effect::body)
+        .ok_or("fixture has no withdrawal effect")?;
+    if body.len() != 254 {
+        return Err("fixture withdrawal effect has an unexpected length".into());
+    }
+    Ok(body.to_vec())
+}
+
+fn expectation() -> Result<DebitExpectation, Box<dyn std::error::Error>> {
+    let decoded = layerx_wire::receipt::decode(RECEIPT).map_err(|error| format!("{error:?}"))?;
+    let protocol = decoded
+        .protocol()
+        .ok_or("fixture is not a protocol receipt")?;
+    let body = withdrawal_effect()?;
+    Ok(DebitExpectation {
+        activity_id: protocol.activity_id(),
+        network_id: u32::from_be_bytes(body.get(2..6).ok_or("network")?.try_into()?),
+        withdrawal_id: body.get(6..38).ok_or("withdrawal_id")?.try_into()?,
+        account: body.get(38..70).ok_or("account")?.try_into()?,
+        withdrawals_account: protocol.to(),
+        asset_id: body.get(70..102).ok_or("asset_id")?.try_into()?,
+        amount: u128::from_be_bytes(body.get(102..118).ok_or("amount")?.try_into()?),
+        recipient: EvmAddress::new(body.get(130..150).ok_or("recipient")?.try_into()?),
     })
-    .unwrap_or_else(|e| panic!("verifier: {e:?}"));
-    let mut tracker = FinalityTracker::new(
-        TrackerConfig {
-            endpoints: vec![anvil.endpoint.clone()],
-            minimum_endpoint_agreement: 1,
-            required_confirmations: 1,
-            poll_cadence: Duration::from_millis(20),
-            delayed_after_polls: 100,
-        },
-        transaction,
+}
+
+fn authorized_batch() -> Result<AuthorizedBatch, Box<dyn std::error::Error>> {
+    let decoded = layerx_wire::receipt::decode(RECEIPT).map_err(|error| format!("{error:?}"))?;
+    let protocol = decoded
+        .protocol()
+        .ok_or("fixture is not a protocol receipt")?;
+    Ok(AuthorizedBatch::new(
+        protocol.batch_id(),
+        protocol.asset(),
+        protocol.previous_state_root(),
+        protocol.resulting_state_root(),
+        SEQUENCER_PUBLIC,
+    ))
+}
+
+fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
+    let decoded = layerx_wire::receipt::decode(RECEIPT).map_err(|error| format!("{error:?}"))?;
+    let protocol = decoded
+        .protocol()
+        .ok_or("fixture is not a protocol receipt")?;
+    let header =
+        layerx_wire::receipt::decode_batch_header(HEADER).map_err(|error| format!("{error:?}"))?;
+    let expectation = expectation()?;
+    let debit = CommittedWithdrawalDebit::verify(RECEIPT, &authorized_batch()?, expectation)
+        .map_err(|error| format!("{error:?}"))?;
+    let material = WithdrawalMaterial::from_inclusion(
+        RECEIPT.to_vec(),
+        &fixture_proof()?,
+        HEADER.to_vec(),
+        *HEADER_SIGNATURE,
     )
-    .unwrap_or_else(|e| panic!("tracker: {e:?}"));
-    let report = tracker.poll();
-    assert!(matches!(report.stage(), FinalityStage::Final { .. }));
-    let proof = verifier
-        .obtain(&report, vault, fetched.clone())
-        .unwrap_or_else(|e| panic!("verified deposit: {e:?}"));
-    assert_eq!(proof.deposit_root(), leaf);
-    let mut tampered = fetched;
-    tampered.registration.signature[0] ^= 1;
-    assert!(verifier.obtain(&report, vault, tampered).is_err());
-    let mut wrong = custody;
-    wrong.amount = Amount::from_u128(VAULT_BALANCE + 1);
-    assert!(PublishedDepositProof::fetch_published(
-        &anvil.endpoint,
-        vault,
-        registry,
-        checkpoint,
-        wrong,
-        1
-    )
-    .is_err());
+    .map_err(|error| format!("{error:?}"))?;
+    let body = withdrawal_effect()?;
+    let anchor: [u8; 32] = body.get(150..182).ok_or("anchor")?.try_into()?;
+    let nullifier = withdrawal_nullifier(
+        expectation.network_id,
+        &expectation.withdrawal_id,
+        &expectation.account,
+        &expectation.asset_id,
+        expectation.amount,
+        &anchor,
+    );
+    if nullifier != protocol.context_hash() {
+        return Err("fixture nullifier does not match the receipt context hash".into());
+    }
+    Ok(Fixture {
+        debit,
+        material,
+        expectation,
+        batch_number: header.batch_number(),
+        state_root: header.resulting_state_root(),
+        receipt_root: header.receipt_merkle_root(),
+        anchor,
+        nullifier,
+        claim_id: withdrawal_claim_id(CHAIN_ID, nullifier, expectation.recipient),
+        transaction: hex(&[0xa1; 32]),
+        payout_transaction: hex(&[0xb2; 32]),
+    })
+}
+
+impl Fixture {
+    fn stored_claim(&self, status: u8) -> CustodyClaim {
+        CustodyClaim {
+            claim_id: self.claim_id,
+            kind: 1,
+            status,
+            nullifier: self.nullifier,
+            withdrawal_id: self.expectation.withdrawal_id,
+            account: self.expectation.account,
+            asset_id: self.expectation.asset_id,
+            denom: "ulxp".to_owned(),
+            recipient: self.expectation.recipient,
+            amount: self.expectation.amount,
+            batch_number: self.batch_number,
+            anchor: self.anchor,
+            available_at: AVAILABLE_AT,
+        }
+    }
+
+    fn asset(&self, enabled: bool, paused: bool) -> CustodyAsset {
+        CustodyAsset {
+            asset_id: self.expectation.asset_id,
+            denom: "ulxp".to_owned(),
+            pointer: EvmAddress::new([0; 20]),
+            enabled,
+            paused,
+            minimum_deposit: 1,
+            custody_cap: 1_000_000,
+            custodied: 1_000,
+            released: 0,
+            pending: 1,
+        }
+    }
+
+    fn queued_log(&self, amount: u128) -> Json {
+        let mut data = self.expectation.asset_id.to_vec();
+        data.extend_from_slice(&address_word(self.expectation.recipient));
+        data.extend_from_slice(&number_word(&amount.to_be_bytes()));
+        data.extend_from_slice(&number_word(&AVAILABLE_AT.to_be_bytes()));
+        log(
+            &self.transaction,
+            SUBMISSION_BLOCK,
+            CUSTODY_PRECOMPILE,
+            &[
+                CLAIM_QUEUED_TOPIC,
+                self.claim_id,
+                self.nullifier,
+                self.anchor,
+            ],
+            &data,
+        )
+    }
+
+    fn finalised_logs(&self) -> Vec<Json> {
+        let mut release = number_word(&self.expectation.amount.to_be_bytes()).to_vec();
+        release.extend_from_slice(&address_word(CUSTODY_PRECOMPILE));
+        vec![
+            log(
+                &self.payout_transaction,
+                PAYOUT_BLOCK,
+                CUSTODY_PRECOMPILE,
+                &[CLAIM_FINALISED_TOPIC, self.claim_id, self.nullifier],
+                &[],
+            ),
+            log(
+                &self.payout_transaction,
+                PAYOUT_BLOCK,
+                CUSTODY_PRECOMPILE,
+                &[
+                    CUSTODY_RELEASE_TOPIC,
+                    self.claim_id,
+                    self.expectation.asset_id,
+                    address_word(self.expectation.recipient),
+                ],
+                &release,
+            ),
+        ]
+    }
+
+    /// The chain exactly as a healthy Paxeer node serves a constructible claim.
+    fn chain(&self) -> Chain {
+        let mut chain = Chain {
+            head: SUBMISSION_BLOCK
+                .saturating_add(REQUIRED_CONFIRMATIONS)
+                .saturating_sub(1),
+            timestamp: AVAILABLE_AT.saturating_sub(600),
+            ..Chain::default()
+        };
+        chain.view(
+            ANCHOR_PRECOMPILE,
+            &anchor_call(FINALIZED_STATE_ROOT, self.batch_number),
+            &two_words(self.state_root, true),
+        );
+        chain.view(
+            ANCHOR_PRECOMPILE,
+            &anchor_call(FINALIZED_RECEIPT_ROOT, self.batch_number),
+            &two_words(self.receipt_root, true),
+        );
+        chain.view(
+            CUSTODY_PRECOMPILE,
+            &nullifier_status_calldata(self.nullifier),
+            &number_word(&[0]),
+        );
+        chain.view(
+            CUSTODY_PRECOMPILE,
+            &get_asset_calldata(self.expectation.asset_id),
+            &encode_asset(&self.asset(true, false)),
+        );
+        chain.view(
+            CUSTODY_PRECOMPILE,
+            &native_asset_id_calldata(),
+            &self.expectation.asset_id,
+        );
+        chain.view(
+            CUSTODY_PRECOMPILE,
+            &get_claim_calldata(self.claim_id),
+            &encode_claim(&self.stored_claim(0)),
+        );
+        chain
+    }
+
+    /// Registers the queue transaction, its `ClaimQueued` log and the pending
+    /// stored claim, exactly as the precompile leaves them after a request.
+    fn queue(&self, node: &Node, claim: &WithdrawalClaim) -> TestResult {
+        let calldata = claim.calldata().to_vec();
+        let queued = self.queued_log(self.expectation.amount);
+        let pending = encode_claim(&self.stored_claim(1));
+        let claim_id = self.claim_id;
+        let transaction = self.transaction.clone();
+        node.edit(move |chain| {
+            chain.transactions.insert(
+                transaction.clone(),
+                transaction_json(&transaction, Some(CUSTODY_PRECOMPILE), &calldata, "0x0"),
+            );
+            chain.receipts.insert(
+                transaction.clone(),
+                receipt_json(&transaction, SUBMISSION_BLOCK, 1, vec![queued]),
+            );
+            chain.view(CUSTODY_PRECOMPILE, &get_claim_calldata(claim_id), &pending);
+        })
+    }
+
+    fn submitted(
+        &self,
+        node: &Node,
+        boundary: &WithdrawalBoundary,
+    ) -> Result<
+        (
+            WithdrawalClaim,
+            layerx_paxeer_client::SubmittedWithdrawalClaim,
+        ),
+        Box<dyn std::error::Error>,
+    > {
+        let claim = boundary
+            .construct_claim(self.debit.clone(), self.material.clone())
+            .map_err(|error| format!("{error:?}"))?;
+        self.queue(node, &claim)?;
+        let report = node.report(boundary, hash(&self.transaction)?)?;
+        let submitted = boundary
+            .accept_submission(claim.clone(), &report)
+            .map_err(|error| format!("{error:?}"))?;
+        Ok((claim, submitted))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_constructed_claim_binds_the_real_inclusion_and_precompile_state() -> TestResult {
+    let fixture = fixture()?;
+    let node = Node::launch(fixture.chain())?;
+    let boundary = node.boundary()?;
+
+    assert_eq!(boundary.custody_precompile(), CUSTODY_PRECOMPILE);
+    assert_eq!(
+        boundary.protocol_version(),
+        layerx_intents::canonical::STATE_COMMITMENT_PROTOCOL_VERSION
+    );
+
+    let claim = boundary
+        .construct_claim(fixture.debit.clone(), fixture.material.clone())
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!(claim.contract(), CUSTODY_PRECOMPILE);
+    assert_eq!(claim.batch_number(), fixture.batch_number);
+    assert_eq!(claim.anchor(), fixture.anchor);
+    assert_eq!(claim.nullifier(), fixture.nullifier);
+    assert_eq!(claim.claim_id(), fixture.claim_id);
+    assert_eq!(claim.calldata(), fixture.material.request_calldata());
+    assert_eq!(claim.material(), &fixture.material);
+    assert_eq!(claim.debit().expectation(), fixture.expectation);
+    assert_ne!(fixture.anchor, [0; 32]);
+    Ok(())
 }
 
 #[test]
-fn native_checkpoint_wire_preserves_c_record_and_refuses_version_confusion() {
-    use layerx_paxeer_client::{
-        state_proof::{NativeEvidence, StateWitness},
-        wire,
-    };
-    let document =
-        layerx_paxeer_client::parse_json(include_str!("vectors/native-withdrawal-proof.json"))
-            .unwrap_or_else(|e| panic!("native vector: {e:?}"));
-    let encoded = document
-        .member("proof")
-        .and_then(Json::as_text)
-        .unwrap_or_else(|| panic!("proof"));
-    let encoded = encoded.strip_prefix("0x").unwrap_or_else(|| panic!("hex"));
-    let encoded = (0..encoded.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&encoded[i..i + 2], 16).unwrap_or_else(|e| panic!("hex: {e}")))
-        .collect::<Vec<_>>();
-    let witness = StateWitness::decode(&encoded).unwrap_or_else(|e| panic!("witness: {e}"));
-    let state_root = witness.root().unwrap_or_else(|e| panic!("root: {e}"));
-    let mut header = checkpoint_header(state_root, 1_000);
-    header.network_id = 7;
-    let checkpoint = checkpoint_hash(&header);
-    let proof = CheckpointProof {
-        native: Some(NativeEvidence {
-            request_anchor: witness.value[150..182]
-                .try_into()
-                .unwrap_or_else(|_| panic!("anchor")),
-            inclusion_checkpoint: checkpoint,
-            network_id: 7,
-            witness: encoded,
-            recipient_signature: Vec::new(),
-        }),
-        checkpoint_hash: checkpoint,
-        state_root,
-        epoch: header.epoch,
-        batch_number: header.batch_number,
-        data_availability_root: header.data_availability_root,
-        leaf_index: 0,
-        siblings: Vec::new(),
-        attestations: vec![signed_attestation(
-            &header,
-            checkpoint,
-            parse_address(FUNDED),
-        )],
-    };
-    verify_checkpoint_codec(&proof, header.protocol_version);
-    let encoded =
-        wire::encode_checkpoint_proof_for_protocol(&proof, 65_536, header.protocol_version)
-            .unwrap_or_else(|e| panic!("encode: {e:?}"));
-    assert_eq!(&encoded[..2], &[2, 2]);
-    for length in 0..encoded.len() {
-        assert!(wire::decode_checkpoint_proof_for_protocol(
-            &encoded[..length],
-            65_536,
-            header.protocol_version
-        )
-        .is_err());
+fn an_accepted_submission_progresses_and_pays_out_against_verified_evidence() -> TestResult {
+    let fixture = fixture()?;
+    let node = Node::launch(fixture.chain())?;
+    let boundary = node.boundary()?;
+    let (claim, submitted) = fixture.submitted(&node, &boundary)?;
+
+    assert_eq!(submitted.claim(), &claim);
+    assert_eq!(submitted.claim_id(), fixture.claim_id);
+    assert_eq!(submitted.available_at(), AVAILABLE_AT);
+    assert_eq!(
+        submitted.submission_transaction(),
+        hash(&fixture.transaction)?
+    );
+    assert_eq!(
+        submitted.submission_inclusion().block.number,
+        SUBMISSION_BLOCK
+    );
+    assert_eq!(
+        submitted.finalise_calldata(),
+        fixture.material.finalise_calldata()
+    );
+    assert_ne!(submitted.finalise_calldata(), claim.calldata());
+
+    match boundary
+        .progress(&submitted)
+        .map_err(|error| format!("{error:?}"))?
+    {
+        ClaimProgress::WaitingForChallengeWindow {
+            available_at,
+            observed_at,
+            remaining,
+        } => {
+            assert_eq!(available_at, AVAILABLE_AT);
+            assert_eq!(observed_at, AVAILABLE_AT - 600);
+            assert_eq!(remaining, Duration::from_secs(600));
+        }
+        other => return Err(format!("expected a challenge window, observed {other:?}").into()),
     }
-    let mut changed = encoded.clone();
-    changed[0] = 1;
-    assert!(
-        wire::decode_checkpoint_proof_for_protocol(&changed, 65_536, header.protocol_version)
-            .is_err()
+
+    node.edit(|chain| chain.timestamp = AVAILABLE_AT)?;
+    assert_eq!(
+        boundary
+            .progress(&submitted)
+            .map_err(|error| format!("{error:?}"))?,
+        ClaimProgress::ReadyToFinalise {
+            available_at: AVAILABLE_AT,
+            observed_at: AVAILABLE_AT,
+        }
     );
-    changed = encoded.clone();
-    changed.push(0);
-    assert!(
-        wire::decode_checkpoint_proof_for_protocol(&changed, 65_536, header.protocol_version)
-            .is_err()
+
+    // The permissionless finalise call pays the recipient in wei.
+    let finalise = submitted.finalise_calldata();
+    let payout = fixture.payout_transaction.clone();
+    let logs = fixture.finalised_logs();
+    let paid = encode_claim(&fixture.stored_claim(2));
+    let recipient = hex(&fixture.expectation.recipient.bytes());
+    let wei = fixture
+        .expectation
+        .amount
+        .checked_mul(WEI_PER_BASE_UNIT)
+        .ok_or("payout wei")?;
+    let claim_id = fixture.claim_id;
+    let nullifier = fixture.nullifier;
+    node.edit(move |chain| {
+        chain.head = PAYOUT_BLOCK
+            .saturating_add(REQUIRED_CONFIRMATIONS)
+            .saturating_sub(1);
+        chain.transactions.insert(
+            payout.clone(),
+            transaction_json(&payout, Some(CUSTODY_PRECOMPILE), &finalise, "0x0"),
+        );
+        chain
+            .receipts
+            .insert(payout.clone(), receipt_json(&payout, PAYOUT_BLOCK, 1, logs));
+        chain.view(CUSTODY_PRECOMPILE, &get_claim_calldata(claim_id), &paid);
+        chain.view(
+            CUSTODY_PRECOMPILE,
+            &nullifier_status_calldata(nullifier),
+            &number_word(&[2]),
+        );
+        chain.balances.insert(recipient, format!("0x{wei:x}"));
+    })?;
+
+    assert_eq!(
+        boundary
+            .progress(&submitted)
+            .map_err(|error| format!("{error:?}"))?,
+        ClaimProgress::PaidAwaitingPayoutVerification
     );
-    let mut changed = proof.clone();
-    changed
-        .native
-        .as_mut()
-        .unwrap_or_else(|| panic!("native"))
-        .inclusion_checkpoint[0] ^= 1;
-    assert!(
-        wire::encode_checkpoint_proof_for_protocol(&changed, 65_536, header.protocol_version)
-            .is_err()
+
+    let payout_report = node.report(&boundary, hash(&fixture.payout_transaction)?)?;
+    let evidence = boundary
+        .verify_payout(&submitted, &payout_report)
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!(evidence.claim_id, fixture.claim_id);
+    assert_eq!(evidence.checkpoint_hash, fixture.anchor);
+    assert_eq!(
+        evidence.debit_receipt_reference,
+        fixture.debit.receipt_reference()
     );
+    assert_eq!(evidence.vault, CUSTODY_PRECOMPILE);
+    assert_eq!(evidence.token, EvmAddress::new([0; 20]));
+    assert_eq!(evidence.asset_id, fixture.expectation.asset_id);
+    assert_eq!(evidence.recipient, fixture.expectation.recipient);
+    assert_eq!(evidence.amount, fixture.expectation.amount);
+    assert_eq!(
+        evidence.payout_transaction,
+        hash(&fixture.payout_transaction)?
+    );
+    assert_eq!(evidence.payout_inclusion.block.number, PAYOUT_BLOCK);
+
+    // A recipient balance below the released amount is never a payout.
+    let recipient = hex(&fixture.expectation.recipient.bytes());
+    node.edit(move |chain| {
+        chain
+            .balances
+            .insert(recipient, format!("0x{:x}", WEI_PER_BASE_UNIT - 1));
+    })?;
+    assert!(matches!(
+        boundary.verify_payout(&submitted, &payout_report),
+        Err(WithdrawalError::PayoutNotVerified { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn a_payout_is_refused_for_a_wrong_target_input_or_value() -> TestResult {
+    let fixture = fixture()?;
+    let node = Node::launch(fixture.chain())?;
+    let boundary = node.boundary()?;
+    let claim = boundary
+        .construct_claim(fixture.debit.clone(), fixture.material.clone())
+        .map_err(|error| format!("{error:?}"))?;
+    fixture.queue(&node, &claim)?;
+    let report = node.report(&boundary, hash(&fixture.transaction)?)?;
+    let calldata = claim.calldata().to_vec();
+
+    let elsewhere = EvmAddress::new([0x0d; 20]);
+    let transaction = fixture.transaction.clone();
+    let wrong_target = transaction_json(&transaction, Some(elsewhere), &calldata, "0x0");
+    node.edit(move |chain| {
+        chain.transactions.insert(transaction, wrong_target);
+    })?;
+    assert_eq!(
+        boundary.accept_submission(claim.clone(), &report),
+        Err(WithdrawalError::TransactionTarget {
+            expected: CUSTODY_PRECOMPILE,
+            found: Some(elsewhere),
+        })
+    );
+
+    let transaction = fixture.transaction.clone();
+    let wrong_input = transaction_json(
+        &transaction,
+        Some(CUSTODY_PRECOMPILE),
+        &fixture.material.finalise_calldata(),
+        "0x0",
+    );
+    node.edit(move |chain| {
+        chain.transactions.insert(transaction, wrong_input);
+    })?;
+    assert_eq!(
+        boundary.accept_submission(claim.clone(), &report),
+        Err(WithdrawalError::TransactionInput)
+    );
+
+    let transaction = fixture.transaction.clone();
+    let wrong_value = transaction_json(&transaction, Some(CUSTODY_PRECOMPILE), &calldata, "0x1");
+    node.edit(move |chain| {
+        chain.transactions.insert(transaction, wrong_value);
+    })?;
+    assert_eq!(
+        boundary.accept_submission(claim, &report),
+        Err(WithdrawalError::TransactionValue)
+    );
+    Ok(())
+}
+
+#[test]
+fn construction_refuses_unfinalised_batches_and_mismatched_roots() -> TestResult {
+    let fixture = fixture()?;
+    let mut chain = fixture.chain();
+    chain.view(
+        ANCHOR_PRECOMPILE,
+        &anchor_call(FINALIZED_STATE_ROOT, fixture.batch_number),
+        &two_words([0; 32], false),
+    );
+    let node = Node::launch(chain)?;
+    let boundary = node.boundary()?;
+    let batch_number = fixture.batch_number;
+    assert_eq!(
+        boundary.construct_claim(fixture.debit.clone(), fixture.material.clone()),
+        Err(WithdrawalError::Refused(ClaimRefusal::BatchNotFinalised {
+            batch_number
+        }))
+    );
+
+    let mut wrong_state_root = fixture.state_root;
+    wrong_state_root[0] ^= 1;
+    node.edit(move |chain| {
+        chain.view(
+            ANCHOR_PRECOMPILE,
+            &anchor_call(FINALIZED_STATE_ROOT, batch_number),
+            &two_words(wrong_state_root, true),
+        );
+    })?;
+    assert_eq!(
+        boundary.construct_claim(fixture.debit.clone(), fixture.material.clone()),
+        Err(WithdrawalError::Refused(
+            ClaimRefusal::FinalisedRootMismatch { batch_number }
+        ))
+    );
+
+    let mut wrong_receipt_root = fixture.receipt_root;
+    wrong_receipt_root[31] ^= 1;
+    let state_root = fixture.state_root;
+    node.edit(move |chain| {
+        chain.view(
+            ANCHOR_PRECOMPILE,
+            &anchor_call(FINALIZED_STATE_ROOT, batch_number),
+            &two_words(state_root, true),
+        );
+        chain.view(
+            ANCHOR_PRECOMPILE,
+            &anchor_call(FINALIZED_RECEIPT_ROOT, batch_number),
+            &two_words(wrong_receipt_root, true),
+        );
+    })?;
+    assert_eq!(
+        boundary.construct_claim(fixture.debit.clone(), fixture.material.clone()),
+        Err(WithdrawalError::Refused(
+            ClaimRefusal::FinalisedRootMismatch { batch_number }
+        ))
+    );
+    Ok(())
+}
+
+#[test]
+fn construction_refuses_used_nullifiers_and_unavailable_assets() -> TestResult {
+    let fixture = fixture()?;
+    let node = Node::launch(fixture.chain())?;
+    let boundary = node.boundary()?;
+    let nullifier = fixture.nullifier;
+
+    for status in [1_u8, 2, 3] {
+        node.edit(move |chain| {
+            chain.view(
+                CUSTODY_PRECOMPILE,
+                &nullifier_status_calldata(nullifier),
+                &number_word(&[status]),
+            );
+        })?;
+        assert_eq!(
+            boundary.construct_claim(fixture.debit.clone(), fixture.material.clone()),
+            Err(WithdrawalError::Refused(ClaimRefusal::NullifierUsed {
+                nullifier,
+                status,
+            }))
+        );
+    }
+    node.edit(move |chain| {
+        chain.view(
+            CUSTODY_PRECOMPILE,
+            &nullifier_status_calldata(nullifier),
+            &number_word(&[0]),
+        );
+    })?;
+
+    for (enabled, paused) in [(false, false), (true, true)] {
+        let asset = encode_asset(&fixture.asset(enabled, paused));
+        let asset_id = fixture.expectation.asset_id;
+        node.edit(move |chain| {
+            chain.view(CUSTODY_PRECOMPILE, &get_asset_calldata(asset_id), &asset);
+        })?;
+        assert_eq!(
+            boundary.construct_claim(fixture.debit.clone(), fixture.material.clone()),
+            Err(WithdrawalError::Refused(ClaimRefusal::AssetUnavailable {
+                asset_id
+            }))
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn construction_refuses_material_that_is_not_the_verified_debit() -> TestResult {
+    let fixture = fixture()?;
+    let node = Node::launch(fixture.chain())?;
+    let boundary = node.boundary()?;
+
+    let mut foreign = fixture.material.clone();
+    foreign.receipt = MAINTENANCE_RECEIPT.to_vec();
+    assert_eq!(
+        boundary.construct_claim(fixture.debit.clone(), foreign),
+        Err(WithdrawalError::Refused(ClaimRefusal::ReceiptMismatch {
+            debit: fixture.debit.receipt_reference(),
+            material: <[u8; 32]>::from(Sha256::digest(MAINTENANCE_RECEIPT)),
+        }))
+    );
+
+    let mut tampered_proof = fixture.material.clone();
+    let last = tampered_proof.proof.len().saturating_sub(1);
+    tampered_proof.proof[last] ^= 1;
+    assert_eq!(
+        boundary.construct_claim(fixture.debit.clone(), tampered_proof),
+        Err(WithdrawalError::Refused(ClaimRefusal::Inclusion(
+            "receipt_path"
+        )))
+    );
+
+    let mut tampered_signature = fixture.material.clone();
+    tampered_signature.header_signature[0] ^= 1;
+    assert_eq!(
+        boundary.construct_claim(fixture.debit.clone(), tampered_signature),
+        Err(WithdrawalError::Refused(ClaimRefusal::Inclusion(
+            "header_signature"
+        )))
+    );
+
+    let mut empty_header = fixture.material.clone();
+    empty_header.header.clear();
+    assert_eq!(
+        boundary.construct_claim(fixture.debit.clone(), empty_header),
+        Err(WithdrawalError::Refused(ClaimRefusal::Material("header")))
+    );
+
+    let mut blank_signature = fixture.material.clone();
+    blank_signature.header_signature = [0; 64];
+    assert_eq!(
+        boundary.construct_claim(fixture.debit.clone(), blank_signature),
+        Err(WithdrawalError::Refused(ClaimRefusal::Material(
+            "header_signature"
+        )))
+    );
+    Ok(())
+}
+
+#[test]
+fn construction_refuses_a_debit_that_names_another_network_or_withdrawal() -> TestResult {
+    let fixture = fixture()?;
+    let node = Node::launch(fixture.chain())?;
+    let boundary = node.boundary()?;
+    let batch = authorized_batch()?;
+
+    let mut other_network = fixture.expectation;
+    other_network.network_id ^= 1;
+    let debit = CommittedWithdrawalDebit::verify(RECEIPT, &batch, other_network)
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!(
+        boundary.construct_claim(debit, fixture.material.clone()),
+        Err(WithdrawalError::Refused(ClaimRefusal::NetworkMismatch {
+            debit: other_network.network_id,
+            header: fixture.expectation.network_id,
+        }))
+    );
+
+    let mut other_withdrawal = fixture.expectation;
+    other_withdrawal.withdrawal_id[0] ^= 1;
+    let debit = CommittedWithdrawalDebit::verify(RECEIPT, &batch, other_withdrawal)
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!(
+        boundary.construct_claim(debit, fixture.material.clone()),
+        Err(WithdrawalError::Refused(ClaimRefusal::Effect("withdrawal")))
+    );
+    Ok(())
+}
+
+#[test]
+fn a_cancelled_claim_reports_both_sides_of_the_funds_boundary() -> TestResult {
+    let fixture = fixture()?;
+    let node = Node::launch(fixture.chain())?;
+    let boundary = node.boundary()?;
+    let (_, submitted) = fixture.submitted(&node, &boundary)?;
+
+    let cancelled = encode_claim(&fixture.stored_claim(3));
+    let claim_id = fixture.claim_id;
+    let nullifier = fixture.nullifier;
+    node.edit(move |chain| {
+        chain.view(
+            CUSTODY_PRECOMPILE,
+            &get_claim_calldata(claim_id),
+            &cancelled,
+        );
+        chain.view(
+            CUSTODY_PRECOMPILE,
+            &nullifier_status_calldata(nullifier),
+            &number_word(&[3]),
+        );
+    })?;
+
+    let expected = CancelledFundsDisposition {
+        paxeer: PaxeerFundsDisposition::RetainedInVault {
+            vault: CUSTODY_PRECOMPILE,
+            asset_id: fixture.expectation.asset_id,
+            amount: fixture.expectation.amount,
+        },
+        layerx: ProtocolDebitDisposition::RemainsCommittedPendingProtocolRecovery {
+            debit_receipt_reference: fixture.debit.receipt_reference(),
+        },
+    };
+    assert_eq!(
+        boundary
+            .progress(&submitted)
+            .map_err(|error| format!("{error:?}"))?,
+        ClaimProgress::Cancelled {
+            disposition: expected
+        }
+    );
+
+    // Cancellation carries no transaction: the evidence is the agreed state.
+    let evidence = boundary
+        .verify_cancellation(&submitted)
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!(evidence.claim_id, fixture.claim_id);
+    assert_eq!(evidence.checkpoint_hash, fixture.anchor);
+    assert_eq!(evidence.disposition, expected);
+    assert_eq!(
+        evidence.observed_head,
+        SUBMISSION_BLOCK
+            .saturating_add(REQUIRED_CONFIRMATIONS)
+            .saturating_sub(1)
+    );
+    assert_eq!(
+        evidence.debit_receipt_reference,
+        fixture.debit.receipt_reference()
+    );
+
+    // A cancelled claim can never be turned into a payout.
+    let report = node.report(&boundary, hash(&fixture.transaction)?)?;
+    assert!(boundary.verify_payout(&submitted, &report).is_err());
+
+    // Nor is cancellation accepted while the nullifier is not terminal.
+    node.edit(move |chain| {
+        chain.view(
+            CUSTODY_PRECOMPILE,
+            &nullifier_status_calldata(nullifier),
+            &number_word(&[1]),
+        );
+    })?;
+    assert!(matches!(
+        boundary.verify_cancellation(&submitted),
+        Err(WithdrawalError::ClaimState { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn restore_submission_readmits_a_claim_in_any_stored_state() -> TestResult {
+    let fixture = fixture()?;
+    let node = Node::launch(fixture.chain())?;
+    let boundary = node.boundary()?;
+    let claim = boundary
+        .construct_claim(fixture.debit.clone(), fixture.material.clone())
+        .map_err(|error| format!("{error:?}"))?;
+    fixture.queue(&node, &claim)?;
+    let report = node.report(&boundary, hash(&fixture.transaction)?)?;
+    let claim_id = fixture.claim_id;
+
+    for status in [1_u8, 2, 3] {
+        let stored = encode_claim(&fixture.stored_claim(status));
+        node.edit(move |chain| {
+            chain.view(CUSTODY_PRECOMPILE, &get_claim_calldata(claim_id), &stored);
+        })?;
+        let submitted = boundary
+            .restore_submission(claim.clone(), &report)
+            .map_err(|error| format!("restore status {status}: {error:?}"))?;
+        assert_eq!(submitted.claim_id(), fixture.claim_id);
+        assert_eq!(submitted.available_at(), AVAILABLE_AT);
+        if status != 1 {
+            // Only `accept_submission` insists the claim is still pending.
+            assert!(matches!(
+                boundary.accept_submission(claim.clone(), &report),
+                Err(WithdrawalError::ClaimState { .. })
+            ));
+        }
+    }
+
+    let absent = encode_claim(&fixture.stored_claim(0));
+    node.edit(move |chain| {
+        chain.view(CUSTODY_PRECOMPILE, &get_claim_calldata(claim_id), &absent);
+    })?;
+    assert!(matches!(
+        boundary.restore_submission(claim.clone(), &report),
+        Err(WithdrawalError::ClaimState { .. })
+    ));
+
+    // A stored claim that names another recipient never binds.
+    let mut foreign = fixture.stored_claim(1);
+    foreign.recipient = EvmAddress::new([0x0e; 20]);
+    let encoded = encode_claim(&foreign);
+    node.edit(move |chain| {
+        chain.view(CUSTODY_PRECOMPILE, &get_claim_calldata(claim_id), &encoded);
+    })?;
+    assert!(matches!(
+        boundary.restore_submission(claim, &report),
+        Err(WithdrawalError::ClaimState { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn a_queue_event_that_does_not_bind_the_claim_is_refused() -> TestResult {
+    let fixture = fixture()?;
+    let node = Node::launch(fixture.chain())?;
+    let boundary = node.boundary()?;
+    let claim = boundary
+        .construct_claim(fixture.debit.clone(), fixture.material.clone())
+        .map_err(|error| format!("{error:?}"))?;
+    fixture.queue(&node, &claim)?;
+    let transaction = fixture.transaction.clone();
+
+    let tx = transaction.clone();
+    node.edit(move |chain| {
+        chain.receipts.insert(
+            tx.clone(),
+            receipt_json(&tx, SUBMISSION_BLOCK, 1, Vec::new()),
+        );
+    })?;
+    let report = node.report(&boundary, hash(&fixture.transaction)?)?;
+    assert_eq!(
+        boundary.accept_submission(claim.clone(), &report),
+        Err(WithdrawalError::MissingEvent("ClaimQueued"))
+    );
+
+    let tx = transaction.clone();
+    let queued = fixture.queued_log(fixture.expectation.amount);
+    let repeated = vec![queued.clone(), queued];
+    node.edit(move |chain| {
+        chain
+            .receipts
+            .insert(tx.clone(), receipt_json(&tx, SUBMISSION_BLOCK, 1, repeated));
+    })?;
+    let report = node.report(&boundary, hash(&fixture.transaction)?)?;
+    assert_eq!(
+        boundary.accept_submission(claim.clone(), &report),
+        Err(WithdrawalError::DuplicateEvent("ClaimQueued"))
+    );
+
+    let tx = transaction;
+    let foreign = fixture.queued_log(fixture.expectation.amount.saturating_add(1));
+    node.edit(move |chain| {
+        chain.receipts.insert(
+            tx.clone(),
+            receipt_json(&tx, SUBMISSION_BLOCK, 1, vec![foreign]),
+        );
+    })?;
+    let report = node.report(&boundary, hash(&fixture.transaction)?)?;
+    assert!(matches!(
+        boundary.accept_submission(claim, &report),
+        Err(WithdrawalError::MalformedEvent { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn a_reverted_or_unconfirmed_submission_is_never_accepted() -> TestResult {
+    let fixture = fixture()?;
+    let node = Node::launch(fixture.chain())?;
+    let boundary = node.boundary()?;
+    let claim = boundary
+        .construct_claim(fixture.debit.clone(), fixture.material.clone())
+        .map_err(|error| format!("{error:?}"))?;
+    fixture.queue(&node, &claim)?;
+
+    // One confirmation short of the declared depth.
+    node.edit(|chain| chain.head = SUBMISSION_BLOCK)?;
+    let mut tracker = boundary
+        .track(hash(&fixture.transaction)?)
+        .map_err(|error| format!("{error:?}"))?;
+    let report = tracker.poll();
+    assert!(matches!(report.stage(), FinalityStage::Confirming { .. }));
+    assert!(matches!(
+        boundary.accept_submission(claim.clone(), &report),
+        Err(WithdrawalError::NotFinal { .. })
+    ));
+
+    // A reverted submission is final but never accepted.
+    let transaction = fixture.transaction.clone();
+    let queued = fixture.queued_log(fixture.expectation.amount);
+    node.edit(move |chain| {
+        chain.head = SUBMISSION_BLOCK
+            .saturating_add(REQUIRED_CONFIRMATIONS)
+            .saturating_sub(1);
+        chain.receipts.insert(
+            transaction.clone(),
+            receipt_json(&transaction, SUBMISSION_BLOCK, 0, vec![queued]),
+        );
+    })?;
+    let report = node.report(&boundary, hash(&fixture.transaction)?)?;
+    assert!(matches!(
+        boundary.accept_submission(claim, &report),
+        Err(WithdrawalError::Reverted { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn boundary_configuration_refuses_weak_policies() -> TestResult {
+    let base = configuration(endpoint("http://127.0.0.1:24999"));
+
+    let mut zero_confirmations = base.clone();
+    zero_confirmations.required_confirmations = 0;
+    assert!(WithdrawalBoundary::new(zero_confirmations).is_err());
+
+    let mut zero_cadence = base.clone();
+    zero_cadence.poll_cadence = Duration::ZERO;
+    assert!(WithdrawalBoundary::new(zero_cadence).is_err());
+
+    let mut zero_stall = base.clone();
+    zero_stall.delayed_after_polls = 0;
+    assert!(WithdrawalBoundary::new(zero_stall).is_err());
+
+    let mut no_endpoints = base.clone();
+    no_endpoints.endpoints.clear();
+    assert!(WithdrawalBoundary::new(no_endpoints).is_err());
+
+    let mut unreachable_agreement = base.clone();
+    unreachable_agreement.minimum_endpoint_agreement = 2;
+    assert!(WithdrawalBoundary::new(unreachable_agreement).is_err());
+
+    // The custody precompile only accepts state-commitment withdrawal receipts.
+    for version in [0_u16, 1, 2, 4] {
+        assert!(WithdrawalBoundary::new_for_protocol(base.clone(), version).is_err());
+    }
+    assert!(WithdrawalBoundary::new_for_protocol(
+        base,
+        layerx_intents::canonical::STATE_COMMITMENT_PROTOCOL_VERSION,
+    )
+    .is_ok());
+    Ok(())
+}
+
+#[test]
+fn the_boundary_only_ever_reads_the_two_declared_precompiles() -> TestResult {
+    let fixture = fixture()?;
+    let node = Node::launch(fixture.chain())?;
+    let boundary = node.boundary()?;
+    let (_, submitted) = fixture.submitted(&node, &boundary)?;
+    boundary
+        .progress(&submitted)
+        .map_err(|error| format!("{error:?}"))?;
+
+    // Every declared view is a fixed-width read-only call.
+    assert_eq!(get_claim_calldata(fixture.claim_id).len(), 36);
+    assert_eq!(nullifier_status_calldata(fixture.nullifier).len(), 36);
+    assert_eq!(get_asset_calldata(fixture.expectation.asset_id).len(), 36);
+    assert_eq!(native_asset_id_calldata().len(), 4);
+    assert_eq!(exit_eligible_calldata().len(), 4);
+
+    let chain = node.chain.lock().map_err(|_| "chain lock poisoned")?;
+    let custody = hex(&CUSTODY_PRECOMPILE.bytes());
+    let anchor = hex(&ANCHOR_PRECOMPILE.bytes());
+    for (target, _) in chain.calls.keys() {
+        assert!(
+            target == &custody || target == &anchor,
+            "unexpected call target {target}"
+        );
+    }
+    Ok(())
 }

@@ -136,7 +136,7 @@ def retain_custody_proofs(work, origins, ca, identity, vault):
 
 
 @contextlib.contextmanager
-def owned_chain(work, artifacts):
+def owned_chain(work, artifacts, custody_genesis=None):
     with tempfile.TemporaryDirectory(prefix='lxp-custody-paxd-') as temporary:
         private = Path(temporary)
         ports, reservations = [], []
@@ -161,6 +161,11 @@ def owned_chain(work, artifacts):
                    LAYERX_PAXEER_COMMIT_TIMEOUT_NANOSECONDS='1000000000',
                    LAYERX_PAXEER_DEPLOYER_ADDRESS=account.address,
                    LAYERX_PAXEER_USDL_RUNTIME=str(runtime_file))
+        if custody_genesis is not None:
+            # LayerX custody is the native layerxcustody module behind the precompile at 0x…1013:
+            # init-chain.sh merges this section into app_state.layerxcustody before validate-genesis,
+            # and without it the module maps no asset and admits no deposit.
+            env['LAYERX_PAXEER_CUSTODY_GENESIS_FILE'] = str(custody_genesis)
         env['GOMAXPROCS'] = str(min(4, int(env.get('GOMAXPROCS', '4'))))
         assert int(env['GOMAXPROCS']) > 0
         for name, port in zip(('EVM', 'EVM_WS', 'RPC', 'P2P', 'GRPC', 'GRPC_WEB', 'API'), ports):
