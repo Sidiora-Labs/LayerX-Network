@@ -9,7 +9,9 @@ import {
   decodeProgram,
   decodeReceipt,
   decodeRecord,
+  decodeUnifiedAccount,
   decodeVerificationReport,
+  parseAccountIdentifier,
   validExplorerCoordinate,
   validExplorerIdentifier,
   validExplorerName,
@@ -22,6 +24,7 @@ import {
   type NameResolutionRecord,
   type ProgramRecord,
   type ReceiptRecord,
+  type UnifiedAccountRecord,
 } from "./model";
 
 const FETCH_TIMEOUT_MS = 8_000;
@@ -210,6 +213,45 @@ export async function programRecord(identifier: string): Promise<ProgramRecord |
   }
   try {
     return decodeProgram(await response.json());
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw error;
+    }
+    throw new ExplorerUnavailableError();
+  }
+}
+
+export async function unifiedAccount(
+  identifier: string,
+  beforeBlock?: string,
+): Promise<UnifiedAccountRecord | undefined> {
+  const account = parseAccountIdentifier(identifier);
+  if (account === undefined || (beforeBlock !== undefined && !validExplorerCoordinate(beforeBlock))) {
+    throw new TypeError("Invalid unified account query");
+  }
+  const { origin, bearer } = programExplorerOrigin();
+  const url = new URL(`/v1/accounts/${encodeURIComponent(account.canonical)}/unified`, origin);
+  if (beforeBlock !== undefined) {
+    url.searchParams.set("before_block", beforeBlock);
+  }
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${bearer}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+  } catch {
+    throw new ExplorerUnavailableError();
+  }
+  if (response.status === 404) {
+    return undefined;
+  }
+  if (!response.ok) {
+    throw new ExplorerUnavailableError();
+  }
+  try {
+    return decodeUnifiedAccount(await response.json());
   } catch (error) {
     if (error instanceof TypeError) {
       throw error;

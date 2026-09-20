@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { resolveName } from "../../../explorer/client";
 import {
+  accountIdentifierPath,
+  parseAccountIdentifier,
   validExplorerCoordinate,
   validExplorerIdentifier,
   validExplorerName,
@@ -37,9 +39,16 @@ export async function GET(request: NextRequest) {
       return invalid(request, "unknown-name");
     }
     return NextResponse.redirect(
-      new URL(`/explorer/accounts/${encodeURIComponent(resolved.did)}`, request.url),
+      new URL(accountIdentifierPath(resolved.did.toLowerCase()), request.url),
       303,
     );
+  }
+  if (kind === "account") {
+    const account = parseAccountIdentifier(identifier);
+    if (account === undefined) {
+      return invalid(request, "invalid");
+    }
+    return NextResponse.redirect(new URL(accountIdentifierPath(account.canonical), request.url), 303);
   }
   const validIdentifier = kind === "batch"
     ? validExplorerCoordinate(identifier)

@@ -878,6 +878,7 @@ dependencies = [
  "native-tls",
  "serde_json",
  "sha2",
+ "sha3",
 ]
 
 [[package]]

@@ -5,6 +5,7 @@ pub mod mirror;
 pub mod programs;
 mod query;
 pub mod reads;
+pub mod unified;
 pub mod verify;
 
 use std::collections::{BTreeMap, BTreeSet};
