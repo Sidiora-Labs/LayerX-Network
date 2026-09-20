@@ -16,6 +16,9 @@ pub(crate) struct Execution<'a> {
     pub action_key: [u8; 32],
     pub target: EvmAddress,
     pub calldata: &'a [u8],
+    /// Native transaction value in wei. Custody deposits of the native coin
+    /// carry the amount here; every other custody call carries nothing.
+    pub value: [u8; 32],
     pub signed_transaction: Option<&'a [u8]>,
 }
 
@@ -68,7 +71,7 @@ pub(crate) fn prepare(
         max_fee_per_gas: context.evm_max_fee_per_gas,
         gas_limit: context.evm_gas_limit,
         to: execution.target.bytes(),
-        value: [0; 32],
+        value: execution.value,
         calldata: execution.calldata.to_vec(),
     })
 }

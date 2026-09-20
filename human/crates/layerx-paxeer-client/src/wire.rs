@@ -4,8 +4,8 @@ use layerx_types::intent::EvmAddress;
 
 use crate::deposit::{DepositNativeError, DEPOSIT_NATIVE_PAYLOAD_MAX};
 use crate::{
-    CheckpointProof, ClaimRefusal, DebitExpectation, DebitFault, DepositFailure, DepositProof,
-    WithdrawalAttestation,
+    ClaimRefusal, DebitExpectation, DebitFault, DepositFailure, DepositProof, ForcedExitMaterial,
+    WithdrawalMaterial,
 };
 
 const VERSION: u8 = 1;
@@ -17,11 +17,8 @@ const DEPOSIT_FAILURE_TAG: u8 = 5;
 const LEGACY_DEPOSIT_PROOF_BYTES: usize = 2 + DEPOSIT_NATIVE_PAYLOAD_MAX;
 pub const MAX_DEPOSIT_PROOF_BYTES: usize = LEGACY_DEPOSIT_PROOF_BYTES + 4 + 207 + 427;
 pub const MAX_DEPOSIT_FAILURE_BYTES: usize = 65_538;
-const MAX_CHECKPOINT_SIBLINGS: usize = 256;
-const MAX_CHECKPOINT_ATTESTATIONS: usize = 4096;
+const FORCED_EXIT_TAG: u8 = 6;
 const DEBIT_BYTES: usize = 1 + 1 + 32 + 4 + 32 + 32 + 32 + 32 + 16 + 20;
-const ATTESTATION_BYTES: usize =
-    2 + 4 + 8 + 20 + 8 + 32 + 32 + 32 + 8 + 32 + 1 + 1 + 1 + 8 + 20 + 32 + 32 + 1;
 
 /// A structural or canonical wire refusal. Cryptographic policy failures stay
 /// in their owning domain APIs and are never flattened into this error.
@@ -239,289 +236,130 @@ pub fn decode_debit_expectation(
     Ok(value)
 }
 
-/// # Errors
-/// Refuses invalid wire material and values exceeding the declared bounds.
-pub fn encode_checkpoint_proof(
-    value: &CheckpointProof,
-    maximum_bytes: usize,
-) -> Result<Vec<u8>, NativeWireError> {
-    encode_checkpoint_proof_for_protocol(
-        value,
-        maximum_bytes,
-        layerx_intents::canonical::PROTOCOL_VERSION,
-    )
-}
-
-/// Encodes checkpoint material whose attestations declare exactly the
-/// explicitly selected `LayerX` protocol version. The byte layout is identical
-/// across versions; only the validation the codec applies is selected.
+/// Encodes withdrawal material for privilege-boundary exchange: version,
+/// tag, then the receipt, `0x4d50` proof and header as u32-length-prefixed
+/// byte strings and the 64-byte sequencer header signature.
 ///
 /// # Errors
-///
-/// Returns a limit refusal for oversized material, and the checkpoint
-/// refusal of [`CheckpointProof::validated_for_protocol`].
-pub fn encode_checkpoint_proof_for_protocol(
-    value: &CheckpointProof,
+/// Refuses material outside the custody evidence bounds and oversized output.
+pub fn encode_withdrawal_material(
+    value: &WithdrawalMaterial,
     maximum_bytes: usize,
-    protocol_version: u16,
 ) -> Result<Vec<u8>, NativeWireError> {
-    if value.siblings.len() > MAX_CHECKPOINT_SIBLINGS
-        || value.attestations.len() > MAX_CHECKPOINT_ATTESTATIONS
-    {
-        return Err(NativeWireError::Limit);
+    let value = value
+        .clone()
+        .validated()
+        .map_err(|_| NativeWireError::Checkpoint(ClaimRefusal::Material("bounds")))?;
+    let mut out = vec![VERSION, CHECKPOINT_TAG];
+    for part in [&value.receipt, &value.proof, &value.header] {
+        out.extend_from_slice(
+            &u32::try_from(part.len())
+                .map_err(|_| NativeWireError::Limit)?
+                .to_be_bytes(),
+        );
+        out.extend_from_slice(part);
     }
-    CheckpointProof::validated_for_protocol(
-        protocol_version,
-        value.checkpoint_hash,
-        value.state_root,
-        value.epoch,
-        value.batch_number,
-        value.data_availability_root,
-        value.leaf_index,
-        value.siblings.clone(),
-        value.attestations.clone(),
-    )
-    .map_err(NativeWireError::Checkpoint)?;
-    let mut out = Vec::new();
-    out.extend_from_slice(&[
-        if value.native.is_some() { 2 } else { VERSION },
-        CHECKPOINT_TAG,
-    ]);
-    out.extend_from_slice(&value.checkpoint_hash);
-    out.extend_from_slice(&value.state_root);
-    out.extend_from_slice(&value.epoch.to_be_bytes());
-    out.extend_from_slice(&value.batch_number.to_be_bytes());
-    out.extend_from_slice(&value.data_availability_root);
-    out.extend_from_slice(&value.leaf_index.to_be_bytes());
-    out.extend_from_slice(
-        &u16::try_from(value.siblings.len())
-            .map_err(|_| NativeWireError::Limit)?
-            .to_be_bytes(),
-    );
-    for sibling in &value.siblings {
-        out.extend_from_slice(sibling);
-    }
-    out.extend_from_slice(
-        &u32::try_from(value.attestations.len())
-            .map_err(|_| NativeWireError::Limit)?
-            .to_be_bytes(),
-    );
-    for value in &value.attestations {
-        encode_attestation(&mut out, value);
-    }
-    if let Some(native) = &value.native {
-        if native.inclusion_checkpoint != value.checkpoint_hash
-            || value.leaf_index != 0
-            || !value.siblings.is_empty()
-        {
-            return Err(NativeWireError::Encoding);
-        }
-        native
-            .decoded(value.state_root)
-            .map_err(|_| NativeWireError::Encoding)?;
-        out.extend_from_slice(&encode_native_evidence(native, maximum_bytes)?);
-    }
+    out.extend_from_slice(&value.header_signature);
     bounded(out, maximum_bytes)
 }
 
 /// # Errors
-/// Refuses invalid wire material and values exceeding the declared bounds.
-pub fn decode_checkpoint_proof(
+/// Refuses malformed, noncanonical or oversized withdrawal material.
+pub fn decode_withdrawal_material(
     bytes: &[u8],
     maximum_bytes: usize,
-) -> Result<CheckpointProof, NativeWireError> {
-    decode_checkpoint_proof_for_protocol(
-        bytes,
-        maximum_bytes,
-        layerx_intents::canonical::PROTOCOL_VERSION,
-    )
-}
-
-/// Decodes checkpoint material and admits it only when every attestation
-/// declares exactly the explicitly selected `LayerX` protocol version.
-///
-/// # Errors
-///
-/// Returns an encoding or limit refusal for malformed bytes, and the
-/// checkpoint refusal of [`CheckpointProof::validated_for_protocol`].
-pub fn decode_checkpoint_proof_for_protocol(
-    bytes: &[u8],
-    maximum_bytes: usize,
-    protocol_version: u16,
-) -> Result<CheckpointProof, NativeWireError> {
-    if bytes.len() > maximum_bytes
-        || bytes.len() < 96
-        || !matches!(bytes[..2], [1 | 2, CHECKPOINT_TAG])
-    {
-        return Err(NativeWireError::Encoding);
-    }
-    let mut r = Reader::new(&bytes[2..]);
-    let checkpoint_hash = r.array()?;
-    let state_root = r.array()?;
-    let epoch = r.u64()?;
-    let batch_number = r.u64()?;
-    let data_availability_root = r.array()?;
-    let leaf_index = r.u64()?;
-    let sibling_count = usize::from(r.u16()?);
-    if sibling_count > MAX_CHECKPOINT_SIBLINGS {
+) -> Result<WithdrawalMaterial, NativeWireError> {
+    if bytes.len() > maximum_bytes {
         return Err(NativeWireError::Limit);
     }
-    let mut siblings = Vec::with_capacity(sibling_count);
-    for _ in 0..sibling_count {
-        siblings.push(r.array()?);
-    }
-    let attestation_count = usize::try_from(r.u32()?).map_err(|_| NativeWireError::Limit)?;
-    if attestation_count > MAX_CHECKPOINT_ATTESTATIONS {
-        return Err(NativeWireError::Limit);
-    }
-    let required = attestation_count
-        .checked_mul(ATTESTATION_BYTES)
-        .ok_or(NativeWireError::Limit)?;
-    if r.remaining() < required || (bytes[0] == 1 && r.remaining() != required) {
+    let mut r = Reader::new(bytes);
+    if r.u8()? != VERSION || r.u8()? != CHECKPOINT_TAG {
         return Err(NativeWireError::Encoding);
     }
-    let mut attestations = Vec::with_capacity(attestation_count);
-    for _ in 0..attestation_count {
-        attestations.push(decode_attestation(&mut r)?);
-    }
-    let native = if bytes[0] == 2 {
-        Some(decode_native_evidence(
-            r.take(r.remaining())?,
-            maximum_bytes,
-        )?)
-    } else {
-        None
-    };
-    r.finish()?;
-    let mut proof = CheckpointProof::validated_for_protocol(
-        protocol_version,
-        checkpoint_hash,
-        state_root,
-        epoch,
-        batch_number,
-        data_availability_root,
-        leaf_index,
-        siblings,
-        attestations,
-    )
-    .map_err(NativeWireError::Checkpoint)?;
-    if let Some(value) = &native {
-        if value.inclusion_checkpoint != checkpoint_hash
-            || leaf_index != 0
-            || !proof.siblings.is_empty()
-        {
+    let mut parts: [Vec<u8>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    for part in &mut parts {
+        let length = usize::try_from(r.u32()?).map_err(|_| NativeWireError::Limit)?;
+        if length > r.remaining() {
             return Err(NativeWireError::Encoding);
         }
-        value
-            .decoded(state_root)
-            .map_err(|_| NativeWireError::Encoding)?;
+        *part = r.take(length)?.to_vec();
     }
-    proof.native = native;
-    Ok(proof)
+    let header_signature = r.array()?;
+    r.finish()?;
+    let [receipt, proof, header] = parts;
+    WithdrawalMaterial {
+        receipt,
+        proof,
+        header,
+        header_signature,
+    }
+    .validated()
+    .map_err(|_| NativeWireError::Checkpoint(ClaimRefusal::Material("bounds")))
 }
 
+/// Encodes forced-exit material for privilege-boundary exchange.
+///
 /// # Errors
-/// Refuses malformed native proofs and evidence exceeding the declared bound.
-pub fn encode_native_evidence(
-    value: &crate::state_proof::NativeEvidence,
+/// Refuses material outside the custody evidence bounds and oversized output.
+pub fn encode_forced_exit_material(
+    value: &ForcedExitMaterial,
     maximum_bytes: usize,
 ) -> Result<Vec<u8>, NativeWireError> {
-    let witness = crate::state_proof::StateWitness::decode(&value.witness)
+    let value = value
+        .clone()
+        .validated()
         .map_err(|_| NativeWireError::Encoding)?;
-    value
-        .decoded(witness.root().map_err(|_| NativeWireError::Encoding)?)
-        .map_err(|_| NativeWireError::Encoding)?;
-    let mut out = value.request_anchor.to_vec();
-    out.extend_from_slice(&value.inclusion_checkpoint);
-    out.extend_from_slice(&value.network_id.to_be_bytes());
+    let mut out = vec![VERSION, FORCED_EXIT_TAG];
+    out.extend_from_slice(&value.batch_number.to_be_bytes());
+    out.extend_from_slice(&value.account);
+    out.extend_from_slice(&value.asset_id);
+    out.extend_from_slice(&value.recipient.bytes());
+    out.extend_from_slice(&value.recipient_signature);
     out.extend_from_slice(
         &u32::try_from(value.witness.len())
             .map_err(|_| NativeWireError::Limit)?
             .to_be_bytes(),
     );
     out.extend_from_slice(&value.witness);
-    out.extend_from_slice(
-        &u16::try_from(value.recipient_signature.len())
-            .map_err(|_| NativeWireError::Limit)?
-            .to_be_bytes(),
-    );
-    out.extend_from_slice(&value.recipient_signature);
     bounded(out, maximum_bytes)
 }
 
 /// # Errors
-/// Refuses malformed, noncanonical or oversized native evidence.
-pub fn decode_native_evidence(
+/// Refuses malformed, noncanonical or oversized forced-exit material.
+pub fn decode_forced_exit_material(
     bytes: &[u8],
     maximum_bytes: usize,
-) -> Result<crate::state_proof::NativeEvidence, NativeWireError> {
+) -> Result<ForcedExitMaterial, NativeWireError> {
     if bytes.len() > maximum_bytes {
         return Err(NativeWireError::Limit);
     }
     let mut r = Reader::new(bytes);
-    let request_anchor = r.array()?;
-    let inclusion_checkpoint = r.array()?;
-    let network_id = r.u32()?;
-    let witness_length = usize::try_from(r.u32()?).map_err(|_| NativeWireError::Limit)?;
-    let witness = r.take(witness_length)?.to_vec();
-    let signature_length = usize::from(r.u16()?);
-    let recipient_signature = r.take(signature_length)?.to_vec();
-    r.finish()?;
-    let value = crate::state_proof::NativeEvidence {
-        request_anchor,
-        inclusion_checkpoint,
-        network_id,
-        witness,
-        recipient_signature,
-    };
-    if encode_native_evidence(&value, maximum_bytes)? != bytes {
+    if r.u8()? != VERSION || r.u8()? != FORCED_EXIT_TAG {
         return Err(NativeWireError::Encoding);
     }
-    Ok(value)
+    let batch_number = r.u64()?;
+    let account = r.array()?;
+    let asset_id = r.array()?;
+    let recipient = EvmAddress::new(r.array()?);
+    let recipient_signature = r.array()?;
+    let length = usize::try_from(r.u32()?).map_err(|_| NativeWireError::Limit)?;
+    if length != r.remaining() {
+        return Err(NativeWireError::Encoding);
+    }
+    let witness = r.take(length)?.to_vec();
+    r.finish()?;
+    ForcedExitMaterial {
+        witness,
+        batch_number,
+        account,
+        asset_id,
+        recipient,
+        recipient_signature,
+    }
+    .validated()
+    .map_err(|_| NativeWireError::Encoding)
 }
 
-fn encode_attestation(out: &mut Vec<u8>, v: &WithdrawalAttestation) {
-    out.extend_from_slice(&v.protocol_version.to_be_bytes());
-    out.extend_from_slice(&v.network_id.to_be_bytes());
-    out.extend_from_slice(&v.paxeer_chain_id.to_be_bytes());
-    out.extend_from_slice(&v.settlement_contract.bytes());
-    out.extend_from_slice(&v.epoch.to_be_bytes());
-    out.extend_from_slice(&v.checkpoint_id);
-    out.extend_from_slice(&v.checkpoint_hash);
-    out.extend_from_slice(&v.guarantor_id);
-    out.extend_from_slice(&v.batch_number.to_be_bytes());
-    out.extend_from_slice(&v.data_availability_root);
-    out.push(u8::from(v.replayed));
-    out.push(u8::from(v.data_available));
-    out.push(v.availability_class_mask);
-    out.extend_from_slice(&v.attested_at.to_be_bytes());
-    out.extend_from_slice(&v.signer.bytes());
-    out.extend_from_slice(&v.signature_r);
-    out.extend_from_slice(&v.signature_s);
-    out.push(v.signature_v);
-}
-fn decode_attestation(r: &mut Reader<'_>) -> Result<WithdrawalAttestation, NativeWireError> {
-    Ok(WithdrawalAttestation {
-        protocol_version: r.u16()?,
-        network_id: r.u32()?,
-        paxeer_chain_id: r.u64()?,
-        settlement_contract: EvmAddress::new(r.array()?),
-        epoch: r.u64()?,
-        checkpoint_id: r.array()?,
-        checkpoint_hash: r.array()?,
-        guarantor_id: r.array()?,
-        batch_number: r.u64()?,
-        data_availability_root: r.array()?,
-        replayed: r.boolean()?,
-        data_available: r.boolean()?,
-        availability_class_mask: r.u8()?,
-        attested_at: r.u64()?,
-        signer: EvmAddress::new(r.array()?),
-        signature_r: r.array()?,
-        signature_s: r.array()?,
-        signature_v: r.u8()?,
-    })
-}
 fn bounded(bytes: Vec<u8>, maximum: usize) -> Result<Vec<u8>, NativeWireError> {
     if maximum == 0 || bytes.len() > maximum {
         Err(NativeWireError::Limit)
@@ -554,9 +392,6 @@ impl<'a> Reader<'a> {
     fn u8(&mut self) -> Result<u8, NativeWireError> {
         Ok(self.array::<1>()?[0])
     }
-    fn u16(&mut self) -> Result<u16, NativeWireError> {
-        Ok(u16::from_be_bytes(self.array()?))
-    }
     fn u32(&mut self) -> Result<u32, NativeWireError> {
         Ok(u32::from_be_bytes(self.array()?))
     }
@@ -565,13 +400,6 @@ impl<'a> Reader<'a> {
     }
     fn u128(&mut self) -> Result<u128, NativeWireError> {
         Ok(u128::from_be_bytes(self.array()?))
-    }
-    fn boolean(&mut self) -> Result<bool, NativeWireError> {
-        match self.u8()? {
-            0 => Ok(false),
-            1 => Ok(true),
-            _ => Err(NativeWireError::Encoding),
-        }
     }
     fn remaining(&self) -> usize {
         self.bytes.len() - self.at

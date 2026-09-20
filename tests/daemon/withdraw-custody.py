@@ -170,8 +170,7 @@ def main():
                 (work / 'custody.json').write_text(json.dumps(custody, sort_keys=True) + '\n')
                 with boundaries(work, first, boundary_binary) as (origins, ca, identity):
                     retain_custody_proofs(work, origins, ca, identity, custody['vault'])
-                    pair = ['--rpc', origins[0], '--rpc', origins[1], '--ca-bundle', str(ca), '--disposable-identity', str(identity),
-                            '--vault-artifact', str(artifacts/'LayerXVault.sol/LayerXVault.json')]
+                    pair = ['--rpc', origins[0], '--rpc', origins[1], '--ca-bundle', str(ca), '--disposable-identity', str(identity)]
                     run(sys.executable, 'tests/bridge/custody_credit.py', 'profile', *pair, '--chain-id', '125',
                         '--network-id', '77', '--vault', custody['vault'], '--runtime-sha256', custody['runtime_sha256'],
                         '--asset', '0x' + ASSET, '--confirmations', '2', '--attestor-key', work / 'attestor', '--output', work / 'profile')

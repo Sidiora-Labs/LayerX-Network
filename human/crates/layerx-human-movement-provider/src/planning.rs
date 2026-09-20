@@ -10,7 +10,6 @@ use layerx_human_service::journeys::{
     DepositAgentPlan, DepositPlan, SettlementConfig, WithdrawalAgentPlan, WithdrawalPlan,
 };
 use layerx_paxeer_client::DepositProofConfig;
-use layerx_types::intent::EvmAddress;
 
 pub(crate) fn identity(request: &PlanningRequest, purpose: &[u8]) -> Result<[u8; 32], Error> {
     let mut digest = Sha256::new();
@@ -31,10 +30,7 @@ pub(crate) fn identity(request: &PlanningRequest, purpose: &[u8]) -> Result<[u8;
     Ok(digest.finalize().into())
 }
 
-pub(crate) fn deposit_plan(
-    request: &PlanningRequest,
-    vault: EvmAddress,
-) -> Result<DepositPlan, Error> {
+pub(crate) fn deposit_plan(request: &PlanningRequest) -> Result<DepositPlan, Error> {
     if request.operation != "deposit.start" {
         return Err(Error::Integrity);
     }
@@ -51,7 +47,7 @@ pub(crate) fn deposit_plan(
         paxeer_chain_id: context.paxeer_chain_id,
         layerx_network: context.network,
         layerx_protocol_version: context.protocol_version,
-        vault,
+        vault: layerx_paxeer_client::CUSTODY_PRECOMPILE,
         asset: context.asset,
         amount: context.amount,
         recipient: context.account.clone(),

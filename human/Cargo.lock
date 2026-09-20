@@ -932,6 +932,7 @@ dependencies = [
  "layerx-human-service",
  "layerx-paxeer-client",
  "layerx-types",
+ "layerx-wire",
  "rustix",
  "rustls",
  "serde",
@@ -1076,6 +1077,7 @@ dependencies = [
  "layerx-proof",
  "layerx-sdk",
  "layerx-types",
+ "layerx-wire",
  "rustix",
  "sha2",
 ]
