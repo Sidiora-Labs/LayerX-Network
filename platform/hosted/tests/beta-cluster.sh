@@ -32,7 +32,9 @@
 #                                       32-byte seed is the node's sequencer key, so the node, the receipt
 #                                       authority, the gateway and the registry share one sequencer identity
 #   LAYERX_BETA_FOUNDRY_BIN             directory holding the pinned forge and cast that
-#                                       platform/hosted/paxeer/deploy-contracts.sh requires (default /root/.foundry/bin)
+#                                       platform/hosted/paxeer/deploy-contracts.sh requires (default /root/.foundry/bin);
+#                                       custody itself is the native module at 0x…1013 and deploys nothing, and the
+#                                       owner custody deposit uses cast only to encode and send its transaction
 #   LAYERX_BETA_FAUCET_HOST             public faucet hostname (default faucet.testnet.layerx.network)
 #   LAYERX_BETA_DEVELOPER_HOST          public developer hostname (default developers.testnet.layerx.network)
 #   LAYERX_BETA_RELAY_HOST              public relay/archive hostname (default relay.testnet.layerx.network)
@@ -1329,6 +1331,14 @@ secrets_apply() {
     done
     apply_secret "$ns" paxeer-checkpoint-submitter --from-file=key="$s/paxeer-checkpoint-submitter.key"
     apply_secret "$ns" paxeer-deployer-address --from-file=address="$s/paxeer-deployer.address"
+    # Paxeer custody is the layerxcustody module behind the precompile at 0x…1013. Nothing is deployed
+    # for it: the network id, the sequencer authorization and the asset map are Paxeer genesis state,
+    # which init-chain.sh merges from this ConfigMap before it validates the genesis.
+    rm -f "$WORK_DIR/paxeer-custody-genesis.json"
+    python3 "$REPO_ROOT/platform/hosted/paxeer/custody-genesis.py" --network-id "$NODE_NETWORK_ID" \
+        --sequencer-id "$SEQUENCER_ID" --sequencer-public-key "$(cat "$CA_DIR/sequencer.pub.hex")" \
+        --asset "$NODE_ASSET_ID:uhpx" --output "$WORK_DIR/paxeer-custody-genesis.json"
+    apply_configmap "$ns" paxeer-custody-genesis --from-file=genesis.json="$WORK_DIR/paxeer-custody-genesis.json"
     apply_tls_secret "$ns" layerx-testnet-ingress-tls testnet-control
     apply_tls_secret "$ns" layerx-gateway-ingress-tls gateway
     apply_tls_secret "$ns" layerx-faucet-ingress-tls faucet

@@ -186,8 +186,7 @@ class MaterialTests(unittest.TestCase):
             owner_native.protected_write(secrets / 'explorer-read.seed.hex', seed.hex().encode())
             (secrets / 'explorer-read.pub.hex').write_text(public.hex())
             asset = '11' * 32
-            custody = dict(vault='0x' + '22' * 20, token='0x' + '33' * 20, registry='0x' + '44' * 20,
-                           timelock='0x' + '55' * 20, asset=asset, runtime_sha256='66' * 32, payer='0x' + '77' * 20)
+            custody = dict(vault='0x' + '0' * 36 + '1013', asset=asset, runtime_sha256='66' * 32, payer='0x' + '77' * 20)
             provision.write_json(source / 'owner-custody.json', custody)
             profile = b'LXBC2' + bytes(92) + bytes.fromhex(asset) + bytes(78)
             owner_native.protected_write(source / 'custody.profile', profile)

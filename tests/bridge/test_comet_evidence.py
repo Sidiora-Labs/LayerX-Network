@@ -100,7 +100,7 @@ class RealCometEvidence(unittest.TestCase):
         self.refused(lambda r: r['bundle']['history'][0]['commit']['signed_header']['commit'].__setitem__('signatures', []))
 
     def test_exact_state_query_identity(self):
-        for name in ('code', 'code_hash', 'deposit'):
+        for name in ('asset', 'deposit'):
             with self.subTest(name=name):
                 self.refused(lambda r: r['bundle']['state'][0][name].__setitem__('height', '999999'))
                 self.refused(lambda r: r['bundle']['state'][0][name].__setitem__('code', 1))
@@ -108,7 +108,7 @@ class RealCometEvidence(unittest.TestCase):
                 self.refused(lambda r: r['bundle']['state'][0][name].__setitem__('value', base64.b64encode(bytes(32)).decode()))
 
     def test_composed_application_root_proofs(self):
-        for name in ('code', 'code_hash', 'deposit'):
+        for name in ('asset', 'deposit'):
             with self.subTest(name=name):
                 self.refused(lambda r: r['bundle']['state'][0][name].__setitem__('proofOps', None))
                 proof_name = 'proofOps' if 'proofOps' in self.request()['bundle']['state'][0][name] else 'proof_ops'
@@ -128,9 +128,9 @@ class RealCometEvidence(unittest.TestCase):
 
     def test_deposit_preimage_and_runtime_binding(self):
         self.refused(lambda r: r['expected'].__setitem__('deposit_id', '0x'+'01'*32))
-        self.refused(lambda r: r['expected'].__setitem__('deposit_slot', '0x'+'01'*32))
-        self.refused(lambda r: r['expected'].__setitem__('vault', '0x'+'01'*20))
-        self.refused(lambda r: r['expected'].__setitem__('runtime_sha256', '0x'+'01'*32))
+        self.refused(lambda r: r['expected'].__setitem__('asset_id', '0x'+'01'*32))
+        self.refused(lambda r: r['expected'].__setitem__('custody', '0x'+'01'*20))
+        self.refused(lambda r: r['expected'].__setitem__('module_sha256', '0x'+'01'*32))
         self.refused(lambda r: r['bundle']['state'][0].pop('deposit'))
 
     def test_finality_and_point_bounds(self):
