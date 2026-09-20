@@ -11,16 +11,17 @@
 //! receipt-verified rows the index builds from availability data.
 
 use std::fmt;
-use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs as _};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
+use layerx_network_gateway as gateway;
 use layerx_programs::hex;
 use serde_json::Value;
 use sha3::{Digest as _, Keccak256};
 
 use crate::{AccountActivityRecord, Freshness, Page};
+
+pub use layerx_network_gateway::{
+    rpc_request, AccountIdentifier, Evidence, GatewayEndpoint, IdentifierError, ResolvedIdentities,
+};
 
 /// The custody precompile that emits deposit, claim and exit events.
 pub const CUSTODY_PRECOMPILE: [u8; 20] = [
@@ -35,148 +36,23 @@ pub const ADDR_PRECOMPILE: [u8; 20] = [
 ];
 
 const DID_PREFIX: &str = "did:layerx:";
-const ANSWER_LIMIT: u64 = 8 * 1024 * 1024;
-const IO_TIMEOUT: Duration = Duration::from_secs(10);
 const MAXIMUM_ACTIVITY_LIMIT: usize = 100;
-const MAXIMUM_JOINED_BALANCES: usize = 1_024;
 const MAXIMUM_LOGS_PER_CHUNK: usize = 10_000;
-const DENOM_LIMIT: usize = 128;
-const PAX_ADDRESS_LIMIT: usize = 128;
-const STATUS_NAME_LIMIT: usize = 64;
-const NETWORK_ID_LIMIT: usize = 64;
-
-static NEXT_REQUEST: AtomicU64 = AtomicU64::new(1);
-
-/// How a fact reached the explorer. The index never upgrades a gateway answer
-/// to a verified level: the two sources stay distinguishable at every hop.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Evidence {
-    /// Reported by the network gateway without an index-checkable proof.
-    GatewayReported,
-}
-
-impl Evidence {
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::GatewayReported => "gateway-reported",
-        }
-    }
-}
-
-/// Refusal for a spelling that is not one of the three public account forms.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct IdentifierError;
-
-impl fmt::Display for IdentifierError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(
-            "account identifier is not an EVM address, a did:layerx identifier or a LayerX account",
-        )
-    }
-}
-
-impl std::error::Error for IdentifierError {}
-
-/// One of the three public spellings of the same unified account.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AccountIdentifier {
-    /// A twenty-byte Paxeer EVM address.
-    Evm([u8; 20]),
-    /// A LayerX decentralised identifier public key.
-    Did([u8; 32]),
-    /// A LayerX account identifier.
-    Account([u8; 32]),
-}
-
-impl AccountIdentifier {
-    /// Parses and normalises any of the three public spellings.
-    ///
-    /// # Errors
-    /// Refuses every other spelling, including partial or over-long hexadecimal.
-    pub fn parse(text: &str) -> Result<Self, IdentifierError> {
-        let trimmed = text.trim();
-        let lowered = trimmed.to_ascii_lowercase();
-        if let Some(body) = lowered.strip_prefix("0x") {
-            return decode_evm(body).map(Self::Evm);
-        }
-        if let Some(body) = lowered.strip_prefix(DID_PREFIX) {
-            return hex::decode_digest(body)
-                .map(Self::Did)
-                .map_err(|_| IdentifierError);
-        }
-        hex::decode_digest(&lowered)
-            .map(Self::Account)
-            .map_err(|_| IdentifierError)
-    }
-
-    /// Renders the exact normalised spelling this identifier is addressed by.
-    #[must_use]
-    pub fn canonical_text(self) -> String {
-        match self {
-            Self::Evm(address) => format!("0x{}", hex::encode(&address)),
-            Self::Did(key) => format!("{DID_PREFIX}{}", hex::encode(&key)),
-            Self::Account(account) => hex::encode(&account),
-        }
-    }
-
-    /// The EVM address this identifier names directly, if it names one.
-    #[must_use]
-    pub const fn evm_address(self) -> Option<[u8; 20]> {
-        match self {
-            Self::Evm(address) => Some(address),
-            Self::Did(_) | Self::Account(_) => None,
-        }
-    }
-}
-
-impl fmt::Display for AccountIdentifier {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.canonical_text())
-    }
-}
-
-fn decode_evm(body: &str) -> Result<[u8; 20], IdentifierError> {
-    let bytes = hex::decode(body).map_err(|_| IdentifierError)?;
-    <[u8; 20]>::try_from(bytes.as_slice()).map_err(|_| IdentifierError)
-}
-
-/// Both identities of one account as the gateway reports them.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResolvedIdentities {
-    pub evm_address: Option<[u8; 20]>,
-    pub pax_address: Option<String>,
-    pub layerx_did: Option<[u8; 32]>,
-    pub layerx_account: Option<[u8; 32]>,
-    pub bound: bool,
-    pub evidence: Evidence,
-}
-
-impl ResolvedIdentities {
-    /// The one identifier this account's single page lives at: the LayerX
-    /// account when the network knows one, otherwise the spelling asked for.
-    #[must_use]
-    pub fn canonical(&self, requested: AccountIdentifier) -> AccountIdentifier {
-        if let Some(account) = self.layerx_account {
-            return AccountIdentifier::Account(account);
-        }
-        if let Some(address) = self.evm_address {
-            if requested.evm_address().is_some() {
-                return AccountIdentifier::Evm(address);
-            }
-        }
-        requested
-    }
-}
 
 /// One asset held by the same account in either domain, joined through the
 /// custody asset map.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct JoinedBalance {
     pub asset_id: [u8; 32],
-    pub denom: String,
+    /// The joined denomination, absent when neither domain names one for this
+    /// asset. The gateway reports a null denomination for an asset that is not
+    /// custodied and carries no denomination of its own.
+    pub denom: Option<String>,
+    /// The amount the custody precompile reports as custodied for this asset.
     pub custody: Option<u128>,
+    /// The Paxeer bank balance under the joined denomination.
     pub paxeer: Option<u128>,
+    /// The spendable amount the LayerX account document reports.
     pub layerx: Option<u128>,
 }
 
@@ -196,10 +72,13 @@ pub struct SettlementLadder {
     pub chain_id: u64,
     /// Instant: the Paxeer block the gateway currently reports as latest.
     pub instant_block: u64,
-    /// Final: the newest batch the anchor reports as finalised.
-    pub finalized_batch: u64,
-    pub anchor_status: u64,
-    pub anchor_status_name: String,
+    /// Final: the newest batch the anchor reports as finalised, absent when the
+    /// anchor reports no finalised batch yet. Never a substituted zero.
+    pub finalized_batch: Option<u64>,
+    /// The anchor's own status code for that batch, absent with the batch.
+    pub anchor_status: Option<u64>,
+    /// The anchor's own name for that status, absent with the batch.
+    pub anchor_status_name: Option<String>,
     pub evidence: Evidence,
 }
 
@@ -231,8 +110,12 @@ impl PaxeerEvent {
     #[must_use]
     pub const fn signature(self) -> &'static str {
         match self {
-            Self::CustodyDeposit => "CustodyDeposit(bytes32,bytes32,address,bytes32,uint256,uint64)",
-            Self::ClaimQueued => "ClaimQueued(bytes32,bytes32,bytes32,bytes32,address,uint256,uint64)",
+            Self::CustodyDeposit => {
+                "CustodyDeposit(bytes32,bytes32,address,bytes32,uint256,uint64)"
+            }
+            Self::ClaimQueued => {
+                "ClaimQueued(bytes32,bytes32,bytes32,bytes32,address,uint256,uint64)"
+            }
             Self::ClaimFinalised => "ClaimFinalised(bytes32,bytes32)",
             Self::CustodyRelease => "CustodyRelease(bytes32,bytes32,address,uint256,address)",
             Self::EmergencyExit => {
@@ -306,8 +189,7 @@ impl PaxeerActivityRecord {
         if address.is_some() && self.address == address {
             return true;
         }
-        self.account
-            .is_some_and(|value| accounts.contains(&value))
+        self.account.is_some_and(|value| accounts.contains(&value))
     }
 }
 
@@ -421,125 +303,16 @@ impl fmt::Display for GatewayError {
 
 impl std::error::Error for GatewayError {}
 
-/// The network gateway's JSON-RPC endpoint: one endpoint for `px_*` joins and
-/// the unchanged `eth_*` reads.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct GatewayEndpoint {
-    secure: bool,
-    host: String,
-    port: u16,
-    path: String,
-}
-
-impl GatewayEndpoint {
-    /// Parses `http://host[:port][/path]` or `https://host[:port][/path]`.
-    ///
-    /// # Errors
-    /// Refuses another scheme, an empty host, a zero port and a host outside
-    /// the ASCII host grammar.
-    pub fn parse(endpoint: &str) -> Result<Self, GatewayError> {
-        let trimmed = endpoint.trim();
-        let (secure, rest) = if let Some(rest) = trimmed.strip_prefix("https://") {
-            (true, rest)
-        } else if let Some(rest) = trimmed.strip_prefix("http://") {
-            (false, rest)
-        } else {
-            return Err(GatewayError::InvalidEndpoint);
-        };
-        let (authority, path) = rest.split_once('/').map_or((rest, "/".to_owned()), |(authority, path)| {
-            (authority, format!("/{path}"))
-        });
-        let (host, port) = match authority.rsplit_once(':') {
-            Some((host, port)) => (
-                host,
-                port.parse::<u16>()
-                    .map_err(|_| GatewayError::InvalidEndpoint)?,
-            ),
-            None => (authority, if secure { 443 } else { 80 }),
-        };
-        if port == 0
-            || host.is_empty()
-            || !host
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-')
-        {
-            return Err(GatewayError::InvalidEndpoint);
+impl From<gateway::GatewayError> for GatewayError {
+    fn from(error: gateway::GatewayError) -> Self {
+        match error {
+            gateway::GatewayError::InvalidEndpoint => Self::InvalidEndpoint,
+            gateway::GatewayError::Transport(detail) => Self::Transport(detail),
+            gateway::GatewayError::Refused { code, message } => Self::Refused { code, message },
+            gateway::GatewayError::Unbound => Self::Unbound,
+            gateway::GatewayError::MalformedAnswer => Self::MalformedAnswer,
         }
-        Ok(Self {
-            secure,
-            host: host.to_ascii_lowercase(),
-            port,
-            path,
-        })
     }
-
-    /// Posts one JSON-RPC request and returns its bounded answer body.
-    ///
-    /// # Errors
-    /// Reports connection, TLS and HTTP framing failures.
-    pub fn post(&self, body: &str) -> Result<Vec<u8>, GatewayError> {
-        let head = format!(
-            "POST {} HTTP/1.1\r\nHost: {}:{}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            self.path,
-            self.host,
-            self.port,
-            body.len()
-        );
-        let mut last = "gateway endpoint has no address".to_owned();
-        let mut connected = None;
-        for address in (self.host.as_str(), self.port)
-            .to_socket_addrs()
-            .map_err(|error| GatewayError::Transport(format!("resolution failed: {error}")))?
-        {
-            match TcpStream::connect_timeout(&address, IO_TIMEOUT) {
-                Ok(stream) => {
-                    connected = Some(stream);
-                    break;
-                }
-                Err(error) => last = format!("connection failed: {error}"),
-            }
-        }
-        let stream = connected.ok_or(GatewayError::Transport(last))?;
-        stream
-            .set_read_timeout(Some(IO_TIMEOUT))
-            .and_then(|()| stream.set_write_timeout(Some(IO_TIMEOUT)))
-            .map_err(|error| GatewayError::Transport(format!("timeout setup failed: {error}")))?;
-        let answer = if self.secure {
-            let connector = native_tls::TlsConnector::builder()
-                .build()
-                .map_err(|error| GatewayError::Transport(format!("TLS setup failed: {error}")))?;
-            let mut stream = connector
-                .connect(&self.host, stream)
-                .map_err(|error| GatewayError::Transport(format!("TLS handshake failed: {error}")))?;
-            exchange(&mut stream, &head, body.as_bytes())?
-        } else {
-            let mut stream = stream;
-            exchange(&mut stream, &head, body.as_bytes())?
-        };
-        http_body(&answer)
-    }
-}
-
-fn exchange<S: Read + Write>(
-    stream: &mut S,
-    head: &str,
-    body: &[u8],
-) -> Result<Vec<u8>, GatewayError> {
-    stream
-        .write_all(head.as_bytes())
-        .and_then(|()| stream.write_all(body))
-        .and_then(|()| stream.flush())
-        .map_err(|error| GatewayError::Transport(format!("request failed: {error}")))?;
-    let mut answer = Vec::new();
-    Read::take(&mut *stream, ANSWER_LIMIT + 1)
-        .read_to_end(&mut answer)
-        .map_err(|error| GatewayError::Transport(format!("answer failed: {error}")))?;
-    if u64::try_from(answer.len()).map_or(true, |length| length > ANSWER_LIMIT) {
-        return Err(GatewayError::Transport(
-            "answer exceeds its size limit".to_owned(),
-        ));
-    }
-    Ok(answer)
 }
 
 /// Extracts the body of one HTTP/1.1 answer, failing closed on a refusal.
@@ -547,37 +320,7 @@ fn exchange<S: Read + Write>(
 /// # Errors
 /// Refuses an unframed answer, a non-200 status and a truncated body.
 pub fn http_body(answer: &[u8]) -> Result<Vec<u8>, GatewayError> {
-    let end = answer
-        .windows(4)
-        .position(|value| value == b"\r\n\r\n")
-        .ok_or_else(|| GatewayError::Transport("answer has no headers".to_owned()))?;
-    let head = std::str::from_utf8(answer.get(..end).unwrap_or_default())
-        .map_err(|_| GatewayError::Transport("answer headers are not UTF-8".to_owned()))?;
-    let body = answer.get(end + 4..).unwrap_or_default();
-    let status = head
-        .lines()
-        .next()
-        .and_then(|line| line.split_ascii_whitespace().nth(1))
-        .and_then(|code| code.parse::<u16>().ok())
-        .ok_or_else(|| GatewayError::Transport("answer has no status".to_owned()))?;
-    if status != 200 {
-        return Err(GatewayError::Transport(format!(
-            "gateway answered HTTP {status}"
-        )));
-    }
-    Ok(body.to_vec())
-}
-
-/// Renders one positional-parameter JSON-RPC request.
-#[must_use]
-pub fn rpc_request(id: u64, method: &str, params: &[Value]) -> String {
-    serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "method": method,
-        "params": params,
-    })
-    .to_string()
+    gateway::http_body(answer).map_err(GatewayError::from)
 }
 
 /// Interprets one JSON-RPC answer for the request `id`, failing closed.
@@ -586,76 +329,15 @@ pub fn rpc_request(id: u64, method: &str, params: &[Value]) -> String {
 /// Refuses a malformed envelope, an answer for another request, and returns
 /// the gateway's own refusal as [`GatewayError::Refused`].
 pub fn rpc_result(id: u64, answer: &[u8]) -> Result<Value, GatewayError> {
-    let document: Value =
-        serde_json::from_slice(answer).map_err(|_| GatewayError::MalformedAnswer)?;
-    if document["jsonrpc"] != Value::String("2.0".to_owned()) {
-        return Err(GatewayError::MalformedAnswer);
-    }
-    if document["id"].as_u64() != Some(id) {
-        return Err(GatewayError::Unbound);
-    }
-    if let Some(error) = document.get("error").filter(|value| !value.is_null()) {
-        return Err(GatewayError::Refused {
-            code: error["code"].as_i64().unwrap_or(0),
-            message: error["message"].as_str().unwrap_or("unspecified").to_owned(),
-        });
-    }
-    document
-        .get("result")
-        .filter(|value| !value.is_null())
-        .cloned()
-        .ok_or(GatewayError::MalformedAnswer)
-}
-
-fn optional_text(value: &Value, limit: usize) -> Result<Option<String>, GatewayError> {
-    match value {
-        Value::Null => Ok(None),
-        Value::String(text) if !text.is_empty() && text.len() <= limit => Ok(Some(text.clone())),
-        _ => Err(GatewayError::MalformedAnswer),
-    }
-}
-
-fn required_text(value: &Value, limit: usize) -> Result<String, GatewayError> {
-    optional_text(value, limit)?.ok_or(GatewayError::MalformedAnswer)
-}
-
-fn optional_address(value: &Value) -> Result<Option<[u8; 20]>, GatewayError> {
-    match value {
-        Value::Null => Ok(None),
-        Value::String(text) if text.is_empty() => Ok(None),
-        Value::String(text) => address(text).map(Some),
-        _ => Err(GatewayError::MalformedAnswer),
-    }
+    gateway::rpc_result(id, answer).map_err(GatewayError::from)
 }
 
 fn address(text: &str) -> Result<[u8; 20], GatewayError> {
-    let lowered = text.trim().to_ascii_lowercase();
-    let body = lowered
-        .strip_prefix("0x")
-        .ok_or(GatewayError::MalformedAnswer)?;
-    decode_evm(body).map_err(|_| GatewayError::MalformedAnswer)
-}
-
-fn optional_digest(value: &Value) -> Result<Option<[u8; 32]>, GatewayError> {
-    match value {
-        Value::Null => Ok(None),
-        Value::String(text) if text.is_empty() => Ok(None),
-        Value::String(text) => digest(text).map(Some),
-        _ => Err(GatewayError::MalformedAnswer),
-    }
+    gateway::address(text).map_err(GatewayError::from)
 }
 
 fn digest(text: &str) -> Result<[u8; 32], GatewayError> {
-    let lowered = text.trim().to_ascii_lowercase();
-    let body = lowered
-        .strip_prefix(DID_PREFIX)
-        .or_else(|| lowered.strip_prefix("0x"))
-        .unwrap_or(&lowered);
-    hex::decode_digest(body).map_err(|_| GatewayError::MalformedAnswer)
-}
-
-fn boolean(value: &Value) -> Result<bool, GatewayError> {
-    value.as_bool().ok_or(GatewayError::MalformedAnswer)
+    gateway::digest(text).map_err(GatewayError::from)
 }
 
 /// Decodes a gateway quantity: an unsigned decimal string, a `0x` quantity or
@@ -664,37 +346,11 @@ fn boolean(value: &Value) -> Result<bool, GatewayError> {
 /// # Errors
 /// Refuses every other spelling and any value beyond 128 bits.
 pub fn quantity(value: &Value) -> Result<u128, GatewayError> {
-    match value {
-        Value::Number(number) => number.as_u64().map(u128::from).ok_or(GatewayError::MalformedAnswer),
-        Value::String(text) => {
-            let trimmed = text.trim();
-            if let Some(body) = trimmed
-                .strip_prefix("0x")
-                .or_else(|| trimmed.strip_prefix("0X"))
-            {
-                if body.is_empty() || body.len() > 32 || !body.bytes().all(|b| b.is_ascii_hexdigit())
-                {
-                    return Err(GatewayError::MalformedAnswer);
-                }
-                return u128::from_str_radix(body, 16).map_err(|_| GatewayError::MalformedAnswer);
-            }
-            trimmed
-                .parse::<u128>()
-                .map_err(|_| GatewayError::MalformedAnswer)
-        }
-        _ => Err(GatewayError::MalformedAnswer),
-    }
-}
-
-fn optional_quantity(value: &Value) -> Result<Option<u128>, GatewayError> {
-    if value.is_null() {
-        return Ok(None);
-    }
-    quantity(value).map(Some)
+    gateway::quantity(value).map_err(GatewayError::from)
 }
 
 fn counted(value: &Value) -> Result<u64, GatewayError> {
-    u64::try_from(quantity(value)?).map_err(|_| GatewayError::MalformedAnswer)
+    gateway::counted(value).map_err(GatewayError::from)
 }
 
 /// Decodes the `px_resolveAccount` result.
@@ -702,66 +358,50 @@ fn counted(value: &Value) -> Result<u64, GatewayError> {
 /// # Errors
 /// Refuses a document that is not the declared shape.
 pub fn decode_identities(result: &Value) -> Result<ResolvedIdentities, GatewayError> {
-    if !result.is_object() {
-        return Err(GatewayError::MalformedAnswer);
-    }
-    Ok(ResolvedIdentities {
-        evm_address: optional_address(&result["evm_address"])?,
-        pax_address: optional_text(&result["pax_address"], PAX_ADDRESS_LIMIT)?,
-        layerx_did: optional_digest(&result["layerx_did"])?,
-        layerx_account: optional_digest(&result["layerx_account"])?,
-        bound: boolean(&result["bound"])?,
-        evidence: Evidence::GatewayReported,
-    })
+    gateway::decode_identities(result).map_err(GatewayError::from)
 }
 
-/// Decodes the `px_getBalances` result.
+/// Decodes the `px_getBalances` result into the explorer's joined table: the
+/// custodied amount of the custody record, the Paxeer bank amount and the
+/// LayerX account's own balance, each absent when that half reports none.
 ///
 /// # Errors
 /// Refuses a document that is not the declared shape or exceeds the joined
 /// balance ceiling.
 pub fn decode_balances(result: &Value) -> Result<JoinedBalances, GatewayError> {
-    let rows = result["balances"]
-        .as_array()
-        .ok_or(GatewayError::MalformedAnswer)?;
-    if rows.len() > MAXIMUM_JOINED_BALANCES {
-        return Err(GatewayError::MalformedAnswer);
-    }
-    let mut items = Vec::with_capacity(rows.len());
-    for row in rows {
+    let joined = gateway::decode_account_balances(result)?;
+    let mut items = Vec::with_capacity(joined.balances.len());
+    for row in &joined.balances {
         items.push(JoinedBalance {
-            asset_id: digest(
-                row["asset_id"]
-                    .as_str()
-                    .ok_or(GatewayError::MalformedAnswer)?,
-            )?,
-            denom: required_text(&row["denom"], DENOM_LIMIT)?,
-            custody: optional_quantity(&row["custody"])?,
-            paxeer: optional_quantity(&row["paxeer"])?,
-            layerx: optional_quantity(&row["layerx"])?,
+            asset_id: row.asset_id,
+            denom: row.denom.clone(),
+            custody: row.custody.as_ref().map(|custody| custody.custodied),
+            paxeer: row.paxeer.as_ref().map(|paxeer| paxeer.amount),
+            layerx: row.layerx_amount()?,
         });
     }
     Ok(JoinedBalances {
         items,
-        joined_limit: counted(&result["joined_limit"])?,
+        joined_limit: joined.joined_limit,
         evidence: Evidence::GatewayReported,
     })
 }
 
-/// Decodes the `px_getNetwork` result into the settlement ladder.
+/// Decodes the `px_getNetwork` result into the settlement ladder. An anchor
+/// that reports no finalised batch yet leaves the final rung absent rather
+/// than failing the whole read or standing in a zero for it.
 ///
 /// # Errors
 /// Refuses a document that is not the declared shape.
 pub fn decode_settlement(result: &Value) -> Result<SettlementLadder, GatewayError> {
-    let paxeer = &result["paxeer"];
-    let anchor = &result["anchor"];
+    let head = gateway::decode_network(result)?;
     Ok(SettlementLadder {
-        network_id: required_text(&result["network_id"], NETWORK_ID_LIMIT)?,
-        chain_id: counted(&paxeer["chain_id"])?,
-        instant_block: counted(&paxeer["latest_block"])?,
-        finalized_batch: counted(&anchor["latest_finalized_batch"])?,
-        anchor_status: counted(&anchor["status"])?,
-        anchor_status_name: required_text(&anchor["status_name"], STATUS_NAME_LIMIT)?,
+        network_id: head.network_id,
+        chain_id: head.chain_id,
+        instant_block: head.latest_block,
+        finalized_batch: head.anchor.latest_finalized_batch,
+        anchor_status: head.anchor.status,
+        anchor_status_name: head.anchor.status_name,
         evidence: Evidence::GatewayReported,
     })
 }
@@ -831,7 +471,11 @@ fn word(words: &[[u8; 32]], position: usize) -> Result<[u8; 32], GatewayError> {
 /// Refuses a log whose topic is unknown, whose emitter does not match the
 /// event, or whose data does not decode against the declared ABI.
 pub fn decode_log(log: &Value) -> Result<PaxeerActivityRecord, GatewayError> {
-    let emitter = address(log["address"].as_str().ok_or(GatewayError::MalformedAnswer)?)?;
+    let emitter = address(
+        log["address"]
+            .as_str()
+            .ok_or(GatewayError::MalformedAnswer)?,
+    )?;
     let event = PaxeerEvent::from_topic(topic(log, 0)?).ok_or(GatewayError::MalformedAnswer)?;
     if event.emitter() != emitter {
         return Err(GatewayError::MalformedAnswer);
@@ -975,9 +619,9 @@ impl<'a> UnifiedAccountReader<'a> {
     }
 
     fn call(&self, method: &str, params: &[Value]) -> Result<Value, GatewayError> {
-        let id = NEXT_REQUEST.fetch_add(1, Ordering::Relaxed);
-        let answer = self.endpoint.post(&rpc_request(id, method, params))?;
-        rpc_result(id, &answer)
+        self.endpoint
+            .call(method, params)
+            .map_err(GatewayError::from)
     }
 
     /// Resolves any of the three spellings, joins balances and the settlement
@@ -1063,6 +707,14 @@ fn amount_text(value: Option<u128>) -> Value {
     value.map_or(Value::Null, |amount| Value::String(amount.to_string()))
 }
 
+fn count_text(value: Option<u64>) -> Value {
+    value.map_or(Value::Null, |count| Value::String(count.to_string()))
+}
+
+fn optional_text(value: Option<&str>) -> Value {
+    value.map_or(Value::Null, |text| Value::String(text.to_owned()))
+}
+
 fn digest_text(value: Option<[u8; 32]>) -> Value {
     value.map_or(Value::Null, |bytes| Value::String(hex::encode(&bytes)))
 }
@@ -1097,7 +749,7 @@ pub fn unified_account_json(join: &UnifiedAccountJoin, freshness: Freshness) -> 
                 .iter()
                 .map(|balance| serde_json::json!({
                     "asset_id": hex::encode(&balance.asset_id),
-                    "denom": balance.denom,
+                    "denom": optional_text(balance.denom.as_deref()),
                     "custody": amount_text(balance.custody),
                     "paxeer": amount_text(balance.paxeer),
                     "layerx": amount_text(balance.layerx),
@@ -1109,9 +761,9 @@ pub fn unified_account_json(join: &UnifiedAccountJoin, freshness: Freshness) -> 
             "chain_id": join.settlement.chain_id.to_string(),
             "instant_block": join.settlement.instant_block.to_string(),
             "sealed_batch": freshness.observed_sealed_batch.to_string(),
-            "finalized_batch": join.settlement.finalized_batch.to_string(),
-            "anchor_status": join.settlement.anchor_status.to_string(),
-            "anchor_status_name": join.settlement.anchor_status_name,
+            "finalized_batch": count_text(join.settlement.finalized_batch),
+            "anchor_status": count_text(join.settlement.anchor_status),
+            "anchor_status_name": optional_text(join.settlement.anchor_status_name.as_deref()),
         },
         "paxeer_activity": {
             "from_block": join.paxeer_activity.from_block.to_string(),
@@ -1146,14 +798,17 @@ mod tests {
 
     use super::{
         decode_balances, decode_identities, decode_log, decode_logs, decode_settlement, http_body,
-        logs_filter, quantity, rpc_request, rpc_result, ActivityWindow, AccountIdentifier,
+        logs_filter, quantity, rpc_request, rpc_result, AccountIdentifier, ActivityWindow,
         Evidence, GatewayEndpoint, GatewayError, JoinedBalance, PaxeerEvent, ResolvedIdentities,
     };
+    use layerx_network_gateway::GatewayError as NetworkGatewayError;
     use serde_json::Value;
 
     const ADDRESS: &str = "0x00112233445566778899aabbccddeeff00112233";
     const ACCOUNT: &str = "1111111111111111111111111111111111111111111111111111111111111111";
     const DID: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+    const ASSET: &str = "3333333333333333333333333333333333333333333333333333333333333333";
+    const POINTER: &str = "0x00000000000000000000000000000000000f0013";
 
     fn identities(bound: bool) -> ResolvedIdentities {
         decode_identities(&serde_json::json!({
@@ -1164,6 +819,34 @@ mod tests {
             "bound": bound,
         }))
         .expect("declared resolve document decodes")
+    }
+
+    /// The `account` half of every `px_getBalances` answer: the gateway sends
+    /// the whole resolution document, never a bare identifier.
+    fn resolution() -> Value {
+        serde_json::json!({
+            "evm_address": ADDRESS,
+            "pax_address": "pax1qqqqq",
+            "layerx_did": format!("did:layerx:{DID}"),
+            "layerx_account": ACCOUNT,
+            "bound": true,
+        })
+    }
+
+    /// The custody precompile's record exactly as `px_getBalances` nests it.
+    fn custody_asset(asset_id: &str, denom: &str, custodied: &str) -> Value {
+        serde_json::json!({
+            "asset_id": asset_id,
+            "denom": denom,
+            "pointer": POINTER,
+            "enabled": true,
+            "paused": false,
+            "minimum_deposit": "1",
+            "custody_cap": "1000000",
+            "custodied": custodied,
+            "released": "25",
+            "pending": "0",
+        })
     }
 
     #[test]
@@ -1293,12 +976,12 @@ mod tests {
     #[test]
     fn balances_join_both_domains_through_the_custody_asset_map() {
         let balances = decode_balances(&serde_json::json!({
-            "account": ACCOUNT,
+            "account": resolution(),
             "balances": [{
                 "asset_id": ACCOUNT,
                 "denom": "upaxd",
-                "custody": "1000",
-                "paxeer": "0x10",
+                "custody": custody_asset(ACCOUNT, "upaxd", "1000"),
+                "paxeer": { "denom": "upaxd", "amount": "16" },
                 "layerx": Value::Null,
             }],
             "joined_limit": "64",
@@ -1310,7 +993,7 @@ mod tests {
             balances.items,
             vec![JoinedBalance {
                 asset_id: [0x11; 32],
-                denom: "upaxd".to_owned(),
+                denom: Some("upaxd".to_owned()),
                 custody: Some(1_000),
                 paxeer: Some(16),
                 layerx: None,
@@ -1320,33 +1003,134 @@ mod tests {
             decode_balances(&serde_json::json!({ "balances": [{ "asset_id": ACCOUNT }] })),
             Err(GatewayError::MalformedAnswer)
         );
-        assert_eq!(quantity(&Value::String("0x".to_owned())), Err(GatewayError::MalformedAnswer));
-        assert_eq!(quantity(&Value::String("-1".to_owned())), Err(GatewayError::MalformedAnswer));
-        assert_eq!(quantity(&Value::Bool(true)), Err(GatewayError::MalformedAnswer));
+        assert_eq!(quantity(&Value::String("0x10".to_owned())), Ok(16));
+        assert_eq!(
+            quantity(&Value::String("0x".to_owned())),
+            Err(GatewayError::MalformedAnswer)
+        );
+        assert_eq!(
+            quantity(&Value::String("-1".to_owned())),
+            Err(GatewayError::MalformedAnswer)
+        );
+        assert_eq!(
+            quantity(&Value::Bool(true)),
+            Err(GatewayError::MalformedAnswer)
+        );
+    }
+
+    #[test]
+    fn the_gateway_balance_answer_decodes_every_nested_half() {
+        let balances = decode_balances(&serde_json::json!({
+            "account": resolution(),
+            "balances": [
+                {
+                    "asset_id": ACCOUNT,
+                    "denom": "upaxd",
+                    "custody": custody_asset(ACCOUNT, "upaxd", "4200"),
+                    "paxeer": { "denom": "upaxd", "amount": "1275" },
+                    "layerx": {
+                        "account_id": ACCOUNT,
+                        "name": "treasury",
+                        "asset_id": ACCOUNT,
+                        "balance": "930",
+                        "verification": "settlement_anchored",
+                    },
+                },
+                {
+                    "asset_id": ASSET,
+                    "denom": Value::Null,
+                    "custody": Value::Null,
+                    "paxeer": Value::Null,
+                    "layerx": {
+                        "account_id": ASSET,
+                        "name": "grant",
+                        "asset_id": ASSET,
+                        "balance": "7",
+                        "verification": "settlement_anchored",
+                    },
+                },
+            ],
+            "joined_limit": 16,
+        }))
+        .expect("the gateway's own balance answer decodes");
+        assert_eq!(balances.joined_limit, 16);
+        assert_eq!(balances.evidence, Evidence::GatewayReported);
+        assert_eq!(
+            balances.items,
+            vec![
+                JoinedBalance {
+                    asset_id: [0x11; 32],
+                    denom: Some("upaxd".to_owned()),
+                    custody: Some(4_200),
+                    paxeer: Some(1_275),
+                    layerx: Some(930),
+                },
+                JoinedBalance {
+                    asset_id: [0x33; 32],
+                    denom: None,
+                    custody: None,
+                    paxeer: None,
+                    layerx: Some(7),
+                },
+            ]
+        );
     }
 
     #[test]
     fn the_settlement_ladder_carries_the_anchor_position() {
         let ladder = decode_settlement(&serde_json::json!({
             "network_id": "paxeer-x",
-            "paxeer": { "chain_id": 8888, "latest_block": "0x2a" },
+            "paxeer": { "chain_id": "0x22b8", "latest_block": "0x2a" },
             "layerx": { "node_info": {} },
             "anchor": {
-                "latest_finalized_batch": "19",
+                "latest_finalized_batch": 19,
                 "status": 2,
-                "status_name": "finalised",
+                "status_name": "final",
+                "status_ladder": { "0": "unknown", "1": "submitted", "2": "final" },
             },
         }))
         .expect("declared network document decodes");
         assert_eq!(ladder.chain_id, 8_888);
         assert_eq!(ladder.instant_block, 42);
-        assert_eq!(ladder.finalized_batch, 19);
-        assert_eq!(ladder.anchor_status, 2);
-        assert_eq!(ladder.anchor_status_name, "finalised");
+        assert_eq!(ladder.finalized_batch, Some(19));
+        assert_eq!(ladder.anchor_status, Some(2));
+        assert_eq!(ladder.anchor_status_name.as_deref(), Some("final"));
         assert_eq!(
             decode_settlement(&serde_json::json!({ "network_id": "paxeer-x" })),
             Err(GatewayError::MalformedAnswer)
         );
+    }
+
+    #[test]
+    fn an_anchor_without_a_finalised_batch_leaves_that_rung_absent() {
+        let unanchored = decode_settlement(&serde_json::json!({
+            "network_id": "paxeer-x",
+            "paxeer": { "chain_id": "0x22b8", "latest_block": "0x2a" },
+            "layerx": { "node_info": {} },
+            "anchor": Value::Null,
+        }))
+        .expect("a network document with no anchor rung decodes");
+        assert_eq!(unanchored.instant_block, 42);
+        assert_eq!(unanchored.finalized_batch, None);
+        assert_eq!(unanchored.anchor_status, None);
+        assert_eq!(unanchored.anchor_status_name, None);
+
+        let unfinalised = decode_settlement(&serde_json::json!({
+            "network_id": "paxeer-x",
+            "paxeer": { "chain_id": "0x22b8", "latest_block": "0x2a" },
+            "layerx": { "node_info": {} },
+            "anchor": {
+                "latest_finalized_batch": Value::Null,
+                "status": Value::Null,
+                "status_name": Value::Null,
+                "status_ladder": { "0": "unknown", "1": "submitted", "2": "final" },
+            },
+        }))
+        .expect("an anchor with no finalised batch decodes");
+        assert_eq!(unfinalised.finalized_batch, None);
+        assert_eq!(unfinalised.anchor_status, None);
+        assert_eq!(unfinalised.anchor_status_name, None);
+        assert_eq!(unfinalised.network_id, "paxeer-x");
     }
 
     #[test]
@@ -1371,9 +1155,7 @@ mod tests {
             "0x0000000000000000000000000000000000001004"
         );
         assert_eq!(
-            filter["topics"][0]
-                .as_array()
-                .map(|topics| topics.len()),
+            filter["topics"][0].as_array().map(|topics| topics.len()),
             Some(PaxeerEvent::ALL.len())
         );
     }
@@ -1419,7 +1201,9 @@ mod tests {
         assert_eq!(record.transaction_hash, [0x44; 32]);
         assert_eq!(record.evidence, Evidence::GatewayReported);
         assert_eq!(
-            record.address.map(|bytes| format!("0x{}", hex_bytes(&bytes))),
+            record
+                .address
+                .map(|bytes| format!("0x{}", hex_bytes(&bytes))),
             Some(ADDRESS.to_owned())
         );
         assert!(record.concerns(record.address, &[]));
@@ -1490,7 +1274,10 @@ mod tests {
             limit: 25,
         };
         assert_eq!(window.validate(), Ok(window));
-        assert_eq!(window.chunks(10_000, None), vec![(9_601, 10_000), (9_201, 9_600)]);
+        assert_eq!(
+            window.chunks(10_000, None),
+            vec![(9_601, 10_000), (9_201, 9_600)]
+        );
         assert_eq!(window.next_before(10_000, 9_201), Some(9_201));
         assert_eq!(window.chunks(10_000, Some(9_201)), vec![(9_001, 9_200)]);
         assert_eq!(window.next_before(10_000, 9_001), None);
@@ -1498,12 +1285,27 @@ mod tests {
         assert_eq!(window.next_before(300, 0), None);
         assert_eq!(window.chunks(10_000, Some(0)), Vec::new());
         for refused in [
-            ActivityWindow { span_blocks: 0, ..window },
-            ActivityWindow { chunk_blocks: 0, ..window },
-            ActivityWindow { chunk_blocks: 2_000, ..window },
-            ActivityWindow { max_chunks: 0, ..window },
+            ActivityWindow {
+                span_blocks: 0,
+                ..window
+            },
+            ActivityWindow {
+                chunk_blocks: 0,
+                ..window
+            },
+            ActivityWindow {
+                chunk_blocks: 2_000,
+                ..window
+            },
+            ActivityWindow {
+                max_chunks: 0,
+                ..window
+            },
             ActivityWindow { limit: 0, ..window },
-            ActivityWindow { limit: 101, ..window },
+            ActivityWindow {
+                limit: 101,
+                ..window
+            },
         ] {
             assert_eq!(refused.validate(), Err(GatewayError::InvalidWindow));
         }
@@ -1512,22 +1314,22 @@ mod tests {
     #[test]
     fn endpoints_and_http_answers_fail_closed() {
         assert_eq!(
-            GatewayEndpoint::parse("https://gateway.example:8545/rpc"),
-            Ok(GatewayEndpoint {
-                secure: true,
-                host: "gateway.example".to_owned(),
-                port: 8_545,
-                path: "/rpc".to_owned(),
-            })
+            GatewayEndpoint::parse("https://gateway.example:8545/rpc")
+                .map(|endpoint| format!("{endpoint:?}")),
+            Ok(concat!(
+                "GatewayEndpoint { secure: true, host: \"gateway.example\", ",
+                "port: 8545, path: \"/rpc\" }"
+            )
+            .to_owned())
         );
         assert_eq!(
-            GatewayEndpoint::parse("http://127.0.0.1:26657"),
-            Ok(GatewayEndpoint {
-                secure: false,
-                host: "127.0.0.1".to_owned(),
-                port: 26_657,
-                path: "/".to_owned(),
-            })
+            GatewayEndpoint::parse("http://127.0.0.1:26657")
+                .map(|endpoint| format!("{endpoint:?}")),
+            Ok(concat!(
+                "GatewayEndpoint { secure: false, host: \"127.0.0.1\", ",
+                "port: 26657, path: \"/\" }"
+            )
+            .to_owned())
         );
         for refused in [
             "gateway.example",
@@ -1538,7 +1340,7 @@ mod tests {
         ] {
             assert_eq!(
                 GatewayEndpoint::parse(refused),
-                Err(GatewayError::InvalidEndpoint),
+                Err(NetworkGatewayError::InvalidEndpoint),
                 "{refused}"
             );
         }
@@ -1568,12 +1370,19 @@ mod tests {
             canonical: identities.canonical(requested),
             identities,
             balances: decode_balances(&serde_json::json!({
+                "account": resolution(),
                 "balances": [{
                     "asset_id": ACCOUNT,
                     "denom": "upaxd",
-                    "custody": "7",
-                    "paxeer": "5",
-                    "layerx": "2",
+                    "custody": custody_asset(ACCOUNT, "upaxd", "7"),
+                    "paxeer": { "denom": "upaxd", "amount": "5" },
+                    "layerx": {
+                        "account_id": ACCOUNT,
+                        "name": "treasury",
+                        "asset_id": ACCOUNT,
+                        "balance": "2",
+                        "verification": "settlement_anchored",
+                    },
                 }],
                 "joined_limit": 64,
             }))
@@ -1582,9 +1391,9 @@ mod tests {
                 network_id: "paxeer-x".to_owned(),
                 chain_id: 8_888,
                 instant_block: 100,
-                finalized_batch: 19,
-                anchor_status: 2,
-                anchor_status_name: "finalised".to_owned(),
+                finalized_batch: Some(19),
+                anchor_status: Some(2),
+                anchor_status_name: Some("finalised".to_owned()),
                 evidence: Evidence::GatewayReported,
             },
             paxeer_activity: PaxeerActivityPage {
@@ -1610,14 +1419,80 @@ mod tests {
         assert_eq!(document["canonical"], ACCOUNT);
         assert_eq!(document["evidence"], "gateway-reported");
         assert_eq!(document["identities"]["bound"], true);
-        assert_eq!(document["identities"]["layerx_did"], format!("did:layerx:{DID}"));
+        assert_eq!(
+            document["identities"]["layerx_did"],
+            format!("did:layerx:{DID}")
+        );
         assert_eq!(document["balances"]["items"][0]["denom"], "upaxd");
         assert_eq!(document["balances"]["items"][0]["layerx"], "2");
         assert_eq!(document["settlement"]["sealed_batch"], "7");
         assert_eq!(document["settlement"]["finalized_batch"], "19");
         assert_eq!(document["settlement"]["instant_block"], "100");
-        assert_eq!(document["paxeer_activity"]["items"][0]["event"], "custody-deposit");
+        assert_eq!(
+            document["paxeer_activity"]["items"][0]["event"],
+            "custody-deposit"
+        );
         assert_eq!(document["paxeer_activity"]["items"][0]["amount"], "255");
         assert_eq!(document["paxeer_activity"]["next_before_block"], "1");
+    }
+
+    #[test]
+    fn an_unread_rung_or_denomination_renders_as_null_never_as_zero() {
+        use super::{
+            decode_settlement, unified_account_json, PaxeerActivityPage, UnifiedAccountJoin,
+        };
+        let identities = identities(true);
+        let requested = AccountIdentifier::parse(ADDRESS).expect("address parses");
+        let join = UnifiedAccountJoin {
+            requested,
+            canonical: identities.canonical(requested),
+            identities,
+            balances: decode_balances(&serde_json::json!({
+                "account": resolution(),
+                "balances": [{
+                    "asset_id": ASSET,
+                    "denom": Value::Null,
+                    "custody": Value::Null,
+                    "paxeer": Value::Null,
+                    "layerx": Value::Null,
+                }],
+                "joined_limit": 16,
+            }))
+            .expect("a row with no joined half decodes"),
+            settlement: decode_settlement(&serde_json::json!({
+                "network_id": "paxeer-x",
+                "paxeer": { "chain_id": "0x22b8", "latest_block": "0x2a" },
+                "layerx": { "node_info": {} },
+                "anchor": Value::Null,
+            }))
+            .expect("a network document with no anchor rung decodes"),
+            paxeer_activity: PaxeerActivityPage {
+                items: Vec::new(),
+                from_block: 42,
+                to_block: 42,
+                next_before_block: None,
+                evidence: Evidence::GatewayReported,
+            },
+        };
+        let document: Value = serde_json::from_str(&unified_account_json(
+            &join,
+            crate::Freshness {
+                observed_chain_sequence: 19,
+                observed_sealed_batch: 7,
+                observed_finalised_checkpoint: [0xee; 32],
+                indexed_batch: Some(7),
+                indexed_checkpoint: Some([0xee; 32]),
+            },
+        ))
+        .expect("document is JSON");
+        assert_eq!(document["balances"]["items"][0]["denom"], Value::Null);
+        assert_eq!(document["balances"]["items"][0]["custody"], Value::Null);
+        assert_eq!(document["balances"]["items"][0]["paxeer"], Value::Null);
+        assert_eq!(document["balances"]["items"][0]["layerx"], Value::Null);
+        assert_eq!(document["settlement"]["instant_block"], "42");
+        assert_eq!(document["settlement"]["sealed_batch"], "7");
+        assert_eq!(document["settlement"]["finalized_batch"], Value::Null);
+        assert_eq!(document["settlement"]["anchor_status"], Value::Null);
+        assert_eq!(document["settlement"]["anchor_status_name"], Value::Null);
     }
 }

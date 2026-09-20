@@ -868,6 +868,7 @@ dependencies = [
  "layerx-crypto",
  "layerx-intents",
  "layerx-mirror",
+ "layerx-network-gateway",
  "layerx-program-sdk",
  "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
