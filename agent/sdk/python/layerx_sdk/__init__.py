@@ -94,6 +94,7 @@ from .program_lifecycle import (
 )
 from .programs import (
     NativeProgramRequest,
+    OccupancyPayer,
     ProgramCall,
     ProgramDiscovery,
     ProgramInterface,
@@ -241,6 +242,7 @@ __all__ = [
     "NativeStorageRead",
     "NativeStorageWrite",
     "NativeTransfer402",
+    "OccupancyPayer",
     "Operation",
     "PaymentBudget",
     "PaymentCheckpointEvidence",

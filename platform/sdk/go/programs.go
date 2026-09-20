@@ -289,10 +289,30 @@ const (
 )
 
 type VerifiedProgramReceipt struct {
-	TransferVerification ProgramTransferVerification
-	Verification         VerifiedReceipt
-	TerminalPayload      []byte
-	CallGraph            []byte
+	TransferVerification     ProgramTransferVerification
+	Verification             VerifiedReceipt
+	TerminalPayload          []byte
+	CallGraph                []byte
+	OccupancyPaymentAccounts [][32]byte
+}
+
+// OccupancyPayer offers a payer DID, and optionally one of the two payment
+// accounts that DID derives, for a state-commitment occupancy charge.
+type OccupancyPayer struct {
+	DID     []byte
+	Account []byte
+}
+
+const (
+	programStateCommitmentProtocolVersion = 3
+	programMaxOccupancyPayers             = 256
+	programMaxPayerDIDBytes               = 255
+)
+
+type occupancyPaymentAccount struct {
+	Payer   [32]byte
+	Asset   [32]byte
+	Account [32]byte
 }
 
 type programCallBinding struct {
@@ -419,6 +439,13 @@ func programPayloadMatchesCall(payload []byte, call ProgramCall) bool {
 }
 
 func VerifyProgramReceipt(execution ProgramExecutionDocument, authority AuthorizedBatch, selectedProtocol ...uint16) (VerifiedProgramReceipt, error) {
+	return VerifyProgramReceiptWithPayers(execution, authority, nil, selectedProtocol...)
+}
+
+// VerifyProgramReceiptWithPayers verifies like VerifyProgramReceipt and proves
+// the offered occupancy payers, which a state-commitment receipt with a paid
+// occupancy charge requires.
+func VerifyProgramReceiptWithPayers(execution ProgramExecutionDocument, authority AuthorizedBatch, payers []OccupancyPayer, selectedProtocol ...uint16) (VerifiedProgramReceipt, error) {
 	if execution.ActivityID == "" || execution.ModuleVersion < 1 || execution.ModuleVersion > 4 || execution.GuestABIVersion != 1 && execution.GuestABIVersion != 2 {
 		return VerifiedProgramReceipt{}, verificationFailure()
 	}
@@ -449,11 +476,11 @@ func VerifyProgramReceipt(execution ProgramExecutionDocument, authority Authoriz
 	if digestError != nil || verified.Receipt.ActivityID != activity || verified.Receipt.BatchID != authority.BatchID || verified.Receipt.ResultingStateRoot != authority.ResultingStateRoot || verified.Receipt.ModuleID != 9 || verified.Receipt.Operation != 3 || verified.Receipt.ModuleVersion != execution.ModuleVersion || outcome == nil || outcome.ABIVersion != execution.GuestABIVersion || outcome.ResultCode != execution.ResultCode || len(graph) == 0 || terminalDigest != outcome.TerminalPayloadRoot || graphDigest != outcome.CallGraphRoot || verified.ReceiptDigest != declaredReceiptDigest {
 		return VerifiedProgramReceipt{}, verificationFailure()
 	}
-	transferVerification, terminalError := verifyProgramTerminal(execution, verified.Receipt, terminal, graph)
+	transferVerification, accounts, terminalError := verifyProgramTerminal(execution, verified.Receipt, terminal, graph, payers)
 	if terminalError != nil {
 		return VerifiedProgramReceipt{}, verificationFailure()
 	}
-	return VerifiedProgramReceipt{Verification: verified, TerminalPayload: terminal, CallGraph: graph, TransferVerification: transferVerification}, nil
+	return VerifiedProgramReceipt{Verification: verified, TerminalPayload: terminal, CallGraph: graph, TransferVerification: transferVerification, OccupancyPaymentAccounts: accounts}, nil
 }
 
 type programTerminalProjection struct {
@@ -476,64 +503,70 @@ type programTerminalProjection struct {
 	TransferRoot            [32]byte
 }
 
-func verifyProgramTerminal(execution ProgramExecutionDocument, receipt ProtocolReceipt, terminal []byte, graph []byte) (ProgramTransferVerification, error) {
+func verifyProgramTerminal(execution ProgramExecutionDocument, receipt ProtocolReceipt, terminal []byte, graph []byte, payers []OccupancyPayer) (ProgramTransferVerification, [][32]byte, error) {
 	receiptOutcome := receipt.ProgramOutcome
 	if receiptOutcome == nil {
-		return "", errors.New("missing Programs receipt outcome")
+		return "", nil, errors.New("missing Programs receipt outcome")
 	}
+	var occupancyAccounts [][32]byte
 	programID, err := programHex32(execution.ProgramID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if len(terminal) == 0 || len(terminal) > 1_048_576 || sha256.Sum256(terminal) != receiptOutcome.TerminalPayloadRoot || len(graph) == 0 || sha256.Sum256(graph) != receiptOutcome.CallGraphRoot {
-		return "", errors.New("Programs terminal or graph root mismatch")
+		return "", nil, errors.New("Programs terminal or graph root mismatch")
 	}
 	inner, err := unwrapAppliedProgramTerminal(terminal, *receiptOutcome)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	projection, err := decodeProgramTerminal(receiptOutcome.TerminalKind, receiptOutcome.ABIVersion, inner, programID, receiptOutcome.ResultCode)
 	if err != nil || projection.RuntimeVersion != receiptOutcome.RuntimeVersion || projection.Candidate && projection.FeeScheduleVersion != receiptOutcome.FeeScheduleVersion || projection.MeteringScheduleVersion != receiptOutcome.MeteringScheduleVersion || projection.CPUFuel != receiptOutcome.CPUFuel || projection.MemoryBytes != receiptOutcome.MemoryBytes || projection.StorageReadBytes != receiptOutcome.StorageReadBytes || projection.StorageWriteBytes != receiptOutcome.StorageWriteBytes || projection.OutputValues != receiptOutcome.OutputValues || projection.OutputBytes != receiptOutcome.OutputBytes || !projection.FeeUnits.Equal(receiptOutcome.FeeUnits) || !programOutcomesEqual(projection.Outcome, execution.Outcome) {
-		return "", errors.New("Programs terminal projection mismatch")
+		return "", nil, errors.New("Programs terminal projection mismatch")
 	}
 	if projection.Candidate && !bytes.Equal(projection.EmbeddedGraph, graph) {
-		return "", errors.New("Programs embedded call graph mismatch")
+		return "", nil, errors.New("Programs embedded call graph mismatch")
 	}
 	occupancyRequired := (receipt.ProtocolVersion == 2 || receipt.ProtocolVersion == 3) && projection.Successful
 	if occupancyRequired != (projection.Occupancy != nil) {
-		return "", errors.New("Programs occupancy attachment mismatch")
+		return "", nil, errors.New("Programs occupancy attachment mismatch")
 	}
 	if projection.Occupancy == nil {
 		if receiptOutcome.OccupancyEvidenceDigest != ([32]byte{}) || receiptOutcome.OccupancyTransferRoot != ([32]byte{}) || receiptOutcome.OccupancyByteBatches != (Uint128{}) || receiptOutcome.OccupancyFeeUnits != (Uint128{}) {
-			return "", errors.New("Programs receipt carries unattached occupancy")
+			return "", nil, errors.New("Programs receipt carries unattached occupancy")
 		}
 	} else if len(projection.Occupancy) == 0 {
 		if receiptOutcome.OccupancyEvidenceDigest != ([32]byte{}) || receiptOutcome.OccupancyTransferRoot != ([32]byte{}) || receiptOutcome.OccupancyByteBatches != (Uint128{}) || receiptOutcome.OccupancyFeeUnits != (Uint128{}) {
-			return "", errors.New("Programs empty occupancy attachment mismatch")
+			return "", nil, errors.New("Programs empty occupancy attachment mismatch")
 		}
 	} else if sha256.Sum256(projection.Occupancy) != receiptOutcome.OccupancyEvidenceDigest {
-		return "", errors.New("Programs occupancy digest mismatch")
+		return "", nil, errors.New("Programs occupancy digest mismatch")
 	} else {
 		occupancy, occupancyError := decodeProgramOccupancy(projection.Occupancy, receiptOutcome.OccupancyAssetID)
-		if occupancyError != nil || !occupancy.ByteBatches.Equal(receiptOutcome.OccupancyByteBatches) || !occupancy.FeeUnits.Equal(receiptOutcome.OccupancyFeeUnits) || occupancy.TransferRoot != receiptOutcome.OccupancyTransferRoot {
-			return "", errors.New("Programs occupancy settlement mismatch")
+		if occupancyError != nil || !occupancy.ByteBatches.Equal(receiptOutcome.OccupancyByteBatches) || !occupancy.FeeUnits.Equal(receiptOutcome.OccupancyFeeUnits) {
+			return "", nil, errors.New("Programs occupancy settlement mismatch")
 		}
+		proven, rootError := verifyProgramOccupancyTransferRoot(occupancy.PaidByPayer, receipt.ProtocolVersion, receiptOutcome.OccupancyAssetID, receiptOutcome.OccupancyTransferRoot, payers)
+		if rootError != nil {
+			return "", nil, rootError
+		}
+		occupancyAccounts = proven
 	}
 	recorded := receiptOutcome.EncodingVersion != 4 && projection.TransferAuthorization == nil && receiptOutcome.TransferRoot != ([32]byte{})
 	authorityRequired := projection.Candidate || receiptOutcome.EncodingVersion == 4 && projection.Successful
 	if !recorded && ((!authorityRequired && projection.TransferAuthorization != nil) || authorityRequired && (projection.TransferAuthorization != nil) != (receiptOutcome.TransferRoot != ([32]byte{}))) {
-		return "", errors.New("Programs transfer authority presence mismatch")
+		return "", nil, errors.New("Programs transfer authority presence mismatch")
 	}
 	if receiptOutcome.EncodingVersion == 4 && projection.TransferAuthorization != nil && !programAuthorizationV2(projection.TransferAuthorization) {
-		return "", errors.New("Programs V2 transfer authority required")
+		return "", nil, errors.New("Programs V2 transfer authority required")
 	}
 	if projection.TransferAuthorization != nil && (projection.TransferRoot != receiptOutcome.TransferRoot || verifyProgramTransferAuthorization(projection.TransferAuthorization, projection.TransferRoot) != nil) {
-		return "", errors.New("Programs transfer authority root mismatch")
+		return "", nil, errors.New("Programs transfer authority root mismatch")
 	}
 	if recorded {
-		return ProgramTransfersRecorded, nil
+		return ProgramTransfersRecorded, occupancyAccounts, nil
 	}
-	return ProgramTransfersReconstructed, nil
+	return ProgramTransfersReconstructed, occupancyAccounts, nil
 }
 
 func programOutcomesEqual(left ProgramOutcome, right ProgramOutcome) bool {
@@ -968,9 +1001,9 @@ func consumeStandaloneProgramResource(cursor *programTerminalCursor) bool {
 func validProgramTransferError(tag byte) bool { return tag >= 1 && tag <= 12 }
 
 type programOccupancyProjection struct {
-	ByteBatches  Uint128
-	FeeUnits     Uint128
-	TransferRoot [32]byte
+	ByteBatches Uint128
+	FeeUnits    Uint128
+	PaidByPayer map[[32]byte]Uint128
 }
 
 func decodeProgramOccupancy(encoded []byte, asset [32]byte) (programOccupancyProjection, error) {
@@ -1055,8 +1088,7 @@ func decodeProgramOccupancy(encoded []byte, asset [32]byte) (programOccupancyPro
 	if cursor.failed || !cursor.finished() || !batches.Equal(declaredBatches) || !fees.Equal(declaredFees) || !paid.Equal(declaredPaid) || !arrears.Equal(declaredArrears) {
 		return programOccupancyProjection{}, errors.New("Programs occupancy totals mismatch")
 	}
-	root := programOccupancyTransferRoot(paidByPayer, asset)
-	return programOccupancyProjection{ByteBatches: batches, FeeUnits: fees, TransferRoot: root}, nil
+	return programOccupancyProjection{ByteBatches: batches, FeeUnits: fees, PaidByPayer: paidByPayer}, nil
 }
 
 func decodeLegacyProgramOccupancy(encoded []byte, asset [32]byte) (programOccupancyProjection, error) {
@@ -1111,7 +1143,7 @@ func decodeLegacyProgramOccupancy(encoded []byte, asset [32]byte) (programOccupa
 	if cursor.failed || !cursor.finished() || !batches.Equal(declaredBatches) || !fees.Equal(declaredFees) {
 		return programOccupancyProjection{}, errors.New("legacy Programs occupancy totals mismatch")
 	}
-	return programOccupancyProjection{ByteBatches: batches, FeeUnits: fees, TransferRoot: programOccupancyTransferRoot(paid, asset)}, nil
+	return programOccupancyProjection{ByteBatches: batches, FeeUnits: fees, PaidByPayer: paid}, nil
 }
 
 func validProgramNamespace(value []byte) bool {
@@ -1164,13 +1196,13 @@ func programOccupancyMandate(payer, rootProgram, activity [32]byte, namespace []
 	return sha256.Sum256(material)
 }
 
-func programOccupancyTransferRoot(paid map[[32]byte]Uint128, asset [32]byte) [32]byte {
-	treasuryMaterial := []byte("LX:ACCOUNT:v1")
+func programOccupancyFeeTreasury() [32]byte {
 	var length [4]byte
 	binary.BigEndian.PutUint32(length[:], 11)
-	treasuryMaterial = append(treasuryMaterial, length[:]...)
-	treasuryMaterial = append(treasuryMaterial, []byte("system:fees")...)
-	treasury := sha256.Sum256(treasuryMaterial)
+	return domainDigest([]byte("LX:ACCOUNT:v1"), length[:], []byte("system:fees"))
+}
+
+func programOccupancyPayingPayers(paid map[[32]byte]Uint128) [][32]byte {
 	payers := make([][32]byte, 0, len(paid))
 	for payer, amount := range paid {
 		if amount != (Uint128{}) {
@@ -1178,19 +1210,23 @@ func programOccupancyTransferRoot(paid map[[32]byte]Uint128, asset [32]byte) [32
 		}
 	}
 	sort.Slice(payers, func(i, j int) bool { return bytes.Compare(payers[i][:], payers[j][:]) < 0 })
-	level := make([][32]byte, 0, len(payers))
-	for _, payer := range payers {
-		leg := []byte{0}
-		leg = append(leg, payer[:]...)
-		leg = append(leg, treasury[:]...)
-		leg = append(leg, asset[:]...)
-		var amount [16]byte
-		binary.BigEndian.PutUint64(amount[:8], paid[payer].High())
-		binary.BigEndian.PutUint64(amount[8:], paid[payer].Low())
-		leg = append(leg, amount[:]...)
-		leg = append(leg, 0, 23)
-		level = append(level, domainDigest([]byte("LXP/v1/merkle-leaf\x00"), leg))
-	}
+	return payers
+}
+
+func programOccupancyTransferLeaf(from, treasury, asset [32]byte, paid Uint128) [32]byte {
+	leaf := []byte{0}
+	leaf = append(leaf, from[:]...)
+	leaf = append(leaf, treasury[:]...)
+	leaf = append(leaf, asset[:]...)
+	var amount [16]byte
+	binary.BigEndian.PutUint64(amount[:8], paid.High())
+	binary.BigEndian.PutUint64(amount[8:], paid.Low())
+	leaf = append(leaf, amount[:]...)
+	leaf = append(leaf, 0, 23)
+	return domainDigest([]byte("LXP/v1/merkle-leaf\x00"), leaf)
+}
+
+func programOccupancyMerkleRoot(level [][32]byte) [32]byte {
 	for len(level) > 1 {
 		next := make([][32]byte, 0, (len(level)+1)/2)
 		for index := 0; index < len(level); index += 2 {
@@ -1206,6 +1242,150 @@ func programOccupancyTransferRoot(paid map[[32]byte]Uint128, asset [32]byte) [32
 		return [32]byte{}
 	}
 	return level[0]
+}
+
+func programOccupancyTransferRoot(paid map[[32]byte]Uint128, asset [32]byte) [32]byte {
+	treasury := programOccupancyFeeTreasury()
+	payers := programOccupancyPayingPayers(paid)
+	level := make([][32]byte, 0, len(payers))
+	for _, payer := range payers {
+		level = append(level, programOccupancyTransferLeaf(payer, treasury, asset, paid[payer]))
+	}
+	return programOccupancyMerkleRoot(level)
+}
+
+// verifyProgramOccupancyTransferRoot rebuilds the committed occupancy transfer
+// root. Protocol versions before the state commitment pay from the payer
+// principal; the state commitment pays from one of the two accounts the payer
+// DID derives, so each offered payer is proven against the settlement and the
+// selection the receipt committed to is recovered.
+func verifyProgramOccupancyTransferRoot(paid map[[32]byte]Uint128, protocolVersion uint16, asset [32]byte, committedRoot [32]byte, payers []OccupancyPayer) ([][32]byte, error) {
+	if protocolVersion != programStateCommitmentProtocolVersion {
+		if programOccupancyTransferRoot(paid, asset) != committedRoot {
+			return nil, errors.New("Programs occupancy transfer root mismatch")
+		}
+		return nil, nil
+	}
+	if asset == ([32]byte{}) {
+		return nil, errors.New("invalid Programs occupancy settlement")
+	}
+	paying := programOccupancyPayingPayers(paid)
+	accounts, err := programProvenPayingAccounts(paying, payers, asset)
+	if err != nil {
+		return nil, err
+	}
+	if len(accounts) > 2*programMaxOccupancyPayers {
+		return nil, errors.New("Programs occupancy payment account bound")
+	}
+	type programOccupancyPayerSelection struct {
+		Paid   Uint128
+		Proven [][32]byte
+	}
+	selected := make([]programOccupancyPayerSelection, 0, len(paying))
+	selections := 1
+	for _, payer := range paying {
+		proven := make([][32]byte, 0, 2)
+		for _, account := range accounts {
+			if account.Payer != payer || account.Asset != asset {
+				continue
+			}
+			known := false
+			for _, candidate := range proven {
+				known = known || candidate == account.Account
+			}
+			if !known {
+				proven = append(proven, account.Account)
+			}
+		}
+		if len(proven) == 0 {
+			return nil, errors.New("Programs occupancy payment account unproven")
+		}
+		selections *= len(proven)
+		if selections > programMaxOccupancyPayers {
+			return nil, errors.New("Programs occupancy payment account bound")
+		}
+		selected = append(selected, programOccupancyPayerSelection{Paid: paid[payer], Proven: proven})
+	}
+	if len(selected) > programMaxOccupancyPayers {
+		return nil, errors.New("Programs occupancy payment account bound")
+	}
+	treasury := programOccupancyFeeTreasury()
+	for selection := 0; selection < selections; selection++ {
+		remaining := selection
+		chosen := make([][32]byte, 0, len(selected))
+		level := make([][32]byte, 0, len(selected))
+		for _, entry := range selected {
+			account := entry.Proven[remaining%len(entry.Proven)]
+			remaining /= len(entry.Proven)
+			level = append(level, programOccupancyTransferLeaf(account, treasury, asset, entry.Paid))
+			chosen = append(chosen, account)
+		}
+		if programOccupancyMerkleRoot(level) == committedRoot {
+			return chosen, nil
+		}
+	}
+	return nil, errors.New("Programs occupancy transfer root mismatch")
+}
+
+func programProvenPayingAccounts(paying [][32]byte, payers []OccupancyPayer, asset [32]byte) ([]occupancyPaymentAccount, error) {
+	accounts := make([]occupancyPaymentAccount, 0, 2*len(payers))
+	if len(paying) == 0 || len(paying) > programMaxOccupancyPayers {
+		return accounts, nil
+	}
+	for _, payer := range payers {
+		main, mainError := programOccupancyPaymentAccount(payer.DID, asset, false)
+		if mainError != nil {
+			continue
+		}
+		charged := false
+		for _, candidate := range paying {
+			charged = charged || candidate == main.Payer
+		}
+		if !charged {
+			continue
+		}
+		scoped, scopedError := programOccupancyPaymentAccount(payer.DID, asset, true)
+		if scopedError != nil {
+			return nil, scopedError
+		}
+		if payer.Account == nil {
+			accounts = append(accounts, main, scoped)
+			continue
+		}
+		switch {
+		case bytes.Equal(payer.Account, main.Account[:]):
+			accounts = append(accounts, main)
+		case bytes.Equal(payer.Account, scoped.Account[:]):
+			accounts = append(accounts, scoped)
+		default:
+			return nil, errors.New("Programs occupancy payment account unproven")
+		}
+	}
+	return accounts, nil
+}
+
+func programOccupancyPaymentAccount(did []byte, asset [32]byte, assetScoped bool) (occupancyPaymentAccount, error) {
+	unproven := errors.New("Programs occupancy payment account unproven")
+	if len(did) == 0 || len(did) > programMaxPayerDIDBytes || asset == ([32]byte{}) {
+		return occupancyPaymentAccount{}, unproven
+	}
+	var length [4]byte
+	binary.BigEndian.PutUint16(length[:2], uint16(len(did)))
+	payer := domainDigest([]byte("LXP/v1/did-id\x00"), length[:2], did)
+	if payer == ([32]byte{}) {
+		return occupancyPaymentAccount{}, unproven
+	}
+	name := make([]byte, 0, 13+len(did)+64)
+	name = append(name, []byte("agent:")...)
+	name = append(name, did...)
+	if assetScoped {
+		name = append(name, []byte(":asset:")...)
+		name = append(name, []byte(hex.EncodeToString(asset[:]))...)
+	} else {
+		name = append(name, []byte(":main")...)
+	}
+	binary.BigEndian.PutUint32(length[:], uint32(len(name)))
+	return occupancyPaymentAccount{Payer: payer, Asset: asset, Account: domainDigest([]byte("LX:ACCOUNT:v1"), length[:], name)}, nil
 }
 
 func programAuthorizationV2(encoded []byte) bool {

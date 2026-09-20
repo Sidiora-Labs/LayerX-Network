@@ -568,7 +568,7 @@ func TestProgramOccupancySettlementBindsCountersFeesAndAssetRoot(t *testing.T) {
 	asset := [32]byte{4}
 	settlement := canonicalEmptyProgramOccupancyFixture()
 	projection, err := decodeProgramOccupancy(settlement, asset)
-	if err != nil || projection.ByteBatches != (Uint128{}) || projection.FeeUnits != (Uint128{}) || projection.TransferRoot != ([32]byte{}) {
+	if err != nil || projection.ByteBatches != (Uint128{}) || projection.FeeUnits != (Uint128{}) || programOccupancyTransferRoot(projection.PaidByPayer, asset) != ([32]byte{}) {
 		t.Fatalf("canonical empty Programs occupancy settlement rejected: %#v %v", projection, err)
 	}
 	mutated := append([]byte(nil), settlement...)

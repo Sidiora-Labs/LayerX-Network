@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import * as http from "node:http";
 
 import {
@@ -11,6 +12,7 @@ import {
   SecretBytes,
 } from "../src/index.js";
 import { assertFreshSimulationObservation, decodeAndVerifyProgramTerminal, decodeSignedProgramCall } from "../src/program-wire.js";
+import type { OccupancyPayer } from "../src/program-wire.js";
 import type { ProgramReceiptOutcome } from "../src/verifier.js";
 
 function assert(condition: boolean, message: string): asserts condition {
@@ -299,6 +301,58 @@ await rejectsTerminal(authorityWrapper(authorityTerminal, transferAuthorization,
 await rejectsTerminal(occupancyWrapper(occupancyTerminal, occupancyEvidence), graph, programId, occupancyReceipt, 2,
   "duplicate occupancy attachment was accepted");
 
+const payerFixture = JSON.parse(readFileSync(new URL("../../../../../platform/sdk/conformance/fixtures/occupancy-payment-accounts-v3.json", import.meta.url), "utf8")) as {
+  asset_hex: string;
+  stranger: { did: string; main_account_hex: string };
+  vectors: readonly {
+    name: string; evidence_hex: string;
+    usage: { byte_batches: string; fee_units: string };
+    payers: readonly { did: string; principal_hex: string; main_account_hex: string; asset_account_hex: string }[];
+    account_transfer_roots: readonly { accounts: readonly string[]; root_hex: string }[];
+    principal_transfer_root_hex?: string; stranger_transfer_root_hex?: string;
+  }[];
+};
+const payerAsset = Buffer.from(payerFixture.asset_hex, "hex");
+for (const vector of payerFixture.vectors) {
+  const evidence = Buffer.from(vector.evidence_hex, "hex");
+  const settledTerminal = occupancyWrapper(terminal, evidence);
+  const settledPayers = [...vector.payers].sort((left, right) => left.principal_hex.localeCompare(right.principal_hex));
+  const committed: ProgramReceiptOutcome = {
+    ...receiptOutcome, terminalPayloadRoot: await hash(settledTerminal),
+    occupancyByteBatches: BigInt(vector.usage.byte_batches), occupancyFeeUnits: BigInt(vector.usage.fee_units),
+    occupancyAssetId: payerAsset, occupancyEvidenceDigest: await hash(evidence), occupancyTransferRoot: new Uint8Array(32),
+  };
+  const derivable = 2 ** settledPayers.length <= 256;
+  const offered = settledPayers.map((payer) => ({ did: payer.did }));
+  for (const selection of vector.account_transfer_roots) {
+    const receipt: ProgramReceiptOutcome = { ...committed, occupancyTransferRoot: Buffer.from(selection.root_hex, "hex") };
+    const expected = settledPayers.map((payer, index) => selection.accounts[index] === "asset" ? payer.asset_account_hex : payer.main_account_hex);
+    const explicit = settledPayers.map((payer, index) => ({ did: payer.did, account: Buffer.from(expected[index] ?? "", "hex") }));
+    const proven = await decodeAndVerifyProgramTerminal(settledTerminal, graph, programId, receipt, 3, undefined, explicit);
+    assert(proven.occupancyPaymentAccounts.join(",") === expected.join(","), `${vector.name} refused the offered payment accounts`);
+    if (derivable) {
+      const derived = await decodeAndVerifyProgramTerminal(settledTerminal, graph, programId, receipt, 3, undefined, offered);
+      assert(derived.occupancyPaymentAccounts.join(",") === expected.join(","), `${vector.name} did not recover the committed payment accounts`);
+    } else {
+      await rejectsTerminal(settledTerminal, graph, programId, receipt, 3, `${vector.name} exceeded the candidate bound without refusing`, offered);
+    }
+    await rejectsTerminal(settledTerminal, graph, programId, receipt, 3, `${vector.name} accepted a paid state-commitment charge with no payer offered`);
+    await rejectsTerminal(settledTerminal, graph, programId, receipt, 3, `${vector.name} accepted an uncharged payer`, [{ did: payerFixture.stranger.did }]);
+    await rejectsTerminal(settledTerminal, graph, programId, receipt, 3, `${vector.name} accepted an underivable payment account`,
+      settledPayers.map((payer) => ({ did: payer.did, account: Buffer.from(payerFixture.stranger.main_account_hex, "hex") })));
+  }
+  if (vector.principal_transfer_root_hex !== undefined) {
+    const principal: ProgramReceiptOutcome = { ...committed, occupancyTransferRoot: Buffer.from(vector.principal_transfer_root_hex, "hex") };
+    const legacy = await decodeAndVerifyProgramTerminal(settledTerminal, graph, programId, principal, 2);
+    assert(legacy.occupancyPaymentAccounts.length === 0, "protocol 2 reported state-commitment payment accounts");
+    await rejectsTerminal(settledTerminal, graph, programId, principal, 3, `${vector.name} accepted the payer principal as the paying account`, offered);
+  }
+  if (vector.stranger_transfer_root_hex !== undefined) {
+    await rejectsTerminal(settledTerminal, graph, programId, { ...committed, occupancyTransferRoot: Buffer.from(vector.stranger_transfer_root_hex, "hex") },
+      3, `${vector.name} accepted an unrelated account as the paying account`, offered);
+  }
+}
+
 function programEnvelope(value: Readonly<Record<string, unknown>>, achieved: boolean): string {
   return JSON.stringify({
     request_id: "1",
@@ -358,9 +412,9 @@ async function occupancyTestRoot(payer: Uint8Array, asset: Uint8Array, amount: b
   return merkleTestRoot(join(Buffer.from([0]), payer, treasury, asset, integer(amount, 16), integer(23n, 2)));
 }
 async function rejectsTerminal(payload: Uint8Array, availableGraph: Uint8Array, expectedProgram: string,
-  receipt: ProgramReceiptOutcome, protocol: number, message: string): Promise<void> {
+  receipt: ProgramReceiptOutcome, protocol: number, message: string, payers: readonly OccupancyPayer[] = []): Promise<void> {
   let rejected = false;
-  try { await decodeAndVerifyProgramTerminal(payload, availableGraph, expectedProgram, receipt, protocol); } catch { rejected = true; }
+  try { await decodeAndVerifyProgramTerminal(payload, availableGraph, expectedProgram, receipt, protocol, undefined, payers); } catch { rejected = true; }
   assert(rejected, message);
 }
 

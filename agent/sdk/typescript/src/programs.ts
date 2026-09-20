@@ -5,7 +5,9 @@ import { DEFAULT_PROTOCOL_VERSION, isSelectableProtocolVersion, programsModuleVe
   supportedProgramGuestAbi, verifyReceiptOutcome } from "./verifier.js";
 import { PlatformSdkError, type IdempotencyKey, type ProductionClient } from "./production.js";
 import { assertFreshSimulationObservation, bindRetainedProgramCall, decodeAndVerifyProgramTerminal, decodeSignedProgramCall,
-  type DecodedSignedProgramCall } from "./program-wire.js";
+  type DecodedSignedProgramCall, type OccupancyPayer } from "./program-wire.js";
+
+export type { OccupancyPayer } from "./program-wire.js";
 
 const HEX32 = /^[0-9a-f]{64}$/u;
 const DECIMAL_U128 = /^(0|[1-9][0-9]{0,38})$/u;
@@ -56,7 +58,7 @@ export interface ProgramUnknownSubmission { readonly state: "unknown"; readonly 
 export type ProgramSubmission = ProgramUnknownSubmission | (ProgramExecutionDocument & Readonly<{ state: "executed" | "refused" }>);
 export interface ProgramSimulationEvidence { readonly boundary_id: string; readonly activity_id: string; readonly previous_state_root: string; readonly hypothetical_state_root: string; readonly observed_sequence: string; readonly observed_at: string; readonly committed: false; readonly public_key: string; readonly signature: string }
 export interface ProgramSimulation { readonly committed: false; readonly execution: ProgramExecutionDocument & Readonly<{ state: "simulated" }>; readonly simulation_evidence: ProgramSimulationEvidence }
-export interface VerifiedProgramReceipt { readonly verification: ReceiptVerification; readonly terminalPayload: Uint8Array; readonly callGraph: Uint8Array; readonly transferVerification: "reconstructed" | "recorded_terminal_root_not_locally_reconstructable" }
+export interface VerifiedProgramReceipt { readonly verification: ReceiptVerification; readonly terminalPayload: Uint8Array; readonly callGraph: Uint8Array; readonly transferVerification: "reconstructed" | "recorded_terminal_root_not_locally_reconstructable"; readonly occupancyPaymentAccounts: readonly string[] }
 
 export class ProgramTrustContext {
   readonly #sequencerPublicKey: Uint8Array;
@@ -109,6 +111,7 @@ export async function verifyProgramReceipt(
   authority: AuthorizedReceiptBatch,
   trust: ProgramTrustContext,
   expectedSignedActivity?: Uint8Array,
+  occupancyPayers: readonly OccupancyPayer[] = [],
 ): Promise<VerifiedProgramReceipt> {
   const protocolVersion = trust.protocolVersion();
   if (!HEX32.test(execution.activity_id)
@@ -149,9 +152,10 @@ export async function verifyProgramReceipt(
       || execution.idempotency_key !== undefined && bound.idempotencyKey !== execution.idempotency_key) throw new TypeError("retained program call metadata mismatch");
   }
   const terminal = await decodeAndVerifyProgramTerminal(terminalPayload, callGraph, execution.program_id, outcome, protocol.protocolVersion,
-    canonical === undefined ? undefined : { protocol, signedActivity: canonical });
+    canonical === undefined ? undefined : { protocol, signedActivity: canonical }, occupancyPayers);
   if (!sameUsage(terminal.usage, execution.usage) || !sameOutcome(terminal.outcome, execution.outcome)) throw new TypeError("program terminal document binding failed");
-  return Object.freeze({ verification, terminalPayload, callGraph, transferVerification: terminal.transferVerification });
+  return Object.freeze({ verification, terminalPayload, callGraph, transferVerification: terminal.transferVerification,
+    occupancyPaymentAccounts: terminal.occupancyPaymentAccounts });
 }
 
 export class ProgramOperations {

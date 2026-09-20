@@ -31,7 +31,11 @@ const OCCUPANCY_MANDATE = bytes("LXP/storage-occupancy-mandate/v1\0");
 const MERKLE_LEAF = bytes("LXP/v1/merkle-leaf\0");
 const MERKLE_INTERNAL = bytes("LXP/v1/merkle-internal\0");
 const ACCOUNT_DERIVATION = bytes("LX:ACCOUNT:v1");
+const DID_DERIVATION = bytes("LXP/v1/did-id\0");
 const FEE_TREASURY_LABEL = bytes("system:fees");
+const STATE_COMMITMENT_PROTOCOL_VERSION = 3;
+const MAX_OCCUPANCY_PAYERS = 256;
+const MAX_PAYER_DID_BYTES = 255;
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U128 = 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffffn;
 const MAX_TRACE_EVIDENCE_BYTES = 34 + 65_536 * 52;
@@ -51,6 +55,12 @@ export interface DecodedProgramTerminal {
   readonly outcome: ProgramOutcome;
   readonly usage: ProgramUsage;
   readonly transferVerification: "reconstructed" | "recorded_terminal_root_not_locally_reconstructable";
+  readonly occupancyPaymentAccounts: readonly string[];
+}
+
+export interface OccupancyPayer {
+  readonly did: Uint8Array | string;
+  readonly account?: Uint8Array;
 }
 
 export async function bindSignedProgramLifecycle(canonical: Uint8Array, payload: Uint8Array | undefined, ordinal: 1 | 2 | 7, expectedIdempotencyKey?: string): Promise<DecodedSignedProgramCall> {
@@ -142,6 +152,7 @@ export async function decodeAndVerifyProgramTerminal(
   receipt: ProgramReceiptOutcome,
   protocolVersion: number,
   binding?: Readonly<{ protocol: ProtocolReceipt; signedActivity: Uint8Array }>,
+  occupancyPayers: readonly OccupancyPayer[] = [],
 ): Promise<DecodedProgramTerminal> {
   if (callGraph.length === 0 || !equal(await sha256(callGraph), receipt.callGraphRoot)) fail("program call graph root");
   if (terminalPayload.length === 0 || terminalPayload.length > 1_048_576 || !equal(await sha256(terminalPayload), receipt.terminalPayloadRoot)) fail("program terminal root");
@@ -150,7 +161,7 @@ export async function decodeAndVerifyProgramTerminal(
     await verifyPreRuntimeFailure(terminalPayload, callGraph, expectedProgramId, receipt, protocolVersion, binding);
     return Object.freeze({
       outcome: Object.freeze({ kind: "refused", failure: Object.freeze({ kind: "guest_refused", code: receipt.resultCode }) }),
-      usage: receiptUsage(receipt), transferVerification: "reconstructed",
+      usage: receiptUsage(receipt), transferVerification: "reconstructed", occupancyPaymentAccounts: Object.freeze([]),
     });
   }
   let inner = terminalPayload;
@@ -234,6 +245,7 @@ export async function decodeAndVerifyProgramTerminal(
   const zero = new Uint8Array(32);
   const occupancyRequired = (protocolVersion === 2 || protocolVersion === 3) && successfulExecution;
   if ((occupancy !== undefined) !== occupancyRequired) fail("occupancy attachment presence");
+  let occupancyPaymentAccounts: readonly string[] = Object.freeze([]);
   if (occupancy !== undefined) {
     if (occupancy.length === 0) {
       if (!equal(receipt.occupancyEvidenceDigest, zero) || !equal(receipt.occupancyTransferRoot, zero)
@@ -241,10 +253,11 @@ export async function decodeAndVerifyProgramTerminal(
     } else {
       if (!equal(await sha256(occupancy), receipt.occupancyEvidenceDigest)) fail("occupancy evidence digest");
       const settlement = await decodeOccupancySettlement(occupancy);
-      if (settlement.byteBatches !== receipt.occupancyByteBatches || settlement.feeUnits !== receipt.occupancyFeeUnits
-        || !equal(await occupancyTransferRoot(settlement, receipt.occupancyAssetId), receipt.occupancyTransferRoot)) {
+      if (settlement.byteBatches !== receipt.occupancyByteBatches || settlement.feeUnits !== receipt.occupancyFeeUnits) {
         fail("occupancy receipt binding");
       }
+      occupancyPaymentAccounts = await verifyOccupancyTransferRoot(settlement, protocolVersion,
+        receipt.occupancyAssetId, receipt.occupancyTransferRoot, occupancyPayers);
     }
   } else if (!equal(receipt.occupancyEvidenceDigest, zero) || !equal(receipt.occupancyTransferRoot, zero)
     || receipt.occupancyByteBatches !== 0n || receipt.occupancyFeeUnits !== 0n) {
@@ -260,7 +273,8 @@ export async function decodeAndVerifyProgramTerminal(
   }
   if (protocolVersion !== 1 && protocolVersion !== 2 && protocolVersion !== 3) fail("program receipt protocol");
   const boundUsage = usage ?? receiptUsage(receipt);
-  return Object.freeze({ outcome, usage: boundUsage, transferVerification: recorded ? "recorded_terminal_root_not_locally_reconstructable" : "reconstructed" });
+  return Object.freeze({ outcome, usage: boundUsage, occupancyPaymentAccounts,
+    transferVerification: recorded ? "recorded_terminal_root_not_locally_reconstructable" : "reconstructed" });
 }
 
 async function verifyPreRuntimeFailure(
@@ -593,6 +607,8 @@ interface ProgramAuthorityBinding {
 interface ProgramFundingBinding { readonly owner: Uint8Array; readonly destination: Uint8Array; readonly asset: Uint8Array }
 interface OccupancyChargeBinding { readonly payer: Uint8Array; readonly amountDue: bigint; readonly paid: boolean; readonly arrearsAfter: bigint }
 interface OccupancySettlementBinding { readonly byteBatches: bigint; readonly feeUnits: bigint; readonly charges: readonly OccupancyChargeBinding[] }
+interface OccupancyPayerDisposition { readonly payer: Uint8Array; readonly due: bigint; readonly paid: bigint; readonly arrears: bigint }
+interface OccupancyPaymentAccountBinding { readonly payer: Uint8Array; readonly asset: Uint8Array; readonly account: Uint8Array }
 interface StorageNamespaceBinding { readonly canonical: Uint8Array; readonly wire: Uint8Array; readonly program: Uint8Array; readonly principal?: Uint8Array }
 
 async function verifyAuthorizationRoot(encoded: Uint8Array, expected: Uint8Array, requireV2: boolean): Promise<void> {
@@ -820,9 +836,7 @@ function decodeStorageNamespace(reader: Reader): StorageNamespaceBinding {
   return { canonical, wire: concatenate(Uint8Array.of(length), canonical), program, ...(principal === undefined ? {} : { principal }) };
 }
 
-async function occupancyTransferRoot(settlement: OccupancySettlementBinding, asset: Uint8Array): Promise<Uint8Array> {
-  if (asset.length !== 32) fail("occupancy asset length");
-  nonzero(asset, "occupancy asset");
+function occupancyPayerDispositions(settlement: OccupancySettlementBinding): OccupancyPayerDisposition[] {
   const payers = new Map<string, { payer: Uint8Array; due: bigint; paid: bigint; arrears: bigint }>();
   for (const charge of settlement.charges) {
     const key = hex(charge.payer); const existing = payers.get(key) ?? { payer: charge.payer, due: 0n, paid: 0n, arrears: 0n };
@@ -830,11 +844,95 @@ async function occupancyTransferRoot(settlement: OccupancySettlementBinding, ass
     if (charge.paid) existing.paid = checkedU128Add(existing.paid, charge.amountDue, "occupancy payer paid");
     existing.arrears = checkedU128Add(existing.arrears, charge.arrearsAfter, "occupancy payer arrears"); payers.set(key, existing);
   }
+  return [...payers.values()].sort((left, right) => compareBytes(left.payer, right.payer));
+}
+
+async function occupancyTransferRoot(settlement: OccupancySettlementBinding, asset: Uint8Array): Promise<Uint8Array> {
+  if (asset.length !== 32) fail("occupancy asset length");
+  nonzero(asset, "occupancy asset");
   const treasury = await sha256(ACCOUNT_DERIVATION, bigEndian(11n, 4), FEE_TREASURY_LABEL); const legs: Uint8Array[] = [];
-  for (const entry of [...payers.values()].filter((value) => value.due !== 0n || value.arrears !== 0n).sort((left, right) => compareBytes(left.payer, right.payer))) {
+  for (const entry of occupancyPayerDispositions(settlement).filter((value) => value.due !== 0n || value.arrears !== 0n)) {
     if (entry.paid !== 0n) legs.push(concatenate(Uint8Array.of(0), entry.payer, treasury, asset, bigEndian(entry.paid, 16), bigEndian(23n, 2)));
   }
   return merkleRoot(legs);
+}
+
+async function verifyOccupancyTransferRoot(
+  settlement: OccupancySettlementBinding, protocolVersion: number, asset: Uint8Array,
+  committedRoot: Uint8Array, payers: readonly OccupancyPayer[],
+): Promise<readonly string[]> {
+  if (protocolVersion !== STATE_COMMITMENT_PROTOCOL_VERSION) {
+    if (!equal(await occupancyTransferRoot(settlement, asset), committedRoot)) fail("occupancy receipt binding");
+    return Object.freeze([]);
+  }
+  if (asset.length !== 32) fail("occupancy asset length");
+  nonzero(asset, "occupancy asset");
+  const dispositions = occupancyPayerDispositions(settlement);
+  const accounts = await provenPayingAccounts(dispositions, payers, asset);
+  if (accounts.length > 2 * MAX_OCCUPANCY_PAYERS) fail("occupancy payment account bound");
+  const paying: { paid: bigint; proven: OccupancyPaymentAccountBinding[] }[] = [];
+  let selections = 1;
+  for (const entry of dispositions) {
+    if (entry.paid === 0n) continue;
+    const proven: OccupancyPaymentAccountBinding[] = [];
+    for (const account of accounts) {
+      if (equal(account.payer, entry.payer) && equal(account.asset, asset)
+        && !proven.some((known) => equal(known.account, account.account))) proven.push(account);
+    }
+    if (proven.length === 0) fail("occupancy payment account");
+    selections *= proven.length;
+    if (!Number.isSafeInteger(selections) || selections > MAX_OCCUPANCY_PAYERS) fail("occupancy payment account bound");
+    paying.push({ paid: entry.paid, proven });
+  }
+  if (paying.length > MAX_OCCUPANCY_PAYERS) fail("occupancy payment account bound");
+  const treasury = await sha256(ACCOUNT_DERIVATION, bigEndian(11n, 4), FEE_TREASURY_LABEL);
+  for (let selection = 0; selection < selections; selection += 1) {
+    let remaining = selection;
+    const chosen: string[] = [];
+    const legs: Uint8Array[] = [];
+    for (const entry of paying) {
+      const account = entry.proven[remaining % entry.proven.length] ?? fail("occupancy payment account");
+      remaining = Math.floor(remaining / entry.proven.length);
+      legs.push(concatenate(Uint8Array.of(0), account.account, treasury, asset, bigEndian(entry.paid, 16), bigEndian(23n, 2)));
+      chosen.push(hex(account.account));
+    }
+    if (equal(await merkleRoot(legs), committedRoot)) return Object.freeze(chosen);
+  }
+  return fail("occupancy transfer root");
+}
+
+async function provenPayingAccounts(
+  dispositions: readonly OccupancyPayerDisposition[], payers: readonly OccupancyPayer[], asset: Uint8Array,
+): Promise<OccupancyPaymentAccountBinding[]> {
+  const paying = dispositions.filter((entry) => entry.paid !== 0n).map((entry) => entry.payer);
+  const accounts: OccupancyPaymentAccountBinding[] = [];
+  if (paying.length === 0 || paying.length > MAX_OCCUPANCY_PAYERS) return accounts;
+  for (const payer of payers) {
+    const did = typeof payer.did === "string" ? bytes(payer.did) : payer.did;
+    let main: OccupancyPaymentAccountBinding;
+    try { main = await occupancyPaymentAccount(did, asset, false); } catch { continue; }
+    if (!paying.some((value) => equal(value, main.payer))) continue;
+    if (payer.account === undefined) {
+      accounts.push(main, await occupancyPaymentAccount(did, asset, true));
+      continue;
+    }
+    const offered = payer.account;
+    const scoped = await occupancyPaymentAccount(did, asset, true);
+    const proven = [main, scoped].find((candidate) => equal(candidate.account, offered));
+    if (proven === undefined) fail("occupancy payment account");
+    accounts.push(proven);
+  }
+  return accounts;
+}
+
+async function occupancyPaymentAccount(did: Uint8Array, asset: Uint8Array, assetScoped: boolean): Promise<OccupancyPaymentAccountBinding> {
+  if (did.length === 0 || did.length > MAX_PAYER_DID_BYTES || asset.length !== 32 || allZero(asset)) fail("occupancy payer did");
+  const payer = await sha256(DID_DERIVATION, bigEndian(BigInt(did.length), 2), did);
+  nonzero(payer, "occupancy payer did");
+  const name = assetScoped
+    ? concatenate(bytes("agent:"), did, bytes(":asset:"), bytes(hex(asset)))
+    : concatenate(bytes("agent:"), did, bytes(":main"));
+  return { payer, asset, account: await sha256(ACCOUNT_DERIVATION, bigEndian(BigInt(name.length), 4), name) };
 }
 
 async function merkleRoot(legs: readonly Uint8Array[]): Promise<Uint8Array> {
