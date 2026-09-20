@@ -50,10 +50,13 @@ fn verify_capture(document: serde_json::Value) -> Result<(), String> {
     verify(
         &stored,
         &fixture("receipt"),
-        must(activity_id(&activity)),
-        call.callee().bytes(),
-        must(payload_hash(&activity)),
-        call.guest_abi,
+        ExpectedCall {
+            activity_id: must(activity_id(&activity)),
+            program_id: call.callee().bytes(),
+            payload_hash: must(payload_hash(&activity)),
+            guest_abi_version: call.guest_abi,
+            actor_did: activity.actor_did(),
+        },
         activity.network_id(),
     )
 }

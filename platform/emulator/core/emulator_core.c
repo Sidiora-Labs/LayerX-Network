@@ -405,9 +405,11 @@ int32_t platform_emulator_simulate(platform_emulator *emulator,
     status = platform_emulator_snapshot_import(candidate, snapshot,
                                                snapshot_length);
     free(snapshot);
-    if (status == LXP_OK)
+    if (status == LXP_OK) {
+        candidate->verified_receipts = emulator->verified_receipts;
         status = platform_emulator_execute(candidate, activity, length,
                                            receipt);
+    }
     if (status == LXP_OK) receipt->isolated_owner = candidate;
     else platform_emulator_destroy(candidate);
     return status;

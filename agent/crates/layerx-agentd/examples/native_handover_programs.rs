@@ -10,7 +10,9 @@ use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Ver
 use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
 use layerx_client::Client;
 use layerx_programs::{hex, DeploymentProof, ProgramId, ProtocolDeploymentVerifier, Registry};
-use layerx_proof::program::{verify_program_execution, ProgramExecutionExpectation};
+use layerx_proof::program::{
+    verify_program_execution_with_payers, OccupancyPayer, ProgramExecutionExpectation,
+};
 use layerx_proof::receipt::verify_sequencer_signature;
 use layerx_sdk::program_lifecycle::NativeProgramLifecycleRequest;
 use layerx_types::account::AccountId;
@@ -387,7 +389,7 @@ fn verify_call_artifacts(
             hex::encode(&digest)
         ),
     )?;
-    checked(verify_program_execution(
+    checked(verify_program_execution_with_payers(
         receipt,
         &checked(hex::decode(field(&artifacts, "terminal_payload")?))?,
         &checked(hex::decode(field(&artifacts, "call_graph")?))?,
@@ -399,6 +401,10 @@ fn verify_call_artifacts(
             program_id: program,
             guest_abi_version: 2,
         },
+        &[OccupancyPayer {
+            did: activity.actor_did(),
+            account: None,
+        }],
     ))?;
     Ok(())
 }

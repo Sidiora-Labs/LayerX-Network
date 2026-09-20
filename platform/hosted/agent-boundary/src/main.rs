@@ -1168,10 +1168,13 @@ fn fetch_program_execution(
     artifacts::verify(
         &stored,
         receipt,
-        activity_id,
-        program_id,
-        payload_hash,
-        call.guest_abi,
+        artifacts::ExpectedCall {
+            activity_id,
+            program_id,
+            payload_hash,
+            guest_abi_version: call.guest_abi,
+            actor_did: activity.actor_did(),
+        },
         config.protocol_network_id,
     )
     .map_err(|detail| {
@@ -1262,10 +1265,14 @@ fn completed_response(config: &Config, record: &JournalRecord) -> Response {
             artifacts::verify(
                 stored,
                 &receipt,
-                activity_id,
-                program_id,
-                layerx_wire::hash::payload_hash(&activity).map_err(|error| format!("{error:?}"))?,
-                call.guest_abi,
+                artifacts::ExpectedCall {
+                    activity_id,
+                    program_id,
+                    payload_hash: layerx_wire::hash::payload_hash(&activity)
+                        .map_err(|error| format!("{error:?}"))?,
+                    guest_abi_version: call.guest_abi,
+                    actor_did: activity.actor_did(),
+                },
                 config.protocol_network_id,
             )
         })();

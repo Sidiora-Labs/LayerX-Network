@@ -1552,6 +1552,7 @@ fn verified_program_result(
             payload_hash,
             program_id: head.program_id,
             guest_abi_version: head.abi_version,
+            actor_did: activity.actor_did(),
         },
     )
     .map_err(|_| response(503, "program_receipt_verification_failed", Some(5)))?;
@@ -1711,6 +1712,7 @@ fn program_simulation(
         activity_id: submission.activity_id(),
         program_id,
         abi_version: head.abi_version,
+        actor_did: activity.actor_did().to_vec(),
         state_root,
         observed_sequence,
         observed_at,
@@ -1737,6 +1739,7 @@ struct SimulationExpectation {
     activity_id: [u8; 32],
     program_id: [u8; 32],
     abi_version: u16,
+    actor_did: Vec<u8>,
     state_root: [u8; 32],
     observed_sequence: u64,
     observed_at: u64,
@@ -1789,6 +1792,7 @@ fn render_simulation(
             payload_hash: expected.payload_hash,
             program_id: expected.program_id,
             guest_abi_version: expected.abi_version,
+            actor_did: &expected.actor_did,
         },
     ) else {
         return response(503, "program_simulation_unverified", Some(5));

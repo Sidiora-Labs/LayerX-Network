@@ -2,9 +2,10 @@
 
 pub use layerx_agent_api::error::{ErrorClass as AgentErrorClass, Retriability};
 use layerx_proof::program::{
-    verify_authorized_program_execution, AuthorizedProgramExecutionExpectation,
+    verify_authorized_program_execution_with_payers, AuthorizedProgramExecutionExpectation,
     VerifiedProgramExecution,
 };
+pub use layerx_proof::program::{OccupancyPayer, MAX_OCCUPANCY_PAYERS};
 use layerx_proof::receipt::AuthorizedBatch;
 use layerx_types::intent::ProgramCall;
 use layerx_types::payload::{ModuleId, ModuleRegistry};
@@ -632,6 +633,23 @@ impl<T: ProgramTransport> ProgramOperations<T> {
 pub fn verify_program_evidence(
     evidence: &ProgramExecutionEvidence,
 ) -> Result<VerifiedProgramExecution, ProgramOperationError> {
+    verify_program_evidence_with_payers(evidence, &[])
+}
+
+/// Verifies like [`verify_program_evidence`] and offers occupancy payer DIDs,
+/// which a state-commitment receipt with a paid occupancy charge requires.
+/// Every offered DID and account is untrusted: the verifier uses only a DID
+/// whose identifier is a paying payer of the signed settlement, and only an
+/// account it derives from that DID.
+///
+/// # Errors
+///
+/// Refuses any signature, state-root, activity, program, ABI, terminal, graph,
+/// occupancy, or transfer-authority mismatch.
+pub fn verify_program_evidence_with_payers(
+    evidence: &ProgramExecutionEvidence,
+    occupancy_payers: &[OccupancyPayer<'_>],
+) -> Result<VerifiedProgramExecution, ProgramOperationError> {
     if evidence.receipt.is_empty()
         || evidence.receipt.len() > MAX_SIGNED_ACTIVITY_BYTES
         || evidence.terminal_payload.len() > MAX_SIGNED_ACTIVITY_BYTES
@@ -639,7 +657,7 @@ pub fn verify_program_evidence(
     {
         return Err(ProgramOperationError::Bounds);
     }
-    verify_authorized_program_execution(
+    verify_authorized_program_execution_with_payers(
         &evidence.receipt,
         &evidence.terminal_payload,
         &evidence.call_graph,
@@ -650,6 +668,7 @@ pub fn verify_program_evidence(
             program_id: evidence.program_id,
             guest_abi_version: evidence.guest_abi_version,
         },
+        occupancy_payers,
     )
     .map_err(|_| ProgramOperationError::Verification)
 }
