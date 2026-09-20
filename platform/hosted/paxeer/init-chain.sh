@@ -180,6 +180,26 @@ if [ -n "$ANCHOR_GENESIS" ]; then
     "$JQ" --slurpfile anchor "$ANCHOR_GENESIS" '.app_state.layerxanchor = $anchor[0]' "$GENESIS" > "$GENESIS.tmp"
     mv "$GENESIS.tmp" "$GENESIS"
 fi
+if [ -n "$ANCHOR_GENESIS" ] && "$JQ" -e '(.guarantors // []) | length > 0' "$ANCHOR_GENESIS" >/dev/null; then
+    # layerxanchor refuses to initialise unless its module account holds exactly the bonds its genesis
+    # records, so a genesis guarantor set brings its escrow with it.
+    "$JQ" -e '[.guarantors[].bond | tonumber] | all(. > 0 and . < 9007199254740992)' "$ANCHOR_GENESIS" >/dev/null \
+        || fail "anchor genesis bond is outside the range this script can total"
+    ESCROW_TOTAL=$("$JQ" -r '[.guarantors[].bond | tonumber] | add' "$ANCHOR_GENESIS")
+    ESCROW_DENOM=$("$JQ" -r '.params.bond_denom' "$ANCHOR_GENESIS")
+    ESCROW_HEX=$(printf 'layerxanchor' | sha256sum | cut -c 1-40)
+    ESCROW_ACCOUNT=$("$PAXD" debug addr "$ESCROW_HEX" --home "$HOME_DIR" 2>/dev/null | sed -n 's/^Bech32 Acc: //p')
+    case "$ESCROW_ACCOUNT" in
+        pax1*) ;;
+        *) fail "paxd could not derive the anchor module account" ;;
+    esac
+    "$JQ" --arg address "$ESCROW_ACCOUNT" --arg denom "$ESCROW_DENOM" --arg amount "$ESCROW_TOTAL" '
+        if any(.app_state.bank.balances[]; .address == $address) then error("anchor module account already funded") else . end
+        | .app_state.bank.balances = (.app_state.bank.balances + [{"address": $address, "coins": [{"denom": $denom, "amount": $amount}]}]
+            | sort_by(.address))
+    ' "$GENESIS" > "$GENESIS.tmp"
+    mv "$GENESIS.tmp" "$GENESIS"
+fi
 "$PAXD" collect-gentxs --home "$HOME_DIR" >/dev/null 2>&1
 "$PAXD" validate-genesis --home "$HOME_DIR" >/dev/null
 
