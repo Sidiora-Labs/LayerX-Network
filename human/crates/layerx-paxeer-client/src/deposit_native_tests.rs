@@ -1,5 +1,5 @@
 use super::verify_native_credit_receipt;
-use crate::{AttestedNativeCustodyCredit, NativeCustodyExpectation};
+use crate::{NativeCustodyCredit, NativeCustodyExpectation};
 use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_intents::canonical::decode_receipt as decode;
 use layerx_proof::receipt::AuthorizedBatch;
@@ -31,7 +31,7 @@ fn signed(unsigned: &[u8], key: &SigningKey) -> Vec<u8> {
 
 #[test]
 fn real_native_credit_receipt_binds_attestation_supply_and_authority() {
-    let credit = AttestedNativeCustodyCredit::verify(
+    let credit = NativeCustodyCredit::verify(
         PROFILE,
         CREDIT,
         NativeCustodyExpectation {
@@ -160,7 +160,7 @@ fn actual_daemon_credit_passes_signed_batch_and_custody_verification() {
     ));
     let payload = read("credit");
     let profile = read("profile");
-    let credit = checked(AttestedNativeCustodyCredit::verify(
+    let credit = checked(NativeCustodyCredit::verify(
         &profile,
         &payload,
         NativeCustodyExpectation {

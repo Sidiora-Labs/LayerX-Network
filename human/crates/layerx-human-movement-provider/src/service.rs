@@ -34,7 +34,7 @@ pub(crate) struct EvidenceService {
     trackers: BTreeMap<[u8; 32], FinalityTracker>,
     verifier: DepositProofVerifier,
     evidence_root: PathBuf,
-    custody_profile: Option<[u8; 207]>,
+    custody_profile: Option<[u8; layerx_paxeer_client::NATIVE_CUSTODY_PROFILE_BYTES]>,
     chain_id: u64,
     executor: Option<Arc<RemoteKmsProvider>>,
     policy: layerx_paxeer_client::DepositProofConfig,
@@ -156,14 +156,15 @@ impl EvidenceService {
             let path = self
                 .evidence_root
                 .join(format!("credit-{}.bin", hex_string(&transaction.bytes())));
-            let payload = read_private(&path, 427)
-                .map_err(|_| proof_error(ProofFault::ProducerUnavailable))?;
+            let payload =
+                read_private(&path, layerx_paxeer_client::NATIVE_CUSTODY_CREDIT_MAX_BYTES)
+                    .map_err(|_| proof_error(ProofFault::ProducerUnavailable))?;
             let owner_key = payload
                 .get(139..171)
                 .ok_or_else(|| proof_error(ProofFault::EvidenceSourceMismatch))?
                 .try_into()
                 .map_err(|_| proof_error(ProofFault::EvidenceSourceMismatch))?;
-            let credit = layerx_paxeer_client::AttestedNativeCustodyCredit::verify(
+            let credit = layerx_paxeer_client::NativeCustodyCredit::verify(
                 profile,
                 &payload,
                 layerx_paxeer_client::NativeCustodyExpectation {

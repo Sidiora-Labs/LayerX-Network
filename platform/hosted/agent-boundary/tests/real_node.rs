@@ -38,7 +38,7 @@ const MODULE_GOVERNANCE: u16 = 7;
 const METERING_AUTHORITY_GENESIS: u8 = 1;
 const BOUNDARY_UID: u32 = 65534;
 const BOUNDARY_GID: u32 = 65534;
-const CUSTODY_PROFILE_BYTES: usize = 207;
+const CUSTODY_PROFILE_BYTES: usize = 223;
 
 #[path = "real_node/lifecycle.rs"]
 mod lifecycle;
@@ -310,7 +310,7 @@ fn build_genesis(root: &Path, builder: &Path, custody_profile: Option<&Path>) ->
             CUSTODY_PROFILE_BYTES,
             "native custody profile length"
         );
-        assert_eq!(&profile[..5], b"LXBC1");
+        assert_eq!(&profile[..5], b"LXBC3");
         assert_eq!(&profile[201..205], &NETWORK_ID.to_be_bytes());
         assert_eq!(&profile[205..207], &PROTOCOL_VERSION.to_be_bytes());
         must(profile[97..129].try_into(), "custody profile asset")

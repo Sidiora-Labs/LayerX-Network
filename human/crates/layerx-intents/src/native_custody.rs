@@ -1,14 +1,18 @@
 use layerx_types::account::{AccountId, AccountNamespace};
 use layerx_types::amount::Amount;
 use layerx_types::ids::AssetId;
+use layerx_types::limits::MAX_PAYLOAD_BYTES;
 use layerx_wire::hash;
 use sha2::{Digest as _, Sha256};
 
 use crate::{IntentError, IntentErrorReason, IntentField};
 
+const HEAD_BYTES: usize = 363;
+const BUNDLE_TAG: &[u8; 5] = b"LXLB1";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NativeCustodyCredit {
-    payload: Box<[u8; 427]>,
+    payload: Box<[u8]>,
     reserve: AccountId,
     recipient: AccountId,
     asset: AssetId,
@@ -21,7 +25,7 @@ impl NativeCustodyCredit {
     /// # Errors
     /// Refuses malformed native credit bytes, invalid value, or account bindings.
     pub fn new(
-        payload: &[u8; 427],
+        payload: &[u8],
         reserve: AccountId,
         recipient: AccountId,
     ) -> Result<Self, IntentError> {
@@ -29,7 +33,14 @@ impl NativeCustodyCredit {
             field: IntentField::DepositProof,
             reason: IntentErrorReason::InvalidCanonicalEncoding,
         };
-        if !matches!(&payload[..5], b"LXDC1" | b"LXDC2")
+        if payload.len() < HEAD_BYTES + BUNDLE_TAG.len() || payload.len() > MAX_PAYLOAD_BYTES {
+            return Err(invalid());
+        }
+        let bundle: [u8; 32] = Sha256::digest(&payload[HEAD_BYTES..]).into();
+        if &payload[..5] != b"LXDC3"
+            || &payload[HEAD_BYTES..HEAD_BYTES + BUNDLE_TAG.len()] != BUNDLE_TAG
+            || payload[327..359] != bundle
+            || payload[359..HEAD_BYTES] != 2_u32.to_be_bytes()
             || payload[37..41] == [0; 4]
             || payload[41..43] != 3_u16.to_be_bytes()
             || reserve.namespace() != AccountNamespace::SystemPaxeerReserve
@@ -55,7 +66,7 @@ impl NativeCustodyCredit {
         digest.update(deposit_id);
         let nullifier = digest.finalize().into();
         Ok(Self {
-            payload: Box::new(*payload),
+            payload: payload.into(),
             reserve,
             recipient,
             asset,
@@ -66,7 +77,7 @@ impl NativeCustodyCredit {
     }
 
     #[must_use]
-    pub fn payload(&self) -> &[u8; 427] {
+    pub fn payload(&self) -> &[u8] {
         &self.payload
     }
 

@@ -714,10 +714,16 @@ fn receipt_mentions_account(
         return Ok(directly_named);
     }
     let payload = activity.payload();
-    if payload.len() != 427 || !matches!(&payload[..5], b"LXDC1" | b"LXDC2") {
+    if payload.len() < 368
+        || payload.len() > layerx_types::limits::MAX_PAYLOAD_BYTES
+        || &payload[..5] != b"LXDC3"
+        || &payload[363..368] != b"LXLB1"
+        || payload[327..359] != Sha256::digest(&payload[363..])[..]
+        || payload[359..363] != 2_u32.to_be_bytes()
+    {
         return Err(NativeReadError::Verification);
     }
-    let payload_hash = Sha256::digest(payload);
+    let payload_hash = Sha256::digest(&payload[..363]);
     let expected = [
         &payload[43..139],
         &payload[191..207],

@@ -476,7 +476,27 @@ fn verify_funding_receipt(cluster: &Cluster, signed: &[u8], answer: &HttpAnswer)
     assert_eq!(activity.protocol_version(), PROTOCOL_VERSION);
     assert_eq!(activity.network_id(), NETWORK_ID);
     assert_eq!(activity.account_sequence(), 1);
-    assert_eq!(activity.payload().len(), 427);
+    let payload = activity.payload();
+    assert!(payload.len() > 363);
+    assert_eq!(&payload[..5], b"LXDC3");
+    assert_eq!(&payload[37..41], &NETWORK_ID.to_be_bytes());
+    assert_eq!(&payload[41..43], &PROTOCOL_VERSION.to_be_bytes());
+    let state_height = u64::from_be_bytes(must(payload[215..223].try_into(), "state height"));
+    assert_ne!(state_height, 0);
+    assert_eq!(
+        u64::from_be_bytes(must(payload[287..295].try_into(), "header height")),
+        state_height + 1
+    );
+    assert_eq!(&payload[327..359], &Sha256::digest(&payload[363..])[..]);
+    assert_eq!(&payload[359..363], &2_u32.to_be_bytes());
+    assert_eq!(&payload[363..368], b"LXLB1");
+    assert_eq!(
+        cluster.actor.did,
+        format!(
+            "did:layerx:{}",
+            hex(&cluster.actor.signing_key.verifying_key().to_bytes())
+        )
+    );
     assert_eq!(&activity.payload()[75..107], &cluster.asset);
     assert_eq!(&activity.payload()[107..139], &cluster.actor.source);
     assert_eq!(
@@ -756,9 +776,7 @@ pub(super) fn start_funded_cluster() -> (Cluster, CustodyChain) {
     let asset = format!("0x{}", hex(&random32()));
     let beneficiary = format!("0x{}", hex(&actor.source));
     let actor_key = chain.root.join("actor.key");
-    let attestor_key = chain.root.join("attestor.key");
     write(&actor_key, &actor.signing_key.to_bytes(), 0o600);
-    write(&attestor_key, &random32(), 0o600);
     let primary = start_anvil(&mut chain, None);
     let deployment_path = chain.root.join("deployment.json");
     producer(
@@ -785,14 +803,8 @@ pub(super) fn start_funded_cluster() -> (Cluster, CustodyChain) {
     assert_eq!(field(&deployment, "beneficiary"), beneficiary);
     assert_eq!(field(&deployment, "asset"), asset);
     assert_eq!(field(&deployment, "amount"), FUNDING_AMOUNT.to_string());
-    let (profile, credit) = produce_custody_credit(
-        &mut chain,
-        &primary,
-        &deployment,
-        &actor,
-        &asset,
-        &attestor_key,
-    );
+    let (profile, credit) =
+        produce_custody_credit(&mut chain, &primary, &deployment, &actor, &asset);
     let cluster = start_cluster_with_custody(Some(CustodySetup {
         profile_path: profile.clone(),
         actor,
@@ -808,7 +820,6 @@ fn produce_custody_credit(
     deployment: &serde_json::Value,
     actor: &Actor,
     asset: &str,
-    attestor_key: &Path,
 ) -> (PathBuf, PathBuf) {
     let beneficiary = format!("0x{}", hex(&actor.source));
     let beneficiary_key = format!("0x{}", hex(&actor.signing_key.verifying_key().to_bytes()));
@@ -836,10 +847,10 @@ fn produce_custody_credit(
             field(deployment, "runtime_sha256").into(),
             "--asset".into(),
             asset.to_owned(),
-            "--confirmations".into(),
-            "64".into(),
-            "--attestor-key".into(),
-            text(attestor_key),
+            "--trusted-height".into(),
+            "1".into(),
+            "--trusting-period-seconds".into(),
+            "1209600".into(),
             "--output".into(),
             text(&profile),
         ],
@@ -866,8 +877,6 @@ fn produce_custody_credit(
         beneficiary_key,
         "--expected-amount".into(),
         FUNDING_AMOUNT.to_string(),
-        "--attestor-key".into(),
-        text(attestor_key),
     ];
     let mut attest_arguments = vec!["attest".into()];
     attest_arguments.extend(evidence_arguments.clone());

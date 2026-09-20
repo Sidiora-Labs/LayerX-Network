@@ -243,9 +243,7 @@ fn start_configured(withdrawal: bool) -> (Cluster, Funding) {
     let beneficiary = format!("0x{}", hex_encode(&account));
     let deployment = funding.root.join("deployment.json");
     let actor_key = funding.root.join("actor.key");
-    let attestor_key = funding.root.join("attestor.key");
     write(&actor_key, &seed, 0o600);
-    write(&attestor_key, &random32(), 0o600);
     producer(
         "deploy_local_custody.py",
         &[
@@ -276,16 +274,11 @@ fn start_configured(withdrawal: bool) -> (Cluster, Funding) {
             .required("fork block"),
     )));
     let profile = funding.root.join("profile.bin");
-    custody_profile(
-        [&primary, &secondary],
-        [&profile, &attestor_key],
-        &deployment,
-        &asset,
-    );
+    custody_profile([&primary, &secondary], &profile, &deployment, &asset);
     let credit = funding.root.join("credit.bin");
     attest_credit(
         [&primary, &secondary],
-        [&profile, &attestor_key, &credit],
+        [&profile, &credit],
         &seed,
         &did,
         deployment["transaction"].as_str().required("transaction"),
@@ -303,7 +296,7 @@ fn start_configured(withdrawal: bool) -> (Cluster, Funding) {
     let recipient_credit = funding.root.join("recipient-credit.bin");
     attest_credit(
         [&primary, &secondary],
-        [&profile, &attestor_key, &recipient_credit],
+        [&profile, &recipient_credit],
         &recipient_seed,
         &recipient_did,
         recipient_deployment["transaction"]
@@ -322,14 +315,8 @@ fn start_configured(withdrawal: bool) -> (Cluster, Funding) {
     (cluster, funding)
 }
 
-fn custody_profile(
-    rpcs: [&str; 2],
-    paths: [&Path; 2],
-    deployment: &serde_json::Value,
-    asset: &str,
-) {
+fn custody_profile(rpcs: [&str; 2], profile: &Path, deployment: &serde_json::Value, asset: &str) {
     let [primary, secondary] = rpcs;
-    let [profile, attestor_key] = paths;
     producer(
         "custody_credit.py",
         &[
@@ -348,10 +335,10 @@ fn custody_profile(
             deployment["runtime_sha256"].as_str().required("runtime"),
             "--asset",
             asset,
-            "--confirmations",
-            "64",
-            "--attestor-key",
-            &text(attestor_key),
+            "--trusted-height",
+            "1",
+            "--trusting-period-seconds",
+            "1209600",
             "--output",
             &text(profile),
         ],
@@ -392,14 +379,14 @@ fn deposit_recipient(
 
 fn attest_credit(
     rpcs: [&str; 2],
-    paths: [&Path; 3],
+    paths: [&Path; 2],
     seed: &[u8; 32],
     did: &str,
     transaction: &str,
     amount: &str,
 ) {
     let [primary, secondary] = rpcs;
-    let [profile, attestor_key, output] = paths;
+    let [profile, output] = paths;
     producer(
         "custody_credit.py",
         &[
@@ -426,8 +413,6 @@ fn attest_credit(
             ),
             "--expected-amount",
             amount,
-            "--attestor-key",
-            &text(attestor_key),
             "--output",
             &text(output),
         ],
@@ -607,7 +592,8 @@ fn funded_genesis(
     let directory = root.join("genesis");
     make_dir(&directory, 0o755);
     let profile_bytes = must(fs::read(profile), "custody profile");
-    assert_eq!(profile_bytes.len(), 207);
+    assert_eq!(profile_bytes.len(), 223);
+    assert_eq!(&profile_bytes[..5], b"LXBC3");
     let asset = must(profile_bytes[97..129].try_into(), "custody asset");
     let sequencer_key = SigningKey::from_bytes(sequencer_seed)
         .verifying_key()
