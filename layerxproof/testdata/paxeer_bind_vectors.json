@@ -1,0 +1,45 @@
+{
+  "generator": "agent/crates/layerx-client/examples/paxeer_bind_vectors.rs",
+  "public_key": "af06a3e3291714e4f356c19c9b15cd1951ec6e6662aa77be07547f289383341d",
+  "did": "did:layerx:af06a3e3291714e4f356c19c9b15cd1951ec6e6662aa77be07547f289383341d",
+  "main_account_name": "agent:did:layerx:af06a3e3291714e4f356c19c9b15cd1951ec6e6662aa77be07547f289383341d:main",
+  "main_account_id": "8109bd8602f591480606a006552834a9fa46f3f5a0ec1be754163d6cda0810e7",
+  "binds": [
+    {
+      "name": "default-chain-nonce-0",
+      "chain_id": "713714",
+      "evm_address": "102132435465768798a9bacbdcedfe0f1e2d3c4b",
+      "nonce": "0",
+      "message": "4c583a5041584545522d42494e443a763100000000000000000000000000000000000000000000000000000000000ae3f2102132435465768798a9bacbdcedfe0f1e2d3c4b0000000000000000",
+      "signature": "c815ff4b2c34fe06ed50e904133b8f4cc618255ce6493d1a1177480eb2e959ed16f055fbe0e12885c199bf662b430e4f9f131addb2aa705fde963fa5995ece0f",
+      "valid": true
+    },
+    {
+      "name": "paxeer-mainnet-nonce-2",
+      "chain_id": "125",
+      "evm_address": "102132435465768798a9bacbdcedfe0f1e2d3c4b",
+      "nonce": "2",
+      "message": "4c583a5041584545522d42494e443a7631000000000000000000000000000000000000000000000000000000000000007d102132435465768798a9bacbdcedfe0f1e2d3c4b0000000000000002",
+      "signature": "ca5118cc9f7a5deffaf72f57051a0537dc73dcb91f6ca936b41e5723519612dba6c5fb4597ed726d2a7321b0e643aa891b1a222030a33157be1adaf8cb839c0e",
+      "valid": true
+    },
+    {
+      "name": "signed-for-another-chain",
+      "chain_id": "713714",
+      "evm_address": "102132435465768798a9bacbdcedfe0f1e2d3c4b",
+      "nonce": "0",
+      "message": "4c583a5041584545522d42494e443a763100000000000000000000000000000000000000000000000000000000000ae3f2102132435465768798a9bacbdcedfe0f1e2d3c4b0000000000000000",
+      "signature": "7f1648a6c30fd691d299f02175dcb95df8666c05c4f849e7eef5a28bacfcbf556574bf227e9a7cf75ef65de29b0a322fc895cb2cefc43f1598c238d3f4a7a707",
+      "valid": false
+    },
+    {
+      "name": "signed-for-another-nonce",
+      "chain_id": "713714",
+      "evm_address": "102132435465768798a9bacbdcedfe0f1e2d3c4b",
+      "nonce": "0",
+      "message": "4c583a5041584545522d42494e443a763100000000000000000000000000000000000000000000000000000000000ae3f2102132435465768798a9bacbdcedfe0f1e2d3c4b0000000000000000",
+      "signature": "908003dc76b0087b5df159ddd880aad15ae3eece471e800e3317ec659d569c951478199b63b871bb9f84ebe66dddab1b316c4cfb6ec1358099e3deef060b620c",
+      "valid": false
+    }
+  ]
+}

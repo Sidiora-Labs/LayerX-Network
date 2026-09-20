@@ -113,6 +113,11 @@ type EVMKeeper interface {
 	) (contractAddr common.Address, err error)
 	GetEVMGasLimitFromCtx(ctx sdk.Context) uint64
 	GetCosmosGasLimitFromEVMGas(ctx sdk.Context, evmGas uint64) uint64
+	GetLayerXDid(ctx sdk.Context, evmAddress common.Address) ([32]byte, bool)
+	GetEVMAddressByLayerXDid(ctx sdk.Context, didPublicKey [32]byte) (common.Address, bool)
+	GetLayerXBindNonce(ctx sdk.Context, evmAddress common.Address) uint64
+	BindLayerX(ctx sdk.Context, evmAddress common.Address, didPublicKey [32]byte, signature [64]byte) (uint64, error)
+	UnbindLayerX(ctx sdk.Context, evmAddress common.Address) ([32]byte, uint64, error)
 }
 
 type AccountKeeper interface {
