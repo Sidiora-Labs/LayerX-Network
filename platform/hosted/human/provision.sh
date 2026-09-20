@@ -243,7 +243,6 @@ human_custody_step() (
     # human_custody_step MODE [WORK_DIR [owner_custody.py arguments]] -> WORK_DIR defaults to the owner's.
     set -euo pipefail
     umask 077
-    export PATH="$FOUNDRY_BIN:$PATH"
     local mode=$1 work=${2:-$WORK_DIR}
     shift
     [ "$#" -eq 0 ] || shift
