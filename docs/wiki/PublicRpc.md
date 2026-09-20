@@ -31,7 +31,7 @@ limit enforced by the gateway is 8 MiB. Parameters are positional.
 | Method | Positional parameters | Result |
 | --- | --- | --- |
 | `lx_register` | `[signer_public_key, registration_signature]` | Identity principal record for a self-registered signer |
-| `lx_requestFunds` | `[did, signer_public_key]` | One bounded testnet faucet grant the faucet confirmed as funded |
+| `lx_requestFunds` | `[did, signer_public_key]` | One bounded beta faucet grant the faucet confirmed as funded |
 | `lx_getAccount` | `[account_id]` | Authenticated account snapshot |
 | `lx_getBalance` | `[account_id]` | The same account object; use its `balance` and `asset_id` |
 | `lx_getBalances` | `[did]` | Complete bounded DID account list |

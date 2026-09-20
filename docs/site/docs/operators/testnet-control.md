@@ -1,4 +1,4 @@
-# Hosted testnet control
+# Hosted control
 
 `layerx-testnet-control` is the public status, parameter, and journey
 admission surface for hosted LayerX Network, and the private funding/reset
@@ -225,7 +225,7 @@ In-cluster URLs (`platform/hosted/testnet/deployment.yaml:88-96`):
 - Registry `https://layerx-program-registry.layerx-testnet.svc.cluster.local:9420`
 - Redis `rediss://layerx-faucet-redis.layerx-testnet.svc.cluster.local:6379`
 
-Testnet-control does not write Redis. It shares the faucet Redis
+Control does not write Redis. It shares the faucet Redis
 listener for the `redis` probe. Persistence for claims is the faucet
 store (`docs/wiki/HostedFaucet.md`). Persistence for fund/reset is
 the core journal (`docs/wiki/HostedCore.md`).
@@ -301,7 +301,7 @@ The faucet accepts only `state == "funded"` as
 
 Core additionally requires `did == did:layerx:` plus the lowercase
 public key and refuses the treasury DID
-(`platform/hosted/core/src/main.rs:1475-1484`). Testnet-control does
+(`platform/hosted/core/src/main.rs:1475-1484`). Control does
 not apply those two checks. The faucet does not either. Those three
 DID alphabets differ.
 
@@ -387,7 +387,7 @@ admits `app=layerx-testnet-control` on 9443
 `platform/hosted/testnet/deployment.yaml`
 (`platform/hosted/tests/topology-check.sh:21`;
 `platform/hosted/tests/topology-check.sh:87`). Beta-cluster apply
-order is testnet, then gateway, then registry, then developer
+order is control, then gateway, then registry, then developer
 (`platform/hosted/tests/beta-cluster.sh:868-872`).
 
 ---

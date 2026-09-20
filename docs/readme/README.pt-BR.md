@@ -1,8 +1,8 @@
 <p align="center"><img src="../../layerx-network.png" alt="LayerX Network" width="720"></p>
 
-<h1 align="center">LayerX Network</h1>
+<h1 align="center">Paxeer X Network</h1>
 
-LayerX Network é uma rede determinística de execução e contabilização para agentes autônomos.
+Paxeer X Network — uma rede: a cadeia EVM Paxeer e o domínio agent-nativo LayerX por uma única interface.
 
 [English](../../README.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md) · [简体中文](README.zh-CN.md) · Português · [Deutsch](README.de.md) · [Français](README.fr.md)
 
@@ -11,17 +11,17 @@ LayerX Network é uma rede determinística de execução e contabilização para
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](../../LICENSE)
 [![CI](https://github.com/Sidiora-Labs/LayerX-Network/actions/workflows/ci.yml/badge.svg)](../../.github/workflows/ci.yml)
 
-## O que é o LayerX Network
+## O que é o Paxeer X Network
 
-LayerX Network é uma rede determinística de execução e contabilização para agentes autônomos. Toda operação que altera estado entra como um `Activity` assinado e canonicamente codificado. O protocolo verifica o ator e sua autoridade, consome a sequência da conta, ordena a atividade em uma sequência global, aplica uma transição de estado determinística e devolve um recibo assinado vinculado à raiz de estado resultante.
+Paxeer X Network é uma rede determinística de execução e contabilização para agentes autônomos. Toda operação que altera estado entra como um `Activity` assinado e canonicamente codificado. O protocolo verifica o ator e sua autoridade, consome a sequência da conta, ordena a atividade em uma sequência global, aplica uma transição de estado determinística e devolve um recibo assinado vinculado à raiz de estado resultante.
 
 O log de atividades somente de acréscimo é a autoridade. Os índices de banco de dados são projeções descartáveis e podem ser reconstruídos reproduzindo esse log. A execução crítica para consenso exclui ponto flutuante, decisões de relógio local, ordem de iteração de banco de dados e outras fontes de não determinismo. `402LXP` é o único componente autorizado a gravar saldos. Os módulos do protocolo emitem conjuntos de transferência validados em vez de alterar fundos por conta própria.
 
 A atividade ordinária de agentes é executada e ordenada dentro do LayerX. Checkpoints periódicos liquidam no Paxeer, que detém a custódia, o registro de checkpoints, as cauções de avalistas, os desafios, os saques, as disputas e as saídas de emergência. Uma ação ordinária no LayerX não exige uma transação no Paxeer.
 
-Este repositório é o monorepo da Sidiora Labs para o LayerX Network e a Paxeer Network. A colocalização mantém o protocolo, a rede de liquidação, os contratos e as superfícies de desenvolvedor auditáveis em um só lugar. Cada subsistema conserva seu próprio build, release, implantação e fronteira de confiança. Consulte [`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md).
+Este repositório é o monorepo da Sidiora Labs para o Paxeer X Network e a Paxeer Network. A colocalização mantém o protocolo, a rede de liquidação, os contratos e as superfícies de desenvolvedor auditáveis em um só lugar. Cada subsistema conserva seu próprio build, release, implantação e fronteira de confiança. Consulte [`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md).
 
-## Experimente a testnet
+## Experimente a rede
 
 O caminho completo está em [`docs/wiki/Quickstart.md`](../wiki/Quickstart.md): instale o CLI `layerx` a partir de `platform/cli`, suba o cluster, carregue `build/beta-cluster/env` com source, depois crie uma credencial, reivindique no faucet, envie uma atividade, verifique o recibo e implante um programa.
 
@@ -143,4 +143,4 @@ Reporte vulnerabilidades pelo relatório privado do GitHub, conforme descrito em
 
 Licenciado sob a Licença Apache, Versão 2.0. Consulte [`LICENSE`](../../LICENSE) e [`NOTICE`](../../NOTICE).
 
-LayerX Network é desenvolvido pela Sidiora Labs.
+Paxeer X Network é desenvolvido pela Sidiora Labs.

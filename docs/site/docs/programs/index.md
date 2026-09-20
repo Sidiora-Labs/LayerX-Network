@@ -321,7 +321,7 @@ capability tags `ProgramSpend` (9) and `BalanceView` (10) are documented in
 
 `LXP_PROTOCOL_VERSION_STATE_COMMITMENT = 3`. Occupancy is used by both 2 and 3
 (`lxp_protocol_version_uses_occupancy`). Header default `LXP_PROTOCOL_VERSION`
-is 2. Hosted testnet pins wire protocol 3
+is 2. Hosted beta pins wire protocol 3
 (`platform/hosted/testnet/deployment.yaml:10`,
 `lxp-wire-protocol-version: "3"`). Beta-cluster genesis writes
 `protocol_version: 3` (`platform/hosted/tests/beta-cluster.sh:794`). Genesis

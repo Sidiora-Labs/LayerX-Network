@@ -6,7 +6,7 @@
 `layerx-platform-identity`; the binary path is `src/main.rs`. It
 stores principals and sessions on disk and answers TLS HTTP from
 seven calling services: `gateway`, `webhooks`, `dashboard`, `faucet`,
-`testnet`, `ramp`, and `provisioning`
+`control`, `ramp`, and `provisioning`
 (`platform/hosted/identity/src/main.rs:36-66`). Provisioning creates
 principals, mints sessions, and revokes sessions. Introspection is
 permitted for the other six service tokens and refused for
@@ -49,7 +49,7 @@ names that start with `..`, which are skipped
 | Webhooks | `webhooks` | `POST /v1/sessions/introspect` (`platform/hosted/webhooks/src/trusted.rs:393-399`) | `DeveloperShape`: `active`, `sub`, `csrf_token` (`platform/hosted/identity/src/main.rs:124-128`; `platform/hosted/identity/src/main.rs:621-636`) |
 | Dashboard | `dashboard` | `POST /v1/sessions/introspect` via the same `DeveloperIdentity::authenticate` (`platform/hosted/webhooks/src/trusted.rs:337-363`; `platform/hosted/webhooks/src/trusted.rs:398`) | same `DeveloperShape` (`platform/hosted/identity/src/main.rs:621`) |
 | Faucet | `faucet` | `POST` to the path in `LAYERX_IDENTITY_INTROSPECTION_URL` (`platform/hosted/faucet/src/main.rs:277-282`; `platform/hosted/faucet/src/main.rs:486-493`; `platform/hosted/testnet/deployment.yaml:145`) | `SubjectShape`: `active`, `sub` (`platform/hosted/identity/src/main.rs:131-134`; `platform/hosted/identity/src/main.rs:637-650`) |
-| Testnet control | `testnet` | `GET /readyz` only (`platform/hosted/testnet/src/main.rs:823-826`; `platform/hosted/testnet/src/main.rs:1097`; `platform/hosted/testnet/src/main.rs:1032-1034`) | readiness JSON, not an introspection shape |
+| Control | `testnet` | `GET /readyz` only (`platform/hosted/testnet/src/main.rs:823-826`; `platform/hosted/testnet/src/main.rs:1097`; `platform/hosted/testnet/src/main.rs:1032-1034`) | readiness JSON, not an introspection shape |
 | Ramp | `ramp` | `POST /v1/introspect` with `audience` (`platform/hosted/identity/src/main.rs:580-582`; `platform/hosted/identity/src/main.rs:651-681`) | `RampShape`: `active`, `principal_id`, `account`, `audience`, `expires_at` (`platform/hosted/identity/src/main.rs:137-143`) |
 | Provisioning | `provisioning` | `POST /v1/principals`, `POST /v1/sessions`, `DELETE /v1/sessions/{id}` (`platform/hosted/identity/src/main.rs:869-886`; `platform/hosted/tests/beta-cluster.sh:1000-1026`) | `PrincipalResponse`, `SessionResponse`, `RevocationResponse` (`platform/hosted/identity/src/main.rs:146-167`) |
 
@@ -63,7 +63,7 @@ service.
 Bring-up copies `gateway-identity.token` to `identity-tokens/gateway`,
 `developer-identity.token` to `identity-tokens/webhooks`, and
 `identity-client.token` to `identity-tokens/faucet`, then generates
-distinct files for `dashboard`, `testnet`, `ramp`, and `provisioning`
+distinct files for `dashboard`, `control`, `ramp`, and `provisioning`
 (`platform/hosted/tests/beta-cluster.sh:524-532`). Webhooks and
 dashboard both mount `identity-token` from
 `layerx-developer-hosted-runtime`, which is `developer-identity.token`
@@ -79,7 +79,7 @@ Those two token identities differ.
 No `platform/hosted` binary other than `layerx-identity` and its
 tests presents the `ramp` token. Bring-up still writes
 `identity-tokens/ramp` (`platform/hosted/tests/beta-cluster.sh:530-531`).
-Testnet control sets `LAYERX_TESTNET_IDENTITY_URL` and does not set an
+Control sets `LAYERX_TESTNET_IDENTITY_URL` and does not set an
 identity service-token env (`platform/hosted/testnet/deployment.yaml:92`;
 `platform/hosted/testnet/deployment.yaml:83-101`).
 
@@ -297,7 +297,7 @@ opens the store and probes writable before listen
 
 Deployment `readinessProbe` is HTTPS `/readyz` every 5s,
 `failureThreshold` 3; `livenessProbe` is HTTPS `/livez` every 15s
-(`platform/hosted/identity/deployment.yaml:30-31`). Testnet control
+(`platform/hosted/identity/deployment.yaml:30-31`). Control
 probes identity with unauthenticated `GET /readyz` and requires HTTP
 200 (`platform/hosted/testnet/src/main.rs:1032-1034`;
 `platform/hosted/testnet/src/main.rs:1097`). Gateway `/readyz` probes

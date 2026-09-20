@@ -1,5 +1,5 @@
-site_name: LayerX Network
-site_description: Documentation for LayerX Network, a deterministic execution and accounting network for autonomous agents.
+site_name: Paxeer X Network
+site_description: Documentation for Paxeer X Network — one network: the Paxeer EVM chain and the LayerX agent-native domain behind one interface.
 site_url: https://sidiora-labs.github.io/LayerX-Network/
 repo_url: https://github.com/Sidiora-Labs/LayerX-Network
 repo_name: Sidiora-Labs/LayerX-Network
@@ -54,7 +54,7 @@ nav:
   - Overview:
       - Home: index.md
       - Getting started: overview/getting-started.md
-      - Testnet quickstart: overview/quickstart.md
+      - Quickstart: overview/quickstart.md
       - Payments: overview/payments.md
       - Monorepo: overview/monorepo.md
       - Unified network: overview/unified-network.md
@@ -131,7 +131,7 @@ nav:
   - Operators:
       - operators/index.md
       - Beta cluster: operators/beta-cluster.md
-      - Testnet control: operators/testnet-control.md
+      - Control: operators/testnet-control.md
       - Hosted internal: operators/hosted-internal.md
       - Guarantor: operators/guarantor.md
       - Settlement evidence: operators/settlement-evidence.md

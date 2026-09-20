@@ -1,8 +1,8 @@
-# Welcome to LayerX Network
+# Welcome to Paxeer X Network
 
-LayerX Network is a deterministic execution and accounting network built for autonomous agents.
+Paxeer X Network — one network: the Paxeer EVM chain and the LayerX agent-native domain behind one interface.
 
-The public testnet exposes a gateway API and a faucet. There is no LayerX mainnet. Custody and settlement live on Paxeer. LayerX is licensed under the Apache License, Version 2.0.
+The public network exposes a gateway API and a faucet. Custody and settlement live on Paxeer. LayerX is licensed under the Apache License, Version 2.0.
 
 Ordinary agent activity is executed and ordered inside LayerX. Periodic
 checkpoints are settled to Paxeer, where custody, finality, economic guarantees,
@@ -11,7 +11,7 @@ inside LayerX while custody and checkpoint settlement remain on Paxeer.
 
 ## Repository and monorepo structure
 
-This is the canonical Sidiora Labs monorepo for LayerX Network and the Paxeer Network. The Paxeer settlement node source lives under the repository root (`go.mod`, `chain.mk`, `daemon/`, `node/`, `modules/`, `consensus/`, `sdk/`, `rpc/`) with independent build, release tags (`paxeer-network/vX.Y.Z`), and trust boundaries. Co-location keeps the protocol, settlement network, and their automation auditable in one place while preserving separate deployment authority.
+This is the canonical Sidiora Labs monorepo for Paxeer X Network and the Paxeer Network. The Paxeer settlement node source lives under the repository root (`go.mod`, `chain.mk`, `daemon/`, `node/`, `modules/`, `consensus/`, `sdk/`, `rpc/`) with independent build, release tags (`paxeer-network/vX.Y.Z`), and trust boundaries. Co-location keeps the protocol, settlement network, and their automation auditable in one place while preserving separate deployment authority.
 
 LayerX Programs is kernel module ID `9` (`LXP_MODULE_PROGRAMS` in `include/layerx/lxp_module.h`). Guest code runs in that module's namespace. Every monetary effect is forced through 402LXP; no program ever holds direct balance-writing authority. See [Programs](Programs.md). Protocol 3 (`LXP_PROTOCOL_VERSION_STATE_COMMITMENT`) is the beta wire; the C header default `LXP_PROTOCOL_VERSION` remains occupancy protocol 2 (`include/layerx/lxp_protocol.h`).
 
@@ -55,8 +55,8 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 
 ## Resources
 
-- [Testnet cluster quickstart](Quickstart.md)
-- [Getting started on testnet](Getting-Started-Testnet.md)
+- [Cluster quickstart](Quickstart.md)
+- [Getting started](Getting-Started-Testnet.md)
 - [Payments developer path](PaymentsQuickstart.md)
 - [Public JSON-RPC](PublicRpc.md)
 - [Public payment API transcript](PublicAPI.md)
@@ -122,11 +122,11 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [Hosted internal](HostedInternal.md)
 - [Hosted identity](HostedIdentity.md)
 - [Hosted faucet](HostedFaucet.md)
-- [Hosted testnet control](HostedTestnetControl.md)
+- [Hosted control](HostedTestnetControl.md)
 - [Hosted node](HostedNode.md)
 - [Hosted agent boundary](HostedAgentBoundary.md)
 - [Paxeer boundary](PaxeerBoundary.md)
 
 ---
 
-LayerX Network is developed by [Sidiora Labs](https://github.com/Sidiora-Labs).
+Paxeer X Network is developed by [Sidiora Labs](https://github.com/Sidiora-Labs).

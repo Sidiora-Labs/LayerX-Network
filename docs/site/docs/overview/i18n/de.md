@@ -19,7 +19,7 @@ Gewöhnliche Agentenaktivität wird innerhalb von LayerX ausgeführt und geordne
 
 Dieses Repository ist das Monorepo von Sidiora Labs für LayerX Network und das Paxeer Network. Die gemeinsame Ablage hält Protokoll, Settlement-Netzwerk, Contracts und Entwickleroberflächen an einem Ort prüfbar. Jedes Subsystem behält seine eigene Build-, Release-, Deployment- und Vertrauensgrenze. Siehe [`spec/layerx-protocol/design.md`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/spec/layerx-protocol/design.md).
 
-## Testnet ausprobieren
+## Schnellstart
 
 Der vollständige Pfad steht in [`docs/wiki/Quickstart.md`](../quickstart.md): die `layerx` CLI aus `platform/cli` installieren, den Cluster hochfahren, `build/beta-cluster/env` sourcen, dann ein Credential anlegen, vom Faucet beanspruchen, eine Activity einreichen, die Quittung prüfen und ein Programm deployen.
 

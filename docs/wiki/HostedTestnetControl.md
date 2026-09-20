@@ -1,4 +1,4 @@
-# Hosted testnet control
+# Hosted control
 
 `layerx-testnet-control` is the public status, parameter, and journey
 admission surface for hosted LayerX Network, and the private funding/reset
@@ -225,7 +225,7 @@ In-cluster URLs (`platform/hosted/testnet/deployment.yaml:88-96`):
 - Registry `https://layerx-program-registry.layerx-testnet.svc.cluster.local:9420`
 - Redis `rediss://layerx-faucet-redis.layerx-testnet.svc.cluster.local:6379`
 
-Testnet-control does not write Redis. It shares the faucet Redis
+Control does not write Redis. It shares the faucet Redis
 listener for the `redis` probe. Persistence for claims is the faucet
 store (`docs/wiki/HostedFaucet.md`). Persistence for fund/reset is
 the core journal (`docs/wiki/HostedCore.md`).
@@ -387,7 +387,7 @@ admits `app=layerx-testnet-control` on 9443
 `platform/hosted/testnet/deployment.yaml`
 (`platform/hosted/tests/topology-check.sh:21`;
 `platform/hosted/tests/topology-check.sh:87`). Beta-cluster apply
-order is testnet, then gateway, then registry, then developer
+order is control, then gateway, then registry, then developer
 (`platform/hosted/tests/beta-cluster.sh:868-872`).
 
 ---
@@ -441,7 +441,7 @@ Portable crate tests (no cluster):
 
 Hosted smoke (`platform/hosted/testnet/tests/hosted-smoke.sh`):
 
-- Testnet `GET /readyz` is 200, `state == "ready"`, nine named
+- Control `GET /readyz` is 200, `state == "ready"`, nine named
   dependencies ready, four journeys ready
   (`platform/hosted/testnet/tests/hosted-smoke.sh:52-65`)
 - `GET /v1/parameters` is 200 and matches readiness network id,

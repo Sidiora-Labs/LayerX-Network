@@ -126,14 +126,14 @@ storage inputs are unavailable. See [Assets](Assets.md#named-fee-schedule).
 
 ## Status
 
-The public testnet exposes a gateway API and a faucet. There is no LayerX mainnet. Custody and settlement live on Paxeer. LayerX is licensed under the Apache License, Version 2.0.
+The public network exposes a gateway API and a faucet. Custody and settlement live on Paxeer. LayerX is licensed under the Apache License, Version 2.0.
 
 ---
 
 ## Start here
 
 - [Home](Home.md)
-- [Getting started on testnet](Getting-Started-Testnet.md)
+- [Getting started](Getting-Started-Testnet.md)
 - [Modules](Modules.md): `0x01`–`0x09` and one page per module
 - [Fees](Fees.md): schedule versions 1–4 and admission policy
 - [Sequencing](Sequencing.md): batches, guarantors, checkpoints

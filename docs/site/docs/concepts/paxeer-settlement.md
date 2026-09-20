@@ -61,8 +61,8 @@ The web application has an exit surface at `/app/settings/exit`
 
 ## Status
 
-There is no LayerX mainnet. Custody and settlement live on Paxeer. The public
-testnet exposes a gateway API and a faucet. Hosted beta bring-up deploys
+Custody and settlement live on Paxeer. The public
+beta exposes a gateway API and a faucet. Hosted beta bring-up deploys
 Paxeer contracts on chain id `125` inside the disposable cluster
 ([Beta cluster](../operators/beta-cluster.md)). Live production certification
 of peers, DNS, TLS, and KMS is outside the beta bar

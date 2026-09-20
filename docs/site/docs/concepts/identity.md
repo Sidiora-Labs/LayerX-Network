@@ -64,7 +64,6 @@ The web application planes are [Human web app](../human/web-app.md).
 ## Status
 
 DID registration, session keys, grants, rotation, and recovery are specified
-and implemented in the protocol kernel and hosted identity service. There is no
-LayerX mainnet. Public testnet wallet registration through `layerx wallet create`
+and implemented in the protocol kernel and hosted identity service. Wallet registration through `layerx wallet create`
 is unavailable; that command is emulator-only
 ([Payments developer path](../overview/payments.md)).

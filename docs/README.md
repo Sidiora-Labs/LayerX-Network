@@ -7,7 +7,7 @@ in [`site/README.md`](site/README.md).
 | --- | --- |
 | [site/](site/) | MkDocs Material site (Overview, Concepts, Protocol, Programs, Agents, Human, Platform, Interop, Operators, Reference) |
 | [wiki/Home.md](wiki/Home.md) | Wiki index |
-| [wiki/Quickstart.md](wiki/Quickstart.md) | Testnet quickstart |
+| [wiki/Quickstart.md](wiki/Quickstart.md) | Quickstart |
 | [wiki/Protocol.md](wiki/Protocol.md) | Activity envelope and the three rules |
 | [wiki/Modules.md](wiki/Modules.md) | Module index; one page per module under `wiki/` |
 | [wiki/Fees.md](wiki/Fees.md) | Canonical fee schedule |

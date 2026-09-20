@@ -3,7 +3,7 @@
 An exact successful claim and the resulting JSON-RPC payment flow are in
 [Public payment API](PublicAPI.md).
 
-`layerx-faucet` is the public claim surface for hosted testnet funds
+`layerx-faucet` is the public claim surface for hosted beta funds
 (`platform/hosted/faucet/Cargo.toml:8-10`;
 `platform/hosted/faucet/src/main.rs:1025`). The crate is
 `layerx-platform-faucet`; the binary path is `src/main.rs`. A
@@ -56,9 +56,9 @@ The developer payments path that starts with this claim is
 [Payments developer path](PaymentsQuickstart.md).
 
 This page covers that binary, its Redis, and the claim path through
-testnet-control. It does not document treasury SEND construction.
+control. It does not document treasury SEND construction.
 That path is on [Hosted core](HostedCore.md). Journey admission is on
-[Hosted testnet control](HostedTestnetControl.md). Session minting is
+[Hosted control](HostedTestnetControl.md). Session minting is
 on [Hosted identity](HostedIdentity.md).
 
 ---
@@ -109,7 +109,7 @@ It never forwards a caller session Bearer as the upstream
 | --- | --- | --- | --- |
 | `Bearer` session | `POST /v1/faucet/claims` (`platform/hosted/faucet/src/main.rs:470-504`) | JSON body `{"token": …}` to identity `POST` at `LAYERX_IDENTITY_INTROSPECTION_URL` (`platform/hosted/faucet/src/main.rs:481-493`) | Upstream `Authorization`. That header carries `LAYERX_IDENTITY_SERVICE_TOKEN_FILE` |
 | Identity service token | File `LAYERX_IDENTITY_SERVICE_TOKEN_FILE` (`platform/hosted/faucet/src/main.rs:282`; `platform/hosted/testnet/deployment.yaml:146`) | `Authorization: Bearer` to identity introspect | Presented by humans |
-| Testnet-control admin token | File `LAYERX_TESTNET_ADMIN_TOKEN_FILE` (`platform/hosted/faucet/src/main.rs:289`; `platform/hosted/testnet/deployment.yaml:148`) | `Authorization: Bearer` to `LAYERX_TESTNET_FUNDING_URL` | Presented by humans |
+| Control admin token | File `LAYERX_TESTNET_ADMIN_TOKEN_FILE` (`platform/hosted/faucet/src/main.rs:289`; `platform/hosted/testnet/deployment.yaml:148`) | `Authorization: Bearer` to `LAYERX_TESTNET_FUNDING_URL` | Presented by humans |
 | Redis username and password | `LAYERX_FAUCET_REDIS_USERNAME_FILE`, `LAYERX_FAUCET_REDIS_PASSWORD_FILE` (`platform/hosted/faucet/src/main.rs:295-296`) | Redis `AUTH` (`platform/hosted/faucet/src/main.rs:524-530`) | HTTP |
 
 `authenticate` requires prefix `Bearer `, a non-empty token of at most
@@ -181,7 +181,7 @@ ASCII hex digits (`platform/hosted/faucet/src/main.rs:201-203`;
 `platform/hosted/faucet/src/main.rs:1040-1041`). `Idempotency-Key` is
 1–128 alnum/`-`/`_`/`.`/`:` (`platform/hosted/faucet/src/main.rs:189-195`;
 `platform/hosted/faucet/src/main.rs:946-950`). Those claim fields
-match [Testnet quickstart](Quickstart.md).
+match [Quickstart](Quickstart.md).
 
 Headers `forwarded`, `x-forwarded-for`, `x-real-ip`,
 `x-layerx-client-ip`, and `x-layerx-principal` are refused as
@@ -258,7 +258,7 @@ upstream 4xx releases the quota reservation
 (`platform/hosted/faucet/src/main.rs:795-807`;
 `platform/hosted/faucet/src/main.rs:1080-1082`).
 
-Faucet `did` is any `did:` identifier. Testnet-control admin requires
+Faucet `did` is any `did:` identifier. Control admin requires
 the same prefix and a 64-hex `public_key`
 (`platform/hosted/testnet/src/main.rs:1235-1248`). Core fund
 additionally requires `did == did:layerx:` plus the lowercase public
@@ -295,8 +295,8 @@ The in-cluster funding URL is
 | `LAYERX_IDENTITY_INTROSPECTION_URL` | Identity HTTPS origin including introspect path |
 | `LAYERX_IDENTITY_SERVICE_TOKEN_FILE` | Bearer to identity; mounted `/run/layerx/identity/token` |
 | `LAYERX_FAUCET_SERVICE_CLAIM_TOKEN_FILE` | Optional shared secret admitting `POST /v1/faucet/service-claims`; absent means that route is `404 not_found` (`platform/hosted/faucet/src/main.rs:218-223`; `platform/hosted/faucet/src/main.rs:285`). The Deployment sets it to `/run/layerx/gateway-faucet/token`, the `token` key of Secret `layerx-gateway-faucet-client`, the same file the gateway reads through `LAYERX_GATEWAY_FAUCET_SERVICE_TOKEN_FILE` (`platform/hosted/testnet/deployment.yaml:147`; `platform/hosted/testnet/deployment.yaml:168`; `platform/hosted/testnet/deployment.yaml:175`; `platform/hosted/gateway/deployment.yaml:87`) |
-| `LAYERX_TESTNET_FUNDING_URL` | Testnet-control admin fund origin including path |
-| `LAYERX_TESTNET_ADMIN_TOKEN_FILE` | Bearer to testnet-control; mounted `/run/layerx/control-admin/token` |
+| `LAYERX_TESTNET_FUNDING_URL` | Control admin fund origin including path |
+| `LAYERX_TESTNET_ADMIN_TOKEN_FILE` | Bearer to control; mounted `/run/layerx/control-admin/token` |
 | `LAYERX_FAUCET_REDIS_URL` | `rediss://` origin |
 | `LAYERX_FAUCET_REDIS_USERNAME_FILE` | Redis ACL user; mounted `/run/layerx/redis-auth/username` |
 | `LAYERX_FAUCET_REDIS_PASSWORD_FILE` | Redis ACL password; mounted `/run/layerx/redis-auth/password` |
@@ -371,7 +371,7 @@ admits `app=layerx-faucet` on TCP 9443
 does not call the core URL. Those two edges differ.
 
 Identity ingress admits `app=layerx-faucet`
-(`platform/hosted/identity/deployment.yaml:57`). Testnet-control
+(`platform/hosted/identity/deployment.yaml:57`). Control
 admin ingress admits `app=layerx-faucet` on TCP 9444
 (`platform/hosted/testnet/deployment.yaml:254-262`).
 

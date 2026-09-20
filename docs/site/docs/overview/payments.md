@@ -7,11 +7,11 @@ are served by this tree. The LXT20 example is not: neither
 `programs/sdk/rust/examples` nor `programs/fixtures/pay5` is present here.
 
 For a shorter environment checklist, start with
-[Getting started on testnet](getting-started.md). Wire details are in
+[Getting started](getting-started.md). Wire details are in
 [Assets](../concepts/assets.md), [Public JSON-RPC](../platform/gateway-rpc.md), and
 [Commitment levels](../protocol/commitment-levels.md).
 
-## 1. Configure trusted testnet inputs
+## 1. Configure trusted inputs
 
 The published gateway and faucet origins are:
 
@@ -42,8 +42,8 @@ chain.
 
 ## 2. Create or import a signing key
 
-Build the testnet-branch CLI and put `platform/target/debug` on `PATH`. For a
-public testnet identity, create an ordinary key and select it:
+Build the CLI and put `platform/target/debug` on `PATH`. For a
+public identity, create an ordinary key and select it:
 
 ```sh
 cargo build --manifest-path platform/cli/Cargo.toml

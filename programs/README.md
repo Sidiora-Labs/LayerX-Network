@@ -262,9 +262,9 @@ Project status is deliberately narrow:
 
 | Stage | Detail |
 | --- | --- |
-| Availability | The public testnet exposes a gateway API and a faucet. There is no LayerX mainnet. |
+| Availability | The public network exposes a gateway API and a faucet. |
 | Source | Licensed under the Apache License, Version 2.0. |
-| Public endpoints | Gateway API and faucet on the public testnet. |
+| Public endpoints | Gateway API and faucet on the public network. |
 | Settlement | Checkpoints settle on Paxeer Network (EVM chain ID `125`); custody and settlement live on Paxeer. The settlement stack is co-located at the repository root. |
 
 A successful local build is development evidence, not authorization to deploy, move

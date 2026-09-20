@@ -116,14 +116,14 @@ storage inputs are unavailable. See [Assets](../concepts/assets.md#named-fee-sch
 
 ## Status
 
-The public testnet exposes a gateway API and a faucet. There is no LayerX mainnet. Custody and settlement live on Paxeer. LayerX is licensed under the Apache License, Version 2.0.
+The public network exposes a gateway API and a faucet. Custody and settlement live on Paxeer. LayerX is licensed under the Apache License, Version 2.0.
 
 ---
 
 ## Start here
 
 - [Home](../index.md)
-- [Getting started on testnet](../overview/getting-started.md)
+- [Getting started](../overview/getting-started.md)
 - [Modules](modules.md): `0x01`–`0x08` economic modules and Programs `0x09`
 - [Programs](../programs/index.md): DEPLOY / UPGRADE / CALL, simulate, guest ABI 2, occupancy
 - [Assets](../concepts/assets.md): per-asset accounts, issuance, register / mint / burn encodings

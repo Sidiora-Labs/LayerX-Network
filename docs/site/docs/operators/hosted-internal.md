@@ -71,17 +71,17 @@ identity certificates (`platform/hosted/tests/beta-cluster.sh:92`;
 `platform/hosted/tests/beta-cluster.sh:380-390`). `IMAGE_NAMES` does
 not include an internal image
 (`platform/hosted/tests/beta-cluster.sh:89-90`). `manifests_render`
-writes node, identity, paxeer, testnet, gateway, registry, and
+writes node, identity, paxeer, control, gateway, registry, and
 developer YAML and does not read
 `platform/hosted/internal/deployment.yaml`
 (`platform/hosted/tests/beta-cluster.sh:820-826`). `manifests_apply`
-applies testnet, gateway, registry, and developer only
+applies control, gateway, registry, and developer only
 (`platform/hosted/tests/beta-cluster.sh:859-864`). Those two sources
 disagree on whether the cluster apply path installs the internal
 workloads.
 
 `topology-check.sh` default manifests are node, identity, paxeer,
-testnet, gateway, and registry
+control, gateway, and registry
 (`platform/hosted/tests/topology-check.sh:17-24`;
 `platform/hosted/tests/topology-check.sh:81-88`). That default set omits
 `platform/hosted/internal/deployment.yaml` and
@@ -178,7 +178,7 @@ faucet, faucet-redis, program-registry, and DNS, and does not list
 `layerx-internal` (`platform/hosted/testnet/deployment.yaml:268-284`).
 No path under `platform/hosted/testnet` names `kms.layerx-internal.svc`
 or the event-source hosts. The internal ingress rule and the
-testnet-control egress rule disagree on that edge.
+control egress rule disagree on that edge.
 
 Redis ingress admits `layerx-developer` pods `app` in `layerx-webhooks`,
 `layerx-dashboard-api` and `layerx-testnet` pods `app=layerx-gateway` on

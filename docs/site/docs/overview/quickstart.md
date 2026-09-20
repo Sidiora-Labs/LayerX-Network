@@ -1,4 +1,4 @@
-# Testnet quickstart
+# Quickstart
 
 At the end of this path a developer has a disposable beta cluster from this
 repository, the env file `up` writes, a local Ed25519 key and a stored hosted
@@ -16,7 +16,7 @@ cited to the tree. Related pages: [CLI](../platform/cli.md), [Beta cluster](../o
 
 Faucet, send, Asset, program, and 402 surfaces are on
 [Payments developer path](payments.md). The public endpoint
-checklist is [Getting started on testnet](getting-started.md).
+checklist is [Getting started](getting-started.md).
 Asset encodings: [Assets](../concepts/assets.md). Public `POST /rpc`: [Public JSON-RPC](../platform/gateway-rpc.md).
 `executed` / `batched` / `finalised`:
 [Commitment levels](../protocol/commitment-levels.md).
@@ -45,7 +45,7 @@ That runs `bash platform/hosted/tests/beta-cluster.sh up $(PLATFORM_BETA_CLUSTER
 `up` calls `beta_cluster_up` (`platform/hosted/tests/beta-cluster.sh:1236-1290,
 1358`). After images, cluster, CA, secrets, render, trusted-boundary apply,
 Paxeer contract deploy, identity provisioning, and port-forwards, it writes
-the env file, writes cluster identity, and waits until testnet `GET /readyz`
+the env file, writes cluster identity, and waits until `GET /readyz`
 has `state == "ready"`, every journey `ready == true`, every dependency
 `ready == true`, four journeys, and the developer-plane deployments are
 ready (`platform/hosted/tests/beta-cluster.sh:1065-1076, 1284-1287`). On
@@ -75,7 +75,7 @@ bash platform/hosted/tests/beta-cluster.sh render
 prints `rendered manifests under` `$MANIFESTS_DIR` `and beta CA under`
 `$CA_DIR` `(nothing applied)` (`platform/hosted/tests/beta-cluster.sh:1320-1338`).
 
-Default host ports are testnet `19443`, gateway `19444`, faucet `19445`
+Default host ports are control `19443`, gateway `19444`, faucet `19445`
 (`platform/hosted/tests/beta-cluster.sh:81-83`). `up` binds
 `TESTNET_URL=https://localhost:$TESTNET_PORT`,
 `GATEWAY_URL=https://localhost:$GATEWAY_PORT`,
@@ -89,7 +89,7 @@ Default host ports are testnet `19443`, gateway `19444`, faucet `19445`
 `HUMAN_URL=https://localhost:19453`
 (`platform/hosted/tests/beta-cluster.sh:1258-1266`). Port-forwards are
 Paxeer-boundary `19449`, Paxeer-observer-boundary `19452`, identity
-`19451`, testnet, gateway, faucet, developer `19450`, pending-core
+`19451`, control, gateway, faucet, developer `19450`, pending-core
 `19446`, and agent-boundary `19447`
 (`platform/hosted/tests/beta-cluster.sh:1268-1283`). Human is forwarded on `19453` to port `9443`. There is no agentd port-forward.
 
@@ -137,7 +137,7 @@ separate export step. Source it:
 | `LAYERX_AGENT_BOUNDARY_URL` | `$AGENT_URL` (`https://localhost:19447`, agent boundary). |
 | `LAYERX_QUALIFICATION_AGENT_URL` | `LAYERX_BETA_QUALIFICATION_AGENT_URL` when supplied for a real deployed agentd; otherwise explicitly unset. Bring-up does not start agentd. |
 | `LAYERX_QUALIFICATION_HUMAN_URL` | `LAYERX_BETA_QUALIFICATION_HUMAN_URL` when set; otherwise `$HUMAN_URL` (`https://localhost:19453`, Human HTTPS API). |
-| `LAYERX_QUALIFICATION_PAXEER_URL` | `$PAXEER_URL` unless `LAYERX_BETA_QUALIFICATION_PAXEER_URL` is set. Role: qualification Paxeer testnet (`tools/qualification/release_runner.py:27`; `tools/qualification/beta_driver.py:44`). |
+| `LAYERX_QUALIFICATION_PAXEER_URL` | `$PAXEER_URL` unless `LAYERX_BETA_QUALIFICATION_PAXEER_URL` is set. Role: qualification Paxeer beta (`tools/qualification/release_runner.py:27`; `tools/qualification/beta_driver.py:44`). |
 
 `env_write` in `platform/hosted/tests/beta-cluster.sh` exports the node,
 Human and Paxeer qualification origins, using their non-empty overrides
@@ -154,7 +154,7 @@ flag (`platform/cli/src/http.rs:41-49`).
 Node network id is `402` (`platform/hosted/node/deployment.yaml:5`;
 `platform/hosted/testnet/src/lib.rs:4`). Node asset id is
 `b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898`
-(`platform/hosted/node/deployment.yaml:7`). Testnet control
+(`platform/hosted/node/deployment.yaml:7`). Control
 `GET /v1/parameters` returns `network` `layerx-testnet`, `network_id`
 `TESTNET_NETWORK_ID` (`402`), `package_semver`, `lxp_wire_protocol_version`,
 and `reset_schedule` (`platform/hosted/testnet/src/main.rs:1155-1163`;
@@ -213,7 +213,7 @@ contracts.
 The public hosted equivalents are `https://api.testnet.layerx.network/rpc` and
 `wss://api.testnet.layerx.network/rpc/ws`; the faucet origin is
 `https://faucet.testnet.layerx.network`. See
-[Getting started on testnet](getting-started.md) for the public
+[Getting started](getting-started.md) for the public
 checklist and [Public JSON-RPC](../platform/gateway-rpc.md) for every method and typed error.
 
 ---
@@ -335,7 +335,7 @@ and native-node run, continue with
 account opening, mint, SEND, balances, asset metadata, and receipt calls without
 shortening canonical bytes.
 
-Testnet control admits the funding journey at `GET /v1/journeys/funding`
+Control admits the funding journey at `GET /v1/journeys/funding`
 (`platform/hosted/testnet/src/main.rs:229, 1165-1171`). Smoke requires
 `.admitted == true and .ready == true and (.failing | length) == 0`
 (`platform/hosted/testnet/tests/hosted-smoke.sh:38-49, 101`).
@@ -631,7 +631,7 @@ Env also exports `LAYERX_PAXEER_CHECKPOINT_REGISTRY` and
 Both carry the layerxAnchor precompile address `0x0000000000000000000000000000000000001014`.
 There is no CLI command that reads the precompile.
 
-Testnet control journey routes are `/v1/journeys/funding`,
+Control journey routes are `/v1/journeys/funding`,
 `/v1/journeys/payment`, `/v1/journeys/receipt-inspection`, and
 `/v1/journeys/programs` (`platform/hosted/testnet/src/main.rs:227-234`).
 `/v1/journeys/settlement` is not one of them

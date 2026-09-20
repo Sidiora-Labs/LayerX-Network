@@ -1,4 +1,4 @@
-# Testnet quickstart
+# Quickstart
 
 At the end of this path a developer has a disposable beta cluster from this
 repository, the env file `up` writes, a local Ed25519 key and a stored hosted
@@ -16,7 +16,7 @@ cited to the tree. Related pages: [CLI](Cli.md), [Beta cluster](BetaCluster.md),
 
 Faucet, send, Asset, program, and 402 surfaces are on
 [Payments developer path](PaymentsQuickstart.md). The public endpoint
-checklist is [Getting started on testnet](Getting-Started-Testnet.md).
+checklist is [Getting started](Getting-Started-Testnet.md).
 Asset encodings: [Assets](Assets.md). Public `POST /rpc`: [Public JSON-RPC](PublicRpc.md).
 `executed` / `batched` / `finalised`:
 [Commitment levels](CommitmentLevels.md).
@@ -213,7 +213,7 @@ contracts.
 The public hosted equivalents are `https://api.testnet.layerx.network/rpc` and
 `wss://api.testnet.layerx.network/rpc/ws`; the faucet origin is
 `https://faucet.testnet.layerx.network`. See
-[Getting started on testnet](Getting-Started-Testnet.md) for the public
+[Getting started](Getting-Started-Testnet.md) for the public
 checklist and [Public JSON-RPC](PublicRpc.md) for every method and typed error.
 
 ---

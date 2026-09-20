@@ -3,7 +3,7 @@
 An exact successful claim and the resulting JSON-RPC payment flow are in
 [Public payment API](public-api.md).
 
-`layerx-faucet` is the public claim surface for hosted testnet funds
+`layerx-faucet` is the public claim surface for hosted beta funds
 (`platform/hosted/faucet/Cargo.toml:8-10`;
 `platform/hosted/faucet/src/main.rs:1025`). The crate is
 `layerx-platform-faucet`; the binary path is `src/main.rs`. A
@@ -181,7 +181,7 @@ ASCII hex digits (`platform/hosted/faucet/src/main.rs:201-203`;
 `platform/hosted/faucet/src/main.rs:1040-1041`). `Idempotency-Key` is
 1–128 alnum/`-`/`_`/`.`/`:` (`platform/hosted/faucet/src/main.rs:189-195`;
 `platform/hosted/faucet/src/main.rs:946-950`). Those claim fields
-match [Testnet quickstart](../overview/quickstart.md).
+match [Quickstart](../overview/quickstart.md).
 
 Headers `forwarded`, `x-forwarded-for`, `x-real-ip`,
 `x-layerx-client-ip`, and `x-layerx-principal` are refused as
@@ -258,7 +258,7 @@ upstream 4xx releases the quota reservation
 (`platform/hosted/faucet/src/main.rs:795-807`;
 `platform/hosted/faucet/src/main.rs:1080-1082`).
 
-Faucet `did` is any `did:` identifier. Testnet-control admin requires
+Faucet `did` is any `did:` identifier. Control admin requires
 the same prefix and a 64-hex `public_key`
 (`platform/hosted/testnet/src/main.rs:1235-1248`). Core fund
 additionally requires `did == did:layerx:` plus the lowercase public
@@ -371,7 +371,7 @@ admits `app=layerx-faucet` on TCP 9443
 does not call the core URL. Those two edges differ.
 
 Identity ingress admits `app=layerx-faucet`
-(`platform/hosted/identity/deployment.yaml:57`). Testnet-control
+(`platform/hosted/identity/deployment.yaml:57`). Control
 admin ingress admits `app=layerx-faucet` on TCP 9444
 (`platform/hosted/testnet/deployment.yaml:254-262`).
 

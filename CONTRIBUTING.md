@@ -1,6 +1,6 @@
-# Contributing to LayerX Network
+# Contributing to Paxeer X Network
 
-LayerX Network is security-critical accounting and settlement software. Contributions must preserve deterministic replay, conservation of value, explicit authority, and fail-closed behavior.
+Paxeer X Network is security-critical accounting and settlement software. Contributions must preserve deterministic replay, conservation of value, explicit authority, and fail-closed behavior.
 
 This project is licensed under Apache 2.0. By contributing you agree that your work is licensed under those terms. Use Developer Certificate of Origin sign-off on every commit:
 

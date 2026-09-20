@@ -57,7 +57,7 @@ Redis credentials on the shared gateway keyspace, and the
 selects. Its derived fields, including all eight conformance suites, are the
 real ones this checkout renders; every key, principal and account in it is an
 example. The `layerx-beta-*` identifiers mark
-the trust roots the bring-up generates for this testnet's own test clients: they
+the trust roots the bring-up generates for the network's own test clients: they
 are not authenticated external counterparties, and a deployment that faces real
 ones replaces them with the variables below.
 
@@ -120,7 +120,7 @@ payment handler.
 
 The AP2 issuer keys, the AP2 asset binding, the Visa TAP agent and merchant
 target and the fiat provider callback key are counterparty credentials. On a
-private testnet the counterparties are the cluster's own test clients, so
+private network the counterparties are the cluster's own test clients, so
 `secrets_generate` in `platform/hosted/tests/beta-cluster.sh` generates them —
 three uncompressed SEC1 P-256 mandate keys, one ed25519 TAP agent key and one
 ed25519 fiat provider key — and writes their public halves with the cluster
@@ -133,7 +133,7 @@ Every generated identifier says so: `layerx-beta-<use-case>-key`,
 and `layerx-beta-fiat-provider`. The rendered configuration carries no field
 for provenance — the service refuses unknown fields — so the render prints the
 roots it generated and the bring-up logs that line. These roots trust nothing
-outside the cluster: they authenticate the testnet's own clients only.
+outside the cluster: they authenticate the network's own clients only.
 
 ### Deployment variables
 

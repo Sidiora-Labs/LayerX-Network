@@ -35,7 +35,7 @@ and subscription are part of the same method contract
 | Method | Exact positional parameters | Result |
 | --- | --- | --- |
 | `lx_register` | `[signer_public_key, registration_signature]` | Identity principal record for a self-registered signer |
-| `lx_requestFunds` | `[did, signer_public_key]` | One bounded testnet faucet grant the faucet confirmed as funded |
+| `lx_requestFunds` | `[did, signer_public_key]` | One bounded beta faucet grant the faucet confirmed as funded |
 | `lx_getAccount` | `[account_id]` | Authenticated account snapshot |
 | `lx_getBalance` | `[account_id]` | Same account object; read `balance` and `asset_id` |
 | `lx_getBalances` | `[did]` | Complete bounded DID account list |

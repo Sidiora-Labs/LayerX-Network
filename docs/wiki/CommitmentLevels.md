@@ -1,8 +1,7 @@
 # Commitment levels
 
 `lx_sendActivity` and the payment middleware use three exact commitment names:
-`executed`, `batched`, and `finalised`. These surfaces are on the testnet
-branch. A commitment is an evidence requirement, not a progress label. The
+`executed`, `batched`, and `finalised`. A commitment is an evidence requirement, not a progress label. The
 gateway never converts a stronger request into a weaker success.
 
 See [Public JSON-RPC](PublicRpc.md),
