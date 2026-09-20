@@ -131,14 +131,8 @@ impl PaxeerCheckpointVerifier {
         }
         let reference_bytes = certificate.settlement_reference().ok_or_else(invalid)?;
         let reference = SettlementReference::decode(reference_bytes, &self.policy, identifier)?;
-        let published = crate::contract::verify(
-            &self.policy,
-            certificate,
-            &header,
-            identifier,
-            set_version,
-            reference,
-        )?;
+        let published =
+            crate::contract::verify(&self.policy, certificate, &header, identifier, reference)?;
         Ok(VerifiedCheckpointPublication {
             policy: self.policy.clone(),
             checkpoint_id: identifier,
