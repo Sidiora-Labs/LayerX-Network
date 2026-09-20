@@ -10,6 +10,11 @@ import sys
 import unicodedata
 from urllib.parse import urlsplit
 
+# LayerX custody on Paxeer is the native layerxcustody module behind this precompile. Deposits,
+# withdrawal claims and forced exits are all calls on it, so the four custody bindings are this
+# constant address and no longer come from the Solidity deployment record.
+CUSTODY_PRECOMPILE = '0x0000000000000000000000000000000000001013'
+
 
 def write(directory, name, value):
     path = directory / name
@@ -47,14 +52,14 @@ def assemble_policy(evidence, deployment, registry_path, output, network, chain)
         policy['onboarding_configuration'] = protected_json(onboarding)
     addresses = deployment['addresses']
     policy['components'].update({
-        'PAXEER_EXIT_CONTRACT': addresses['emergency_exit'],
-        'PAXEER_WITHDRAWAL_CLAIMS_CONTRACT': addresses['withdrawal_claims'],
+        'PAXEER_EXIT_CONTRACT': CUSTODY_PRECOMPILE,
+        'PAXEER_WITHDRAWAL_CLAIMS_CONTRACT': CUSTODY_PRECOMPILE,
     })
     policy['movement'].update({
-        'PAXEER_VAULT': addresses['vault'],
+        'PAXEER_VAULT': CUSTODY_PRECOMPILE,
         'PAXEER_CHECKPOINT_REGISTRY': addresses['checkpoint_registry'],
-        'PAXEER_CLAIMS_CONTRACT': addresses['withdrawal_claims'],
-        'PAXEER_EXIT_CONTRACT': addresses['emergency_exit'],
+        'PAXEER_CLAIMS_CONTRACT': CUSTODY_PRECOMPILE,
+        'PAXEER_EXIT_CONTRACT': CUSTODY_PRECOMPILE,
     })
     policy['registry'] = {'network_id': network, 'protocol_version': 3, 'modules': [
         {'module_id': module['module'], 'activity_types': [
@@ -188,7 +193,8 @@ def main():
                 raise ValueError('Human policy binding fields refused')
         for name in ('PAXEER_EXIT_CONTRACT', 'PAXEER_WITHDRAWAL_CLAIMS_CONTRACT'):
             address = policy['components'][name]
-            if not re.fullmatch(r'0x[0-9a-fA-F]{40}', address) or int(address, 16) == 0:
+            if (not re.fullmatch(r'0x[0-9a-fA-F]{40}', address)
+                    or address.lower() != CUSTODY_PRECOMPILE):
                 raise ValueError('Human custody contract binding refused')
         if policy['registry']['network_id'] != network or policy['registry']['protocol_version'] != 3:
             raise ValueError('Human registry network or protocol mismatch')
@@ -257,6 +263,9 @@ def main():
                     raise ValueError('Human movement timing refused')
             elif not re.fullmatch(r'0x[0-9a-fA-F]{' + str(width) + '}', value) or int(value, 16) == 0:
                 raise ValueError('Human movement binding refused')
+        for name in ('PAXEER_VAULT', 'PAXEER_CLAIMS_CONTRACT', 'PAXEER_EXIT_CONTRACT'):
+            if policy['movement'][name].lower() != CUSTODY_PRECOMPILE:
+                raise ValueError('Human movement custody binding must name the custody precompile')
         if (policy['movement']['PAXEER_CLAIMS_CONTRACT'] != policy['components']['PAXEER_WITHDRAWAL_CLAIMS_CONTRACT']
                 or policy['movement']['PAXEER_EXIT_CONTRACT'] != policy['components']['PAXEER_EXIT_CONTRACT']):
             raise ValueError('Human movement custody bindings differ')

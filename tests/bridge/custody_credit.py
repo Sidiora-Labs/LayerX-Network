@@ -3,11 +3,14 @@ import hashlib
 import ipaddress
 import json
 import os
+from pathlib import Path
 import stat
+import sys
 import urllib.parse
 import urllib.request
 
-from Crypto.Hash import keccak
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "platform/hosted/paxeer"))
+from evm import keccak
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
@@ -18,10 +21,7 @@ MAX_ANCESTRY = 8192
 MAX_TOTAL_RESPONSE = 128 * 1024 * 1024
 MAX_RPC_CALLS = 20000
 PROFILE_BYTES = 207
-DEPOSIT_TOPIC = "0x" + keccak.new(
-    digest_bits=256,
-    data=b"CustodyDeposit(bytes32,bytes32,address,bytes32,uint256,uint64)",
-).hexdigest()
+DEPOSIT_TOPIC = "0x" + keccak(b"CustodyDeposit(bytes32,bytes32,address,bytes32,uint256,uint64)").hex()
 
 
 def require(condition, message):
@@ -51,7 +51,7 @@ def sha(value):
 
 
 def eth_hash(value):
-    return keccak.new(digest_bits=256, data=value).digest()
+    return keccak(value)
 
 
 def rlp(value):

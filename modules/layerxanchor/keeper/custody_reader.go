@@ -2,6 +2,8 @@ package keeper
 
 import (
 	"github.com/sidiora-labs/paxeer-network/layerxproof/verify"
+	"github.com/sidiora-labs/paxeer-network/modules/layerxanchor/types"
+	custodytypes "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 )
 
@@ -47,6 +49,21 @@ func (a CustodyAnchor) FinalizedStateRoot(ctx sdk.Context, batchNumber uint64) (
 
 func (a CustodyAnchor) FinalizedReceiptRoot(ctx sdk.Context, batchNumber uint64) ([32]byte, bool) {
 	return a.k.FinalizedReceiptRoot(ctx, batchNumber)
+}
+
+// FinalizedCheckpoint returns the final checkpoint recorded under checkpointID
+// with the account that submitted it.
+func (a CustodyAnchor) FinalizedCheckpoint(ctx sdk.Context, checkpointID [32]byte) (custodytypes.FinalizedCheckpoint, bool) {
+	checkpoint, found := a.k.CheckpointByID(ctx, checkpointID)
+	if !found || checkpoint.Status != types.CheckpointFinal {
+		return custodytypes.FinalizedCheckpoint{}, false
+	}
+	proposer, err := sdk.AccAddressFromBech32(checkpoint.Submitter)
+	if err != nil {
+		return custodytypes.FinalizedCheckpoint{}, false
+	}
+	return custodytypes.FinalizedCheckpoint{BatchNumber: checkpoint.BatchNumber, StateRoot: checkpoint.StateRoot,
+		NetworkID: checkpoint.NetworkID, ProtocolVersion: checkpoint.ProtocolVersion, Proposer: proposer}, true
 }
 
 // LatestFinalizedBatch returns the highest finalized batch and the unix second

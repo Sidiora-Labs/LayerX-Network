@@ -56,6 +56,12 @@ func (a authorityAnchor) LatestFinalizedBatch(ctx sdk.Context) (uint64, int64, b
 	return checkpoint.BatchNumber, checkpoint.FinalizedAt, found
 }
 
+// FinalizedCheckpoint is never found here: authority-registered checkpoints
+// carry no identifier and no proposer.
+func (a authorityAnchor) FinalizedCheckpoint(sdk.Context, [32]byte) (types.FinalizedCheckpoint, bool) {
+	return types.FinalizedCheckpoint{}, false
+}
+
 func (k *Keeper) GetCheckpoint(ctx sdk.Context, batchNumber uint64) (types.Checkpoint, bool) {
 	var checkpoint types.Checkpoint
 	bz := k.store(ctx).Get(types.CheckpointKey(batchNumber))

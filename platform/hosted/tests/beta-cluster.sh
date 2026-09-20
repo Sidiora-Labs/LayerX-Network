@@ -31,10 +31,12 @@
 #   LAYERX_BETA_SEQUENCER_KEY_FILE      PEM ed25519 private key of the beta sequencer; generated when unset. Its
 #                                       32-byte seed is the node's sequencer key, so the node, the receipt
 #                                       authority, the gateway and the registry share one sequencer identity
-#   LAYERX_BETA_FOUNDRY_BIN             directory holding the pinned forge and cast that
-#                                       platform/hosted/paxeer/deploy-contracts.sh requires (default /root/.foundry/bin);
-#                                       custody itself is the native module at 0x…1013 and deploys nothing, and the
-#                                       owner custody deposit uses cast only to encode and send its transaction
+#   LAYERX_BETA_MIRROR_FOUNDRY_BIN      directory holding the pinned forge and cast that
+#                                       interop/deploy/mirror/deploy-ethereum-mirror.sh needs to compile and deploy
+#                                       the Ethereum mirror archive contract (default /root/.foundry/bin). Nothing
+#                                       else in the bring-up uses Foundry: custody (0x…1013) and the checkpoint
+#                                       anchor (0x…1014) are native chain modules configured in the Paxeer genesis,
+#                                       and every Paxeer transaction is signed by platform/hosted/paxeer/evm.py
 #   LAYERX_BETA_FAUCET_HOST             public faucet hostname (default faucet.testnet.layerx.network)
 #   LAYERX_BETA_DEVELOPER_HOST          public developer hostname (default developers.testnet.layerx.network)
 #   LAYERX_BETA_RELAY_HOST              public relay/archive hostname (default relay.testnet.layerx.network)
@@ -184,10 +186,11 @@
 # The trusted-boundary services (node with core boundary, receipt authority and agent boundary; identity;
 # Paxeer chain with its boundary) are built from the repository, applied before the testnet, gateway,
 # registry and developer manifests, and bound together in this order: the Paxeer chain starts with the
-# generated deployer address, the node bootstraps its genesis, deploy-contracts.sh deploys the settlement
-# contracts from the node's genesis artifacts through the Paxeer boundary, and the resulting GuarantorBond
-# and CheckpointRegistry addresses are published to the node as the layerx-node-settlement ConfigMap the
-# sequencer supervisor waits for before starting layerxd --serve.
+# generated deployer address and the custody and anchor module genesis, the node bootstraps its genesis,
+# anchor-guarantors.sh registers and activates the node's guarantors in the anchor module through the Paxeer
+# boundary, and the anchor precompile address is published to the node as the settlement contract and
+# checkpoint registry of the layerx-node-settlement ConfigMap the sequencer supervisor waits for before
+# starting layerxd --serve. No Solidity contract is deployed for custody, checkpoints, bonds or challenges.
 #
 # Two reference programs are deployed through the program registry deployment ingress before the explorer
 # observation is published: programs/sdk/rust/examples/escrow, whose deployment record carries the program
@@ -254,7 +257,8 @@ source "$SCRIPT_DIR/beta-images.sh"
 source "$REPO_ROOT/platform/hosted/human/provision.sh"
 TRUSTED_BOUNDARY_SERVICES=(layerx-pending-core layerx-pending-core-admin paxeer-boundary layerx-identity layerx-receipt-authority layerx-agent-boundary)
 INTERNAL_NAMESPACE=layerx-internal
-FOUNDRY_BIN=${LAYERX_BETA_FOUNDRY_BIN:-/root/.foundry/bin}
+MIRROR_FOUNDRY_BIN=${LAYERX_BETA_MIRROR_FOUNDRY_BIN:-/root/.foundry/bin}
+EVM_TOOL="$REPO_ROOT/platform/hosted/paxeer/evm.py"
 BUILDER_ENVIRONMENT_RECIPE=platform/hosted/registry/builder-environment
 BUILDER_ENVIRONMENT_CACHE_DIR=${LAYERX_BETA_BUILDER_ENVIRONMENT_CACHE_DIR:-$REPO_ROOT/build/builder-environment}
 CUSTODY_PROFILE=${LAYERX_BETA_CUSTODY_PROFILE:-}
@@ -279,6 +283,7 @@ RAMP_OPTIONAL_INPUTS=(LAYERX_BETA_RAMP_PORT LAYERX_BETA_RAMP_WORKER_ID LAYERX_BE
     LAYERX_BETA_RAMP_OFF_GRANT_JSON LAYERX_BETA_RAMP_ON_ACCOUNT_SEQUENCE
     LAYERX_BETA_RAMP_OFF_RECEIVER_SEQUENCE)
 PAXEER_CHAIN_ID=125
+CUSTODY_PRECOMPILE=0x0000000000000000000000000000000000001013
 ANCHOR_PRECOMPILE=0x0000000000000000000000000000000000001014
 MIRROR_SIGNER_SOCKET=/run/mirror-signer/signer.sock
 MIRROR_ETHEREUM_KEY_HANDLE=mirror/ethereum/beta
@@ -773,28 +778,17 @@ explorer_read_principal_generate() {
 
 secp256k1_public_key() {
     # secp256k1_public_key KEY_FILE -> compressed secp256k1 public key of that private key
-    local key
-    key=$(tr -d '\r\n' < "$1")
-    "$FOUNDRY_BIN/cast" wallet public-key --private-key "$key" 2>/dev/null | python3 -c '
-import sys
-raw = bytes.fromhex(sys.stdin.read().strip().removeprefix("0x"))
-if len(raw) == 65 and raw[0] == 4:
-    raw = raw[1:]
-if len(raw) != 64:
-    raise SystemExit("cast did not print an uncompressed secp256k1 public key")
-print(("02" if raw[63] % 2 == 0 else "03") + raw[:32].hex())
-'
+    python3 "$EVM_TOOL" public-key "$1"
 }
 
 evm_key_generate() {
     # evm_key_generate NAME -> SECRETS_DIR/NAME.key (0x-prefixed secp256k1 secret) and SECRETS_DIR/NAME.address
-    local name=$1 key address
+    local name=$1 address
     while :; do
-        key=0x$(random_hex 32)
-        address=$("$FOUNDRY_BIN/cast" wallet address --private-key "$key" 2>/dev/null) || continue
+        (umask 077; printf '0x%s' "$(random_hex 32)" > "$SECRETS_DIR/$name.key")
+        address=$(python3 "$EVM_TOOL" address "$SECRETS_DIR/$name.key" 2>/dev/null) || continue
         [[ $address =~ ^0x[0-9a-fA-F]{40}$ ]] && break
     done
-    (umask 077; printf '%s' "$key" > "$SECRETS_DIR/$name.key")
     printf '%s' "$address" > "$SECRETS_DIR/$name.address"
 }
 
@@ -1021,9 +1015,6 @@ secrets_generate() {
     done
     write_token "$d/identity-store.key"
     evm_key_generate paxeer-deployer
-    evm_key_generate paxeer-final-proposer
-    evm_key_generate paxeer-final-executor
-    evm_key_generate paxeer-emergency-council
     evm_key_generate paxeer-guarantor-controller
     evm_key_generate paxeer-guarantor-second-controller
     evm_key_generate paxeer-checkpoint-submitter
@@ -2134,10 +2125,10 @@ guarantor_sequence_test() (
         ' "$dir/members.json" > /dev/null
         jq -s 'sort_by(.guarantor_id)' "$dir/members.jsonl" > "$dir/expected.json"
         jq -e --slurpfile expected "$dir/expected.json" 'map(del(.governance_sequence)) == $expected[0]' "$dir/members.json" > /dev/null
-        LAYERX_PAXEER_GUARANTORS="$dir/members.json" bash "$REPO_ROOT/platform/hosted/paxeer/deploy-contracts.sh" check-guarantors
+        LAYERX_PAXEER_GUARANTORS="$dir/members.json" bash "$REPO_ROOT/platform/hosted/paxeer/anchor-guarantors.sh" check-guarantors
         for mutation in 'map(.governance_sequence = 1)' '.[0].governance_sequence = 0' '.[1].governance_sequence = 3' '.[1].governance_sequence = "2"' '.[1].governance_sequence = 2.5' 'reverse'; do
             jq "$mutation" "$dir/members.json" > "$dir/invalid.json"
-            if LAYERX_PAXEER_GUARANTORS="$dir/invalid.json" bash "$REPO_ROOT/platform/hosted/paxeer/deploy-contracts.sh" check-guarantors > "$dir/refusal.log" 2>&1; then
+            if LAYERX_PAXEER_GUARANTORS="$dir/invalid.json" bash "$REPO_ROOT/platform/hosted/paxeer/anchor-guarantors.sh" check-guarantors > "$dir/refusal.log" 2>&1; then
                 fail "non-contiguous governance sequences were accepted: $mutation"
             fi
             grep -q 'governance sequences must be contiguous from 1 in member order' "$dir/refusal.log"
@@ -2325,8 +2316,8 @@ paxeer_contracts_deploy() {
     [[ $count =~ ^[1-9][0-9]*$ ]] && [ "$count" -le 32 ] || fail "node.env carries no bounded genesis guarantor count"
     [ "$count" -ge "$(jq -er '.finality_policy.certificate_threshold' "$REPO_ROOT/contracts/config/checkpoint-settlement.json")" ] \
         || fail "genesis guarantors cannot meet the certificate threshold"
-    bond_amount=$(jq -r '((.usdl_custody_cap | tonumber) * .minimum_bond_bps / 10000 | floor) | tostring' "$REPO_ROOT/platform/hosted/paxeer/deployment-input.beta.json")
-    [[ $bond_amount =~ ^[1-9][0-9]*$ ]] || fail "the beta deployment input yields no positive minimum guarantor bond"
+    bond_amount=$(jq -er '.params.min_bond' "$WORK_DIR/paxeer-anchor-genesis.json")
+    [[ $bond_amount =~ ^[1-9][0-9]*$ ]] || fail "the anchor genesis carries no positive minimum guarantor bond"
     : > "$dir/guarantors.jsonl"
     for ((index = 0; index < count; index++)); do
         id=$(sed -n "s/^LAYERX_NODE_GENESIS_GUARANTOR_ID_$index=//p" "$WORK_DIR/genesis/node.env")
@@ -2347,36 +2338,26 @@ paxeer_contracts_deploy() {
         (umask 077; cp "$SECRETS_DIR/$controller.key" "$dir/guarantor-keys/0x$id.controller.key")
     done
     guarantor_set_render "$dir/guarantors.jsonl" > "$dir/guarantors.json"
-    jq --arg proposer "$(cat "$SECRETS_DIR/paxeer-final-proposer.address")" --arg executor "$(cat "$SECRETS_DIR/paxeer-final-executor.address")" \
-        --arg council "$(cat "$SECRETS_DIR/paxeer-emergency-council.address")" \
-        '. + {protocol_version: 3, final_proposer: $proposer, final_executor: $executor, emergency_council: $council}' \
-        "$REPO_ROOT/platform/hosted/paxeer/deployment-input.beta.json" > "$dir/deployment-input.json"
     cp "$REPO_ROOT/contracts/config/checkpoint-settlement.json" "$dir/checkpoint-settlement.json"
     authority=$(deposit_root_authority "$WORK_DIR/genesis")
-    log "deploying the settlement contracts from the node genesis through the Paxeer boundary with deposit-root authority $authority"
-    if ! LAYERX_PAXEER_BOUNDARY_URL="$PAXEER_URL" LAYERX_PAXEER_BOUNDARY_CA_DER="$CA_DIR/ca.der" LAYERX_PAXEER_CHAIN_ID="$PAXEER_CHAIN_ID" \
-        LAYERX_PAXEER_CHECKPOINT_SUBMITTER_KEY_FILE="$SECRETS_DIR/paxeer-checkpoint-submitter.key" \
-        LAYERX_PAXEER_DEPLOYER_KEY_FILE="$SECRETS_DIR/paxeer-deployer.key" LAYERX_PAXEER_GENESIS_DIR="$WORK_DIR/genesis" \
-        LAYERX_PAXEER_DEPLOYMENT_INPUT="$dir/deployment-input.json" LAYERX_PAXEER_GUARANTORS="$dir/guarantors.json" \
-        LAYERX_PAXEER_GUARANTOR_KEYS_DIR="$dir/guarantor-keys" LAYERX_PAXEER_DEPLOYMENT_RECORD="$dir/deployment.json" \
-        LAYERX_PAXEER_SETTLEMENT_JSON="$dir/checkpoint-settlement.json" LAYERX_PAXEER_SETTLEMENT_DOMAIN=beta \
-        LAYERX_PAXEER_FOUNDRY_BIN="$FOUNDRY_BIN" \
-        bash "$REPO_ROOT/platform/hosted/paxeer/deploy-contracts.sh" bootstrap "$authority" > "$LOG_DIR/deploy-contracts.log" 2>&1; then
-        tail -n 40 "$LOG_DIR/deploy-contracts.log" >&2
-        fail "deploy-contracts.sh bootstrap failed (log $LOG_DIR/deploy-contracts.log)"
-    fi
-    [ "$(jq -r '.network_id' "$dir/deployment.json")" = "$NODE_NETWORK_ID" ] || fail "the deployment record network id differs from the node network id $NODE_NETWORK_ID"
-    jq -e --arg authority "$authority" '.deposit_root_authority.public_key == $authority and .deposit_root_authority.executed == true' \
-        "$dir/deployment.json" > /dev/null || fail "the deployment record does not carry the executed guarantor deposit-root authority $authority"
-    log "contracts deployed from the node genesis (blueprint $(jq -r '.blueprint' "$dir/deployment.json"))"
+    [ "$(jq -er '.params.network_id' "$WORK_DIR/paxeer-custody-genesis.json")" = "$NODE_NETWORK_ID" ] \
+        || fail "the custody genesis network id differs from the node network id $NODE_NETWORK_ID"
+    # Custody and the checkpoint anchor are chain modules: the record names their constant precompile
+    # addresses for the consumers that used to read the Solidity deployment record.
+    jq -n --argjson network "$NODE_NETWORK_ID" --argjson chain "$PAXEER_CHAIN_ID" --arg deployer "$(cat "$SECRETS_DIR/paxeer-deployer.address")" \
+        --arg custody "$CUSTODY_PRECOMPILE" --arg anchor "$ANCHOR_PRECOMPILE" --arg authority "$authority" \
+        '{network_id: $network, chain_id: $chain, protocol_version: 3, deployer: $deployer,
+          addresses: {custody: $custody, checkpoint_registry: $anchor, guarantor_bond: $anchor},
+          deposit_root_authority: {public_key: $authority}}' > "$dir/deployment.json"
+    log "custody $CUSTODY_PRECOMPILE and anchor $ANCHOR_PRECOMPILE are native modules; nothing is deployed (deposit-root authority $authority)"
     anchor_guarantors_register
 }
 
 # Checkpoints settle and guarantors bond in the layerxanchor module behind the precompile at
 # 0x…1014: the settlement contract and the checkpoint registry of every LayerX configuration are
 # that one constant. The guarantor identities exist only after the node generated them, so they
-# register here through the precompile and the deployer, the anchor authority, activates them. The
-# beta settlement domain written by deploy-contracts.sh is replaced by the anchor domain.
+# register here through the precompile and the deployer, the anchor authority, activates them, and
+# the beta settlement domain is written as the anchor domain.
 anchor_guarantors_register() {
     local dir="$WORK_DIR/paxeer"
     [ "$(jq -er '.params.network_id' "$WORK_DIR/paxeer-anchor-genesis.json")" = "$NODE_NETWORK_ID" ] \
@@ -2385,7 +2366,7 @@ anchor_guarantors_register() {
         LAYERX_PAXEER_DEPLOYER_KEY_FILE="$SECRETS_DIR/paxeer-deployer.key" \
         LAYERX_PAXEER_ANCHOR_GENESIS="$WORK_DIR/paxeer-anchor-genesis.json" LAYERX_PAXEER_GUARANTORS="$dir/guarantors.json" \
         LAYERX_PAXEER_GUARANTOR_KEYS_DIR="$dir/guarantor-keys" LAYERX_PAXEER_SETTLEMENT_JSON="$dir/checkpoint-settlement.json" \
-        LAYERX_PAXEER_SETTLEMENT_DOMAIN=beta LAYERX_PAXEER_FOUNDRY_BIN="$FOUNDRY_BIN" \
+        LAYERX_PAXEER_SETTLEMENT_DOMAIN=beta \
         bash "$REPO_ROOT/platform/hosted/paxeer/anchor-guarantors.sh" > "$LOG_DIR/anchor-guarantors.log" 2>&1; then
         tail -n 40 "$LOG_DIR/anchor-guarantors.log" >&2
         fail "anchor-guarantors.sh failed (log $LOG_DIR/anchor-guarantors.log)"
@@ -2416,10 +2397,12 @@ custody_registration_publish() {
     # therefore built from the node's own descriptor and request once the anchor views show that
     # state; the anchor holds no copy of the LayerX genesis roots to compare them with.
     local latest first
-    latest=$(SSL_CERT_FILE="$CA_DIR/ca.crt" "$FOUNDRY_BIN/cast" call --rpc-url "$PAXEER_URL" --json \
-        "$ANCHOR_PRECOMPILE" 'latestFinalized()(uint64,bool)' | jq -r 'map(tostring) | join(" ")')
-    first=$(SSL_CERT_FILE="$CA_DIR/ca.crt" "$FOUNDRY_BIN/cast" call --rpc-url "$PAXEER_URL" \
-        "$ANCHOR_PRECOMPILE" 'statusOf(uint64)(uint8)' 1)
+    latest=$(python3 "$EVM_TOOL" call --rpc "$PAXEER_URL" --ca "$CA_DIR/ca.crt" \
+        "$ANCHOR_PRECOMPILE" 'latestFinalized()(uint64,bool)' | jq -r 'map(tostring) | join(" ")') \
+        || fail "the anchor latestFinalized view could not be read"
+    first=$(python3 "$EVM_TOOL" call --rpc "$PAXEER_URL" --ca "$CA_DIR/ca.crt" \
+        "$ANCHOR_PRECOMPILE" 'statusOf(uint64)(uint8)' 1 | jq -r '.[0]') \
+        || fail "the anchor statusOf view could not be read"
     [ "$latest" = "0 false" ] && [ "$first" = 0 ] \
         || fail "the anchor already holds checkpoints (latestFinalized $latest, statusOf(1) $first); a genesis registration needs a fresh network"
     python3 - "$WORK_DIR/genesis/paxeer-deployment-descriptor.lxgd" \
@@ -2527,7 +2510,7 @@ mirror_publish() {
         [ "${LAYERX_BETA_MIRROR_ETHEREUM_SIGNER_PUBLIC_KEY#0x}" = "$publisher_public_key" ] \
             || fail "LAYERX_BETA_MIRROR_ETHEREUM_SIGNER_PUBLIC_KEY is not the public key of the mirror publisher key"
     fi
-    publisher_address=$(PATH="$FOUNDRY_BIN:$PATH" python3 "$REPO_ROOT/platform/hosted/paxeer/settlement-domain.py" \
+    publisher_address=$(python3 "$REPO_ROOT/platform/hosted/paxeer/settlement-domain.py" \
         signer "0x$publisher_public_key") \
         || fail "the mirror publisher address could not be derived from its public key"
     if [ "$MIRROR_SOLANA" = 1 ]; then
@@ -2572,7 +2555,7 @@ mirror_publish() {
         LAYERX_MIRROR_DEPLOYER_KEY_FILE="$LAYERX_MIRROR_DEPLOYER_KEY_FILE" \
         LAYERX_MIRROR_PUBLISHER_ADDRESS="$publisher_address" \
         LAYERX_MIRROR_DEPLOYMENT_RECORD="$dir/ethereum-deployment.json" \
-        LAYERX_MIRROR_FOUNDRY_BIN="$FOUNDRY_BIN" \
+        LAYERX_MIRROR_FOUNDRY_BIN="$MIRROR_FOUNDRY_BIN" \
         bash "$REPO_ROOT/interop/deploy/mirror/deploy-ethereum-mirror.sh" > "$LOG_DIR/mirror-deploy.log" 2>&1; then
         tail -n 40 "$LOG_DIR/mirror-deploy.log" >&2
         fail "the Ethereum mirror archive contract could not be deployed (log $LOG_DIR/mirror-deploy.log)"
@@ -2581,13 +2564,12 @@ mirror_publish() {
     publisher_gas=${LAYERX_BETA_MIRROR_PUBLISHER_GAS_WEI:-1000000000000000000}
     [[ $publisher_gas =~ ^[1-9][0-9]*$ ]] \
         || fail "LAYERX_BETA_MIRROR_PUBLISHER_GAS_WEI must be a positive decimal amount of wei"
-    publisher_balance=$(SSL_CERT_FILE="$dir/ethereum-ca.pem" "$FOUNDRY_BIN/cast" balance \
-        --rpc-url "$ethereum_primary" "$publisher_address") \
+    publisher_balance=$(python3 "$EVM_TOOL" balance --rpc "$ethereum_primary" --ca "$dir/ethereum-ca.pem" \
+        "$publisher_address") \
         || fail "the mirror publisher balance could not be read from $ethereum_primary"
     if [ "$(printf '%s\n' "$publisher_balance" "$publisher_gas" | sort -n | head -1)" != "$publisher_gas" ]; then
-        SSL_CERT_FILE="$dir/ethereum-ca.pem" "$FOUNDRY_BIN/cast" send --json --timeout 120 \
-            --rpc-url "$ethereum_primary" --chain "$ethereum_chain_id" \
-            --private-key "$(cat "$LAYERX_MIRROR_DEPLOYER_KEY_FILE")" --value "$publisher_gas" \
+        python3 "$EVM_TOOL" send --rpc "$ethereum_primary" --ca "$dir/ethereum-ca.pem" --timeout 120 \
+            --chain "$ethereum_chain_id" --key-file "$LAYERX_MIRROR_DEPLOYER_KEY_FILE" --value "$publisher_gas" \
             "$publisher_address" > "$dir/publisher-gas.json" \
             || fail "the mirror publisher could not be funded for gas on chain $ethereum_chain_id"
         [ "$(jq -r '.status' "$dir/publisher-gas.json")" = "0x1" ] \
@@ -3131,7 +3113,7 @@ identity_write() {
         printf 'paxeer_deployer=%s\n' "$(cat "$SECRETS_DIR/paxeer-deployer.address")"
         printf 'paxeer_guarantor_bond=%s\n' "$GUARANTOR_BOND"
         printf 'paxeer_checkpoint_registry=%s\n' "$CHECKPOINT_REGISTRY"
-        printf 'paxeer_blueprint=%s\n' "$(jq -r '.blueprint' "$WORK_DIR/paxeer/deployment.json")"
+        printf 'paxeer_custody=%s\n' "$CUSTODY_PRECOMPILE"
         printf 'test_auth_token_source=%s\n' "$TEST_AUTH_SOURCE"
         printf 'test_source_did=%s\n' "$TEST_SOURCE_DID"
         printf 'test_destination_did=%s\n' "$TEST_DESTINATION_DID"
@@ -3208,7 +3190,7 @@ custody_profile_validate() {
 }
 
 require_foundry() {
-    [ -x "$FOUNDRY_BIN/forge" ] && [ -x "$FOUNDRY_BIN/cast" ] || fail "pinned forge and cast are not installed at $FOUNDRY_BIN (LAYERX_BETA_FOUNDRY_BIN); deploy-contracts.sh needs them"
+    [ -x "$MIRROR_FOUNDRY_BIN/forge" ] && [ -x "$MIRROR_FOUNDRY_BIN/cast" ] || fail "pinned forge and cast are not installed at $MIRROR_FOUNDRY_BIN (LAYERX_BETA_MIRROR_FOUNDRY_BIN); deploy-ethereum-mirror.sh needs them for the mirror archive contract"
 }
 
 builder_environment_key() {

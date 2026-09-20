@@ -108,6 +108,10 @@ interface ILayerXCustody {
         uint256 amount
     );
 
+    event DepositRootRegistered(
+        bytes32 indexed checkpointId, bytes32 indexed depositRoot, bytes32 commitment, uint16 version
+    );
+
     /// Custody msg.value of the native coin for a LayerX account.
     function deposit(bytes32 beneficiary) external payable returns (bytes32 depositId);
 
@@ -171,4 +175,21 @@ interface ILayerXCustody {
     function nativeAssetId() external view returns (bytes32 assetId);
 
     function exitEligible() external view returns (bool eligible);
+
+    /// Record the deposit root of a finalized checkpoint. Only the account that
+    /// submitted the checkpoint to layerxAnchor may call. `registration` is
+    /// "LX:PAXEER:DEPOSIT:ROOT:v1" followed by checkpointId, stateRoot,
+    /// depositRoot, custodyReference, network (4 bytes) and protocol version
+    /// (2 bytes); `signature` is the deposit root authority's Ed25519 signature
+    /// over it. `leafOrdering` is committed to, not verified.
+    function registerDepositRoot(bytes calldata registration, bytes calldata signature, bytes32[] calldata leafOrdering)
+        external;
+
+    /// Ed25519 key that signs deposit root registrations; zero when unset.
+    function depositRootAuthority() external view returns (bytes32 authority);
+
+    function depositRootRegistered(bytes32 checkpointId) external view returns (bool registered);
+
+    /// SHA-256 of abi.encode(uint16 2, registration, signature, leafOrdering); zero when none.
+    function depositRegistrationDigest(bytes32 checkpointId) external view returns (bytes32 commitment);
 }

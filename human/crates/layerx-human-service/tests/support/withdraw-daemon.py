@@ -78,8 +78,11 @@ def main():
                            user=uid, group=client_gid, extra_groups=[], timeout=60)
         request = (work / 'data/genesis/paxeer-registration-request.lxrr').read_bytes()
         assert len(request) == 73
+        sequencer_public = Ed25519PrivateKey.from_private_bytes(bytes([0x22]) * 32).public_key().public_bytes(
+            Encoding.Raw, PublicFormat.Raw)
         generated = {'manifest': '0x' + hashlib.sha256((work / 'data/genesis/genesis.manifest').read_bytes()).hexdigest(),
-                     'state': '0x' + request[9:41].hex(), 'receipt': '0x' + request[41:73].hex()}
+                     'state': '0x' + request[9:41].hex(), 'receipt': '0x' + request[41:73].hex(),
+                     'sequencer_public_key': '0x' + sequencer_public.hex()}
         (work / 'generated.json').write_text(json.dumps(generated))
         configuration = json.loads(sys.stdin.buffer.readline())
         endpoint = urllib.parse.urlparse(configuration['url'])
@@ -89,8 +92,12 @@ def main():
             with urllib.request.urlopen(urllib.request.Request(configuration['url'], encoded, {'Content-Type': 'application/json'}), timeout=10) as response:
                 return json.load(response)['result']
         assert int(rpc('eth_chainId', []), 16) == configuration['chain_id']
+        # Settlement is the native layerxanchor module at 0x…1014, so nothing is deployed:
+        # the chain's own anchor genesis records this node's genesis state root and the
+        # certificate threshold the precompile answers with.
+        assert bytes.fromhex(configuration['genesis_state_root'][2:]) == request[41:73]
         observed = rpc('eth_call', [{'to': configuration['registry'], 'data': configuration['root_call']}, 'latest'])
-        assert bytes.fromhex(observed[2:]) == request[41:73]
+        assert int(observed, 16) == configuration['threshold']
         registration = work / 'data/genesis/genesis.registration'
         registration.write_bytes(b'LXGR\x01' + (77).to_bytes(4, 'big') + bytes(8) + request[41:73] * 2 + b'\x01')
         os.chown(registration, uid, client_gid)

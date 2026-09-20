@@ -105,7 +105,7 @@ jobs:
     timeout-minutes: 180
     env:
       LAYERX_BETA_BUILDER_ENVIRONMENT_DIR: ${{ github.workspace }}/build/browser-builder/rootfs
-      LAYERX_BETA_FOUNDRY_BIN: /home/runner/.foundry/bin
+      LAYERX_BETA_MIRROR_FOUNDRY_BIN: /home/runner/.foundry/bin
       LAYERX_BETA_HUMAN_WEB_PORT: ""
     steps:
       - name: Check out source

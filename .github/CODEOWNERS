@@ -26,7 +26,6 @@ contracts/ @Sidiora-Labs/core
 /node/ @Sidiora-Labs/core
 /occ_tests/ @Sidiora-Labs/core
 /parallelization/ @Sidiora-Labs/core
-/paxeer-docs/ @Sidiora-Labs/core
 /precompiles/ @Sidiora-Labs/core
 /ratelimiter/ @Sidiora-Labs/core
 /rpc/ @Sidiora-Labs/core

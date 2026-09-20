@@ -192,6 +192,18 @@ func (gs GenesisState) Validate() error {
 		}
 		batches[checkpoint.BatchNumber] = true
 	}
+	roots := map[string]bool{}
+	for _, registration := range gs.DepositRoots {
+		for _, text := range []string{registration.CheckpointId, registration.DepositRoot, registration.Commitment} {
+			if _, err := ParseNonZeroHash32(text); err != nil {
+				return err
+			}
+		}
+		if roots[registration.CheckpointId] {
+			return fail("duplicate deposit root for checkpoint %s", registration.CheckpointId)
+		}
+		roots[registration.CheckpointId] = true
+	}
 	for _, consumed := range gs.ConsumedBalances {
 		for _, text := range []string{consumed.Account, consumed.AssetId, consumed.Anchor} {
 			if _, err := ParseNonZeroHash32(text); err != nil {

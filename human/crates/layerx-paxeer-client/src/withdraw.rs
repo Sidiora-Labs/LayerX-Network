@@ -1,14 +1,24 @@
 use std::time::Duration;
 
+use layerx_proof::inclusion::{verify_receipt, InclusionError, SequencerAuthorization};
+use layerx_proof::merkle::Proof;
 use layerx_proof::receipt::{
     verify_outcome, AuthorizedBatch, ReceiptCheck, VerificationFailure, VerifiedReceipt,
 };
 use layerx_types::intent::EvmAddress;
+use layerx_wire::receipt::{decode_batch_header, decode_merkle_proof};
 use sha2::{Digest as _, Sha256};
 
 use crate::client::{
-    BlockRef, ClientConfigError, EndpointError, ExecutionOutcome, PaxeerClient, TransactionHash,
-    TransactionInclusion,
+    BlockRef, ClientConfigError, EndpointError, ExecutionOutcome, LogRecord, PaxeerClient,
+    TransactionHash, TransactionInclusion,
+};
+use crate::custody::{
+    decode_asset, decode_claim, decode_claim_finalised, decode_claim_queued,
+    decode_custody_release, decode_status, get_asset_calldata, get_claim_calldata,
+    native_asset_id_calldata, nullifier_status_calldata, withdrawal_claim_id, withdrawal_nullifier,
+    CustodyAbiError, CustodyAsset, CustodyClaim, WithdrawalMaterial, CLAIM_FINALISED_TOPIC,
+    CLAIM_QUEUED_TOPIC, CUSTODY_PRECOMPILE, CUSTODY_RELEASE_TOPIC, WEI_PER_BASE_UNIT,
 };
 use crate::finality::{
     FinalityReport, FinalityStage, FinalityTracker, TrackerConfig, TrackerConfigError,
@@ -17,57 +27,24 @@ use crate::json::Json;
 use crate::rpc::EndpointConfig;
 
 const WORD: usize = 32;
-const MAX_PROOF_DEPTH: usize = 256;
-const ATTESTATION_WORDS: usize = 18;
-const ALL_AVAILABILITY_CLASSES: u8 = 0x1f;
+const WITHDRAWAL_EVENT_BYTES: usize = 254;
 
-const WITHDRAWAL_DOMAIN: &[u8] = b"LX:WITHDRAWAL:v1";
-const MERKLE_LEAF_DOMAIN: &[u8] = b"LXP/v1/merkle-leaf\0";
-const MERKLE_NODE_DOMAIN: &[u8] = b"LXP/v1/merkle-internal\0";
+/// The native `layerxAnchor` precompile whose finalized roots the custody
+/// precompile checks every withdrawal header against.
+pub const ANCHOR_PRECOMPILE: EvmAddress = EvmAddress::new([
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10, 0x14,
+]);
 
-const SELECTOR_QUEUE_CLAIM: [u8; 4] = [0x0d, 0x79, 0x92, 0xc8];
-const SELECTOR_FINALISE_CLAIM: [u8; 4] = [0x38, 0x51, 0xa8, 0x61];
-const SELECTOR_CANCEL_CLAIM: [u8; 4] = [0x52, 0xc1, 0xd8, 0x2c];
-const SELECTOR_CLAIM: [u8; 4] = [0xbd, 0x66, 0x52, 0x8a];
-const SELECTOR_CHALLENGE: [u8; 4] = [0xcf, 0xfd, 0x46, 0xdc];
-const SELECTOR_REGISTRY: [u8; 4] = [0x7b, 0x10, 0x39, 0x99];
-const SELECTOR_NETWORK_ID: [u8; 4] = [0x90, 0x25, 0xe6, 0x4c];
-const SELECTOR_CHALLENGE_MANAGER: [u8; 4] = [0x02, 0x3a, 0x96, 0xfe];
-const SELECTOR_VAULT: [u8; 4] = [0xfb, 0xfa, 0x77, 0xcf];
-const SELECTOR_ASSET_REGISTRY: [u8; 4] = [0x97, 0x9d, 0x7e, 0x86];
-const SELECTOR_ASSET: [u8; 4] = [0x85, 0x39, 0xcc, 0xf4];
 const SELECTOR_BALANCE_OF: [u8; 4] = [0x70, 0xa0, 0x82, 0x31];
-const SELECTOR_WITHDRAWAL_LEAF: [u8; 4] = [0x54, 0x00, 0x16, 0x0a];
-const SELECTOR_WITHDRAWAL_NULLIFIER: [u8; 4] = [0x3e, 0x51, 0xd1, 0x52];
-const SELECTOR_FINALISED_STATE_ROOT: [u8; 4] = [0xdf, 0xd0, 0x60, 0x94];
-const SELECTOR_RECORDED_CERTIFICATE: [u8; 4] = [0x05, 0xd9, 0x4f, 0x01];
-const SELECTOR_GUARANTOR_ELIGIBILITY: [u8; 4] = [0x9e, 0x2b, 0x11, 0xf1];
-const SELECTOR_PROTOCOL_VERSION: [u8; 4] = [0x2a, 0xe9, 0xc6, 0x00];
-const SELECTOR_NULLIFIER_REGISTRY: [u8; 4] = [0xb8, 0x70, 0x67, 0x6c];
-const SELECTOR_NULLIFIER_STATUS: [u8; 4] = [0x52, 0xad, 0x0d, 0x5e];
+pub(crate) const SELECTOR_FINALIZED_STATE_ROOT: [u8; 4] = [0x0f, 0x60, 0x7f, 0xe4];
+pub(crate) const SELECTOR_FINALIZED_RECEIPT_ROOT: [u8; 4] = [0xe0, 0xa3, 0xcc, 0xaa];
+pub(crate) const SELECTOR_LATEST_FINALIZED: [u8; 4] = [0x6c, 0xdd, 0x45, 0xae];
 
-const CLAIM_QUEUED_TOPIC: [u8; 32] = [
-    0xc7, 0x32, 0xa8, 0x7b, 0x48, 0x0b, 0xe9, 0x51, 0xee, 0x9f, 0x6c, 0x11, 0x51, 0xf3, 0x77, 0x7c,
-    0x75, 0x8a, 0x03, 0xaf, 0x59, 0xfa, 0x46, 0x78, 0x9b, 0xe6, 0x90, 0x8b, 0x76, 0xac, 0xa0, 0x98,
-];
-const CLAIM_FINALISED_TOPIC: [u8; 32] = [
-    0xc0, 0x1c, 0xc7, 0x28, 0xe6, 0x7a, 0x51, 0x18, 0x15, 0xa1, 0x5f, 0x0f, 0x00, 0x30, 0xfc, 0x5a,
-    0xc8, 0xdf, 0xc1, 0x5f, 0x7d, 0x0d, 0x45, 0xbe, 0x09, 0xef, 0xe2, 0xd4, 0x50, 0x85, 0x75, 0x82,
-];
-const CLAIM_CANCELLED_TOPIC: [u8; 32] = [
-    0xbe, 0x66, 0x5e, 0xa0, 0x14, 0xd5, 0xba, 0xfd, 0xbd, 0x6e, 0xd7, 0xce, 0x37, 0xf7, 0x51, 0x1a,
-    0xae, 0xb9, 0xf8, 0xc6, 0xb0, 0xfd, 0xd0, 0x17, 0x19, 0x9e, 0xb4, 0x66, 0xda, 0x11, 0x64, 0x2f,
-];
-const CUSTODY_RELEASE_TOPIC: [u8; 32] = [
-    0x37, 0x56, 0x7a, 0x5b, 0x2d, 0xe5, 0x43, 0xb7, 0x07, 0x16, 0x2e, 0xf2, 0x36, 0x9f, 0x95, 0xd3,
-    0x9e, 0x53, 0xee, 0x43, 0x62, 0x1b, 0xd3, 0x29, 0xa9, 0x96, 0xc2, 0xb7, 0x26, 0xf9, 0x0f, 0x43,
-];
 /// Declared Paxeer withdrawal boundary and finality policy.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WithdrawalConfig {
     pub endpoints: Vec<EndpointConfig>,
     pub minimum_endpoint_agreement: usize,
-    pub claims_contract: EvmAddress,
     pub required_confirmations: u64,
     pub poll_cadence: Duration,
     pub delayed_after_polls: u64,
@@ -78,7 +55,6 @@ pub struct WithdrawalConfig {
 pub enum WithdrawalConfigError {
     Endpoints(ClientConfigError),
     Agreement(TrackerConfigError),
-    ZeroClaimsContract,
     ZeroRequiredConfirmations,
     ZeroPollCadence,
     ZeroDelayedAfterPolls,
@@ -130,6 +106,7 @@ pub enum DebitFault {
 pub struct CommittedWithdrawalDebit {
     expectation: DebitExpectation,
     receipt_reference: [u8; 32],
+    sequencer_public_key: [u8; 32],
     verified: VerifiedReceipt,
 }
 
@@ -189,6 +166,7 @@ impl CommittedWithdrawalDebit {
         Ok(Self {
             expectation,
             receipt_reference: Sha256::digest(receipt_bytes).into(),
+            sequencer_public_key: batch.sequencer_public_key(),
             verified,
         })
     }
@@ -209,198 +187,6 @@ impl CommittedWithdrawalDebit {
     }
 }
 
-/// One EVM guarantor attestation in the exact Paxeer checkpoint ABI.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WithdrawalAttestation {
-    pub protocol_version: u16,
-    pub network_id: u32,
-    pub paxeer_chain_id: u64,
-    pub settlement_contract: EvmAddress,
-    pub epoch: u64,
-    pub checkpoint_id: [u8; 32],
-    pub checkpoint_hash: [u8; 32],
-    pub guarantor_id: [u8; 32],
-    pub batch_number: u64,
-    pub data_availability_root: [u8; 32],
-    pub replayed: bool,
-    pub data_available: bool,
-    pub availability_class_mask: u8,
-    pub attested_at: u64,
-    pub signer: EvmAddress,
-    pub signature_r: [u8; 32],
-    pub signature_s: [u8; 32],
-    pub signature_v: u8,
-}
-
-/// Finalised checkpoint and state-membership material required by `queueClaim`.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CheckpointProof {
-    pub native: Option<crate::state_proof::NativeEvidence>,
-    pub checkpoint_hash: [u8; 32],
-    pub state_root: [u8; 32],
-    pub epoch: u64,
-    pub batch_number: u64,
-    pub data_availability_root: [u8; 32],
-    pub leaf_index: u64,
-    pub siblings: Vec<[u8; 32]>,
-    pub attestations: Vec<WithdrawalAttestation>,
-}
-
-impl CheckpointProof {
-    /// Constructs structurally canonical checkpoint material at the wire
-    /// boundary. Debit-specific root and attestation-domain checks remain in
-    /// `WithdrawalBoundary`, where the verified debit and configured chain
-    /// domain are available.
-    ///
-    /// # Errors
-    /// Refuses empty fields, invalid proof bounds, and mismatched attestations.
-    pub fn validated(self) -> Result<Self, ClaimRefusal> {
-        let native = self.native;
-        let mut value = Self::validated_for_protocol(
-            layerx_intents::canonical::PROTOCOL_VERSION,
-            self.checkpoint_hash,
-            self.state_root,
-            self.epoch,
-            self.batch_number,
-            self.data_availability_root,
-            self.leaf_index,
-            self.siblings,
-            self.attestations,
-        )?;
-        value.native = native;
-        if let Some(native) = &value.native {
-            if native.inclusion_checkpoint != value.checkpoint_hash
-                || value.leaf_index != 0
-                || !value.siblings.is_empty()
-            {
-                return Err(ClaimRefusal::EmptyCheckpointField("native_evidence"));
-            }
-            native
-                .decoded(value.state_root)
-                .map_err(|_| ClaimRefusal::EmptyCheckpointField("native_evidence"))?;
-        }
-        Ok(value)
-    }
-
-    /// Constructs structurally canonical checkpoint material whose guarantor
-    /// attestations declare exactly the explicitly selected `LayerX` protocol
-    /// version. [`Self::validated`] is this constructor bound to the legacy
-    /// default version.
-    ///
-    /// # Errors
-    ///
-    /// Refuses a protocol version the client does not support, and otherwise
-    /// the same empty-field, depth, index, and attestation refusals as
-    /// [`Self::validated`].
-    #[allow(clippy::too_many_arguments)]
-    pub fn validated_for_protocol(
-        protocol_version: u16,
-        checkpoint_hash: [u8; 32],
-        state_root: [u8; 32],
-        epoch: u64,
-        batch_number: u64,
-        data_availability_root: [u8; 32],
-        leaf_index: u64,
-        siblings: Vec<[u8; 32]>,
-        attestations: Vec<WithdrawalAttestation>,
-    ) -> Result<Self, ClaimRefusal> {
-        if !supported_protocol_version(protocol_version) {
-            return Err(ClaimRefusal::UnsupportedProtocolVersion { protocol_version });
-        }
-        for (field, value) in [
-            ("checkpoint_hash", checkpoint_hash),
-            ("state_root", state_root),
-            ("data_availability_root", data_availability_root),
-        ] {
-            if value == [0; 32] {
-                return Err(ClaimRefusal::EmptyCheckpointField(field));
-            }
-        }
-        if epoch == 0 || batch_number == 0 {
-            return Err(ClaimRefusal::EmptyCheckpointField("epoch_or_batch"));
-        }
-        if siblings.len() > MAX_PROOF_DEPTH {
-            return Err(ClaimRefusal::ProofTooDeep {
-                depth: siblings.len(),
-            });
-        }
-        if siblings.len() < 64
-            && leaf_index
-                .checked_shr(u32::try_from(siblings.len()).unwrap_or(64))
-                .unwrap_or(0)
-                != 0
-        {
-            return Err(ClaimRefusal::LeafIndexOutOfRange {
-                leaf_index,
-                depth: siblings.len(),
-            });
-        }
-        if attestations.is_empty() {
-            return Err(ClaimRefusal::NoAttestations);
-        }
-        let mut previous = None;
-        for (index, attestation) in attestations.iter().enumerate() {
-            for (valid, field) in [
-                (
-                    attestation.protocol_version == protocol_version,
-                    "protocol_version",
-                ),
-                (attestation.network_id != 0, "network_id"),
-                (attestation.paxeer_chain_id != 0, "paxeer_chain_id"),
-                (
-                    attestation.settlement_contract.bytes() != [0; 20],
-                    "settlement_contract",
-                ),
-                (attestation.epoch == epoch, "epoch"),
-                (
-                    attestation.checkpoint_id == checkpoint_hash,
-                    "checkpoint_id",
-                ),
-                (
-                    attestation.checkpoint_hash == checkpoint_hash,
-                    "checkpoint_hash",
-                ),
-                (attestation.guarantor_id != [0; 32], "guarantor_id"),
-                (attestation.batch_number == batch_number, "batch_number"),
-                (
-                    attestation.data_availability_root == data_availability_root,
-                    "data_availability_root",
-                ),
-                (attestation.replayed, "replayed"),
-                (attestation.data_available, "data_available"),
-                (
-                    attestation.availability_class_mask == ALL_AVAILABILITY_CLASSES,
-                    "availability_class_mask",
-                ),
-                (attestation.attested_at != 0, "attested_at"),
-                (attestation.signer.bytes() != [0; 20], "signer"),
-                (attestation.signature_r != [0; 32], "signature_r"),
-                (attestation.signature_s != [0; 32], "signature_s"),
-                (matches!(attestation.signature_v, 27 | 28), "signature_v"),
-            ] {
-                if !valid {
-                    return Err(ClaimRefusal::InvalidAttestation { index, field });
-                }
-            }
-            if previous.is_some_and(|prior| prior >= attestation.guarantor_id) {
-                return Err(ClaimRefusal::UnsortedGuarantors { index });
-            }
-            previous = Some(attestation.guarantor_id);
-        }
-        Ok(Self {
-            native: None,
-            checkpoint_hash,
-            state_root,
-            epoch,
-            batch_number,
-            data_availability_root,
-            leaf_index,
-            siblings,
-            attestations,
-        })
-    }
-}
-
 /// Why a claim was refused before a wallet transaction could be requested.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClaimRefusal {
@@ -413,41 +199,38 @@ pub enum ClaimRefusal {
     },
     NetworkMismatch {
         debit: u32,
-        paxeer: u32,
+        header: u32,
     },
-    EmptyCheckpointField(&'static str),
-    ProofTooDeep {
-        depth: usize,
+    /// The material is empty, oversized or not canonical wire bytes.
+    Material(&'static str),
+    /// The material's receipt is not the verified debit receipt.
+    ReceiptMismatch {
+        debit: [u8; 32],
+        material: [u8; 32],
     },
-    LeafIndexOutOfRange {
-        leaf_index: u64,
-        depth: usize,
-    },
-    RootMismatch {
-        computed: [u8; 32],
-        declared: [u8; 32],
-    },
-    NoAttestations,
-    InvalidAttestation {
-        index: usize,
-        field: &'static str,
-    },
-    UnsortedGuarantors {
-        index: usize,
-    },
-    ContractLeafMismatch {
+    /// The receipt is not included under the sequencer-signed header.
+    Inclusion(&'static str),
+    /// The receipt does not commit the expected native withdrawal.
+    Effect(&'static str),
+    NullifierMismatch {
         local: [u8; 32],
-        declared: [u8; 32],
+        receipt: [u8; 32],
     },
-    ContractNullifierMismatch {
-        local: [u8; 32],
-        declared: [u8; 32],
+    /// Paxeer has not finalized the batch the receipt is included in.
+    BatchNotFinalised {
+        batch_number: u64,
     },
-    CheckpointNotFinalised {
-        checkpoint: [u8; 32],
+    /// Paxeer finalized different roots for the batch than the signed header.
+    FinalisedRootMismatch {
+        batch_number: u64,
     },
-    CertificateNotRecorded {
-        checkpoint: [u8; 32],
+    /// 1 reserved, 2 consumed, 3 cancelled.
+    NullifierUsed {
+        nullifier: [u8; 32],
+        status: u8,
+    },
+    AssetUnavailable {
+        asset_id: [u8; 32],
     },
 }
 
@@ -499,21 +282,24 @@ pub enum WithdrawalError {
     },
 }
 
-/// A contract-valid claim assembled from one verified debit and checkpoint proof.
+/// A precompile-valid claim assembled from one verified debit and its
+/// inclusion material.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WithdrawalClaim {
-    contract: EvmAddress,
     debit: CommittedWithdrawalDebit,
-    proof: CheckpointProof,
-    leaf: [u8; 32],
+    material: WithdrawalMaterial,
+    batch_number: u64,
+    anchor: [u8; 32],
     nullifier: [u8; 32],
+    claim_id: [u8; 32],
     calldata: Vec<u8>,
 }
 
 impl WithdrawalClaim {
+    /// The custody precompile every claim transaction targets.
     #[must_use]
     pub const fn contract(&self) -> EvmAddress {
-        self.contract
+        CUSTODY_PRECOMPILE
     }
 
     #[must_use]
@@ -522,13 +308,20 @@ impl WithdrawalClaim {
     }
 
     #[must_use]
-    pub const fn proof(&self) -> &CheckpointProof {
-        &self.proof
+    pub const fn material(&self) -> &WithdrawalMaterial {
+        &self.material
     }
 
+    /// The `LayerX` batch whose signed header commits the receipt.
     #[must_use]
-    pub const fn leaf(&self) -> [u8; 32] {
-        self.leaf
+    pub const fn batch_number(&self) -> u64 {
+        self.batch_number
+    }
+
+    /// The request anchor the receipt's nullifier binds.
+    #[must_use]
+    pub const fn anchor(&self) -> [u8; 32] {
+        self.anchor
     }
 
     #[must_use]
@@ -536,6 +329,13 @@ impl WithdrawalClaim {
         self.nullifier
     }
 
+    /// The claim identifier the precompile derives for this withdrawal.
+    #[must_use]
+    pub const fn claim_id(&self) -> [u8; 32] {
+        self.claim_id
+    }
+
+    /// Exact `requestWithdrawal` bytes.
     #[must_use]
     pub fn calldata(&self) -> &[u8] {
         &self.calldata
@@ -578,38 +378,15 @@ impl SubmittedWithdrawalClaim {
         self.submission_inclusion
     }
 
+    /// Exact `finaliseWithdrawal` bytes: the precompile re-verifies the same
+    /// evidence before it pays.
     #[must_use]
     pub fn finalise_calldata(&self) -> Vec<u8> {
-        call_data(SELECTOR_FINALISE_CLAIM, &[self.claim_id])
-    }
-
-    #[must_use]
-    pub fn cancellation_calldata(&self) -> Vec<u8> {
-        call_data(SELECTOR_CANCEL_CLAIM, &[self.claim_id])
+        self.claim.material.finalise_calldata()
     }
 }
 
-/// Contract-defined reason the checkpoint payout is being checked.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ChallengeKind {
-    Fraud,
-    DataAvailability,
-    Equivocation,
-}
-
-/// Honest challenge hold, including all timing the contract actually declares.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ChallengeHold {
-    pub kind: ChallengeKind,
-    pub evidence_hash: [u8; 32],
-    pub raised_at: u64,
-    pub window_closes_at: u64,
-    pub observed_at: u64,
-    pub window_elapsed: bool,
-    pub resolution_has_no_on_chain_deadline: bool,
-}
-
-/// Paxeer custody disposition after an upheld checkpoint challenge.
+/// Paxeer custody disposition after the authority cancelled a pending claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PaxeerFundsDisposition {
     RetainedInVault {
@@ -625,7 +402,7 @@ pub enum ProtocolDebitDisposition {
     RemainsCommittedPendingProtocolRecovery { debit_receipt_reference: [u8; 32] },
 }
 
-/// Both sides of the funds boundary after a challenged claim is cancelled.
+/// Both sides of the funds boundary after a claim is cancelled.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CancelledFundsDisposition {
     pub paxeer: PaxeerFundsDisposition,
@@ -644,53 +421,158 @@ pub enum ClaimProgress {
         available_at: u64,
         observed_at: u64,
     },
-    ChallengeHeld(ChallengeHold),
-    ChallengeUpheldAwaitingCancellation {
-        disposition: CancelledFundsDisposition,
-    },
     PaidAwaitingPayoutVerification,
+    /// The custody authority cancelled the pending claim inside its window.
+    /// Cancellation is a module message: no EVM transaction or log exists.
     Cancelled {
         disposition: CancelledFundsDisposition,
     },
 }
 
-/// Final evidence joining the `LayerX` debit, checkpoint proof and Paxeer payout.
+/// Final evidence joining the `LayerX` debit, its anchor and the Paxeer payout.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PayoutEvidence {
     pub debit_receipt_reference: [u8; 32],
+    /// The request anchor the claim's nullifier binds.
     pub checkpoint_hash: [u8; 32],
     pub claim_id: [u8; 32],
     pub payout_transaction: TransactionHash,
     pub payout_inclusion: TransactionInclusion,
+    /// The custody precompile that released the funds.
     pub vault: EvmAddress,
+    /// The asset's registered ERC20 pointer; zero when the asset has none.
     pub token: EvmAddress,
     pub asset_id: [u8; 32],
     pub recipient: EvmAddress,
     pub amount: u128,
 }
 
-/// Final evidence that an upheld challenge cancelled payout without releasing custody.
+/// Agreed custody state proving the authority cancelled the claim without
+/// releasing custody: claim status 3 and nullifier status 3.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CancellationEvidence {
     pub debit_receipt_reference: [u8; 32],
     pub checkpoint_hash: [u8; 32],
     pub claim_id: [u8; 32],
-    pub cancellation_transaction: TransactionHash,
-    pub cancellation_inclusion: TransactionInclusion,
+    /// Paxeer head at which every configured quorum read agreed.
+    pub observed_head: u64,
     pub disposition: CancelledFundsDisposition,
 }
 
-/// Real Paxeer withdrawal boundary: contract reads, claim construction and evidence verification.
+/// Real Paxeer withdrawal boundary: precompile reads, claim construction and evidence verification.
 #[derive(Clone, Debug)]
 pub struct WithdrawalBoundary {
     protocol_version: u16,
     client: PaxeerClient,
     endpoints: Vec<EndpointConfig>,
-    claims_contract: EvmAddress,
     required_confirmations: u64,
     poll_cadence: Duration,
     delayed_after_polls: u64,
     minimum_endpoint_agreement: usize,
+}
+
+struct VerifiedMaterial {
+    batch_number: u64,
+    state_root: [u8; 32],
+    receipt_root: [u8; 32],
+    anchor: [u8; 32],
+    nullifier: [u8; 32],
+}
+
+fn verify_material(
+    debit: &CommittedWithdrawalDebit,
+    material: &WithdrawalMaterial,
+) -> Result<VerifiedMaterial, ClaimRefusal> {
+    let expectation = &debit.expectation;
+    let digest: [u8; 32] = Sha256::digest(&material.receipt).into();
+    if digest != debit.receipt_reference {
+        return Err(ClaimRefusal::ReceiptMismatch {
+            debit: debit.receipt_reference,
+            material: digest,
+        });
+    }
+    let header =
+        decode_batch_header(&material.header).map_err(|_| ClaimRefusal::Material("header"))?;
+    if header.network_id() != expectation.network_id {
+        return Err(ClaimRefusal::NetworkMismatch {
+            debit: expectation.network_id,
+            header: header.network_id(),
+        });
+    }
+    let wire = decode_merkle_proof(&material.proof).map_err(|_| ClaimRefusal::Material("proof"))?;
+    let proof = Proof::new(
+        wire.leaf_index(),
+        wire.leaf_count(),
+        wire.siblings().to_vec(),
+    )
+    .map_err(|_| ClaimRefusal::Material("proof"))?;
+    let authorization = SequencerAuthorization::new(
+        header.sequencer_id(),
+        debit.sequencer_public_key,
+        header.batch_number(),
+        header.batch_number(),
+    );
+    verify_receipt(
+        &material.receipt,
+        &proof,
+        &material.header,
+        &material.header_signature,
+        &authorization,
+    )
+    .map_err(|error| {
+        ClaimRefusal::Inclusion(match error {
+            InclusionError::HeaderSignature => "header_signature",
+            InclusionError::Merkle(_) => "receipt_path",
+            _ => "header",
+        })
+    })?;
+    let protocol = debit
+        .verified
+        .receipt()
+        .protocol()
+        .ok_or(ClaimRefusal::Effect("receipt"))?;
+    let body = protocol
+        .effects()
+        .get(1)
+        .map(|effect| effect.body())
+        .filter(|body| body.len() == WITHDRAWAL_EVENT_BYTES)
+        .ok_or(ClaimRefusal::Effect("event"))?;
+    if body[2..6] != expectation.network_id.to_be_bytes()
+        || body[6..38] != expectation.withdrawal_id
+        || body[38..70] != expectation.account
+        || body[70..102] != expectation.asset_id
+        || body[102..118] != expectation.amount.to_be_bytes()
+        || body[118..130] != [0; 12]
+        || body[130..150] != expectation.recipient.bytes()
+    {
+        return Err(ClaimRefusal::Effect("withdrawal"));
+    }
+    let mut anchor = [0_u8; 32];
+    anchor.copy_from_slice(&body[150..182]);
+    if anchor == [0; 32] {
+        return Err(ClaimRefusal::Effect("anchor"));
+    }
+    let nullifier = withdrawal_nullifier(
+        expectation.network_id,
+        &expectation.withdrawal_id,
+        &expectation.account,
+        &expectation.asset_id,
+        expectation.amount,
+        &anchor,
+    );
+    if nullifier != protocol.context_hash() {
+        return Err(ClaimRefusal::NullifierMismatch {
+            local: nullifier,
+            receipt: protocol.context_hash(),
+        });
+    }
+    Ok(VerifiedMaterial {
+        batch_number: header.batch_number(),
+        state_root: header.resulting_state_root(),
+        receipt_root: header.receipt_merkle_root(),
+        anchor,
+        nullifier,
+    })
 }
 
 impl WithdrawalBoundary {
@@ -698,19 +580,17 @@ impl WithdrawalBoundary {
         &self,
         debit: &CommittedWithdrawalDebit,
     ) -> Result<(), WithdrawalError> {
-        if self.protocol_version == layerx_intents::canonical::STATE_COMMITMENT_PROTOCOL_VERSION {
-            let found = debit.verified.receipt().protocol().map_or(
-                0,
-                layerx_intents::canonical::ProtocolReceipt::protocol_version,
-            );
-            if found != self.protocol_version {
-                return Err(WithdrawalError::Refused(
-                    ClaimRefusal::DebitProtocolMismatch {
-                        expected: self.protocol_version,
-                        found,
-                    },
-                ));
-            }
+        let found = debit.verified.receipt().protocol().map_or(
+            0,
+            layerx_intents::canonical::ProtocolReceipt::protocol_version,
+        );
+        if found != self.protocol_version {
+            return Err(WithdrawalError::Refused(
+                ClaimRefusal::DebitProtocolMismatch {
+                    expected: self.protocol_version,
+                    found,
+                },
+            ));
         }
         Ok(())
     }
@@ -719,15 +599,18 @@ impl WithdrawalBoundary {
     ///
     /// # Errors
     ///
-    /// Refuses missing endpoints, zero contract/depth/cadence/stall bounds, or invalid URLs.
+    /// Refuses missing endpoints, zero depth/cadence/stall bounds, or invalid URLs.
     pub fn new(config: WithdrawalConfig) -> Result<Self, WithdrawalConfigError> {
-        Self::new_for_protocol(config, layerx_intents::canonical::PROTOCOL_VERSION)
+        Self::new_for_protocol(
+            config,
+            layerx_intents::canonical::STATE_COMMITMENT_PROTOCOL_VERSION,
+        )
     }
 
     /// Validates and adopts a declared Paxeer withdrawal boundary bound to one
-    /// explicitly selected `LayerX` protocol version. Every attestation, the
-    /// registry's declared version, and for the state-commitment protocol the
-    /// verified debit receipt itself must carry exactly that version.
+    /// explicitly selected `LayerX` protocol version. The custody precompile
+    /// only accepts state-commitment protocol withdrawal receipts, so that is
+    /// the only version this boundary adopts.
     ///
     /// # Errors
     ///
@@ -737,11 +620,8 @@ impl WithdrawalBoundary {
         config: WithdrawalConfig,
         protocol_version: u16,
     ) -> Result<Self, WithdrawalConfigError> {
-        if !supported_protocol_version(protocol_version) {
+        if protocol_version != layerx_intents::canonical::STATE_COMMITMENT_PROTOCOL_VERSION {
             return Err(WithdrawalConfigError::UnsupportedProtocolVersion);
-        }
-        if config.claims_contract.bytes() == [0; 20] {
-            return Err(WithdrawalConfigError::ZeroClaimsContract);
         }
         if config.required_confirmations == 0 {
             return Err(WithdrawalConfigError::ZeroRequiredConfirmations);
@@ -763,7 +643,6 @@ impl WithdrawalBoundary {
             protocol_version,
             client,
             endpoints: config.endpoints,
-            claims_contract: config.claims_contract,
             required_confirmations: config.required_confirmations,
             poll_cadence: config.poll_cadence,
             delayed_after_polls: config.delayed_after_polls,
@@ -771,78 +650,10 @@ impl WithdrawalBoundary {
         })
     }
 
-    fn verify_registered_checkpoint(
-        &self,
-        proof: &CheckpointProof,
-        network_id: u32,
-    ) -> Result<(), WithdrawalError> {
-        let registry = self.address_view(
-            self.claims_contract,
-            &call_data(SELECTOR_REGISTRY, &[]),
-            "registry",
-        )?;
-        if let Some(native) = &proof.native {
-            if !self.bool_view(
-                registry,
-                &call_data(
-                    [0x10, 0xee, 0x2d, 0x39],
-                    &[native.request_anchor, native.inclusion_checkpoint],
-                ),
-                "isRecordedAncestor",
-            )? {
-                return Err(WithdrawalError::Refused(
-                    ClaimRefusal::EmptyCheckpointField("request_anchor_ancestry"),
-                ));
-            }
-        }
-        let settlement_contract = self.address_view(
-            registry,
-            &call_data(SELECTOR_GUARANTOR_ELIGIBILITY, &[]),
-            "guarantorEligibility",
-        )?;
-        let protocol_version = self.u32_view(
-            registry,
-            &call_data(SELECTOR_PROTOCOL_VERSION, &[]),
-            "protocolVersion",
-        )?;
-        let chain_id = quantity(&self.rpc("eth_chainId", &[])?, "eth_chainId")?;
-        validate_attestation_domain(
-            proof,
-            protocol_version,
-            network_id,
-            chain_id,
-            settlement_contract,
-        )?;
-        let registered_root = self.word_view(
-            registry,
-            &call_data(SELECTOR_FINALISED_STATE_ROOT, &[proof.checkpoint_hash]),
-            "finalisedStateRoot",
-        )?;
-        if registered_root != proof.state_root {
-            return Err(WithdrawalError::Refused(
-                ClaimRefusal::CheckpointNotFinalised {
-                    checkpoint: proof.checkpoint_hash,
-                },
-            ));
-        }
-        let recorded = self.bool_view(
-            registry,
-            &recorded_certificate_calldata(proof.checkpoint_hash, &proof.attestations),
-            "isRecordedCertificate",
-        )?;
-        if !recorded {
-            return Err(WithdrawalError::Refused(
-                ClaimRefusal::CertificateNotRecorded {
-                    checkpoint: proof.checkpoint_hash,
-                },
-            ));
-        }
-        Ok(())
-    }
-
+    /// The custody precompile every withdrawal transaction targets.
     #[must_use]
-    pub const fn claims_contract(&self) -> EvmAddress {
-        self.claims_contract
+    pub const fn custody_precompile(&self) -> EvmAddress {
+        CUSTODY_PRECOMPILE
     }
 
     #[must_use]
@@ -850,72 +661,126 @@ impl WithdrawalBoundary {
         self.protocol_version
     }
 
-    /// Constructs exact `queueClaim` bytes only after local proof checks and live Paxeer
-    /// finalised-root/certificate checks agree.
+    fn finalised_root(
+        &self,
+        selector: [u8; 4],
+        batch_number: u64,
+        what: &str,
+    ) -> Result<Option<[u8; 32]>, WithdrawalError> {
+        let mut data = selector.to_vec();
+        data.extend_from_slice(&quantity_word(&batch_number.to_be_bytes()));
+        let words = exact_words(&self.call_contract(ANCHOR_PRECOMPILE, &data)?, 2, what)?;
+        Ok(match word_u8(&words[1], what)? {
+            0 => None,
+            1 => Some(words[0]),
+            other => {
+                return Err(WithdrawalError::Contract {
+                    detail: format!("{what}: expected boolean, got {other}"),
+                })
+            }
+        })
+    }
+
+    /// Constructs exact `requestWithdrawal` bytes only after the receipt's
+    /// inclusion under the sequencer-signed header verifies locally and Paxeer
+    /// agrees the batch is finalized with the header's roots, the nullifier is
+    /// unused and the asset can be released.
     ///
     /// # Errors
     ///
-    /// Returns the first proof, contract, endpoint, network, leaf or nullifier mismatch.
+    /// Returns the first material, inclusion, finality, nullifier, asset or
+    /// endpoint refusal.
     pub fn construct_claim(
         &self,
         debit: CommittedWithdrawalDebit,
-        proof: CheckpointProof,
+        material: WithdrawalMaterial,
     ) -> Result<WithdrawalClaim, WithdrawalError> {
-        self.validate_debit_protocol(&debit)?;
-        validate_checkpoint_proof(&debit, &proof, self.protocol_version)?;
-        let paxeer_network = self.u32_view(
-            self.claims_contract,
-            &call_data(SELECTOR_NETWORK_ID, &[]),
-            "networkId",
-        )?;
-        if paxeer_network != debit.expectation.network_id {
-            return Err(WithdrawalError::Refused(ClaimRefusal::NetworkMismatch {
-                debit: debit.expectation.network_id,
-                paxeer: paxeer_network,
+        let claim = self.assemble_claim(debit, material)?;
+        let status = self.nullifier_status(claim.nullifier)?;
+        if status != 0 {
+            return Err(WithdrawalError::Refused(ClaimRefusal::NullifierUsed {
+                nullifier: claim.nullifier,
+                status,
             }));
         }
-        let request_anchor = proof
-            .native
-            .as_ref()
-            .map_or(proof.checkpoint_hash, |native| native.request_anchor);
-        let withdrawal_words = withdrawal_words(&debit.expectation, request_anchor);
-        let local_leaf = withdrawal_leaf(&debit.expectation);
-        let declared_leaf = self.word_view(
-            self.claims_contract,
-            &call_data(SELECTOR_WITHDRAWAL_LEAF, &withdrawal_words),
-            "withdrawalLeaf",
+        let asset = self.asset(claim.debit.expectation.asset_id)?;
+        if !asset.enabled || asset.paused {
+            return Err(WithdrawalError::Refused(ClaimRefusal::AssetUnavailable {
+                asset_id: claim.debit.expectation.asset_id,
+            }));
+        }
+        Ok(claim)
+    }
+
+    /// Rebuilds the exact claim of a withdrawal that is already on the custody
+    /// ledger, for a restarted or re-entered service that must re-derive the
+    /// same `requestWithdrawal` bytes, claim identifier and anchor.
+    ///
+    /// Every proof the claim rests on is verified exactly as
+    /// [`Self::construct_claim`] verifies it. Only the two admission gates of a
+    /// *new* claim are absent: an already queued, paid or cancelled withdrawal
+    /// has a reserved, consumed or cancelled nullifier by construction, and its
+    /// asset may since have been paused. The real state of the rebuilt claim is
+    /// never assumed here — it is proved by [`Self::restore_submission`],
+    /// [`Self::progress`], [`Self::verify_payout`] and
+    /// [`Self::verify_cancellation`], each of which reads the stored claim and
+    /// its nullifier and refuses any state it was not asked for.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first material, inclusion, finality or endpoint refusal.
+    pub fn restore_claim(
+        &self,
+        debit: CommittedWithdrawalDebit,
+        material: WithdrawalMaterial,
+    ) -> Result<WithdrawalClaim, WithdrawalError> {
+        self.assemble_claim(debit, material)
+    }
+
+    /// The material, inclusion and finalized-root verification both claim
+    /// constructors share, up to and including the derived claim identifier.
+    fn assemble_claim(
+        &self,
+        debit: CommittedWithdrawalDebit,
+        material: WithdrawalMaterial,
+    ) -> Result<WithdrawalClaim, WithdrawalError> {
+        self.validate_debit_protocol(&debit)?;
+        let material = material
+            .validated()
+            .map_err(|error| WithdrawalError::Refused(ClaimRefusal::Material(abi_field(&error))))?;
+        let verified = verify_material(&debit, &material).map_err(WithdrawalError::Refused)?;
+        let batch_number = verified.batch_number;
+        let state_root = self.finalised_root(
+            SELECTOR_FINALIZED_STATE_ROOT,
+            batch_number,
+            "finalizedStateRoot",
         )?;
-        if local_leaf != declared_leaf {
+        let receipt_root = self.finalised_root(
+            SELECTOR_FINALIZED_RECEIPT_ROOT,
+            batch_number,
+            "finalizedReceiptRoot",
+        )?;
+        let (Some(state_root), Some(receipt_root)) = (state_root, receipt_root) else {
+            return Err(WithdrawalError::Refused(ClaimRefusal::BatchNotFinalised {
+                batch_number,
+            }));
+        };
+        if state_root != verified.state_root || receipt_root != verified.receipt_root {
             return Err(WithdrawalError::Refused(
-                ClaimRefusal::ContractLeafMismatch {
-                    local: local_leaf,
-                    declared: declared_leaf,
-                },
+                ClaimRefusal::FinalisedRootMismatch { batch_number },
             ));
         }
-        let local_nullifier =
-            withdrawal_nullifier(paxeer_network, &debit.expectation, request_anchor);
-        let declared_nullifier = self.word_view(
-            self.claims_contract,
-            &call_data(SELECTOR_WITHDRAWAL_NULLIFIER, &withdrawal_words),
-            "withdrawalNullifier",
-        )?;
-        if local_nullifier != declared_nullifier {
-            return Err(WithdrawalError::Refused(
-                ClaimRefusal::ContractNullifierMismatch {
-                    local: local_nullifier,
-                    declared: declared_nullifier,
-                },
-            ));
-        }
-        self.verify_registered_checkpoint(&proof, debit.expectation.network_id)?;
-        let calldata = queue_claim_calldata(&debit.expectation, &proof);
+        let chain_id = quantity(&self.rpc("eth_chainId", &[])?, "eth_chainId")?;
+        let claim_id =
+            withdrawal_claim_id(chain_id, verified.nullifier, debit.expectation.recipient);
+        let calldata = material.request_calldata();
         Ok(WithdrawalClaim {
-            contract: self.claims_contract,
             debit,
-            proof,
-            leaf: local_leaf,
-            nullifier: local_nullifier,
+            material,
+            batch_number,
+            anchor: verified.anchor,
+            nullifier: verified.nullifier,
+            claim_id,
             calldata,
         })
     }
@@ -956,7 +821,7 @@ impl WithdrawalBoundary {
 
     /// Reconstructs a previously accepted submission from its immutable queue
     /// transaction after a service restart. The current claim may already be
-    /// queued, paid, or cancelled, but its original queue event and every
+    /// pending, paid, or cancelled, but its original queue event and every
     /// stored claim field must still bind to the supplied claim.
     ///
     /// # Errors
@@ -977,20 +842,20 @@ impl WithdrawalBoundary {
         report: &FinalityReport,
         expected_status: Option<u8>,
     ) -> Result<SubmittedWithdrawalClaim, WithdrawalError> {
-        let observed = self.verify_transaction(report, self.claims_contract, claim.calldata())?;
-        let queued = unique_log(
+        let observed = self.verify_transaction(report, claim.calldata())?;
+        let event = decode_claim_queued(custody_log(
             &observed.logs,
-            self.claims_contract,
             CLAIM_QUEUED_TOPIC,
             "ClaimQueued",
-        )?;
-        let event = decode_claim_queued(queued)?;
-        if event.nullifier != claim.nullifier
-            || event.checkpoint_hash != claim.proof.checkpoint_hash
-            || event.asset_id != claim.debit.expectation.asset_id
-            || event.recipient != claim.debit.expectation.recipient
-            || event.amount != claim.debit.expectation.amount
-            || event.claim_id == [0; 32]
+        )?)
+        .map_err(|error| malformed("ClaimQueued", &error))?;
+        let expectation = &claim.debit.expectation;
+        if event.claim_id != claim.claim_id
+            || event.nullifier != claim.nullifier
+            || event.anchor != claim.anchor
+            || event.asset_id != expectation.asset_id
+            || event.recipient != expectation.recipient
+            || event.amount != expectation.amount
         {
             return Err(WithdrawalError::MalformedEvent {
                 event: "ClaimQueued",
@@ -1004,7 +869,7 @@ impl WithdrawalBoundary {
                 detail: format!("unknown or absent claim status {status}"),
             });
         }
-        verify_claim_record(&claim, event.claim_id, event.available_at, &record, status)?;
+        verify_claim_record(&claim, event.available_at, &record, status)?;
         Ok(SubmittedWithdrawalClaim {
             claim,
             claim_id: event.claim_id,
@@ -1014,12 +879,12 @@ impl WithdrawalBoundary {
         })
     }
 
-    /// Reads the current claim/challenge state without ever turning contract `Paid` into user-visible
+    /// Reads the current claim state without ever turning custody `paid` into user-visible
     /// payout completion before the payout transaction itself is verified.
     ///
     /// # Errors
     ///
-    /// Returns malformed or contradictory contract state and endpoint failures.
+    /// Returns malformed or contradictory custody state and endpoint failures.
     pub fn progress(
         &self,
         submitted: &SubmittedWithdrawalClaim,
@@ -1027,58 +892,39 @@ impl WithdrawalBoundary {
         let record = self.claim_record(submitted.claim_id)?;
         verify_claim_record(
             &submitted.claim,
-            submitted.claim_id,
             submitted.available_at,
             &record,
             record.status,
         )?;
-        let disposition = self.cancelled_disposition(submitted)?;
         match record.status {
-            2 => return Ok(ClaimProgress::PaidAwaitingPayoutVerification),
-            3 => return Ok(ClaimProgress::Cancelled { disposition }),
-            1 => {}
-            status => {
-                return Err(WithdrawalError::ClaimState {
-                    detail: format!("unknown or absent claim status {status}"),
+            1 => {
+                let now = self.latest_timestamp()?;
+                Ok(if now < submitted.available_at {
+                    ClaimProgress::WaitingForChallengeWindow {
+                        available_at: submitted.available_at,
+                        observed_at: now,
+                        remaining: Duration::from_secs(submitted.available_at.saturating_sub(now)),
+                    }
+                } else {
+                    ClaimProgress::ReadyToFinalise {
+                        available_at: submitted.available_at,
+                        observed_at: now,
+                    }
                 })
             }
-        }
-        let challenge_manager = self.address_view(
-            self.claims_contract,
-            &call_data(SELECTOR_CHALLENGE_MANAGER, &[]),
-            "challengeManager",
-        )?;
-        let challenge =
-            self.challenge_record(challenge_manager, submitted.claim.proof.checkpoint_hash)?;
-        let now = self.latest_timestamp()?;
-        match challenge.status {
-            1 => Ok(ClaimProgress::ChallengeHeld(ChallengeHold {
-                kind: challenge.kind,
-                evidence_hash: challenge.evidence_hash,
-                raised_at: challenge.raised_at,
-                window_closes_at: submitted.available_at,
-                observed_at: now,
-                window_elapsed: now >= submitted.available_at,
-                resolution_has_no_on_chain_deadline: true,
-            })),
-            3 => Ok(ClaimProgress::ChallengeUpheldAwaitingCancellation { disposition }),
-            0 | 2 if now < submitted.available_at => Ok(ClaimProgress::WaitingForChallengeWindow {
-                available_at: submitted.available_at,
-                observed_at: now,
-                remaining: Duration::from_secs(submitted.available_at.saturating_sub(now)),
-            }),
-            0 | 2 => Ok(ClaimProgress::ReadyToFinalise {
-                available_at: submitted.available_at,
-                observed_at: now,
+            2 => Ok(ClaimProgress::PaidAwaitingPayoutVerification),
+            3 => Ok(ClaimProgress::Cancelled {
+                disposition: cancelled_disposition(submitted),
             }),
             status => Err(WithdrawalError::ClaimState {
-                detail: format!("unknown challenge status {status}"),
+                detail: format!("unknown or absent claim status {status}"),
             }),
         }
     }
 
-    /// Verifies final Paxeer payout from the exact finalise call, contract state, claims event,
-    /// vault release event and independently read recipient token balance.
+    /// Verifies final Paxeer payout from the exact finalise call, custody state, the
+    /// `ClaimFinalised` and `CustodyRelease` logs of the precompile and the
+    /// independently read recipient balance.
     ///
     /// # Errors
     ///
@@ -1090,149 +936,122 @@ impl WithdrawalBoundary {
         report: &FinalityReport,
     ) -> Result<PayoutEvidence, WithdrawalError> {
         let expected_input = submitted.finalise_calldata();
-        let observed = self.verify_transaction(report, self.claims_contract, &expected_input)?;
+        let observed = self.verify_transaction(report, &expected_input)?;
         let record = self.claim_record(submitted.claim_id)?;
-        verify_claim_record(
-            &submitted.claim,
-            submitted.claim_id,
-            submitted.available_at,
-            &record,
-            2,
-        )?;
-        verify_indexed_pair(
-            unique_log(
-                &observed.logs,
-                self.claims_contract,
-                CLAIM_FINALISED_TOPIC,
-                "ClaimFinalised",
-            )?,
+        verify_claim_record(&submitted.claim, submitted.available_at, &record, 2)?;
+        let expectation = &submitted.claim.debit.expectation;
+        let finalised = decode_claim_finalised(custody_log(
+            &observed.logs,
+            CLAIM_FINALISED_TOPIC,
             "ClaimFinalised",
-            submitted.claim_id,
-            submitted.claim.nullifier,
-        )?;
-        let vault = self.address_view(
-            self.claims_contract,
-            &call_data(SELECTOR_VAULT, &[]),
-            "vault",
-        )?;
-        verify_custody_release(
-            unique_log(
-                &observed.logs,
-                vault,
-                CUSTODY_RELEASE_TOPIC,
-                "CustodyRelease",
-            )?,
-            submitted,
-            self.claims_contract,
-        )?;
-        let asset_registry = self.address_view(
-            vault,
-            &call_data(SELECTOR_ASSET_REGISTRY, &[]),
-            "assetRegistry",
-        )?;
-        let token = self.asset_token(asset_registry, submitted.claim.debit.expectation.asset_id)?;
-        let balance = self.u256_view(
-            token,
-            &call_data(
-                SELECTOR_BALANCE_OF,
-                &[address_word(submitted.claim.debit.expectation.recipient)],
-            ),
-            "balanceOf",
-        )?;
-        if balance < submitted.claim.debit.expectation.amount {
+        )?)
+        .map_err(|error| malformed("ClaimFinalised", &error))?;
+        if finalised.claim_id != submitted.claim_id
+            || finalised.nullifier != submitted.claim.nullifier
+        {
+            return Err(WithdrawalError::MalformedEvent {
+                event: "ClaimFinalised",
+                detail: "indexed identifiers do not bind to the claim".to_owned(),
+            });
+        }
+        let release = decode_custody_release(custody_log(
+            &observed.logs,
+            CUSTODY_RELEASE_TOPIC,
+            "CustodyRelease",
+        )?)
+        .map_err(|error| malformed("CustodyRelease", &error))?;
+        if release.claim_id != submitted.claim_id
+            || release.asset_id != expectation.asset_id
+            || release.recipient != expectation.recipient
+            || release.amount != expectation.amount
+            || release.settlement_module != CUSTODY_PRECOMPILE
+        {
             return Err(WithdrawalError::PayoutNotVerified {
-                detail: "recipient token balance is below the released amount".to_owned(),
+                detail: "custody release does not bind to the claim".to_owned(),
+            });
+        }
+        let asset = self.asset(expectation.asset_id)?;
+        let balance = if asset.pointer.bytes() == [0; 20] {
+            let native = exact_word(
+                &self.call_contract(CUSTODY_PRECOMPILE, &native_asset_id_calldata())?,
+                "nativeAssetId",
+            )?;
+            if native != expectation.asset_id {
+                return Err(WithdrawalError::PayoutNotVerified {
+                    detail: "asset has no pointer and is not the native asset".to_owned(),
+                });
+            }
+            let wei = quantity_bytes(
+                &self.rpc(
+                    "eth_getBalance",
+                    &[
+                        Json::Text(bytes_hex(&expectation.recipient.bytes())),
+                        Json::Text("latest".to_owned()),
+                    ],
+                )?,
+                "eth_getBalance",
+            )?;
+            if wei[..16] == [0; 16] {
+                word_u128(&wei, "eth_getBalance")? / WEI_PER_BASE_UNIT
+            } else {
+                u128::MAX
+            }
+        } else {
+            let mut data = SELECTOR_BALANCE_OF.to_vec();
+            data.extend_from_slice(&address_word(expectation.recipient));
+            word_u128(
+                &exact_word(&self.call_contract(asset.pointer, &data)?, "balanceOf")?,
+                "balanceOf",
+            )?
+        };
+        if balance < expectation.amount {
+            return Err(WithdrawalError::PayoutNotVerified {
+                detail: "recipient balance is below the released amount".to_owned(),
             });
         }
         self.verify_nullifier(submitted.claim.nullifier, 2)?;
         Ok(PayoutEvidence {
             debit_receipt_reference: submitted.claim.debit.receipt_reference,
-            checkpoint_hash: submitted.claim.proof.checkpoint_hash,
+            checkpoint_hash: submitted.claim.anchor,
             claim_id: submitted.claim_id,
             payout_transaction: report.transaction(),
             payout_inclusion: observed.inclusion,
-            vault,
-            token,
-            asset_id: submitted.claim.debit.expectation.asset_id,
-            recipient: submitted.claim.debit.expectation.recipient,
-            amount: submitted.claim.debit.expectation.amount,
+            vault: CUSTODY_PRECOMPILE,
+            token: asset.pointer,
+            asset_id: expectation.asset_id,
+            recipient: expectation.recipient,
+            amount: expectation.amount,
         })
     }
 
-    /// Verifies an upheld-challenge cancellation and proves the cancellation transaction emitted no
-    /// release of this claim's custody.
+    /// Verifies that the custody authority cancelled the pending claim: the
+    /// stored claim is cancelled, its nullifier is terminally cancelled and
+    /// the asset's custody still covers it. Cancellation is a module message,
+    /// so the evidence is the endpoint-agreed custody state, not a transaction.
     ///
     /// # Errors
     ///
-    /// Returns finality, execution, challenge, claim-state, event or custody-release mismatches.
+    /// Returns claim-state, nullifier or endpoint mismatches.
     pub fn verify_cancellation(
         &self,
         submitted: &SubmittedWithdrawalClaim,
-        report: &FinalityReport,
     ) -> Result<CancellationEvidence, WithdrawalError> {
-        let expected_input = submitted.cancellation_calldata();
-        let observed = self.verify_transaction(report, self.claims_contract, &expected_input)?;
         let record = self.claim_record(submitted.claim_id)?;
-        verify_claim_record(
-            &submitted.claim,
-            submitted.claim_id,
-            submitted.available_at,
-            &record,
-            3,
-        )?;
-        verify_indexed_pair(
-            unique_log(
-                &observed.logs,
-                self.claims_contract,
-                CLAIM_CANCELLED_TOPIC,
-                "ClaimCancelled",
-            )?,
-            "ClaimCancelled",
-            submitted.claim_id,
-            submitted.claim.nullifier,
-        )?;
-        let challenge_manager = self.address_view(
-            self.claims_contract,
-            &call_data(SELECTOR_CHALLENGE_MANAGER, &[]),
-            "challengeManager",
-        )?;
-        let challenge =
-            self.challenge_record(challenge_manager, submitted.claim.proof.checkpoint_hash)?;
-        if challenge.status != 3 {
-            return Err(WithdrawalError::CancellationNotVerified {
-                detail: "checkpoint challenge is not upheld".to_owned(),
-            });
-        }
-        let vault = self.address_view(
-            self.claims_contract,
-            &call_data(SELECTOR_VAULT, &[]),
-            "vault",
-        )?;
-        if observed.logs.iter().any(|log| {
-            log.address == vault
-                && log.topics.first() == Some(&CUSTODY_RELEASE_TOPIC)
-                && log.topics.get(1) == Some(&submitted.claim_id)
-        }) {
-            return Err(WithdrawalError::CancellationNotVerified {
-                detail: "cancelled claim emitted a custody release".to_owned(),
-            });
-        }
+        verify_claim_record(&submitted.claim, submitted.available_at, &record, 3)?;
         self.verify_nullifier(submitted.claim.nullifier, 3)?;
-        let disposition = self.cancelled_disposition(submitted)?;
+        let observed_head = quantity(&self.rpc("eth_blockNumber", &[])?, "eth_blockNumber")?;
         Ok(CancellationEvidence {
             debit_receipt_reference: submitted.claim.debit.receipt_reference,
-            checkpoint_hash: submitted.claim.proof.checkpoint_hash,
+            checkpoint_hash: submitted.claim.anchor,
             claim_id: submitted.claim_id,
-            cancellation_transaction: report.transaction(),
-            cancellation_inclusion: observed.inclusion,
-            disposition,
+            observed_head,
+            disposition: cancelled_disposition(submitted),
         })
     }
 
     fn verify_transaction(
         &self,
         report: &FinalityReport,
-        expected_target: EvmAddress,
         expected_input: &[u8],
     ) -> Result<ObservedTransaction, WithdrawalError> {
         let (tracked, confirmations) = match report.stage() {
@@ -1299,9 +1118,9 @@ impl WithdrawalBoundary {
             });
         }
         let transaction = self.transaction(report.transaction())?;
-        if transaction.to != Some(expected_target) {
+        if transaction.to != Some(CUSTODY_PRECOMPILE) {
             return Err(WithdrawalError::TransactionTarget {
-                expected: expected_target,
+                expected: CUSTODY_PRECOMPILE,
                 found: transaction.to,
             });
         }
@@ -1327,83 +1146,32 @@ impl WithdrawalBoundary {
         })
     }
 
-    fn cancelled_disposition(
-        &self,
-        submitted: &SubmittedWithdrawalClaim,
-    ) -> Result<CancelledFundsDisposition, WithdrawalError> {
-        let vault = self.address_view(
-            self.claims_contract,
-            &call_data(SELECTOR_VAULT, &[]),
-            "vault",
-        )?;
-        Ok(CancelledFundsDisposition {
-            paxeer: PaxeerFundsDisposition::RetainedInVault {
-                vault,
-                asset_id: submitted.claim.debit.expectation.asset_id,
-                amount: submitted.claim.debit.expectation.amount,
-            },
-            layerx: ProtocolDebitDisposition::RemainsCommittedPendingProtocolRecovery {
-                debit_receipt_reference: submitted.claim.debit.receipt_reference,
-            },
-        })
+    fn claim_record(&self, claim_id: [u8; 32]) -> Result<CustodyClaim, WithdrawalError> {
+        decode_claim(&self.call_contract(CUSTODY_PRECOMPILE, &get_claim_calldata(claim_id))?)
+            .map_err(|error| contract("getClaim", &error))
     }
 
-    fn claim_record(&self, claim_id: [u8; 32]) -> Result<ClaimRecord, WithdrawalError> {
-        let bytes = self.call_contract(
-            self.claims_contract,
-            &call_data(SELECTOR_CLAIM, &[claim_id]),
-        )?;
-        let words = exact_words(&bytes, 7, "claim")?;
-        Ok(ClaimRecord {
-            nullifier: words[0],
-            checkpoint_hash: words[1],
-            asset_id: words[2],
-            recipient: word_address_decode(&words[3], "claim.recipient")?,
-            amount: word_u128(&words[4], "claim.amount")?,
-            available_at: word_u64(&words[5], "claim.availableAt")?,
-            status: word_u8(&words[6], "claim.status")?,
-        })
+    fn asset(&self, asset_id: [u8; 32]) -> Result<CustodyAsset, WithdrawalError> {
+        let asset =
+            decode_asset(&self.call_contract(CUSTODY_PRECOMPILE, &get_asset_calldata(asset_id))?)
+                .map_err(|error| contract("getAsset", &error))?;
+        if asset.asset_id != asset_id {
+            return Err(WithdrawalError::Contract {
+                detail: "getAsset: record names a different asset".to_owned(),
+            });
+        }
+        Ok(asset)
     }
 
-    fn challenge_record(
-        &self,
-        challenge_manager: EvmAddress,
-        checkpoint: [u8; 32],
-    ) -> Result<ChallengeRecord, WithdrawalError> {
-        let bytes = self.call_contract(
-            challenge_manager,
-            &call_data(SELECTOR_CHALLENGE, &[checkpoint]),
-        )?;
-        let words = exact_words(&bytes, 6, "challenge")?;
-        let kind = match word_u8(&words[4], "challenge.kind")? {
-            0 => ChallengeKind::Fraud,
-            1 => ChallengeKind::DataAvailability,
-            2 => ChallengeKind::Equivocation,
-            other => {
-                return Err(WithdrawalError::Contract {
-                    detail: format!("challenge.kind: unknown value {other}"),
-                })
-            }
-        };
-        Ok(ChallengeRecord {
-            evidence_hash: words[1],
-            raised_at: word_u64(&words[3], "challenge.raisedAt")?,
-            kind,
-            status: word_u8(&words[5], "challenge.status")?,
-        })
+    fn nullifier_status(&self, nullifier: [u8; 32]) -> Result<u8, WithdrawalError> {
+        decode_status(
+            &self.call_contract(CUSTODY_PRECOMPILE, &nullifier_status_calldata(nullifier))?,
+        )
+        .map_err(|error| contract("nullifierStatus", &error))
     }
 
     fn verify_nullifier(&self, nullifier: [u8; 32], expected: u8) -> Result<(), WithdrawalError> {
-        let registry = self.address_view(
-            self.claims_contract,
-            &call_data(SELECTOR_NULLIFIER_REGISTRY, &[]),
-            "nullifierRegistry",
-        )?;
-        let status = self.u8_view(
-            registry,
-            &call_data(SELECTOR_NULLIFIER_STATUS, &[nullifier]),
-            "nullifier.status",
-        )?;
+        let status = self.nullifier_status(nullifier)?;
         if status == expected {
             Ok(())
         } else {
@@ -1411,22 +1179,6 @@ impl WithdrawalBoundary {
                 detail: format!("nullifier status {status}, expected {expected}"),
             })
         }
-    }
-
-    fn asset_token(
-        &self,
-        registry: EvmAddress,
-        asset_id: [u8; 32],
-    ) -> Result<EvmAddress, WithdrawalError> {
-        let bytes = self.call_contract(registry, &call_data(SELECTOR_ASSET, &[asset_id]))?;
-        let words = exact_words(&bytes, 6, "asset")?;
-        let token = word_address_decode(&words[0], "asset.token")?;
-        if token.bytes() == [0; 20] {
-            return Err(WithdrawalError::PayoutNotVerified {
-                detail: "asset registry returned a zero token".to_owned(),
-            });
-        }
-        Ok(token)
     }
 
     fn latest_timestamp(&self) -> Result<u64, WithdrawalError> {
@@ -1483,95 +1235,6 @@ impl WithdrawalBoundary {
             .agreed_call(method, params, self.minimum_endpoint_agreement)
             .map_err(WithdrawalError::Endpoint)
     }
-
-    fn word_view(
-        &self,
-        contract: EvmAddress,
-        data: &[u8],
-        what: &str,
-    ) -> Result<[u8; 32], WithdrawalError> {
-        exact_word(&self.call_contract(contract, data)?, what)
-    }
-
-    fn bool_view(
-        &self,
-        contract: EvmAddress,
-        data: &[u8],
-        what: &str,
-    ) -> Result<bool, WithdrawalError> {
-        match word_u8(&self.word_view(contract, data, what)?, what)? {
-            0 => Ok(false),
-            1 => Ok(true),
-            other => Err(WithdrawalError::Contract {
-                detail: format!("{what}: expected boolean, got {other}"),
-            }),
-        }
-    }
-
-    fn u8_view(
-        &self,
-        contract: EvmAddress,
-        data: &[u8],
-        what: &str,
-    ) -> Result<u8, WithdrawalError> {
-        word_u8(&self.word_view(contract, data, what)?, what)
-    }
-
-    fn u32_view(
-        &self,
-        contract: EvmAddress,
-        data: &[u8],
-        what: &str,
-    ) -> Result<u32, WithdrawalError> {
-        let value = word_u64(&self.word_view(contract, data, what)?, what)?;
-        u32::try_from(value).map_err(|_| WithdrawalError::Contract {
-            detail: format!("{what}: value exceeds u32"),
-        })
-    }
-
-    fn u256_view(
-        &self,
-        contract: EvmAddress,
-        data: &[u8],
-        what: &str,
-    ) -> Result<u128, WithdrawalError> {
-        word_u128(&self.word_view(contract, data, what)?, what)
-    }
-
-    fn address_view(
-        &self,
-        contract: EvmAddress,
-        data: &[u8],
-        what: &str,
-    ) -> Result<EvmAddress, WithdrawalError> {
-        word_address_decode(&self.word_view(contract, data, what)?, what)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ClaimRecord {
-    nullifier: [u8; 32],
-    checkpoint_hash: [u8; 32],
-    asset_id: [u8; 32],
-    recipient: EvmAddress,
-    amount: u128,
-    available_at: u64,
-    status: u8,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ChallengeRecord {
-    evidence_hash: [u8; 32],
-    raised_at: u64,
-    kind: ChallengeKind,
-    status: u8,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct LogRecord {
-    address: EvmAddress,
-    topics: Vec<[u8; 32]>,
-    data: Vec<u8>,
 }
 
 struct ObservedCall {
@@ -1583,16 +1246,6 @@ struct ObservedCall {
 struct ObservedTransaction {
     inclusion: TransactionInclusion,
     logs: Vec<LogRecord>,
-}
-
-struct ClaimQueuedEvent {
-    claim_id: [u8; 32],
-    nullifier: [u8; 32],
-    checkpoint_hash: [u8; 32],
-    asset_id: [u8; 32],
-    recipient: EvmAddress,
-    amount: u128,
-    available_at: u64,
 }
 
 pub(crate) const fn supported_protocol_version(protocol_version: u16) -> bool {
@@ -1627,325 +1280,83 @@ fn validate_debit_expectation(expectation: &DebitExpectation) -> Result<(), Debi
     Ok(())
 }
 
-fn validate_checkpoint_fields(proof: &CheckpointProof) -> Result<(), WithdrawalError> {
-    for (name, value) in [
-        ("checkpoint_hash", proof.checkpoint_hash),
-        ("state_root", proof.state_root),
-        ("data_availability_root", proof.data_availability_root),
-    ] {
-        if value == [0; 32] {
-            return Err(WithdrawalError::Refused(
-                ClaimRefusal::EmptyCheckpointField(name),
-            ));
-        }
+const fn abi_field(error: &CustodyAbiError) -> &'static str {
+    match error {
+        CustodyAbiError::EvidenceBounds(field) | CustodyAbiError::Layout(field) => field,
+        CustodyAbiError::WeiRemainder | CustodyAbiError::AmountOverflow => "amount",
     }
-    if proof.epoch == 0 || proof.batch_number == 0 {
-        return Err(WithdrawalError::Refused(
-            ClaimRefusal::EmptyCheckpointField("epoch_or_batch"),
-        ));
-    }
-    Ok(())
 }
 
-fn validate_checkpoint_proof(
-    debit: &CommittedWithdrawalDebit,
-    proof: &CheckpointProof,
-    protocol_version: u16,
-) -> Result<(), WithdrawalError> {
-    validate_checkpoint_fields(proof)?;
-    let depth = proof.siblings.len();
-    if depth > MAX_PROOF_DEPTH {
-        return Err(WithdrawalError::Refused(ClaimRefusal::ProofTooDeep {
-            depth,
-        }));
+fn contract(what: &str, error: &CustodyAbiError) -> WithdrawalError {
+    WithdrawalError::Contract {
+        detail: format!("{what}: {error:?}"),
     }
-    if depth < 64
-        && proof
-            .leaf_index
-            .checked_shr(u32::try_from(depth).unwrap_or(64))
-            .unwrap_or(0)
-            != 0
+}
+
+fn malformed(event: &'static str, error: &CustodyAbiError) -> WithdrawalError {
+    WithdrawalError::MalformedEvent {
+        event,
+        detail: format!("{error:?}"),
+    }
+}
+
+fn custody_log<'a>(
+    logs: &'a [LogRecord],
+    topic: [u8; 32],
+    name: &'static str,
+) -> Result<&'a LogRecord, WithdrawalError> {
+    let mut matches = logs
+        .iter()
+        .filter(|log| log.address == CUSTODY_PRECOMPILE && log.topics.first() == Some(&topic));
+    let first = matches.next().ok_or(WithdrawalError::MissingEvent(name))?;
+    if matches.next().is_some() {
+        return Err(WithdrawalError::DuplicateEvent(name));
+    }
+    Ok(first)
+}
+
+fn cancelled_disposition(submitted: &SubmittedWithdrawalClaim) -> CancelledFundsDisposition {
+    CancelledFundsDisposition {
+        paxeer: PaxeerFundsDisposition::RetainedInVault {
+            vault: CUSTODY_PRECOMPILE,
+            asset_id: submitted.claim.debit.expectation.asset_id,
+            amount: submitted.claim.debit.expectation.amount,
+        },
+        layerx: ProtocolDebitDisposition::RemainsCommittedPendingProtocolRecovery {
+            debit_receipt_reference: submitted.claim.debit.receipt_reference,
+        },
+    }
+}
+
+fn verify_claim_record(
+    claim: &WithdrawalClaim,
+    available_at: u64,
+    record: &CustodyClaim,
+    expected_status: u8,
+) -> Result<(), WithdrawalError> {
+    let expectation = &claim.debit.expectation;
+    if record.claim_id != claim.claim_id
+        || record.kind != 1
+        || record.nullifier != claim.nullifier
+        || record.withdrawal_id != expectation.withdrawal_id
+        || record.account != expectation.account
+        || record.asset_id != expectation.asset_id
+        || record.recipient != expectation.recipient
+        || record.amount != expectation.amount
+        || record.batch_number != claim.batch_number
+        || record.anchor != claim.anchor
+        || record.available_at != available_at
     {
-        return Err(WithdrawalError::Refused(
-            ClaimRefusal::LeafIndexOutOfRange {
-                leaf_index: proof.leaf_index,
-                depth,
-            },
-        ));
+        return Err(WithdrawalError::ClaimState {
+            detail: "stored claim does not bind to the constructed claim".to_owned(),
+        });
     }
-    let leaf = withdrawal_leaf(&debit.expectation);
-    let computed = if proof.native.is_some() {
-        proof
-            .verify_native_withdrawal(&debit.expectation)
-            .map_err(WithdrawalError::Refused)?;
-        proof.state_root
-    } else {
-        proof_root(leaf, proof.leaf_index, &proof.siblings)
-    };
-    if computed != proof.state_root {
-        return Err(WithdrawalError::Refused(ClaimRefusal::RootMismatch {
-            computed,
-            declared: proof.state_root,
-        }));
-    }
-    if proof.attestations.is_empty() {
-        return Err(WithdrawalError::Refused(ClaimRefusal::NoAttestations));
-    }
-    let mut previous = None;
-    for (index, attestation) in proof.attestations.iter().enumerate() {
-        for (valid, field) in [
-            (
-                attestation.protocol_version == protocol_version,
-                "protocol_version",
-            ),
-            (
-                attestation.network_id == debit.expectation.network_id,
-                "network_id",
-            ),
-            (attestation.paxeer_chain_id != 0, "paxeer_chain_id"),
-            (
-                attestation.settlement_contract.bytes() != [0; 20],
-                "settlement_contract",
-            ),
-            (attestation.epoch == proof.epoch, "epoch"),
-            (
-                attestation.checkpoint_id == proof.checkpoint_hash,
-                "checkpoint_id",
-            ),
-            (
-                attestation.checkpoint_hash == proof.checkpoint_hash,
-                "checkpoint_hash",
-            ),
-            (attestation.guarantor_id != [0; 32], "guarantor_id"),
-            (
-                attestation.batch_number == proof.batch_number,
-                "batch_number",
-            ),
-            (
-                attestation.data_availability_root == proof.data_availability_root,
-                "data_availability_root",
-            ),
-            (attestation.replayed, "replayed"),
-            (attestation.data_available, "data_available"),
-            (
-                attestation.availability_class_mask == ALL_AVAILABILITY_CLASSES,
-                "availability_class_mask",
-            ),
-            (attestation.attested_at != 0, "attested_at"),
-            (attestation.signer.bytes() != [0; 20], "signer"),
-            (attestation.signature_r != [0; 32], "signature_r"),
-            (attestation.signature_s != [0; 32], "signature_s"),
-            (matches!(attestation.signature_v, 27 | 28), "signature_v"),
-        ] {
-            if !valid {
-                return Err(WithdrawalError::Refused(ClaimRefusal::InvalidAttestation {
-                    index,
-                    field,
-                }));
-            }
-        }
-        if previous.is_some_and(|prior| prior >= attestation.guarantor_id) {
-            return Err(WithdrawalError::Refused(ClaimRefusal::UnsortedGuarantors {
-                index,
-            }));
-        }
-        previous = Some(attestation.guarantor_id);
+    if record.status != expected_status {
+        return Err(WithdrawalError::ClaimState {
+            detail: format!("claim status {}, expected {expected_status}", record.status),
+        });
     }
     Ok(())
-}
-
-fn validate_attestation_domain(
-    proof: &CheckpointProof,
-    protocol_version: u32,
-    network_id: u32,
-    paxeer_chain_id: u64,
-    settlement_contract: EvmAddress,
-) -> Result<(), WithdrawalError> {
-    for (index, attestation) in proof.attestations.iter().enumerate() {
-        for (valid, field) in [
-            (
-                u32::from(attestation.protocol_version) == protocol_version,
-                "protocol_version",
-            ),
-            (attestation.network_id == network_id, "network_id"),
-            (
-                attestation.paxeer_chain_id == paxeer_chain_id,
-                "paxeer_chain_id",
-            ),
-            (
-                attestation.settlement_contract == settlement_contract,
-                "settlement_contract",
-            ),
-        ] {
-            if !valid {
-                return Err(WithdrawalError::Refused(ClaimRefusal::InvalidAttestation {
-                    index,
-                    field,
-                }));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn withdrawal_leaf(expectation: &DebitExpectation) -> [u8; 32] {
-    digest_parts(&[
-        MERKLE_LEAF_DOMAIN,
-        &expectation.withdrawal_id,
-        &expectation.account,
-        &expectation.asset_id,
-        &expectation.amount.to_be_bytes(),
-        &address_word(expectation.recipient),
-    ])
-}
-
-fn withdrawal_nullifier(
-    network_id: u32,
-    expectation: &DebitExpectation,
-    checkpoint_hash: [u8; 32],
-) -> [u8; 32] {
-    digest_parts(&[
-        WITHDRAWAL_DOMAIN,
-        &network_id.to_be_bytes(),
-        &expectation.withdrawal_id,
-        &expectation.account,
-        &expectation.asset_id,
-        &expectation.amount.to_be_bytes(),
-        &checkpoint_hash,
-    ])
-}
-
-fn proof_root(leaf: [u8; 32], leaf_index: u64, siblings: &[[u8; 32]]) -> [u8; 32] {
-    let mut node = leaf;
-    for (level, sibling) in siblings.iter().enumerate() {
-        let bit = u32::try_from(level)
-            .ok()
-            .and_then(|shift| leaf_index.checked_shr(shift))
-            .unwrap_or(0)
-            & 1;
-        node = if bit == 0 {
-            merkle_node(&node, sibling)
-        } else {
-            merkle_node(sibling, &node)
-        };
-    }
-    node
-}
-
-fn merkle_node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-    digest_parts(&[MERKLE_NODE_DOMAIN, left, right])
-}
-
-fn digest_parts(parts: &[&[u8]]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    for part in parts {
-        hasher.update(part);
-    }
-    hasher.finalize().into()
-}
-
-fn withdrawal_words(expectation: &DebitExpectation, checkpoint_hash: [u8; 32]) -> [[u8; 32]; 6] {
-    [
-        expectation.withdrawal_id,
-        expectation.account,
-        expectation.asset_id,
-        quantity_word(&expectation.amount.to_be_bytes()),
-        address_word(expectation.recipient),
-        checkpoint_hash,
-    ]
-}
-
-fn queue_claim_calldata(expectation: &DebitExpectation, proof: &CheckpointProof) -> Vec<u8> {
-    if let Some(native) = &proof.native {
-        let witness = abi_bytes(&native.witness);
-        let mut words = withdrawal_words(expectation, native.request_anchor).to_vec();
-        words.extend_from_slice(&[
-            native.inclusion_checkpoint,
-            proof.state_root,
-            quantity_word(&proof.epoch.to_be_bytes()),
-            quantity_word(&proof.batch_number.to_be_bytes()),
-            proof.data_availability_root,
-        ]);
-        words.push(usize_word(13 * WORD));
-        words.push(usize_word(13 * WORD + witness.len()));
-        let mut out = call_data([0x9c, 0x6b, 0x4b, 0xce], &words);
-        out.extend_from_slice(&witness);
-        out.extend_from_slice(&usize_word(proof.attestations.len()));
-        for attestation in &proof.attestations {
-            for word in attestation_words(attestation) {
-                out.extend_from_slice(&word);
-            }
-        }
-        return out;
-    }
-    let mut words = Vec::<[u8; 32]>::new();
-    words.extend_from_slice(&withdrawal_words(expectation, proof.checkpoint_hash));
-    words.push(proof.state_root);
-    words.push(quantity_word(&proof.epoch.to_be_bytes()));
-    words.push(quantity_word(&proof.batch_number.to_be_bytes()));
-    words.push(proof.data_availability_root);
-    let head_bytes = 12_usize.saturating_mul(WORD);
-    let proof_words = 3_usize.saturating_add(proof.siblings.len());
-    words.push(usize_word(head_bytes));
-    words.push(usize_word(
-        head_bytes.saturating_add(proof_words.saturating_mul(WORD)),
-    ));
-    words.push(quantity_word(&proof.leaf_index.to_be_bytes()));
-    words.push(usize_word(WORD.saturating_mul(2)));
-    words.push(usize_word(proof.siblings.len()));
-    words.extend_from_slice(&proof.siblings);
-    words.push(usize_word(proof.attestations.len()));
-    for attestation in &proof.attestations {
-        words.extend_from_slice(&attestation_words(attestation));
-    }
-    call_data(SELECTOR_QUEUE_CLAIM, &words)
-}
-
-fn recorded_certificate_calldata(
-    checkpoint_hash: [u8; 32],
-    attestations: &[WithdrawalAttestation],
-) -> Vec<u8> {
-    let mut words = vec![
-        checkpoint_hash,
-        usize_word(WORD.saturating_mul(2)),
-        usize_word(attestations.len()),
-    ];
-    for attestation in attestations {
-        words.extend_from_slice(&attestation_words(attestation));
-    }
-    call_data(SELECTOR_RECORDED_CERTIFICATE, &words)
-}
-
-fn attestation_words(attestation: &WithdrawalAttestation) -> [[u8; 32]; ATTESTATION_WORDS] {
-    [
-        quantity_word(&attestation.protocol_version.to_be_bytes()),
-        quantity_word(&attestation.network_id.to_be_bytes()),
-        quantity_word(&attestation.paxeer_chain_id.to_be_bytes()),
-        address_word(attestation.settlement_contract),
-        quantity_word(&attestation.epoch.to_be_bytes()),
-        attestation.checkpoint_id,
-        attestation.checkpoint_hash,
-        attestation.guarantor_id,
-        quantity_word(&attestation.batch_number.to_be_bytes()),
-        attestation.data_availability_root,
-        quantity_word(&[u8::from(attestation.replayed)]),
-        quantity_word(&[u8::from(attestation.data_available)]),
-        quantity_word(&[attestation.availability_class_mask]),
-        quantity_word(&attestation.attested_at.to_be_bytes()),
-        address_word(attestation.signer),
-        attestation.signature_r,
-        attestation.signature_s,
-        quantity_word(&[attestation.signature_v]),
-    ]
-}
-
-fn call_data(selector: [u8; 4], words: &[[u8; 32]]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(4_usize.saturating_add(words.len().saturating_mul(WORD)));
-    bytes.extend_from_slice(&selector);
-    for word in words {
-        bytes.extend_from_slice(word);
-    }
-    bytes
 }
 
 fn quantity_word(bytes: &[u8]) -> [u8; 32] {
@@ -1960,144 +1371,10 @@ fn quantity_word(bytes: &[u8]) -> [u8; 32] {
     word
 }
 
-fn usize_word(value: usize) -> [u8; 32] {
-    quantity_word(&value.to_be_bytes())
-}
-
 fn address_word(address: EvmAddress) -> [u8; 32] {
     let mut word = [0_u8; 32];
     word[12..].copy_from_slice(&address.bytes());
     word
-}
-
-fn validate_claim_record(
-    claim: &WithdrawalClaim,
-    claim_id: [u8; 32],
-    available_at: u64,
-    record: &ClaimRecord,
-) -> Result<(), WithdrawalError> {
-    if claim_id == [0; 32]
-        || record.nullifier != claim.nullifier
-        || record.checkpoint_hash != claim.proof.checkpoint_hash
-        || record.asset_id != claim.debit.expectation.asset_id
-        || record.recipient != claim.debit.expectation.recipient
-        || record.amount != claim.debit.expectation.amount
-        || record.available_at != available_at
-    {
-        return Err(WithdrawalError::ClaimState {
-            detail: "stored claim does not bind to the constructed claim".to_owned(),
-        });
-    }
-    Ok(())
-}
-
-fn verify_claim_record(
-    claim: &WithdrawalClaim,
-    claim_id: [u8; 32],
-    available_at: u64,
-    record: &ClaimRecord,
-    expected_status: u8,
-) -> Result<(), WithdrawalError> {
-    validate_claim_record(claim, claim_id, available_at, record)?;
-    if record.status != expected_status {
-        return Err(WithdrawalError::ClaimState {
-            detail: format!("claim status {}, expected {expected_status}", record.status),
-        });
-    }
-    Ok(())
-}
-
-fn unique_log<'a>(
-    logs: &'a [LogRecord],
-    address: EvmAddress,
-    topic: [u8; 32],
-    name: &'static str,
-) -> Result<&'a LogRecord, WithdrawalError> {
-    let mut matches = logs
-        .iter()
-        .filter(|log| log.address == address && log.topics.first() == Some(&topic));
-    let first = matches.next().ok_or(WithdrawalError::MissingEvent(name))?;
-    if matches.next().is_some() {
-        return Err(WithdrawalError::DuplicateEvent(name));
-    }
-    Ok(first)
-}
-
-fn decode_claim_queued(log: &LogRecord) -> Result<ClaimQueuedEvent, WithdrawalError> {
-    if log.topics.len() != 4 || log.data.len() != 128 {
-        return Err(WithdrawalError::MalformedEvent {
-            event: "ClaimQueued",
-            detail: format!(
-                "expected 4 topics/128 bytes, got {}/{}",
-                log.topics.len(),
-                log.data.len()
-            ),
-        });
-    }
-    let words = bytes_words(&log.data);
-    Ok(ClaimQueuedEvent {
-        claim_id: log.topics[1],
-        nullifier: log.topics[2],
-        checkpoint_hash: log.topics[3],
-        asset_id: words[0],
-        recipient: word_address_decode(&words[1], "ClaimQueued.recipient")?,
-        amount: word_u128(&words[2], "ClaimQueued.amount")?,
-        available_at: word_u64(&words[3], "ClaimQueued.availableAt")?,
-    })
-}
-
-fn verify_indexed_pair(
-    log: &LogRecord,
-    name: &'static str,
-    first: [u8; 32],
-    second: [u8; 32],
-) -> Result<(), WithdrawalError> {
-    if log.topics.as_slice()
-        != [
-            if name == "ClaimFinalised" {
-                CLAIM_FINALISED_TOPIC
-            } else {
-                CLAIM_CANCELLED_TOPIC
-            },
-            first,
-            second,
-        ]
-        || !log.data.is_empty()
-    {
-        return Err(WithdrawalError::MalformedEvent {
-            event: name,
-            detail: "indexed identifiers or empty event data mismatch".to_owned(),
-        });
-    }
-    Ok(())
-}
-
-fn verify_custody_release(
-    log: &LogRecord,
-    submitted: &SubmittedWithdrawalClaim,
-    settlement_module: EvmAddress,
-) -> Result<(), WithdrawalError> {
-    let expected = &submitted.claim.debit.expectation;
-    if log.topics.len() != 4 || log.data.len() != 64 {
-        return Err(WithdrawalError::MalformedEvent {
-            event: "CustodyRelease",
-            detail: "expected 4 topics and 64 data bytes".to_owned(),
-        });
-    }
-    let words = bytes_words(&log.data);
-    let recipient = word_address_decode(&log.topics[3], "CustodyRelease.recipient")?;
-    let module = word_address_decode(&words[1], "CustodyRelease.settlementModule")?;
-    if log.topics[1] != submitted.claim_id
-        || log.topics[2] != expected.asset_id
-        || recipient != expected.recipient
-        || word_u128(&words[0], "CustodyRelease.amount")? != expected.amount
-        || module != settlement_module
-    {
-        return Err(WithdrawalError::PayoutNotVerified {
-            detail: "custody release does not bind to the claim".to_owned(),
-        });
-    }
-    Ok(())
 }
 
 fn required<'a>(value: &'a Json, name: &str) -> Result<&'a Json, WithdrawalError> {
@@ -2224,17 +1501,6 @@ fn bytes_words(bytes: &[u8]) -> Vec<[u8; 32]> {
         .collect()
 }
 
-fn word_address_decode(word: &[u8; 32], what: &str) -> Result<EvmAddress, WithdrawalError> {
-    if word[..12].iter().any(|byte| *byte != 0) {
-        return Err(WithdrawalError::Contract {
-            detail: format!("{what}: word is not an address"),
-        });
-    }
-    let mut address = [0_u8; 20];
-    address.copy_from_slice(&word[12..]);
-    Ok(EvmAddress::new(address))
-}
-
 fn word_u8(word: &[u8; 32], what: &str) -> Result<u8, WithdrawalError> {
     if word[..31].iter().any(|byte| *byte != 0) {
         return Err(WithdrawalError::Contract {
@@ -2264,211 +1530,4 @@ fn word_u128(word: &[u8; 32], what: &str) -> Result<u128, WithdrawalError> {
     let mut bytes = [0_u8; 16];
     bytes.copy_from_slice(&word[16..]);
     Ok(u128::from_be_bytes(bytes))
-}
-
-impl CheckpointProof {
-    /// Encodes a bounded vector of withdrawal identities, leaf hashes and canonical proofs.
-    /// Entries must be strictly ordered by withdrawal identity.
-    ///
-    /// # Errors
-    /// Refuses noncanonical proofs, ordering, bounds or roots.
-    pub fn encode_publication(
-        entries: &[(DebitExpectation, Self)],
-        protocol_version: u16,
-    ) -> Result<Vec<u8>, crate::EndpointFault> {
-        use crate::deposit::evidence as e;
-        let native = entries.first().is_none_or(|entry| entry.1.native.is_some());
-        if entries
-            .iter()
-            .any(|entry| entry.1.native.is_some() != native)
-        {
-            return Err(e::invalid());
-        }
-        let mut items = Vec::new();
-        let mut previous = None;
-        for (debit, proof) in entries {
-            debit.validated().map_err(|_| e::invalid())?;
-            if previous.is_some_and(|id| id >= debit.withdrawal_id) {
-                return Err(e::invalid());
-            }
-            previous = Some(debit.withdrawal_id);
-            let leaf = withdrawal_leaf(debit);
-            if proof.native.is_some() {
-                proof
-                    .verify_native_withdrawal(debit)
-                    .map_err(|_| e::invalid())?;
-            } else if proof_root(leaf, proof.leaf_index, &proof.siblings) != proof.state_root {
-                return Err(e::invalid());
-            }
-            let mut item = debit.withdrawal_id.to_vec();
-            item.extend_from_slice(&leaf);
-            item.extend_from_slice(
-                &crate::wire::encode_checkpoint_proof_for_protocol(
-                    proof,
-                    e::LIMIT,
-                    protocol_version,
-                )
-                .map_err(|_| e::invalid())?,
-            );
-            items.push(item);
-        }
-        e::vector(
-            if native {
-                e::WITHDRAWALS_V2
-            } else {
-                e::WITHDRAWALS
-            },
-            &items,
-        )
-    }
-
-    /// Retrieves canonical withdrawal membership for an already verified debit.
-    /// The returned proof must still pass `WithdrawalBoundary::construct_claim`.
-    ///
-    /// # Errors
-    /// Refuses unavailable publication, noncanonical encoding and identity/root mismatches.
-    pub fn fetch_published(
-        endpoint: &EndpointConfig,
-        registry: EvmAddress,
-        checkpoint: [u8; 32],
-        debit: &DebitExpectation,
-        protocol_version: u16,
-        confirmations: u64,
-    ) -> Result<Self, crate::EndpointFailure> {
-        use crate::deposit::evidence as e;
-        let (withdrawals, _, registered) =
-            e::witnesses(endpoint, registry, checkpoint, confirmations)?;
-        let decode = || {
-            let mut previous = None;
-            let mut found = None;
-            let native = withdrawals.starts_with(e::WITHDRAWALS_V2);
-            for item in e::items(
-                if native {
-                    e::WITHDRAWALS_V2
-                } else {
-                    e::WITHDRAWALS
-                },
-                &withdrawals,
-            )? {
-                let mut r = e::Reader(item);
-                let id = r.array::<32>()?;
-                let leaf = r.array::<32>()?;
-                if previous.is_some_and(|value| value >= id) {
-                    return Err(e::invalid());
-                }
-                previous = Some(id);
-                let proof = crate::wire::decode_checkpoint_proof_for_protocol(
-                    r.0,
-                    e::LIMIT,
-                    protocol_version,
-                )
-                .map_err(|_| e::invalid())?;
-                if proof.native.is_some() != native {
-                    return Err(e::invalid());
-                }
-                e::bind(&proof, checkpoint, &registered)?;
-                if proof.native.is_some() {
-                    if proof.native_withdrawal_fact().map_err(|_| e::invalid())? != (id, leaf) {
-                        return Err(e::invalid());
-                    }
-                } else if proof_root(leaf, proof.leaf_index, &proof.siblings) != proof.state_root {
-                    return Err(e::invalid());
-                }
-                if id == debit.withdrawal_id {
-                    if leaf != withdrawal_leaf(debit) {
-                        return Err(e::invalid());
-                    }
-                    if proof.native.is_some() {
-                        proof
-                            .verify_native_withdrawal(debit)
-                            .map_err(|_| e::invalid())?;
-                    }
-                    found = Some(proof);
-                }
-            }
-            found.ok_or_else(e::invalid)
-        };
-        decode().map_err(|fault| e::failure(endpoint, fault))
-    }
-}
-
-fn abi_bytes(value: &[u8]) -> Vec<u8> {
-    let mut out = usize_word(value.len()).to_vec();
-    out.extend_from_slice(value);
-    out.resize(WORD + value.len().div_ceil(WORD) * WORD, 0);
-    out
-}
-
-impl CheckpointProof {
-    fn native_withdrawal_fact(&self) -> Result<([u8; 32], [u8; 32]), ClaimRefusal> {
-        let refused = || ClaimRefusal::EmptyCheckpointField("native_withdrawal");
-        let native = self.native.as_ref().ok_or_else(refused)?;
-        let witness = native.decoded(self.state_root).map_err(|_| refused())?;
-        let v = &witness.value;
-        if native.inclusion_checkpoint != self.checkpoint_hash
-            || !native.recipient_signature.is_empty()
-            || self.leaf_index != 0
-            || !self.siblings.is_empty()
-            || witness.module_id != 1
-            || witness.account_path.is_some()
-            || witness.key.len() != 43
-            || !witness.key.starts_with(b"withdrawal:")
-            || v.len() != 182
-            || v[..2] != [0, 2]
-            || v[2..6] != native.network_id.to_be_bytes()
-            || v[150..182] != native.request_anchor
-            || v[118..130] != [0; 12]
-            || v[6..38] == [0; 32]
-            || v[38..70] == [0; 32]
-            || v[70..102] == [0; 32]
-            || v[102..118] == [0; 16]
-            || v[130..150] == [0; 20]
-        {
-            return Err(refused());
-        }
-        let nullifier = digest_parts(&[WITHDRAWAL_DOMAIN, &v[2..118], &v[150..182]]);
-        if witness.key[11..] != nullifier {
-            return Err(refused());
-        }
-        let leaf = digest_parts(&[MERKLE_LEAF_DOMAIN, &v[6..150]]);
-        Ok((v[6..38].try_into().map_err(|_| refused())?, leaf))
-    }
-
-    /// # Errors
-    /// Refuses any native record, domain, witness or checkpoint mismatch.
-    pub fn verify_native_withdrawal(&self, debit: &DebitExpectation) -> Result<(), ClaimRefusal> {
-        let refused = || ClaimRefusal::EmptyCheckpointField("native_withdrawal");
-        let native = self.native.as_ref().ok_or_else(refused)?;
-        if native.inclusion_checkpoint != self.checkpoint_hash
-            || self.leaf_index != 0
-            || !self.siblings.is_empty()
-            || native.network_id != debit.network_id
-            || !native.recipient_signature.is_empty()
-        {
-            return Err(refused());
-        }
-        let witness = native.decoded(self.state_root).map_err(|_| refused())?;
-        let mut value = 2_u16.to_be_bytes().to_vec();
-        value.extend_from_slice(&debit.network_id.to_be_bytes());
-        value.extend_from_slice(&debit.withdrawal_id);
-        value.extend_from_slice(&debit.account);
-        value.extend_from_slice(&debit.asset_id);
-        value.extend_from_slice(&debit.amount.to_be_bytes());
-        value.extend_from_slice(&address_word(debit.recipient));
-        value.extend_from_slice(&native.request_anchor);
-        let mut key = b"withdrawal:".to_vec();
-        key.extend_from_slice(&withdrawal_nullifier(
-            debit.network_id,
-            debit,
-            native.request_anchor,
-        ));
-        if witness.module_id != 1
-            || witness.account_path.is_some()
-            || witness.key != key
-            || witness.value != value
-        {
-            return Err(refused());
-        }
-        Ok(())
-    }
 }

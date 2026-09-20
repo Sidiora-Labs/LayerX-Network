@@ -200,6 +200,9 @@ pub struct WalletCustodyRequest {
     pub wallet: EvmAddress,
     pub chain_id: u64,
     pub vault: EvmAddress,
+    /// Custody asset discriminator: `None` deposits the native coin through the
+    /// payable precompile entry, `Some(pointer)` deposits that token.
+    pub pointer: Option<EvmAddress>,
     pub asset: AssetId,
     pub beneficiary: [u8; 32],
     pub amount: Amount,
@@ -1034,6 +1037,8 @@ impl DepositJourney {
             wallet: EvmAddress::new(self.record.wallet),
             chain_id,
             vault: EvmAddress::new(self.record.vault),
+            pointer: (self.record.vault != layerx_paxeer_client::CUSTODY_PRECOMPILE.bytes())
+                .then(|| EvmAddress::new(self.record.vault)),
             asset: AssetId::new(self.record.asset),
             beneficiary,
             amount: Amount::from_u128(self.record.amount),

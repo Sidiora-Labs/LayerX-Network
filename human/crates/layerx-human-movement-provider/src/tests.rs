@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use k256::ecdsa::SigningKey;
 use layerx_client::lni::transport::{Limits, MutualTlsConfig};
 use layerx_human_service::custody::RemoteKmsProvider;
 use layerx_human_service::journeys::DepositRuntime;
@@ -22,9 +21,9 @@ use layerx_human_service::server::movement_provider::{
 use layerx_human_service::store::{AgentTenantId, PrincipalId};
 use layerx_human_service::trace::TraceId;
 use layerx_paxeer_client::{
-    raw_call, ChainSignal, CheckpointProof, DepositProofConfig, EndpointConfig, EndpointTransport,
-    FinalityTracker, ProofFault, TrackerConfig, TransactionHash, WithdrawalAttestation,
-    WithdrawalBoundary, WithdrawalConfig,
+    raw_call, ChainSignal, DepositProofConfig, EndpointConfig, EndpointTransport, FinalityTracker,
+    ProofFault, TrackerConfig, TransactionHash, WithdrawalBoundary, WithdrawalConfig,
+    WithdrawalMaterial,
 };
 use layerx_types::intent::EvmAddress;
 use rustls::{
@@ -32,7 +31,6 @@ use rustls::{
     RootCertStore,
 };
 use sha2::{Digest, Sha256};
-use sha3::Keccak256;
 
 use crate::config::{hex_string, Config, MAX_FRAME};
 use crate::journal::{read_private, Journal};
@@ -45,9 +43,9 @@ fn checked<T, E: std::fmt::Debug>(value: std::result::Result<T, E>) -> Result<T>
     value.map_err(|error| format!("{error:?}").into())
 }
 
-struct Directory(PathBuf);
+pub(crate) struct Directory(PathBuf);
 impl Directory {
-    fn new() -> Result<Self> {
+    pub(crate) fn new() -> Result<Self> {
         let mut nonce = [0; 8];
         checked(getrandom::fill(&mut nonce))?;
         let root = std::env::temp_dir().join("hm5");
@@ -92,7 +90,7 @@ fn unreachable_endpoint() -> Result<EndpointConfig> {
     drop(closed);
     Ok(endpoint)
 }
-fn config(dir: &Directory) -> Result<Config> {
+pub(crate) fn config(dir: &Directory) -> Result<Config> {
     config_for(dir, unreachable_endpoint()?, None)
 }
 fn config_for(
@@ -126,10 +124,7 @@ fn config_for(
             layerx_network_id: 77,
             layerx_protocol_version: 2,
         },
-        vault: EvmAddress::new([8; 20]),
         checkpoint_registry: EvmAddress::new([12; 20]),
-        claims_contract: EvmAddress::new([7; 20]),
-        exit_contract: EvmAddress::new([13; 20]),
         executor,
         checkpoint_interval_seconds: 10,
         paxeer_block_seconds: 1,
@@ -145,20 +140,17 @@ fn client(config: &Config) -> Result<UnixMovementProvider> {
             maximum_frame_bytes: MAX_FRAME,
             deadline: Duration::from_secs(2),
         },
-        Arc::new(checked(NativeMovementCodec::for_protocol(
-            config.listener.protocol,
-        ))?),
-        checked(WithdrawalBoundary::new_for_protocol(
-            WithdrawalConfig {
-                endpoints: config.tracker.endpoints.clone(),
-                minimum_endpoint_agreement: config.tracker.minimum_endpoint_agreement,
-                claims_contract: EvmAddress::new([7; 20]),
-                required_confirmations: 2,
-                poll_cadence: Duration::from_secs(1),
-                delayed_after_polls: 2,
-            },
-            config.listener.protocol,
-        ))?,
+        Arc::new(NativeMovementCodec::new()),
+        // The boundary's protocol version is the withdrawal receipt's, not the
+        // provider socket's: the custody precompile only honours
+        // state-commitment receipts, so the boundary adopts that version alone.
+        checked(WithdrawalBoundary::new(WithdrawalConfig {
+            endpoints: config.tracker.endpoints.clone(),
+            minimum_endpoint_agreement: config.tracker.minimum_endpoint_agreement,
+            required_confirmations: 2,
+            poll_cadence: Duration::from_secs(1),
+            delayed_after_polls: 2,
+        }))?,
     ))
 }
 fn plan(operation: &str) -> Result<PlanningRequest> {
@@ -403,22 +395,22 @@ fn private_files_refuse_symlinks_hardlinks_and_public_permissions() -> Result {
 }
 
 #[test]
-fn signed_native_checkpoint_proofs_replay_without_converting_them_to_authority() -> Result {
+fn signed_withdrawal_material_replays_without_converting_it_to_authority() -> Result {
     for protocol in [2, 3] {
         let dir = Directory::new()?;
-        let codec = checked(NativeMovementCodec::for_protocol(protocol))?;
-        let proof = signed_checkpoint(protocol)?;
+        let codec = NativeMovementCodec::new();
+        let material = withdrawal_material()?;
         let response =
-            checked(codec.encode_response(&Response::CheckpointProof(Some(proof.clone()))))?;
+            checked(codec.encode_response(&Response::WithdrawalMaterial(Some(material.clone()))))?;
         let mut journal = Journal::open(&dir.0.join("state"), protocol)?;
         let key = "b".repeat(64);
         journal.begin(
             &key,
-            &checked(codec.encode_request(&Request::CheckpointProof(
+            &checked(codec.encode_request(&Request::WithdrawalMaterial(
                 layerx_paxeer_client::DebitExpectation {
                     activity_id: [5; 32],
                     network_id: 77,
-                    withdrawal_id: [6; 32],
+                    withdrawal_id: [5; 32],
                     account: [7; 32],
                     withdrawals_account: [8; 32],
                     asset_id: [9; 32],
@@ -434,9 +426,9 @@ fn signed_native_checkpoint_proofs_replay_without_converting_them_to_authority()
             journal.record(&key).ok_or("record")?.response.as_ref(),
             Some(&response)
         );
-        let mut invalid = proof;
-        invalid.attestations[0].signature_r[0] ^= 1;
-        let invalid_response = Response::CheckpointProof(Some(invalid));
+        let mut invalid = material;
+        invalid.header_signature[0] ^= 1;
+        let invalid_response = Response::WithdrawalMaterial(Some(invalid));
         let invalid_bytes = checked(codec.encode_response(&invalid_response))?;
         let decoded = checked(codec.decode_response(&invalid_bytes))?;
         assert_eq!(checked(codec.encode_response(&decoded))?, invalid_bytes);
@@ -444,65 +436,98 @@ fn signed_native_checkpoint_proofs_replay_without_converting_them_to_authority()
     Ok(())
 }
 
-pub(crate) fn signed_checkpoint(protocol: u16) -> Result<CheckpointProof> {
-    let key = checked(SigningKey::from_slice(&random_seed()?))?;
-    let point = key.verifying_key().to_encoded_point(false);
-    let hash = Keccak256::digest(&point.as_bytes()[1..]);
-    let mut attestation = WithdrawalAttestation {
-        protocol_version: protocol,
-        network_id: 77,
-        paxeer_chain_id: 31337,
-        settlement_contract: EvmAddress::new([8; 20]),
-        epoch: 1,
-        checkpoint_id: [1; 32],
-        checkpoint_hash: [1; 32],
-        guarantor_id: [2; 32],
-        batch_number: 1,
-        data_availability_root: [3; 32],
-        replayed: true,
-        data_available: true,
-        availability_class_mask: 31,
-        attested_at: 1,
-        signer: EvmAddress::new(checked(hash[12..].try_into())?),
-        signature_r: [0; 32],
-        signature_s: [0; 32],
-        signature_v: 27,
+/// The real bound native withdrawal a `LayerX` node serves: its canonical
+/// receipt, the wire Merkle path under the header's receipt root, the
+/// canonical batch header and the sequencer signature over that header. Every
+/// byte comes from the recorded fixture; none of it is synthesised here.
+pub(crate) fn withdrawal_material() -> Result<WithdrawalMaterial> {
+    const RECEIPT: &[u8] =
+        include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/receipt");
+    const PROOF: &[u8] =
+        include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/receipt.proof");
+    const HEADER: &[u8] =
+        include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/header");
+    const SIGNATURE: &[u8] =
+        include_bytes!("../../../../tests/fixtures/asset/bound-native-withdrawal/header.signature");
+    checked(
+        WithdrawalMaterial {
+            receipt: RECEIPT.to_vec(),
+            proof: PROOF.to_vec(),
+            header: HEADER.to_vec(),
+            header_signature: <[u8; 64]>::try_from(SIGNATURE)?,
+        }
+        .validated(),
+    )
+}
+
+/// The registry-publication check the Solidity checkpoint registry used to
+/// answer is now the anchor precompile's finalized roots: stored withdrawal
+/// material is never served while no origin anchors the batch its signed
+/// header names, and material for a debit this provider never bound is refused
+/// outright.
+#[test]
+fn stored_withdrawal_material_is_served_only_once_the_anchor_finalises_its_batch() -> Result {
+    use layerx_human_service::server::movement_provider::MovementProviderService;
+    let dir = Directory::new()?;
+    let config = config(&dir)?;
+    let codec = NativeMovementCodec::new();
+    let planning = plan("withdraw.start")?;
+    let identity = layerx_human_service::journeys::MovementExecutionIdentity {
+        principal: planning.principal.clone(),
+        tenant: planning.tenant.clone(),
+        account: checked(layerx_paxeer_client::account_address_for_protocol(
+            &planning.context.account,
+            2,
+        ))?,
+        wallet: planning.context.wallet,
+        plan_id: planning.idempotency_key,
     };
-    let mut message = Vec::new();
-    message.extend(protocol.to_be_bytes());
-    message.extend(attestation.network_id.to_be_bytes());
-    message.extend(attestation.paxeer_chain_id.to_be_bytes());
-    message.extend(attestation.settlement_contract.bytes());
-    message.extend(attestation.epoch.to_be_bytes());
-    message.extend(attestation.checkpoint_id);
-    message.extend(attestation.checkpoint_hash);
-    message.extend(attestation.guarantor_id);
-    message.extend(attestation.batch_number.to_be_bytes());
-    message.extend(attestation.data_availability_root);
-    message.extend([1, 1, 31]);
-    message.extend(attestation.attested_at.to_be_bytes());
-    let mut digest = Sha256::new();
-    digest.update(b"LXP/v2/guarantor-attestation\0");
-    digest.update(message);
-    let (signature, recovery) = checked(key.sign_prehash_recoverable(&digest.finalize()))?;
-    attestation
-        .signature_r
-        .copy_from_slice(&signature.to_bytes()[..32]);
-    attestation
-        .signature_s
-        .copy_from_slice(&signature.to_bytes()[32..]);
-    attestation.signature_v = recovery.to_byte() + 27;
-    checked(CheckpointProof::validated_for_protocol(
-        protocol,
-        [1; 32],
-        [4; 32],
-        1,
-        1,
-        [3; 32],
-        0,
-        Vec::new(),
-        vec![attestation],
-    ))
+    let debit = layerx_paxeer_client::DebitExpectation {
+        activity_id: [42; 32],
+        withdrawal_id: [42; 32],
+        network_id: planning.context.network.value(),
+        account: identity.account,
+        withdrawals_account: checked(layerx_paxeer_client::account_address_for_protocol(
+            &planning.context.withdrawals_account,
+            2,
+        ))?,
+        asset_id: planning.context.asset.bytes(),
+        amount: planning.context.amount.value(),
+        recipient: identity.wallet,
+    };
+    let mut journal = Journal::open(&config.state_root, 2)?;
+    let key = hex_string(&[43; 32]);
+    journal.begin(
+        &key,
+        &checked(codec.encode_request(&Request::BindWithdrawalDebit {
+            identity,
+            debit,
+            receipt_reference: [44; 32],
+        }))?,
+    )?;
+    journal.complete(&key, &checked(codec.encode_response(&Response::Ready))?)?;
+    drop(journal);
+    let path = config.evidence_root.join(format!(
+        "withdrawal-{}.bin",
+        hex_string(&debit.withdrawal_id)
+    ));
+    let published = checked(
+        codec.encode_response(&Response::WithdrawalMaterial(Some(withdrawal_material()?))),
+    )?;
+    assert!(crate::journal::publish_private(&path, &published)?);
+    let mut service = EvidenceService::new(&config, Journal::open(&config.state_root, 2)?)?;
+    assert_eq!(
+        service.dispatch(Request::WithdrawalMaterial(debit)),
+        Response::Unavailable
+    );
+    let mut unbound = debit;
+    unbound.activity_id = [45; 32];
+    unbound.withdrawal_id = unbound.activity_id;
+    assert_eq!(
+        service.dispatch(Request::WithdrawalMaterial(unbound)),
+        Response::ContractViolation
+    );
+    Ok(())
 }
 
 #[test]
@@ -532,7 +557,7 @@ fn malformed_proof_candidates_are_refused_over_the_real_socket() -> Result {
 #[test]
 fn published_evidence_is_private_complete_and_never_overwrites_an_existing_path() -> Result {
     let dir = Directory::new()?;
-    let codec = checked(NativeMovementCodec::for_protocol(3))?;
+    let codec = NativeMovementCodec::new();
     let original = checked(codec.encode_response(&Response::Unavailable))?;
     let changed = checked(codec.encode_response(&Response::ContractViolation))?;
     let path = dir.0.join("evidence.bin");
@@ -852,7 +877,7 @@ fn probe_reaches_the_real_listener_and_reports_the_provider_answer() -> Result {
 
 #[test]
 fn probe_accepts_only_the_provider_ready_answer() -> Result {
-    let codec = checked(NativeMovementCodec::for_protocol(2))?;
+    let codec = NativeMovementCodec::new();
     let ready = checked(codec.encode_response(&Response::Ready))?;
     assert_eq!(
         checked(crate::probe::interpret(2, &ready))?,

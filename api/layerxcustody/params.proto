@@ -35,4 +35,7 @@ message Params {
   uint64 liveness_bound_seconds = 5;
   // sequencer_authorizations backs AnchorReader until the anchor module lands.
   repeated SequencerAuthorization sequencer_authorizations = 6 [(gogoproto.nullable) = false];
+  // deposit_root_authority is the Ed25519 public key, 64 lowercase hex
+  // characters, that signs deposit root registrations. Empty refuses them all.
+  string deposit_root_authority = 7;
 }

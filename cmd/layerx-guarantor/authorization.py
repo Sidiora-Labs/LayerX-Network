@@ -87,18 +87,16 @@ def registered_checkpoint(api, publication, rpc, request, policy):
     proof = publication.raw(request['validity_proof'])
     require(len(proof) <= 1_048_576 and api.checkpoint_hash(header, proof) == digest,
             'authorization checkpoint hash mismatch')
-    registry = request['checkpoint_registry']
-    require(rpc.view(registry, 'guarantorEligibility()', outputs=('address',))[0].lower()
-            == request['settlement_contract'].lower(), 'authorization registry bond mismatch')
-    require(rpc.view(registry, 'isCanonicalCheckpoint(bytes32)', ('bytes32',), (digest,), ('bool',))[0],
-            'authorization checkpoint is not canonical')
-    require(rpc.view(registry, 'checkpointHash(' + api.HEADER + ',bytes)', (api.HEADER, 'bytes'),
-                     (header, proof), ('bytes32',))[0] == digest, 'authorization registered header mismatch')
+    api.require_anchor(request)
+    status, record = api.anchor_checkpoint(rpc, header[3])
+    require(status in (api.STATUS_SUBMITTED, api.STATUS_FINAL), 'authorization checkpoint is not canonical')
     require(type(request['attestations']) is list and 0 < len(request['attestations']) <= 4096,
             'authorization certificate bounds')
     attestations = [api.values(api.ATTESTATION_TYPES, item) for item in request['attestations']]
-    require(rpc.view(registry, 'isRecordedCertificate(bytes32,' + api.ATTESTATION + '[])',
-                     ('bytes32', api.ATTESTATION + '[]'), (digest, attestations), ('bool',))[0],
+    api.require_checkpoint(record, digest, header, len(attestations))
+    signed = [attestation[7] for attestation in attestations]
+    recorded = rpc.view(api.ANCHOR, 'checkpointGuarantors(uint64)', ('uint64',), (header[3],), ('bytes32[]',))[0]
+    require(len(set(signed)) == len(signed) and sorted(signed) == sorted(bytes(item) for item in recorded),
             'authorization certificate differs')
     return header, digest
 

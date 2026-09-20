@@ -66,6 +66,13 @@ message EventCheckpointRegistered {
   string receipt_root = 3;
 }
 
+// EventDepositRootRegistered records a deposit root registration.
+message EventDepositRootRegistered {
+  string checkpoint_id = 1;
+  string deposit_root = 2;
+  string commitment = 3;
+}
+
 // EventEmergencySet records the forced-exit emergency declaration.
 message EventEmergencySet {
   bool enabled = 1;

@@ -19,6 +19,27 @@ func (k Keeper) GetCheckpoint(ctx sdk.Context, batchNumber uint64) (types.Checkp
 
 func (k Keeper) setCheckpoint(ctx sdk.Context, checkpoint types.Checkpoint) {
 	k.set(ctx, types.CheckpointKey(checkpoint.BatchNumber), checkpoint)
+	k.set(ctx, types.CheckpointIDKey(checkpoint.CheckpointID), checkpoint.BatchNumber)
+}
+
+func (k Keeper) deleteCheckpoint(ctx sdk.Context, checkpoint types.Checkpoint) {
+	store := ctx.KVStore(k.storeKey)
+	store.Delete(types.CheckpointKey(checkpoint.BatchNumber))
+	store.Delete(types.CheckpointIDKey(checkpoint.CheckpointID))
+}
+
+// CheckpointByID is the recorded checkpoint carrying the identifier. A removed
+// checkpoint, or a batch since recorded under another identifier, is unknown.
+func (k Keeper) CheckpointByID(ctx sdk.Context, checkpointID [32]byte) (types.Checkpoint, bool) {
+	var batchNumber uint64
+	if !k.get(ctx, types.CheckpointIDKey(checkpointID), &batchNumber) {
+		return types.Checkpoint{}, false
+	}
+	checkpoint, ok := k.GetCheckpoint(ctx, batchNumber)
+	if !ok || checkpoint.CheckpointID != types.Hash32(checkpointID) {
+		return types.Checkpoint{}, false
+	}
+	return checkpoint, true
 }
 
 func (k Keeper) GetCheckpoints(ctx sdk.Context) []types.Checkpoint {

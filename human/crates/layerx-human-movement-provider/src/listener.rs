@@ -40,8 +40,8 @@ impl Listener {
         {
             return Err(Error::Configuration);
         }
-        let codec =
-            NativeMovementCodec::for_protocol(config.protocol).map_err(|_| Error::Configuration)?;
+        crate::config::validated_protocol(config.protocol)?;
+        let codec = NativeMovementCodec::new();
         let parent = config.socket.parent().ok_or(Error::Configuration)?;
         let meta = fs::symlink_metadata(parent)?;
         if !meta.is_dir()

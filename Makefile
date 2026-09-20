@@ -2983,8 +2983,7 @@ agent-check-secrets:
 
 ci: public-audit test reproducible scan-consensus test-sanitizers
 
-.PHONY: paxeer-build paxeer-lint paxeer-test paxeer-ci paxeer-docs-install \
-	paxeer-docs-build paxeer-docs-static-test developer-dashboard-install \
+.PHONY: paxeer-build paxeer-lint paxeer-test paxeer-ci developer-dashboard-install \
 	developer-dashboard-build developer-dashboard-static-test specgen-build \
 	specgen-test specgen-lint core-test-all workspace-install workspace-build workspace-test \
 	workspace-lint workspace-inventory-check workspace-ci hpx-public-check monorepo-ci \
@@ -3065,13 +3064,11 @@ paxeer-npm-install: paxeer-node-preflight
 	npm --prefix contracts ci --ignore-scripts --no-audit --no-fund
 	npm --prefix integration_test/dapp_tests ci --ignore-scripts --no-audit --no-fund
 	npm --prefix integration_test/rpc_tests ci --ignore-scripts --no-audit --no-fund
-	$(MAKE) paxeer-docs-install
 
 paxeer-npm-dependencies-ready:
 	@test -d contracts/node_modules
 	@test -d integration_test/dapp_tests/node_modules
 	@test -d integration_test/rpc_tests/node_modules
-	@test -d paxeer-docs/node_modules
 
 paxeer-hardhat-compilers-ready: paxeer-npm-dependencies-ready
 	node tools/workspace/check-hardhat-compilers.mjs
@@ -3080,13 +3077,11 @@ paxeer-npm-build: paxeer-hardhat-compilers-ready
 	npm --prefix contracts exec -- hardhat compile
 	npm --prefix integration_test/dapp_tests exec -- hardhat compile
 	npm --prefix integration_test/rpc_tests run compile
-	$(MAKE) paxeer-docs-build
 
 paxeer-npm-static-test: paxeer-npm-dependencies-ready
 	npm --prefix contracts exec -- tsc --noEmit
 	find integration_test/dapp_tests -type f -name '*.js' -exec node --check {} \;
 	npm --prefix integration_test/rpc_tests exec -- tsc --noEmit
-	$(MAKE) paxeer-docs-static-test
 
 paxeer-tools-install:
 	@set -eu; \
@@ -3131,15 +3126,6 @@ paxeer-manifest-lint: workspace-inventory-check paxeer-npm-static-test
 	@test -z "$$(find . \( -path ./.git -o -path ./platform -o -path ./spec -o -name node_modules \) -prune -o -type f -name '*.go' -print0 | xargs -0 gofmt -l)"
 	$(PAXEER_MAKE) GOLANGCI_LINT=$(PAXEER_GOLANGCI_LINT) lint
 	@set -eu; for directory in $(PAXEER_NESTED_GO_DIRS); do (cd "$$directory" && test -z "$$(gofmt -l .)" && GOPROXY=off go vet ./... && go mod verify); done
-
-paxeer-docs-install:
-	npm --prefix paxeer-docs ci --ignore-scripts --no-audit --no-fund
-
-paxeer-docs-build:
-	npm --prefix paxeer-docs run build
-
-paxeer-docs-static-test:
-	npm --prefix paxeer-docs run test:static
 
 developer-dashboard-install:
 	node tools/ci/developer-dashboard-lock.mjs

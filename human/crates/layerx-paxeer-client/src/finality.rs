@@ -204,6 +204,15 @@ impl FinalityReport {
     pub(crate) const fn evidence(&self) -> Option<&FinalityEvidence> {
         self.evidence.as_ref()
     }
+
+    /// The receipt logs of the tracked transaction, as observed by the endpoint
+    /// quorum that produced this report. `None` until a receipt was observed.
+    #[must_use]
+    pub fn receipt_logs(&self) -> Option<&[LogRecord]> {
+        self.evidence
+            .as_ref()
+            .and_then(FinalityEvidence::receipt_logs)
+    }
 }
 
 /// Tracks one custody transaction from broadcast to bridge-required finality.

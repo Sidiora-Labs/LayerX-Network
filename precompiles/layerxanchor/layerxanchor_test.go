@@ -47,6 +47,7 @@ type harness struct {
 	operators  []party
 	ids        [][32]byte
 	signers    []common.Address
+	reason     string
 }
 
 func (h *harness) ctx() sdk.Context { return h.stateDB.Ctx() }
@@ -151,7 +152,10 @@ func (h *harness) run(from party, units int64, readOnly bool, name string, args 
 	res, err := h.precompile.Run(h.evm, from.address, from.address, h.input(name, args...), value, readOnly, false, nil)
 	if err != nil {
 		require.ErrorIs(h.t, err, vm.ErrExecutionReverted)
-		require.Nil(h.t, res)
+		reason, unpackErr := abi.UnpackRevert(res)
+		require.NoError(h.t, unpackErr)
+		require.NotEmpty(h.t, reason)
+		h.reason = reason
 		h.stateDB.RevertToSnapshot(snapshot)
 		return nil, err
 	}
@@ -511,6 +515,55 @@ func TestUpheldChallengeSlashesThroughRun(t *testing.T) {
 	h.invariant()
 }
 
+// The bring-up names the authority in genesis as the cast of the deployer's EVM
+// address. The deployer's first signed transaction associates that address with
+// its public-key account; the authority must survive that.
+func TestCastAuthoritySurvivesAssociation(t *testing.T) {
+	var deployer, stranger party
+	h := newHarness(t, func(p *anchortypes.Params) {
+		for i := range deployer.address {
+			deployer.address[i], stranger.address[i] = 0xd1, 0xd2
+		}
+		p.Authority = sdk.AccAddress(deployer.address[:]).String()
+	})
+	deployer.account, stranger.account = sdk.AccAddress(deployer.address[:]), sdk.AccAddress(stranger.address[:])
+	operator := h.operators[0]
+
+	_, err := h.run(operator, bond, false, layerxanchor.RegisterGuarantorMethod, h.ids[0], h.signers[0])
+	require.NoError(t, err)
+	require.Equal(t, bond, h.balance(operator.account))
+	status := func(id [32]byte) *layerxanchor.GuarantorView {
+		return abi.ConvertType(h.view(layerxanchor.GuarantorMethod, id)[0], new(layerxanchor.GuarantorView)).(*layerxanchor.GuarantorView)
+	}
+	require.Equal(t, anchortypes.GuarantorPending, status(h.ids[0]).Status)
+
+	associated := make(sdk.AccAddress, 20)
+	for i := range associated {
+		associated[i] = 0xd3
+	}
+	h.app.EvmKeeper.SetAddressMapping(h.ctx(), associated, deployer.address)
+	account, ok := h.app.EvmKeeper.GetPaxAddress(h.ctx(), deployer.address)
+	require.True(t, ok)
+	require.NotEqual(t, deployer.account, account)
+
+	_, err = h.call(stranger, layerxanchor.ActivateGuarantorMethod, h.ids[0])
+	require.Error(t, err)
+	_, err = h.call(operator, layerxanchor.ActivateGuarantorMethod, h.ids[0])
+	require.Error(t, err)
+	require.Equal(t, anchortypes.GuarantorPending, status(h.ids[0]).Status)
+	_, err = h.call(deployer, layerxanchor.ActivateGuarantorMethod, h.ids[0])
+	require.NoError(t, err)
+	require.Equal(t, anchortypes.GuarantorActive, status(h.ids[0]).Status)
+	require.True(t, status(h.ids[0]).Eligible)
+	require.Equal(t, big.NewInt(bond), status(h.ids[0]).Bond)
+	sequencer := [32]byte{7}
+	_, err = h.call(stranger, layerxanchor.SetSequencerAuthorizationMethod, sequencer, [32]byte{8}, uint64(1), uint64(8))
+	require.Error(t, err)
+	_, err = h.call(deployer, layerxanchor.SetSequencerAuthorizationMethod, sequencer, [32]byte{8}, uint64(1), uint64(8))
+	require.NoError(t, err)
+	h.invariant()
+}
+
 func TestCallDiscipline(t *testing.T) {
 	h := newHarness(t, nil)
 	h.bootstrap()
@@ -574,4 +627,54 @@ func TestWiring(t *testing.T) {
 	require.Equal(t, common.HexToAddress("0x0000000000000000000000000000000000001014"), address)
 	require.True(t, evmkeeper.IsPayablePrecompile(&address))
 	require.Contains(t, gigaprecompiles.AllCustomPrecompilesFailFast, address)
+}
+
+func TestRevertCarriesReason(t *testing.T) {
+	h := newHarness(t, nil)
+	_, err := h.call(h.reporter, layerxanchor.ActivateGuarantorMethod, h.ids[0])
+	require.ErrorIs(t, err, vm.ErrExecutionReverted)
+	require.Contains(t, h.reason, anchortypes.ErrUnauthorized.Error())
+
+	h.fund(h.reporter.account, 5)
+	_, err = h.run(h.reporter, 1, false, layerxanchor.ThresholdMethod)
+	require.ErrorIs(t, err, vm.ErrExecutionReverted)
+	require.NotEmpty(t, h.reason)
+
+	res, err := h.precompile.Run(h.evm, h.reporter.address, h.reporter.address, []byte{0xde, 0xad, 0xbe, 0xef}, nil, false, false, nil)
+	require.ErrorIs(t, err, vm.ErrExecutionReverted)
+	reason, err := abi.UnpackRevert(res)
+	require.NoError(t, err)
+	require.NotEmpty(t, reason)
+}
+
+func TestCheckpointIdentityViews(t *testing.T) {
+	h := newHarness(t, func(p *anchortypes.Params) { p.ChallengeWindowSeconds = 50 })
+	h.bootstrap()
+	v := h.vector("checkpoints", "batch_1_quorum")
+	id, _ := v.Array32("checkpoint_id")
+	require.Equal(t, []interface{}{uint64(0), anchortypes.CheckpointUnknown}, h.view(layerxanchor.CheckpointBatchMethod, id))
+	require.Empty(t, h.view(layerxanchor.CheckpointGuarantorsMethod, uint64(1))[0])
+
+	_, err := h.submit("batch_1_quorum")
+	require.NoError(t, err)
+	require.Equal(t, []interface{}{uint64(1), anchortypes.CheckpointSubmitted}, h.view(layerxanchor.CheckpointBatchMethod, id))
+	require.Equal(t, []interface{}{uint64(0), anchortypes.CheckpointUnknown}, h.view(layerxanchor.CheckpointBatchMethod, [32]byte{9}))
+	recorded, ok := h.anchor.GetCheckpoint(h.ctx(), 1)
+	require.True(t, ok)
+	expected := make([][32]byte, 0, len(recorded.Guarantors))
+	for _, guarantor := range recorded.Guarantors {
+		expected = append(expected, guarantor)
+	}
+	require.Len(t, expected, 3)
+	require.Equal(t, expected, h.view(layerxanchor.CheckpointGuarantorsMethod, uint64(1))[0])
+
+	// A checkpoint an upheld challenge removes is no longer recorded under its identifier.
+	challenger := h.party(0xc1, true)
+	h.fund(challenger.account, 1_000_000)
+	out, err := h.run(challenger, 1_000_000, false, layerxanchor.OpenChallengeMethod, uint64(1), anchortypes.ChallengeFraud, [32]byte{7})
+	require.NoError(t, err)
+	_, err = h.call(h.authority, layerxanchor.ResolveChallengeMethod, out[0], true)
+	require.NoError(t, err)
+	require.Equal(t, []interface{}{uint64(0), anchortypes.CheckpointUnknown}, h.view(layerxanchor.CheckpointBatchMethod, id))
+	h.invariant()
 }

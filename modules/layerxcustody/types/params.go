@@ -58,6 +58,15 @@ func (p Params) Validate() error {
 	if p.LivenessBoundSeconds < MinLivenessBoundSeconds {
 		return sdkerrors.Wrap(ErrInvalidParams, "liveness bound is below one hour")
 	}
+	if p.DepositRootAuthority != "" {
+		key, err := ParseNonZeroHash32(p.DepositRootAuthority)
+		if err != nil {
+			return sdkerrors.Wrapf(ErrInvalidParams, "deposit root authority: %s", err)
+		}
+		if !verify.PublicKeyIsCanonical(key) {
+			return sdkerrors.Wrap(ErrInvalidParams, "deposit root authority is not a canonical Ed25519 key")
+		}
+	}
 	if len(p.SequencerAuthorizations) > MaxSequencerAuthorizations {
 		return sdkerrors.Wrap(ErrInvalidParams, "too many sequencer authorizations")
 	}

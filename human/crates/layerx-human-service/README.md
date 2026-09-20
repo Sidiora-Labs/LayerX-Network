@@ -18,7 +18,7 @@ The service retains its existing authentication, custody, agent and movement soc
 | `LAYERX_HUMAN_PAXEER_TRUST_ANCHOR_DER` | Configured RPC TLS trust root |
 | `LAYERX_HUMAN_PAXEER_RPC_TIMEOUT_SECONDS` | Bounded RPC timeout |
 | `LAYERX_HUMAN_PAXEER_CHAIN_ID` | Explicit Paxeer chain identity |
-| `LAYERX_HUMAN_PAXEER_EXIT_CONTRACT`, `LAYERX_HUMAN_PAXEER_WITHDRAWAL_CLAIMS_CONTRACT` | Deployed settlement contracts matching provider configuration |
+| `LAYERX_HUMAN_NETWORK_ID` | LayerX network identity the custody precompile `0x…1013` is configured with; it binds withdrawal identifiers, nullifiers and recipient signatures. Custody, withdrawal claims and forced exit are native precompile calls, so no settlement contract address is configured any more |
 | `LAYERX_HUMAN_EXIT_REQUIRED_CONFIRMATIONS`, `LAYERX_HUMAN_EXIT_POLL_CADENCE_SECONDS`, `LAYERX_HUMAN_EXIT_DELAYED_AFTER_POLLS` | Finality depth, cadence and stall threshold shared by withdrawal and exit |
 | `LAYERX_HUMAN_EVM_GAS_LIMIT` | Authorized transaction gas limit |
 | `LAYERX_HUMAN_EVM_MAX_FEE_PER_GAS` | Exact maximum gas price in wei |

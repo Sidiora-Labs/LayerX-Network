@@ -102,6 +102,15 @@ message Checkpoint {
   int64 finalized_at = 4;
 }
 
+// DepositRootRegistration is the deposit root a checkpoint's proposer
+// registered for it, with the commitment to the registration evidence.
+message DepositRootRegistration {
+  string checkpoint_id = 1;
+  string deposit_root = 2;
+  // commitment is SHA-256 of abi.encode(2, registration, signature, leaf ordering).
+  string commitment = 3;
+}
+
 // ConsumedBalance marks an account balance already exited at an anchor.
 message ConsumedBalance {
   string account = 1;

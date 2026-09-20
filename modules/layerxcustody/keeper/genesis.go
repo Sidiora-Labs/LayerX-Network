@@ -55,6 +55,9 @@ func (k *Keeper) InitGenesis(ctx sdk.Context, gs types.GenesisState) {
 	if gs.Emergency {
 		k.store(ctx).Set(types.EmergencyKey, []byte{1})
 	}
+	for _, registration := range gs.DepositRoots {
+		k.setDepositRoot(ctx, registration)
+	}
 }
 
 func (k *Keeper) iterateKeys(ctx sdk.Context, keyPrefix []byte, visit func(key, value []byte)) {
@@ -91,5 +94,11 @@ func (k *Keeper) ExportGenesis(ctx sdk.Context) *types.GenesisState {
 			AssetId: types.Hash32(assetID), Anchor: types.Hash32(anchor)})
 	})
 	k.IterateTotals(ctx, func(totals types.AssetTotals) bool { gs.Totals = append(gs.Totals, totals); return false })
+	k.iterate(ctx, types.DepositRootPrefix, func(value []byte) bool {
+		var registration types.DepositRootRegistration
+		k.cdc.MustUnmarshal(value, &registration)
+		gs.DepositRoots = append(gs.DepositRoots, registration)
+		return false
+	})
 	return gs
 }

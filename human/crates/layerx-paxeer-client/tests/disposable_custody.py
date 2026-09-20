@@ -20,11 +20,12 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / 'tests/bridge'))
 sys.path.insert(0, str(ROOT / 'tests/daemon'))
+from comet_credit import CUSTODY_ADDRESS, module_identity
 from custody_chain import boundaries, owned_chain
-from custody_credit import Rpc, create_profile, eth_hash, unhex, write_new
+from custody_credit import DEPOSIT_TOPIC, Rpc, create_profile, eth_hash, unhex, write_new
 sys.path.insert(0, str(ROOT / 'tests/support'))
 from lxgb_metadata import metadata
-from deploy_local_custody import (command, disposable_rpc, signer, genesis_document,
+from deploy_local_custody import (calldata, command, disposable_rpc, send, signer, genesis_document,
                                   PERSISTENT_GENESIS, PERSISTENT_BLUEPRINT)
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
@@ -32,6 +33,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 
 PERSISTENT_COMET_CHAIN_ID = "hyperpax_125-1"
+WEI_PER_BASE_UNIT = 10 ** 12
 
 def port():
     with socket.socket() as reservation:
@@ -202,13 +204,12 @@ class DisposableCustody(unittest.TestCase):
                       int(os.environ.get('RAYON_NUM_THREADS', '4')))
         if threads <= 0:
             raise ValueError('positive contract build concurrency required')
+        # Custody is the native layerxcustody module behind the precompile at 0x…1013, so nothing
+        # custodial is deployed here: the only contract the disposable chain still needs is the
+        # BetaUsdl runtime init-chain.sh writes into genesis.
         command('forge', 'build', 'platform/hosted/paxeer/contracts/BetaUsdl.sol',
-                'contracts/governance/LayerXBetaTimelock.sol', 'contracts/custody/AssetRegistry.sol',
-                'contracts/custody/LayerXVault.sol',
-                'loadtest/contracts/evm/lib/solmate/src/tokens/WETH.sol',
                 '--threads', str(threads))
         cls.artifacts = ROOT / 'build/forge-artifacts'
-        cls.vault_artifact = cls.artifacts / 'LayerXVault.sol/LayerXVault.json'
 
     def test_real_paxeer_genesis_code_at_denied_blueprint_address(self):
         with tempfile.TemporaryDirectory(dir=ROOT / 'qual-logs') as temporary:
@@ -313,7 +314,16 @@ class DisposableCustody(unittest.TestCase):
     def test_real_signed_ca_verified_deployment_and_identity_refusals(self):
         with tempfile.TemporaryDirectory(dir=ROOT / 'qual-logs') as temporary:
             directory = Path(temporary)
-            with owned_chain(directory, self.artifacts) as chain:
+            asset = '0x' + hashlib.sha256(b'test asset').hexdigest()
+            sequencer = ed25519.Ed25519PrivateKey.generate().public_key().public_bytes(
+                Encoding.Raw, PublicFormat.Raw)
+            custody_genesis = directory / 'custody-genesis.json'
+            command('python3', str(ROOT / 'platform/hosted/paxeer/custody-genesis.py'),
+                    '--network-id', '402',
+                    '--sequencer-id', '0x' + hashlib.sha256(sequencer).hexdigest(),
+                    '--sequencer-public-key', '0x' + sequencer.hex(),
+                    '--asset', asset + ':uhpx', '--output', str(custody_genesis))
+            with owned_chain(directory, self.artifacts, custody_genesis) as chain:
                 with boundaries(directory, chain, self.boundary_binary) as (origins, ca_path, identity_path):
                     url, observer_url = origins
                     ca = str(ca_path)
@@ -358,20 +368,39 @@ class DisposableCustody(unittest.TestCase):
                     actor_public = actor.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
                     name = ('agent:did:layerx:' + actor_public.hex() + ':main').encode()
                     beneficiary = '0x' + hashlib.sha256(b'LX:ACCOUNT:v1' + len(name).to_bytes(4, 'big') + name).hexdigest()
+                    amount = 10 ** 18
+                    deposited = send(verified, chain.account.address, CUSTODY_ADDRESS,
+                                     calldata('deposit(bytes32)', beneficiary),
+                                     amount * WEI_PER_BASE_UNIT)
+                    logs = [entry for entry in deposited['logs']
+                            if unhex(entry['address'], 20) == unhex(CUSTODY_ADDRESS, 20)
+                            and entry['topics'][0].lower() == DEPOSIT_TOPIC]
+                    self.assertEqual(len(logs), 1)
+                    self.assertEqual(len(logs[0]['topics']), 4)
+                    self.assertEqual(unhex(logs[0]['topics'][2], 32), unhex(asset, 32))
+                    self.assertEqual(unhex(logs[0]['topics'][3], 32),
+                                     bytes(12) + unhex(chain.account.address, 20))
+                    data = unhex(logs[0]['data'], 96)
+                    self.assertEqual(data[:32], unhex(beneficiary, 32))
+                    self.assertEqual(int.from_bytes(data[32:64], 'big'), amount)
+                    self.assertEqual(int.from_bytes(data[64:], 'big'), 1)
+                    self.assertEqual(unhex(verified.call('eth_call', [{'to': CUSTODY_ADDRESS,
+                        'data': calldata('nativeAssetId()')}, 'latest']), 32), unhex(asset, 32))
+                    self.assertEqual(int(verified.call('eth_call', [{'to': CUSTODY_ADDRESS,
+                        'data': calldata('depositCount()')}, 'latest']), 16), 1)
                     output = directory / 'custody.json'
-                    command('python3', str(ROOT / 'tests/bridge/deploy_local_custody.py'),
-                            '--allow-local-chain', '--rpc', url, '--ca-bundle', ca,
-                            '--disposable-identity', str(identity_path), '--key-file', str(key_file),
-                            '--asset', '0x' + hashlib.sha256(b'test asset').hexdigest(),
-                            '--beneficiary', beneficiary, '--amount', '1000000000000000000',
-                            '--output', str(output))
+                    write_new(output, json.dumps(
+                        {'chain_id': 125, 'vault': CUSTODY_ADDRESS,
+                         'runtime_sha256': '0x' + module_identity().hex(), 'asset': asset,
+                         'amount': str(amount), 'beneficiary': beneficiary,
+                         'transaction': deposited['transactionHash'], 'genesis_sha256': genesis,
+                         'comet_chain_id': identity['comet_chain_id']}, indent=2).encode() + b'\n')
                     deployed = json.loads(output.read_text())
                     self.assertEqual(deployed['chain_id'], 125)
                     self.assertEqual(deployed['comet_chain_id'], identity['comet_chain_id'])
                     self.assertEqual(deployed['genesis_sha256'], genesis)
-                    code = unhex(verified.call('eth_getCode', [deployed['vault'], 'latest']))
-                    self.assertEqual(deployed['runtime_sha256'], '0x' + hashlib.sha256(code).hexdigest())
-                    self.assertEqual(int(verified.call('eth_getBalance', [deployed['token'], 'latest']), 16), 10 ** 18)
+                    self.assertEqual(unhex(deployed['vault'], 20), unhex(CUSTODY_ADDRESS, 20))
+                    self.assertEqual(unhex(deployed['runtime_sha256'], 32), module_identity())
                     authority = ed25519.Ed25519PrivateKey.generate()
                     authority_path = directory / 'attestor.key'
                     write_new(authority_path, authority.private_bytes_raw())
@@ -381,7 +410,7 @@ class DisposableCustody(unittest.TestCase):
                         disposable_identity=str(identity_path), chain_id=125, network_id=402,
                         vault=deployed['vault'], runtime_sha256=deployed['runtime_sha256'],
                         asset=deployed['asset'], confirmations=2, attestor_key=str(authority_path),
-                        output=str(profile), vault_artifact=str(self.vault_artifact), history_state=str(history)))
+                        output=str(profile), history_state=str(history)))
                     self.assertEqual(profile.read_bytes()[:5], b'LXBC2')
                     genesis_metadata = directory / 'genesis-metadata'
                     write_new(genesis_metadata, metadata(unhex(deployed['asset'], 32), actor_public, os.urandom(32)))
@@ -401,8 +430,7 @@ class DisposableCustody(unittest.TestCase):
                         '--attestor-public-key', '0x' + authority.public_key().public_bytes(
                             Encoding.Raw, PublicFormat.Raw).hex(),
                         '--beneficiary-key', '0x' + actor_public.hex(), '--network-id', '402',
-                        '--confirmations', '2', '--vault-artifact', str(self.vault_artifact),
-                        '--history-state', str(history)]
+                        '--confirmations', '2', '--history-state', str(history)]
                     command(*evidence_args, '--output', str(directory / 'evidence'))
                     produced_profile = (directory / 'evidence/custody.profile').read_bytes()
                     self.assertEqual(produced_profile, profile.read_bytes())

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod client;
+pub mod custody;
 mod deposit;
 mod exit;
 mod finality;
@@ -15,6 +16,10 @@ pub use client::{
     BlockRef, ClientConfigError, EndpointError, ExecutionOutcome, LogRecord, PaxeerClient,
     TransactionHash, TransactionHashError, TransactionInclusion, TransactionView,
 };
+pub use custody::{
+    CustodyAbiError, CustodyAsset, CustodyClaim, ForcedExitMaterial, WithdrawalMaterial,
+    CUSTODY_PRECOMPILE, WEI_PER_BASE_UNIT,
+};
 pub use deposit::{
     account_address, account_address_for_protocol, deposit_leaf_bytes,
     deposit_root_registration_message, AccountAddressError, AdmittedCustody, AgentCreditContext,
@@ -23,9 +28,8 @@ pub use deposit::{
     ProofFault, PublishedDepositProof,
 };
 pub use exit::{
-    balance_leaf, emergency_withdrawal_id, exit_nullifier, merkle_node, EmergencyExit, ExitClaim,
-    ExitConfig, ExitConfigError, ExitEligibility, ExitError, ExitEvidence, ExitProgress,
-    ExitRefusal, GuarantorAttestation,
+    verify_exit_balance, EmergencyExit, ExitClaim, ExitConfig, ExitConfigError, ExitEligibility,
+    ExitError, ExitEvidence, ExitProgress, ExitRefusal,
 };
 pub use finality::{
     ChainSignal, ConfirmationProgress, EndpointSignal, FinalityReport, FinalityStage,
@@ -41,11 +45,10 @@ pub use status::{
     BoundaryHealth, BoundaryStatus, ChainStatus, ContractStatus, DelayExpectation, EndpointStatus,
 };
 pub use withdraw::{
-    CancellationEvidence, CancelledFundsDisposition, ChallengeHold, ChallengeKind, CheckpointProof,
-    ClaimProgress, ClaimRefusal, CommittedWithdrawalDebit, DebitExpectation, DebitFault,
-    PaxeerFundsDisposition, PayoutEvidence, ProtocolDebitDisposition, SubmittedWithdrawalClaim,
-    WithdrawalAttestation, WithdrawalBoundary, WithdrawalClaim, WithdrawalConfig,
-    WithdrawalConfigError, WithdrawalError,
+    CancellationEvidence, CancelledFundsDisposition, ClaimProgress, ClaimRefusal,
+    CommittedWithdrawalDebit, DebitExpectation, DebitFault, PaxeerFundsDisposition, PayoutEvidence,
+    ProtocolDebitDisposition, SubmittedWithdrawalClaim, WithdrawalBoundary, WithdrawalClaim,
+    WithdrawalConfig, WithdrawalConfigError, WithdrawalError, ANCHOR_PRECOMPILE,
 };
 
 /// Stable identity of the Paxeer custody-boundary client.
