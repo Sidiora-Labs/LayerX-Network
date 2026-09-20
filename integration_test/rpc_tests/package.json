@@ -15,7 +15,7 @@
     "rpc:ci": "bash scripts/run-ci.sh"
   },
   "dependencies": {
-    "@cosmjs/amino": "^0.32.4",
+    "@cosmjs/amino": "^0.39.0",
     "@cosmjs/cosmwasm-stargate": "^0.32.4",
     "@cosmjs/crypto": "^0.32.4",
     "@cosmjs/encoding": "^0.32.4",
