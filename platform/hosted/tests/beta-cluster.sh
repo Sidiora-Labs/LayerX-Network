@@ -1978,8 +1978,11 @@ PYPUBLISH
 # The reference naming program is deployed by the node treasury, the same publication authority the reference
 # escrow deployment of human_journal_deploy uses: the registry admits a deployment only against protocol
 # evidence its node boundary produced, and the node treasury signer is the only deployment principal the
-# bring-up holds inside the node pod. It runs before human_evidence_provision so that the single journal
-# materialisation of human_journal_deploy exports both deployment pairs to $WORK_DIR/registry-journal.
+# bring-up holds inside the node pod. human_evidence_provision calls it inside two bounds. It runs after
+# human_native_provision, because the owner admission there requires a fresh native genesis head and this
+# deployment commits an activity that advances the head. It runs before human_journal_deploy, because that
+# step materialises the registry journal exactly once and the export to $WORK_DIR/registry-journal has to
+# hold both deployment pairs: explorer_observation_publish reads the naming program id from that export.
 naming_program_deploy() {
     local example="$REPO_ROOT/programs/sdk/rust/examples/naming"
     local artifact="$WORK_DIR/program-target/wasm32-unknown-unknown/release/layerx_reference_naming.wasm"
@@ -3650,7 +3653,6 @@ beta_cluster_up() {
         done
         apply_configmap "$TESTNET_NAMESPACE" layerx-human-guardian-bindings \
             --from-file=bindings.json="$WORK_DIR/human-evidence-input/recovery-guardian-bindings.json"
-        naming_program_deploy
         human_evidence_provision
         human_policy_publish
     fi

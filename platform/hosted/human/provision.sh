@@ -229,6 +229,7 @@ human_evidence_provision() (
     human_native_provision
     explorer_read_principal_fund
     python3 "$provision" --validate-owner-registration --work-dir "$WORK_DIR"
+    naming_program_deploy
     registry_deployment_produce
     human_journal_deploy
     python3 "$provision" --validate-evidence-inputs --work-dir "$WORK_DIR" \
