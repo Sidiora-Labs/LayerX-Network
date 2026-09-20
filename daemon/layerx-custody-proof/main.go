@@ -13,6 +13,14 @@ import (
 )
 
 func run(output io.Writer) error {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "light-profile":
+			return lightProfile(os.Args[2:])
+		case "light-credit":
+			return lightCredit(os.Args[2:])
+		}
+	}
 	flags := flag.NewFlagSet("layerx-custody-proof", flag.ContinueOnError)
 	state := flags.String("history-state", "", "protected authenticated history directory")
 	key := flags.String("attestor-key", "", "protected attestor seed file")

@@ -2025,6 +2025,9 @@ lxp_result lxp_ctx_bridge_credit(lxp_module_ctx *ctx,
                                  const lxp_bridge_credit *credit)
 {
     lxp_bridge_profile profile;
+    lxp_bridge_light_trust trusted;
+    lxp_bridge_light_trust advanced;
+    uint8_t trust_bytes[LXP_BRIDGE_LIGHT_TRUST_BYTES];
     const uint8_t *stored;
     size_t stored_length;
     uint8_t nullifier[32];
@@ -2065,8 +2068,8 @@ lxp_result lxp_ctx_bridge_credit(lxp_module_ctx *ctx,
         ctx->transfer_applied || ctx->effects == NULL || ctx->effects->count != 0U ||
         ctx->next_effect_ordinal != 0U ||
         activity->activity_type != LXP_BRIDGE_CREDIT ||
-        activity->payload.bytes == NULL || activity->payload.length != sizeof(credit->bytes) ||
-        memcmp(activity->payload.bytes, credit->bytes, sizeof(credit->bytes)) != 0 ||
+        activity->payload.bytes == NULL ||
+        !lxp_bridge_credit_matches(credit, activity->payload.bytes, activity->payload.length) ||
         activity->authority.length != 32U || activity->actor_did.bytes == NULL ||
         activity->actor_did.length == 0U ||
         activity->actor_did.length > sizeof(name) - 11U ||
@@ -2093,8 +2096,11 @@ lxp_result lxp_ctx_bridge_credit(lxp_module_ctx *ctx,
     if (status != LXP_OK || stored_length != sizeof(profile.bytes))
         return LXP_ERR_DEPOSIT_PROOF_NOT_FINAL;
     (void)memcpy(profile.bytes, stored, sizeof(profile.bytes));
+    status = lxp_bridge_light_trust_load(ctx, &profile, &trusted);
+    if (status != LXP_OK) return LXP_ERR_DEPOSIT_PROOF_NOT_FINAL;
     status = lxp_bridge_credit_verify(&profile, credit, activity->network_id,
-                                      activity->protocol_version, nullifier);
+                                      activity->protocol_version, &trusted, nullifier,
+                                      &advanced);
     if (status != LXP_OK) return status;
     if (lxp_ct_memcmp(nullifier, activity->idempotency_key, 32U) != 0)
         return LXP_ERR_CONTEXT_MISMATCH;
@@ -2141,6 +2147,10 @@ lxp_result lxp_ctx_bridge_credit(lxp_module_ctx *ctx,
     status = lxp_ctx_account_find(ctx, beneficiary, &recipient);
     if (status == LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE) {
         lx_account_registration *registration = &ctx->staged_accounts[0];
+        if (!lxp_bridge_credit_owner_bound(activity->actor_did.bytes,
+                                           activity->actor_did.length,
+                                           authority->verified_key))
+            return LXP_ERR_ACCOUNT_ID_MISMATCH;
         (void)memset(registration, 0, sizeof(*registration));
         registration->expected_count = ctx->kernel->state->accounts->count;
         recipient = &registration->account;
@@ -2168,6 +2178,12 @@ lxp_result lxp_ctx_bridge_credit(lxp_module_ctx *ctx,
     if (status == LXP_OK)
         status = lxp_ctx_kv_put(ctx, replay_key, sizeof(replay_key), credit->bytes,
                                 sizeof(credit->bytes));
+    if (status == LXP_OK && advanced.height != trusted.height) {
+        status = lxp_bridge_light_trust_encode(&advanced, trust_bytes);
+        if (status == LXP_OK)
+            status = lxp_ctx_kv_put(ctx, lxp_bridge_light_trust_key, 32U, trust_bytes,
+                                    sizeof(trust_bytes));
+    }
 #ifdef LXP_TESTING
     if (status == LXP_OK && ctx->bridge_credit_fail_stage == 1U) status = LXP_ERR_IO;
 #endif

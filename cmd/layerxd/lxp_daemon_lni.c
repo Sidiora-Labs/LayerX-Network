@@ -1971,6 +1971,7 @@ static lxp_result program_admission_decode(
     if (activity->activity_type == LXP_BRIDGE_CREDIT) {
         lxp_bridge_profile profile;
         lxp_bridge_credit credit;
+        lxp_bridge_light_trust trusted;
         const uint8_t *value;
         size_t length;
         uint8_t nullifier[32];
@@ -1978,7 +1979,8 @@ static lxp_result program_admission_decode(
         lxp_u128 balance;
         if (owner->kernel == NULL || owner->scratch == NULL ||
             owner->kernel->state == NULL || owner->kernel->state->accounts == NULL ||
-            activity->payload.length != sizeof(credit.bytes) ||
+            lxp_bridge_credit_parse(activity->payload.bytes, activity->payload.length,
+                                    &credit) != LXP_OK ||
             activity->authority.length != 32U)
             return LXP_ERR_NON_CANONICAL;
         status = lxp_module_ctx_init(&ctx, owner->kernel, LXP_MODULE_BRIDGE, 0U,
@@ -1988,9 +1990,11 @@ static lxp_result program_admission_decode(
         if (status != LXP_OK) return status;
         if (length != sizeof(profile.bytes)) return LXP_ERR_NON_CANONICAL;
         (void)memcpy(profile.bytes, value, length);
-        (void)memcpy(credit.bytes, activity->payload.bytes, sizeof(credit.bytes));
+        status = lxp_bridge_light_trust_load(&ctx, &profile, &trusted);
+        if (status != LXP_OK) return status;
         status = lxp_bridge_credit_verify(&profile, &credit, owner->network_id,
-                                          activity->protocol_version, nullifier);
+                                          activity->protocol_version, &trusted, nullifier,
+                                          NULL);
         if (status == LXP_OK)
             status = lni_principal(owner->kernel->state->accounts, activity,
                                    activity->authority.bytes, principal,

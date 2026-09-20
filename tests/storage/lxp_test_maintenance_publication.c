@@ -550,9 +550,8 @@ static int maintenance_bridge(const char *manifest_path, const char *activity_pa
     CHECK(lxp_bridge_genesis_profile(manifest, &profile, &present) == LXP_OK && present);
     CHECK(lxp_activity_decode(activity_bytes, activity_length, &activity) == LXP_OK);
     CHECK(lxp_activity_verify_signature(&activity) == LXP_OK && activity.activity_type == LXP_BRIDGE_CREDIT);
-    CHECK(activity.payload.length == sizeof(credit.bytes));
-    memcpy(credit.bytes, activity.payload.bytes, sizeof(credit.bytes));
-    CHECK(lxp_bridge_credit_verify(&profile, &credit, manifest->network_id, 3U, nullifier) == LXP_OK);
+    CHECK(lxp_bridge_credit_parse(activity.payload.bytes, activity.payload.length, &credit) == LXP_OK);
+    CHECK(lxp_bridge_credit_verify(&profile, &credit, manifest->network_id, 3U, NULL, nullifier, NULL) == LXP_OK);
     CHECK(lxp_u128_from_be(credit.bytes + 191U, &amount) == LXP_OK);
     CHECK(lx_account_registry_init(&f->accounts) == LXP_OK);
     CHECK(lxp_state_store_init(&f->state, 1U) == LXP_OK);
