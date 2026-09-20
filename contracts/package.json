@@ -18,7 +18,7 @@
   "devDependencies": {
     "@nomicfoundation/hardhat-foundry": "^1.1.1",
     "@nomicfoundation/hardhat-toolbox": "^4.0.0",
-    "@openzeppelin/hardhat-upgrades": "^3.0.2",
+    "@openzeppelin/hardhat-upgrades": "^4.1.0",
     "@openzeppelin/test-helpers": "^0.5.16",
     "@types/node": "^24.2.0",
     "dotenv": "^16.3.1",
