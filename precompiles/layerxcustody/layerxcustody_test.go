@@ -75,6 +75,10 @@ func newHarness(t *testing.T, withdrawalDelay uint64) *harness {
 	fixture, err := testvectors.Load()
 	require.NoError(t, err)
 	h := &harness{t: t, keeper: app.LayerXCustodyKeeper, withdrawal: fixture["withdrawal"][0], exit: fixture["exit"][0]}
+	// This harness exercises custody against its own authority-registered
+	// checkpoints; the app wires the anchor module's reader, which
+	// TestWithdrawalReadsAnchorFinalizedCheckpoint covers.
+	h.keeper.SetAnchorReader(nil)
 	h.callerAcc, h.caller = testkeeper.MockAddressPair()
 	app.EvmKeeper.SetAddressMapping(ctx, h.callerAcc, h.caller)
 	for _, denom := range []string{sdk.MustGetBaseDenom(), tokenDenom} {
