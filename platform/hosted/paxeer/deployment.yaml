@@ -83,6 +83,7 @@ spec:
     - from:
         - podSelector: {matchLabels: {app: layerx-testnet-control}}
         - podSelector: {matchLabels: {app: layerx-node}}
+        - podSelector: {matchLabels: {app: layerx-gateway}}
         - namespaceSelector: {}
           podSelector: {matchLabels: {layerx-plane: human}}
       ports: [{protocol: TCP, port: 9443}]

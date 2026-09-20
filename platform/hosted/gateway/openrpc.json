@@ -3,7 +3,7 @@
   "info": {
     "title": "LayerX public JSON-RPC",
     "version": "0.1.0",
-    "description": "Public JSON-RPC reads, authenticated activity submission and scoped WebSocket subscriptions. Native DID enumeration, asset listing/detail and canonical fee estimation forward to authenticated core reads; unavailable evidence is returned explicitly and balances, metadata or fees are never fabricated."
+    "description": "Public JSON-RPC reads, authenticated activity submission and scoped WebSocket subscriptions. Native DID enumeration, asset listing/detail and canonical fee estimation forward to authenticated core reads; unavailable evidence is returned explicitly and balances, metadata or fees are never fabricated. The same endpoint relays the Paxeer EVM JSON-RPC namespaces eth_, net_ and web3_ to the chain's node byte for byte, including eth_sendRawTransaction and batches that mix EVM and LayerX calls; node-side signing methods (eth_accounts, eth_coinbase, eth_sendTransaction, eth_sign, eth_signTransaction, eth_signTypedData, eth_signTypedData_v4, eth_mining) and eth_subscribe/eth_unsubscribe are refused here rather than at the node. The px_ namespace joins both domains through the native precompiles addr (0x0000000000000000000000000000000000001004), layerxCustody (0x0000000000000000000000000000000000001013) and layerxAnchor (0x0000000000000000000000000000000000001014)."
   },
   "methods": [
     {
@@ -707,6 +707,160 @@
         {
           "code": -32001,
           "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "px_resolveAccount",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "account",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Resolves one account across both domains. The argument is either a 0x-prefixed 20-byte EVM address or a LayerX DID (did:layerx:<64 hex> or the bare 64 hex characters of the DID public key). The result is {evm_address, pax_address, layerx_did, layerx_account, bound}: every field comes from the addr precompile's getUnifiedAccount/getEvmAddrByLayerX, the halves that are not bound are null, and bound is false when the EVM address carries no LayerX DID. A LayerX account identifier has no reverse index on chain, so only the DID public key resolves from the LayerX side. An unconfigured Paxeer endpoint is -32001 with data.code=paxeer_rpc_not_configured.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Paxeer read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "px_getAccount",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "account",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Resolves the account and joins both halves: paxeer is {address, balance, nonce} read with eth_getBalance and eth_getTransactionCount at latest, layerx is the public core account read for the DID's main account. Either half is null when the account is not bound or the domain has no record. Balances and sequences are never fabricated: an unavailable domain is an explicit -32001 rather than a zero.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Paxeer read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "px_getBalances",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "account",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Per-asset balances on both domains for one account. Assets come from the public core asset registry ordered by asset_id and are joined with the custody precompile's getAsset; the Paxeer amount is the bank precompile's balance(address,denom) and the LayerX amount is the DID's account for that asset. At most the first 16 assets are joined per answer, reported as joined_limit. Amounts are exact decimal strings of the on-chain 256-bit values.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Paxeer read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "px_listAssets",
+      "paramStructure": "by-position",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "The joined asset map: for each LayerX asset (asset_id, denom and its public core record) the custody precompile's record on Paxeer (pointer, enabled, paused, minimum_deposit, custody_cap, custodied, released, pending), or null when the asset is not registered with custody. At most 16 assets are joined per answer, reported as joined_limit. Takes no arguments.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Paxeer read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "px_getNetwork",
+      "paramStructure": "by-position",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "One head for the whole network: network_id, paxeer {chain_id, latest_block} from eth_chainId and eth_blockNumber, layerx {node_info} from the public core node information, and anchor {latest_finalized_batch, status, status_name, status_ladder} from the anchor precompile's latestFinalized and statusOf. The status ladder is the anchor's own: 0 unknown, 1 submitted, 2 final. Takes no arguments.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Paxeer read unavailable"
         },
         {
           "code": -32005,

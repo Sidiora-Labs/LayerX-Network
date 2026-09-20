@@ -7,6 +7,7 @@ pub mod evidence;
 pub mod handover;
 pub mod head;
 pub mod lni;
+pub mod paxeer_binding;
 pub mod read;
 pub mod receipt;
 #[cfg(target_os = "linux")]

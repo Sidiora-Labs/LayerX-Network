@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+ed25519-dalek = "=2.2.0"
 layerx-crypto = { path = "../layerx-crypto" }
 layerx-types = { path = "../layerx-types" }
 layerx-wire = { path = "../layerx-wire" }
@@ -18,7 +19,6 @@ rustls = { version = "0.23.32", default-features = false, features = ["ring", "s
 rustix = { version = "=1.1.4", features = ["net", "process"] }
 
 [dev-dependencies]
-ed25519-dalek = "=2.2.0"
 layerx-programs-runtime = { path = "../../../programs/crates/layerx-programs-runtime" }
 
 [lints]
