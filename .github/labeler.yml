@@ -67,7 +67,6 @@ area:paxeer:
           - node/**
           - occ_tests/**
           - parallelization/**
-          - paxeer-docs/**
           - precompiles/**
           - ratelimiter/**
           - rpc/**

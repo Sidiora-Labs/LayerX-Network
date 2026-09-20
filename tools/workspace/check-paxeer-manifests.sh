@@ -9,7 +9,7 @@ trap 'rm -f "$actual" "$declared"' EXIT HUP INT TERM
 # The Paxeer chain sits at the repository root beside the LayerX trees, so the
 # scan names every chain-owned root explicitly instead of walking the whole
 # repository. A new chain top-level directory must be added here.
-chain_roots="admin api assets benchmark consensus custodyproof daemon docker engine example hpx integration_test interchain loadtest modules node occ_tests parallelization paxeer-docs precompiles ratelimiter rpc sdk storage store sync testutil types utils wasm wasm-runtime wasmbinding contracts tests/chain tools/chain tools/tx-scanner tools/utils"
+chain_roots="admin api assets benchmark consensus custodyproof daemon docker engine example hpx integration_test interchain loadtest modules node occ_tests parallelization precompiles ratelimiter rpc sdk storage store sync testutil types utils wasm wasm-runtime wasmbinding contracts tests/chain tools/chain tools/tx-scanner tools/utils"
 for root in $chain_roots; do test -d "$root"; done
 {
     for manifest in go.mod foundry.paxeer.toml; do test -f "$manifest" && printf '%s\n' "$manifest"; done

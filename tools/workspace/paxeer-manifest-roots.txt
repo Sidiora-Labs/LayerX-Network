@@ -9,7 +9,6 @@ go|sdk/ics23/go.mod|build_test_lint
 npm|contracts/package.json|build_static_live_test_blocked
 npm|integration_test/dapp_tests/package.json|build_static_live_test_blocked
 npm|integration_test/rpc_tests/package.json|build_static_live_test_blocked
-npm|paxeer-docs/package.json|build_static
 rust|example/cosmwasm/cw1155/Cargo.toml|build_test_lint
 rust|example/cosmwasm/cw20/Cargo.toml|build_test_lint
 rust|example/cosmwasm/cw721/Cargo.toml|build_test_lint

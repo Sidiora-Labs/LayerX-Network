@@ -39,7 +39,6 @@ on:
       - 'node/**'
       - 'occ_tests/**'
       - 'parallelization/**'
-      - 'paxeer-docs/**'
       - 'precompiles/**'
       - 'ratelimiter/**'
       - 'rpc/**'
@@ -115,7 +114,7 @@ jobs:
           BASE_REF='${{ github.event.pull_request.base.ref }}'
           git fetch --no-tags origin "$BASE_REF":"refs/remotes/origin/$BASE_REF"
           MB=$(git merge-base "origin/$BASE_REF" HEAD)
-          CHAIN_PATHS=(go.mod go.sum chain.mk Dockerfile Dockerfile.dockerignore foundry.paxeer.toml buf.gen.yaml buf.lock buf.yaml codecov.yml config.yml .golangci.yml gen.go link_directives_test.go mod_test.go run_blocktests.sh version.json admin api assets benchmark consensus custodyproof daemon docker engine example hpx integration_test interchain loadtest modules node occ_tests parallelization paxeer-docs precompiles ratelimiter rpc sdk storage store sync testutil types utils wasm wasm-runtime wasmbinding contracts/src contracts/test contracts/scripts contracts/wasm docs/swagger docs/swagger-ui tests/chain tools/chain tools/tx-scanner tools/utils contracts/config/client.toml contracts/hardhat.config.js contracts/package.json contracts/package-lock.json contracts/tsconfig.json docs/evm_jsonrpc_unsupported.md docs/paxeer-network.md docs/paxeer-chain-docs.md scripts ':(exclude)scripts/PaxeerBetaDeploy.s.sol' ':(exclude)scripts/qualify-mirror-live.sh' ':(exclude)scripts/qualify-mirror-verification-live.sh')
+          CHAIN_PATHS=(go.mod go.sum chain.mk Dockerfile Dockerfile.dockerignore foundry.paxeer.toml buf.gen.yaml buf.lock buf.yaml codecov.yml config.yml .golangci.yml gen.go link_directives_test.go mod_test.go run_blocktests.sh version.json admin api assets benchmark consensus custodyproof daemon docker engine example hpx integration_test interchain loadtest modules node occ_tests parallelization precompiles ratelimiter rpc sdk storage store sync testutil types utils wasm wasm-runtime wasmbinding contracts/src contracts/test contracts/scripts contracts/wasm docs/swagger docs/swagger-ui tests/chain tools/chain tools/tx-scanner tools/utils contracts/config/client.toml contracts/hardhat.config.js contracts/package.json contracts/package-lock.json contracts/tsconfig.json docs/evm_jsonrpc_unsupported.md docs/paxeer-network.md docs/paxeer-chain-docs.md scripts ':(exclude)scripts/PaxeerBetaDeploy.s.sol' ':(exclude)scripts/qualify-mirror-live.sh' ':(exclude)scripts/qualify-mirror-verification-live.sh')
           git diff --unified=0 "$MB"..HEAD -- "${CHAIN_PATHS[@]}" > pr.diff
           git --no-pager diff --stat "$MB"..HEAD -- "${CHAIN_PATHS[@]}" > pr.stat || true
 
@@ -182,7 +181,7 @@ jobs:
             HEAD_SHA=$(git rev-parse HEAD)
             {
               echo "The diff is too large to embed safely in this CI run."
-              echo "Inspect the checked-out repository and analyze only the Paxeer chain paths at the repository root: go.mod, chain.mk, admin, api, assets, benchmark, consensus, custodyproof, daemon, docker, engine, example, hpx, integration_test, interchain, loadtest, modules, node, occ_tests, parallelization, paxeer-docs, precompiles, ratelimiter, rpc, sdk, storage, store, sync, testutil, types, utils, wasm, wasm-runtime, wasmbinding, contracts/src, contracts/test, tests/chain, tools/chain, tools/tx-scanner, tools/utils."
+              echo "Inspect the checked-out repository and analyze only the Paxeer chain paths at the repository root: go.mod, chain.mk, admin, api, assets, benchmark, consensus, custodyproof, daemon, docker, engine, example, hpx, integration_test, interchain, loadtest, modules, node, occ_tests, parallelization, precompiles, ratelimiter, rpc, sdk, storage, store, sync, testutil, types, utils, wasm, wasm-runtime, wasmbinding, contracts/src, contracts/test, tests/chain, tools/chain, tools/tx-scanner, tools/utils."
               echo
               echo "Commit range (merge-base...HEAD):"
               echo "merge-base: $MB"
