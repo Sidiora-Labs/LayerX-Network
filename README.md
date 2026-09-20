@@ -19,7 +19,7 @@ Ordinary agent activity is executed and ordered inside LayerX. Periodic checkpoi
 
 This repository is the Sidiora Labs monorepo for Paxeer X Network: the Paxeer chain and the LayerX domain in one repository. Co-location keeps the protocol, settlement network, contracts, and developer surfaces auditable in one place. Each subsystem keeps its own build, release, deployment, and trust boundary. See [`spec/layerx-protocol/design.md`](spec/layerx-protocol/design.md).
 
-## Try the testnet
+## Try the network
 
 The cluster path is [`docs/wiki/Quickstart.md`](docs/wiki/Quickstart.md): install the `layerx` CLI from `platform/cli`, bring up the cluster, source `build/beta-cluster/env`, then create a credential, claim from the faucet, submit an activity, verify the receipt, and deploy a program.
 
@@ -124,7 +124,7 @@ make paxeer-ci
 ## Documentation
 
 - Wiki index: [`docs/wiki/Home.md`](docs/wiki/Home.md)
-- Getting started on testnet: [`docs/wiki/Getting-Started-Testnet.md`](docs/wiki/Getting-Started-Testnet.md)
+- Getting started on the network: [`docs/wiki/Getting-Started-Testnet.md`](docs/wiki/Getting-Started-Testnet.md)
 - Payments developer path: [`docs/wiki/PaymentsQuickstart.md`](docs/wiki/PaymentsQuickstart.md)
 - Public JSON-RPC: [`docs/wiki/PublicRpc.md`](docs/wiki/PublicRpc.md)
 - Assets and tokens: [`docs/wiki/Assets.md`](docs/wiki/Assets.md)

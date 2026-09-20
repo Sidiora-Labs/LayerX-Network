@@ -33,7 +33,7 @@ The image is `ghcr.io/sidiora-labs/layerx-webhooks:0.1.0`
 (`platform/hosted/webhooks/deployment.yaml:69`;
 `platform/hosted/tests/beta-cluster.sh:118`). Dashboard images in the
 same list also use `ghcr.io/sidiora-labs/...`
-(`platform/hosted/tests/beta-cluster.sh:119-120`). Testnet, gateway, faucet, registry, node, boundary, identity, and paxd
+(`platform/hosted/tests/beta-cluster.sh:119-120`). Control, gateway, faucet, registry, node, boundary, identity, and paxd
 images in that list use `ghcr.io/sidiora-labs/...`
 (`platform/hosted/tests/beta-cluster.sh:114-117, 121-128`). These images share the same
 registry prefix. The Dockerfile builds
@@ -69,7 +69,7 @@ Service `layerx-webhooks` `19450:443` and exports `WEBHOOKS_URL`
 (`platform/hosted/tests/beta-cluster.sh:49-50, 1184-1195`).
 
 Default `topology-check.sh` manifests are node, identity, paxeer,
-testnet, gateway, and registry. They do not include
+control, gateway, and registry. They do not include
 `platform/hosted/webhooks/deployment.yaml` or
 `platform/hosted/internal/deployment.yaml`
 (`platform/hosted/tests/topology-check.sh:17-23, 81-88`). Node

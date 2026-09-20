@@ -6,7 +6,7 @@ Asset encodings, public RPC, and 402 commitment extras are documented on
 [`docs/wiki/PaymentsQuickstart.md`](../../docs/wiki/PaymentsQuickstart.md)
 and [`docs/wiki/CommitmentLevels.md`](../../docs/wiki/CommitmentLevels.md).
 
-| Application | Emulator | Testnet |
+| Application | Emulator | Beta |
 |---|---|---|
 | Buyer agent | `npm run start:emulator --workspace @sidiora/layerx-example-buyer-agent` | `npm run start:testnet --workspace @sidiora/layerx-example-buyer-agent` |
 | Paid API | `npm run start:emulator --workspace @sidiora/layerx-example-paid-api` | `npm run start:testnet --workspace @sidiora/layerx-example-paid-api` |
@@ -42,4 +42,4 @@ Every `LAYERX_EMULATOR_*` input is then derived from that run instead of being h
 
 Any of those variables that is already set in the environment is used verbatim, so an owner can override any single input. `LAYERX_EMULATOR_SEED_FILE` skips provisioning and starts the emulator from an existing seed, reading the trust anchor published beside it. `LAYERX_CREDENTIAL_STORE` defaults to `file` with a per-run passphrase so the run needs no operating-system keyring; set `LAYERX_CREDENTIAL_STORE` and `LAYERX_CREDENTIAL_PASSPHRASE` to use your own credential storage.
 
-`--scenario testnet` is unchanged and still expects the `LAYERX_TESTNET_*` inputs. `LAYERX_EXAMPLE_ENDPOINT` overrides the hosted endpoint every testnet profile carries, so the same runner can be pointed at a beta cluster gateway URL.
+`--scenario testnet` is unchanged and still expects the `LAYERX_TESTNET_*` inputs. `LAYERX_EXAMPLE_ENDPOINT` overrides the hosted endpoint every profile carries, so the same runner can be pointed at a beta cluster gateway URL.

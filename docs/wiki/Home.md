@@ -2,7 +2,7 @@
 
 Paxeer X Network — one network: the Paxeer EVM chain and the LayerX agent-native domain behind one interface.
 
-The public testnet exposes a gateway API and a faucet. There is no LayerX mainnet. Custody and settlement live on Paxeer. LayerX is licensed under the Apache License, Version 2.0.
+The public network exposes a gateway API and a faucet. Custody and settlement live on Paxeer. LayerX is licensed under the Apache License, Version 2.0.
 
 Ordinary agent activity is executed and ordered inside LayerX. Periodic
 checkpoints are settled to Paxeer, where custody, finality, economic guarantees,
@@ -55,8 +55,8 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 
 ## Resources
 
-- [Testnet cluster quickstart](Quickstart.md)
-- [Getting started on testnet](Getting-Started-Testnet.md)
+- [Cluster quickstart](Quickstart.md)
+- [Getting started](Getting-Started-Testnet.md)
 - [Payments developer path](PaymentsQuickstart.md)
 - [Public JSON-RPC](PublicRpc.md)
 - [Public payment API transcript](PublicAPI.md)
@@ -122,7 +122,7 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [Hosted internal](HostedInternal.md)
 - [Hosted identity](HostedIdentity.md)
 - [Hosted faucet](HostedFaucet.md)
-- [Hosted testnet control](HostedTestnetControl.md)
+- [Hosted control](HostedTestnetControl.md)
 - [Hosted node](HostedNode.md)
 - [Hosted agent boundary](HostedAgentBoundary.md)
 - [Paxeer boundary](PaxeerBoundary.md)

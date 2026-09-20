@@ -28,13 +28,13 @@ Unknown outcomes are still-checking and are resolved only by receipt lookup
 under the idempotency key. While unresolved, controls that could duplicate
 the economic effect stay disabled.
 
-## Hosted testnet journeys
+## Hosted journeys
 
-Hosted testnet-control admits four developer journeys:
+Hosted control admits four developer journeys:
 `/v1/journeys/funding`, `/v1/journeys/payment`,
 `/v1/journeys/receipt-inspection`, and `/v1/journeys/programs`
-([Hosted testnet control](../operators/testnet-control.md),
-[Testnet quickstart](../overview/quickstart.md)).
+([Hosted control](../operators/testnet-control.md),
+[Quickstart](../overview/quickstart.md)).
 `/v1/journeys/settlement` is not one of them.
 
 The beta specification (`spec/layerx-beta/spec.kvx`, requirement 7) requires

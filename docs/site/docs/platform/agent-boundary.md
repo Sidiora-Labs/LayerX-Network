@@ -304,7 +304,7 @@ version 4, operation 0, and absent program outcome
 | `LAYERX_AGENT_BOUNDARY_STATE_DIR` | Creates `journal/` and `activities/`; manifest `/var/lib/layerx/agent-boundary` (`platform/hosted/agent-boundary/src/main.rs:471-476`; `platform/hosted/node/deployment.yaml:210`) |
 | `LAYERX_AGENT_BOUNDARY_MODULE_REGISTRY_FILE` | Optional JSON `{modules:[{module,ordinals}]}`; default modules `1..=9` with ordinals `1..=16` (`platform/hosted/agent-boundary/src/main.rs:367-407`) |
 
-The testnet pod pins
+The pod pins
 `LAYERX_AGENT_BOUNDARY_NETWORK_ID` from ConfigMap
 `network-name` (`layerx-testnet`) and
 `LAYERX_AGENT_BOUNDARY_PROTOCOL_NETWORK_ID` from `network-id`

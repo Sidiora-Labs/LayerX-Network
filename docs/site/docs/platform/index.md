@@ -25,7 +25,7 @@ This section covers hosted developer surfaces that exist in
 | Developer CLI | [CLI](cli.md) |
 | Public relay / archive nodes | [Relay and archive](relay-archive.md) |
 
-Public testnet origins named in the wiki are
+Public origins named in the wiki are
 `https://api.testnet.layerx.network/rpc` and
 `https://faucet.testnet.layerx.network`
 ([Getting started](../overview/getting-started.md)).

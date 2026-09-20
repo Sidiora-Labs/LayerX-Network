@@ -21,7 +21,7 @@ A atividade ordinária de agentes é executada e ordenada dentro do LayerX. Chec
 
 Este repositório é o monorepo da Sidiora Labs para o Paxeer X Network e a Paxeer Network. A colocalização mantém o protocolo, a rede de liquidação, os contratos e as superfícies de desenvolvedor auditáveis em um só lugar. Cada subsistema conserva seu próprio build, release, implantação e fronteira de confiança. Consulte [`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md).
 
-## Experimente a testnet
+## Experimente a rede
 
 O caminho completo está em [`docs/wiki/Quickstart.md`](../wiki/Quickstart.md): instale o CLI `layerx` a partir de `platform/cli`, suba o cluster, carregue `build/beta-cluster/env` com source, depois crie uma credencial, reivindique no faucet, envie uma atividade, verifique o recibo e implante um programa.
 

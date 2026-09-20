@@ -65,9 +65,9 @@ same wallet name. Import an existing 32-byte hexadecimal seed with
 `layerx wallet import alice`, supplying the seed on stdin. Importing does not
 register or fund an identity.
 
-### Request testnet funds
+### Request beta funds
 
-Use the faucet address and CA certificate supplied with your testnet access.
+Use the faucet address and CA certificate supplied with your beta access.
 Set `FAUCET_URL`, `TESTNET_CA_FILE`, `WALLET_DID`, and `WALLET_PUBLIC_KEY`
 to your endpoint and the public values from `layerx wallet list`.
 Choose a unique `FAUCET_REQUEST_ID` of 16–128 letters, digits, dashes, or
@@ -92,7 +92,7 @@ Amounts are integer base units. `ASSET_ID` is the asset's 64-character
 hexadecimal identifier; `RECIPIENT_DID` is the recipient's DID.
 The recipient's account must already exist for that asset.
 
-Configure your testnet environment with its network ID and store your gateway
+Configure your beta environment with its network ID and store your gateway
 credential under the `testnet` alias. Obtain a receipt policy
 from an independently trusted operator; do not derive trust pins from the RPC
 response being verified. The JSON file contains `protocol_version` (3),
@@ -186,7 +186,7 @@ The stream provides no durable replay. Remote connections require validated TLS.
 
 ### Public JSON-RPC
 
-Select a configured testnet profile, then pass the complete RPC endpoint:
+Select a configured beta profile, then pass the complete RPC endpoint:
 
 ```bash
 layerx --rpc "$RPC_URL" --gateway-credential testnet wallet balance --did "$WALLET_DID"

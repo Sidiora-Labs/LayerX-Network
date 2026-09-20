@@ -244,7 +244,7 @@ Unknown `production_route` values are `404 not_found`
 | `LAYERX_GATEWAY_LISTEN` | Bind address; default `0.0.0.0:9443` (`platform/hosted/gateway/src/main.rs:567-570`; `platform/hosted/gateway/deployment.yaml:72`) |
 | `LAYERX_GATEWAY_TLS_CERT_DER` | Inbound server certificate DER |
 | `LAYERX_GATEWAY_TLS_KEY_DER` | Inbound PKCS#8 key DER |
-| `LAYERX_GATEWAY_PUBLIC_CORE_URL` | HTTPS source for public committed reads; testnet uses `layerx-pending-core` |
+| `LAYERX_GATEWAY_PUBLIC_CORE_URL` | HTTPS source for public committed reads; hosted uses `layerx-pending-core` |
 | `LAYERX_GATEWAY_OUTBOUND_CA_DER` | Trust bundle for HTTPS and Redis |
 | `LAYERX_GATEWAY_CLIENT_IDENTITY_PKCS12` | Outbound client identity |
 | `LAYERX_GATEWAY_CLIENT_IDENTITY_PASSWORD_FILE` | PKCS#12 password |
@@ -488,7 +488,7 @@ Probes: Deployment `readinessProbe` HTTPS `/readyz` every 5s,
 `livenessProbe` HTTPS `/livez` every 15s
 (`platform/hosted/gateway/deployment.yaml:96-97`).
 
-Testnet control probes the gateway with unauthenticated `GET /readyz`
+Testnet-control probes the gateway with unauthenticated `GET /readyz`
 and requires HTTP 200 (`platform/hosted/testnet/src/main.rs:1032-1037`;
 `platform/hosted/testnet/src/main.rs:1104`). Payment, receipt
 inspection, and programs journeys list `Dependency::Gateway`
@@ -497,7 +497,7 @@ inspection, and programs journeys list `Dependency::Gateway`
 `GET /v1/status` reports `hosted_gateway` as `degraded` when Redis is
 ready and `unavailable` when it is not; it never reports
 `available` for that field (`platform/hosted/gateway/src/main.rs:2834-2855`).
-Testnet public status names the gateway as one of four components
+The public status names the gateway as one of four components
 `testnet`, `gateway`, `core`, `paxeer`
 (`platform/hosted/testnet/src/main.rs:1647`). Those two status shapes
 differ.

@@ -297,7 +297,7 @@ opens the store and probes writable before listen
 
 Deployment `readinessProbe` is HTTPS `/readyz` every 5s,
 `failureThreshold` 3; `livenessProbe` is HTTPS `/livez` every 15s
-(`platform/hosted/identity/deployment.yaml:30-31`). Testnet control
+(`platform/hosted/identity/deployment.yaml:30-31`). Control
 probes identity with unauthenticated `GET /readyz` and requires HTTP
 200 (`platform/hosted/testnet/src/main.rs:1032-1034`;
 `platform/hosted/testnet/src/main.rs:1097`). Gateway `/readyz` probes

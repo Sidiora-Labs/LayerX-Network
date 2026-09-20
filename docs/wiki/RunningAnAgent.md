@@ -15,7 +15,7 @@ and the absence of a `layerx` subcommand
 (`agent/crates/layerx-agentd/src/enrolment.rs:397-403`;
 `platform/cli/src/main.rs:43-83`).
 
-This is the second developer path after the testnet quickstart. It
+This is the second developer path after the quickstart. It
 does not document emulator administration. `layerx install a2a`
 refuses the emulator
 (`platform/cli/src/install/mod.rs:573-577`); `layerx install mcp`
@@ -58,7 +58,7 @@ inventory.
 
 ---
 
-## Point the CLI at testnet
+## Point the CLI at the hosted profile
 
 Required command:
 
@@ -78,7 +78,7 @@ already-configured `testnet` profile
 (`platform/cli/src/config.rs:121-126`).
 
 Non-loopback endpoints must use `https://`
-(`platform/cli/src/http.rs:27-37`). The testnet gateway Ingress host
+(`platform/cli/src/http.rs:27-37`). The hosted gateway Ingress host
 in `layerx-testnet` is `api.testnet.layerx.network`
 (`platform/hosted/gateway/deployment.yaml:182, 190-192`). The CLI
 does not default that URL.

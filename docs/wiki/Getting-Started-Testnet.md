@@ -1,4 +1,4 @@
-# Getting started on testnet
+# Getting started
 
 This checklist uses the public gateway and faucet contracts; access still requires credentials
 and independently supplied verification policy.
@@ -14,7 +14,7 @@ Store a gateway `LayerX-Key` credential under the CLI alias `testnet`, keep the
 faucet bearer session out of command history, and obtain the network id and
 receipt-policy trust pins independently of any response you are verifying.
 
-For the disposable local beta cluster, follow [Testnet quickstart](Quickstart.md)
+For the disposable local beta cluster, follow [Quickstart](Quickstart.md)
 and source `build/beta-cluster/env`. That file exports the local origins,
 credential-file paths, and `LAYERX_TEST_CA_FILE` at
 `build/beta-cluster/ca/ca.crt`. Add `--cacert "$LAYERX_TEST_CA_FILE"` only to
@@ -22,7 +22,7 @@ requests for those local cluster endpoints.
 
 ## Wallet and faucet
 
-For a public testnet identity, create an ordinary signing key. Public
+For a public identity, create an ordinary signing key. Public
 `wallet create` is deliberately unavailable because the gateway exposes no
 DID-registration route:
 

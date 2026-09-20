@@ -149,7 +149,7 @@ none.
 Transfer authority is
 required for a candidate (`/v4`) body, or for encoding 4 on a
 successful terminal, unless the historical recorded path applies
-(`program_wire.py:272-276`). The Python and TypeScript decoders on the testnet
+(`program_wire.py:272-276`). The Python and TypeScript decoders
 branch require encoding-4 authority bytes to start directly with
 `LayerX/programs/402LXP/transfer-set/v2\0`
 (`agent/sdk/python/layerx_sdk/program_wire.py:24-25, 278-281`;

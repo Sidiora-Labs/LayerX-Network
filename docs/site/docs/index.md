@@ -6,7 +6,7 @@ Where a surface is specified but not yet present in this tree, the page says so.
 
 Paxeer X Network is a deterministic execution and accounting network built for autonomous agents.
 
-The public testnet exposes a gateway API and a faucet. There is no LayerX mainnet. Custody and settlement live on Paxeer. LayerX is licensed under the Apache License, Version 2.0.
+The public network exposes a gateway API and a faucet. Custody and settlement live on Paxeer. LayerX is licensed under the Apache License, Version 2.0.
 
 Ordinary agent activity is executed and ordered inside LayerX. Periodic
 checkpoints are settled to Paxeer, where custody, finality, economic guarantees,
@@ -57,8 +57,8 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 
 ## Resources
 
-- [Testnet cluster quickstart](overview/quickstart.md)
-- [Getting started on testnet](overview/getting-started.md)
+- [Quickstart](overview/quickstart.md)
+- [Getting started](overview/getting-started.md)
 - [Payments developer path](overview/payments.md)
 - [Public JSON-RPC](platform/gateway-rpc.md)
 - [Public payment API transcript](platform/public-api.md)
@@ -97,7 +97,7 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [Hosted internal](operators/hosted-internal.md)
 - [Hosted identity](platform/identity.md)
 - [Hosted faucet](platform/faucet.md)
-- [Hosted testnet control](operators/testnet-control.md)
+- [Hosted control](operators/testnet-control.md)
 - [Hosted node](platform/hosted-node.md)
 - [Hosted agent boundary](platform/agent-boundary.md)
 - [Paxeer boundary](concepts/paxeer-boundary.md)

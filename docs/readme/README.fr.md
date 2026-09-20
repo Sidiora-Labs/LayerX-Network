@@ -21,7 +21,7 @@ L'activité ordinaire des agents est exécutée et ordonnée dans LayerX. Des po
 
 Ce dépôt est le monorepo Sidiora Labs pour Paxeer X Network et le Paxeer Network. La colocalisation garde le protocole, le réseau de règlement, les contrats et les surfaces développeur auditables en un seul endroit. Chaque sous-système conserve sa propre compilation, publication, déploiement et frontière de confiance. Voir [`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md).
 
-## Essayer le testnet
+## Essayer le réseau
 
 Le parcours complet est [`docs/wiki/Quickstart.md`](../wiki/Quickstart.md) : installer le CLI `layerx` depuis `platform/cli`, démarrer le cluster, sourcer `build/beta-cluster/env`, puis créer un identifiant, réclamer au faucet, soumettre une activité, vérifier le reçu, et déployer un programme.
 

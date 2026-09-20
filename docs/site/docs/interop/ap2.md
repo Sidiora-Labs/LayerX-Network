@@ -31,7 +31,7 @@ declare public HTTP routes of its own in `src/lib.rs`. Hosted product URLs
 for an AP2 checkout endpoint are not named in the copied wiki set. If a
 deployment exposes AP2 through the interoperability gateway, that wiring is
 an operator configuration of `interop/crates/layerx-interop-service`, not a
-public testnet hostname documented here.
+public hostname documented here.
 
 ## Status
 

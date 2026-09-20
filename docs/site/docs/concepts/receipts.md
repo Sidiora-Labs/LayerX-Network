@@ -40,7 +40,7 @@ receipt is not execution evidence.
 `layerx-proof` verifies a signed receipt from its bytes alone
 (`spec/.beta/layerx-agent-interface/spec.kvx`, requirement 6). The CLI command
 `layerx receipt verify` is a local check against caller-supplied batch facts
-([CLI](../platform/cli.md), [Testnet quickstart](../overview/quickstart.md)).
+([CLI](../platform/cli.md), [Quickstart](../overview/quickstart.md)).
 
 `layerx-portable` exports and verifies a `layerx-receipt-proof-v1` JSON object
 against an independently trusted `AuthorizedBatch` with no node, gateway,

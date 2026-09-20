@@ -54,7 +54,7 @@ The hosted TLS surface that submits signed activities onto node LNI is
 [Hosted agent boundary](../platform/agent-boundary.md). That binary is not
 `layerx-agentd`. The disposable beta cluster does not start agentd; it
 forwards the agent-boundary Service
-([Testnet quickstart](../overview/quickstart.md)).
+([Quickstart](../overview/quickstart.md)).
 
 ## Pre-queue authentication (beta)
 

@@ -44,7 +44,7 @@ Descriptions are the strings `catalogue.rs` returns from `description`.
 | `token.transfer` | write | `write:token:transfer` | Submit | Transfer one asset amount through the ordinary daemon submission path. |
 | `grant.issue` | write | `write:grant:issue` | Submit | Issue one spending grant through the ordinary daemon submission path. |
 | `grant.draw` | write | `write:grant:draw` | Submit | Draw against one spending grant through the ordinary daemon submission path. |
-| `faucet.request` | write | `write:faucet:claim` | FaucetClaim | Claim one bounded testnet faucet grant for the named DID and signer key through the daemon's faucet operation. |
+| `faucet.request` | write | `write:faucet:claim` | FaucetClaim | Claim one bounded beta faucet grant for the named DID and signer key through the daemon's faucet operation. |
 
 Read tools are absent from the list when the bound scope does not include
 them.

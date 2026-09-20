@@ -45,7 +45,7 @@ surfaces. Technical details and the public explorer are exempt.
 The Human HTTPS API is an in-cluster Service `layerx-human` on the node pod's
 `human` container. The disposable cluster forwards it on host port `19453`
 ([Hosted gateway](../platform/hosted-gateway.md),
-[Testnet quickstart](../overview/quickstart.md)).
+[Quickstart](../overview/quickstart.md)).
 That origin is a cluster port-forward, not a public product URL.
 
 ## Status
