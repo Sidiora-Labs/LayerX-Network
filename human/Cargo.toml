@@ -7,6 +7,7 @@ members = [
     "crates/layerx-human-kms",
     "crates/layerx-human-movement-provider",
     "crates/layerx-intents",
+    "crates/layerx-network-gateway",
     "crates/layerx-paxeer-client",
     "crates/layerx-explorer-index",
 ]
@@ -35,6 +36,7 @@ layerx-programs = { package = "layerx-programs-registry", path = "../programs/cr
 layerx-programs-protocol-adapter = { path = "../programs/crates/layerx-programs-protocol-adapter" }
 layerx-agentd = { path = "../agent/crates/layerx-agentd" }
 layerx-paxeer-client = { path = "crates/layerx-paxeer-client" }
+layerx-network-gateway = { path = "crates/layerx-network-gateway" }
 layerx-intents = { path = "crates/layerx-intents" }
 passkey-auth = "=0.1.3"
 proptest = "=1.7.0"

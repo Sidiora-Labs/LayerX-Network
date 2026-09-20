@@ -167,10 +167,44 @@ Clients that want to bind an account call `bindLayerX` with a signature the
 `layerx-client` crate builds: `layerx_client::paxeer_binding::Binding` assembles
 the exact consent message described below and signs it with the DID key.
 
+## Unified intent planning
+
+The human service plans one stated intent across both domains. `plan(intent,
+observed_state)` is pure: the same intent over the same observed state yields
+byte-identical plan bytes, so the plan digest is stable. That digest is bound
+into every leg's action key, every signing context and the journey idempotency
+key, so a signed plan cannot be re-routed — altering any leg changes the digest
+and therefore invalidates every signature over it.
+
+The planner never reads the network itself. `ObservedStateBuilder` assembles
+the snapshot it consumes, and each source is read from the one place that is
+authoritative for it:
+
+- the bound wallet and its Paxeer balances come from the gateway's `px_*`
+  joins, through the shared network-gateway client, and stay tagged as
+  gateway-reported;
+- the LayerX spendable balances, the allowance inventory (budget allowances,
+  payer grants and delegated capabilities with their remaining caps) and the
+  budget bindings come from the service's own records — never from the caller's
+  request, which states an intent and never the headroom that would authorise
+  it;
+- the fee schedule and limits come from the same component configuration that
+  move, deposit and withdraw already take them from.
+
+A source that cannot answer is a typed refusal naming that source. An
+unobserved balance is never read as zero: an asset with no joined row, or a
+joined row with no Paxeer half, refuses the plan rather than planning on a
+partial state. A top-up leg is emitted only when a user-signed allowance
+covers that exact leg; where none does, the plan is refused and no allowance is
+widened or synthesised.
+
+Both the human service and the explorer index read the gateway endpoint from
+`LAYERX_NETWORK_GATEWAY_ENDPOINT`.
+
 ## Not yet built
 
 The following components are planned but not yet implemented:
 
-- **Unified index / explorer account page** — a single view that merges activity from both domains for one account.
-- **Intent routing** — a mechanism for expressing cross-domain intents that the network resolves automatically.
+- **Intent HTTP endpoints** — `intent.plan` and `intent.submit` are not yet declared in the human API schema, so the planner is reachable in-process but not over HTTP.
+- **Intent bindings in the agent SDKs** — typed `planIntent`, `submitPlan` and `px_*` read helpers.
 - **Light-client verification of Paxeer deposits on LayerX** — a light-client proof that a deposit transaction was included in a Paxeer block, verifiable on the LayerX side without a full Paxeer node.

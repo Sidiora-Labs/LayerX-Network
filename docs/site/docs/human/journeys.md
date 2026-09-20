@@ -41,6 +41,26 @@ The beta specification (`spec/layerx-beta/spec.kvx`, requirement 7) requires
 per-journey readiness: a journey is ready only when every declared dependency
 is reachable. A global green with a missing dependency is a defect.
 
+## Stating an intent once
+
+A human states one intent — move an amount of one asset from one endpoint to
+another, where either end may be the bound Paxeer wallet or a LayerX account,
+agent or agent budget — and the network plans it. The plan is a single ordered
+set of legs spanning both domains, with one digest bound into every action key,
+every signing context and the journey idempotency key. The user signs that
+plan; a plan whose legs changed no longer matches its signatures.
+
+This does not add a transfer type. Deposit and withdrawal still name movements
+across the Paxeer custody boundary only, everything inside LayerX is still one
+verb, and the route resolver still picks the mechanism. Intent planning is how
+one statement reaches a route across both domains at once, not a new choice put
+to the user.
+
+The planner refuses rather than guesses. If the wallet binding, a balance, the
+allowance inventory or the fee schedule cannot be read, the answer is a typed
+refusal naming that source — never a plan over a partial state. Progress is
+read through the existing journey status route, and done is still a receipt.
+
 ## Reclaim
 
 A human takes money back from a managed agent only by defunding a protocol

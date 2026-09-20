@@ -504,6 +504,8 @@ spec:
               value: /run/layerx/human/components.sock
             - name: LAYERX_HUMAN_WEB_ORIGIN
               value: https://human.testnet.layerx.network
+            - name: LAYERX_NETWORK_GATEWAY_ENDPOINT
+              value: https://layerx-gateway.layerx-testnet.svc.cluster.local:443/rpc
           ports:
             - name: human-https
               containerPort: 9447
@@ -1030,6 +1032,8 @@ spec:
       ports: [{protocol: TCP, port: 9444}]
     - to: [{podSelector: {matchLabels: {app: layerx-node}}}]
       ports: [{protocol: TCP, port: 9445}]
+    - to: [{podSelector: {matchLabels: {app: layerx-gateway}}}]
+      ports: [{protocol: TCP, port: 9443}]
 ---
 apiVersion: v1
 kind: Service
