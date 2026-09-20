@@ -17,11 +17,12 @@ use zeroize::Zeroizing;
 use crate::production::SecretBytes;
 
 use super::{
-    verify_program_evidence, AgentErrorClass, BoundProgramRequest, NativeProgramCallRequest,
-    NativeProgramTransport, ProgramCallRequest, ProgramExecutionEvidence, ProgramLifecycle,
-    ProgramOperationError, ProgramServiceError, ProgramSimulationEvidence, ProgramSource,
-    ProgramSubmission, ProgramTransport, Retriability, VerifiedProgramDiscovery,
-    VerifiedProgramInterface, VerifiedProgramSimulation, MAX_SIGNED_ACTIVITY_BYTES,
+    verify_program_evidence_with_payers, AgentErrorClass, BoundProgramRequest,
+    NativeProgramCallRequest, NativeProgramTransport, OccupancyPayer, ProgramCallRequest,
+    ProgramExecutionEvidence, ProgramLifecycle, ProgramOperationError, ProgramServiceError,
+    ProgramSimulationEvidence, ProgramSource, ProgramSubmission, ProgramTransport, Retriability,
+    VerifiedProgramDiscovery, VerifiedProgramInterface, VerifiedProgramSimulation,
+    MAX_OCCUPANCY_PAYERS, MAX_SIGNED_ACTIVITY_BYTES,
 };
 
 const MAX_HTTP_REQUEST_BYTES: usize = 4 * 1_048_576 + 4096;
@@ -1187,7 +1188,7 @@ fn execution_call_binding(
     activity_id: [u8; 32],
     program_id: [u8; 32],
     guest_abi_version: u16,
-) -> Result<([u8; 32], u16), ProgramOperationError> {
+) -> Result<([u8; 32], u16, Vec<u8>), ProgramOperationError> {
     let registry = crate::program_lifecycle::programs_module_registry()?;
     let activity = layerx_wire::activity::decode_signed(signed_activity, &registry)
         .map_err(|_| ProgramOperationError::Decode)?;
@@ -1219,7 +1220,33 @@ fn execution_call_binding(
     }
     let payload_hash =
         layerx_wire::hash::payload_hash(&activity).map_err(|_| ProgramOperationError::Decode)?;
-    Ok((payload_hash, activity.protocol_version()))
+    Ok((
+        payload_hash,
+        activity.protocol_version(),
+        activity.actor_did().to_vec(),
+    ))
+}
+
+fn occupancy_payer_hints(
+    value: &Map<String, Value>,
+) -> Result<Vec<(Vec<u8>, [u8; 32])>, ProgramOperationError> {
+    let Some(hints) = value.get("occupancy_payers") else {
+        return Ok(Vec::new());
+    };
+    let hints = hints.as_array().ok_or(ProgramOperationError::Decode)?;
+    if hints.len() > MAX_OCCUPANCY_PAYERS {
+        return Err(ProgramOperationError::Bounds);
+    }
+    hints
+        .iter()
+        .map(|hint| {
+            let hint = object(hint)?;
+            Ok((
+                required_string(hint, "did")?.as_bytes().to_vec(),
+                fixed(hint, "account_id")?,
+            ))
+        })
+        .collect()
 }
 
 fn decode_execution(
@@ -1271,8 +1298,17 @@ fn decode_execution(
     let output_bytes = decimal_u64(usage, "output_bytes")?;
     let fee_units = decimal_u128(usage, "fee_units")?;
     let outcome = value.get("outcome").ok_or(ProgramOperationError::Decode)?;
-    let (payload_hash, protocol_version) =
+    let (payload_hash, protocol_version, actor_did) =
         execution_call_binding(signed_activity, activity_id, program_id, guest_abi_version)?;
+    let payer_hints = occupancy_payer_hints(value)?;
+    let mut occupancy_payers = vec![OccupancyPayer {
+        did: &actor_did,
+        account: None,
+    }];
+    occupancy_payers.extend(payer_hints.iter().map(|(did, account)| OccupancyPayer {
+        did,
+        account: Some(*account),
+    }));
     let evidence = ProgramExecutionEvidence {
         payload_hash,
         receipt,
@@ -1283,7 +1319,7 @@ fn decode_execution(
         program_id,
         guest_abi_version,
     };
-    let verified = verify_program_evidence(&evidence)?;
+    let verified = verify_program_evidence_with_payers(&evidence, &occupancy_payers)?;
     let protocol = verified
         .receipt()
         .receipt()

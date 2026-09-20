@@ -4,10 +4,8 @@ use layerx_programs_runtime::terminal::{
     decode_terminal_payload, CandidateTerminalOutcome, DecodedTerminal, ExecutionTerminal,
     FailureTerminal, PreRuntimeFailure, TerminalDetail, EMPTY_CALL_GRAPH, PRE_RUNTIME_FAILURE,
 };
-use layerx_programs_runtime::{
-    BudgetMeterRefusal, OccupancyPaymentAccount, OccupancySettlement, ProgramFailure,
-    MAX_OCCUPANCY_PAYERS,
-};
+use layerx_programs_runtime::{BudgetMeterRefusal, OccupancySettlement, ProgramFailure};
+pub use layerx_programs_runtime::{OccupancyPaymentAccount, MAX_OCCUPANCY_PAYERS};
 use layerx_types::intent::{
     ProgramCallOutcome, ProgramCallResponse, ProgramLegacyCallResponse, ProgramLegacyValue,
 };

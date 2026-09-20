@@ -1,7 +1,8 @@
 use layerx_proof::inclusion::{verify_receipt, SequencerAuthorization};
 use layerx_proof::merkle::Proof;
 use layerx_proof::program::{
-    verify_authorized_program_execution, AuthorizedProgramExecutionExpectation,
+    verify_authorized_program_execution_with_payers, AuthorizedProgramExecutionExpectation,
+    OccupancyPayer,
 };
 use layerx_proof::receipt::{
     authorized_maintained_activity_batch_chain, verify_program_outcome, verify_sequencer_signature,
@@ -125,15 +126,30 @@ pub(super) fn document(
     Ok(document)
 }
 
+/// The signed call a stored execution must prove, with the actor DID offered
+/// to the verifier as an occupancy payer.
+#[derive(Clone, Copy)]
+pub(super) struct ExpectedCall<'a> {
+    pub activity_id: [u8; 32],
+    pub program_id: [u8; 32],
+    pub payload_hash: [u8; 32],
+    pub guest_abi_version: u16,
+    pub actor_did: &'a [u8],
+}
+
 pub(super) fn verify(
     stored: &StoredExecution,
     receipt_bytes: &[u8],
-    activity_id: [u8; 32],
-    program_id: [u8; 32],
-    payload_hash: [u8; 32],
-    guest_abi_version: u16,
+    expected: ExpectedCall<'_>,
     network_id: u32,
 ) -> Result<(), String> {
+    let ExpectedCall {
+        activity_id,
+        program_id,
+        payload_hash,
+        guest_abi_version,
+        actor_did,
+    } = expected;
     if stored.version != 1 {
         return Err(error("artifact journal version"));
     }
@@ -173,7 +189,7 @@ pub(super) fn verify(
     if terminal.is_empty() || graph.is_empty() {
         return Err(error("missing execution artifacts"));
     }
-    verify_authorized_program_execution(
+    verify_authorized_program_execution_with_payers(
         receipt_bytes,
         &terminal,
         &graph,
@@ -184,6 +200,10 @@ pub(super) fn verify(
             payload_hash,
             guest_abi_version,
         },
+        &[OccupancyPayer {
+            did: actor_did,
+            account: None,
+        }],
     )
     .map_err(error)?;
     Ok(())

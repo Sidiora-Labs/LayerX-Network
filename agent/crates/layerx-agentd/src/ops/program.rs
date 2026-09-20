@@ -8,7 +8,9 @@ use layerx_programs::{
 };
 use layerx_programs_runtime::terminal::DecodedTerminal;
 use layerx_programs_runtime::{BudgetMeterRefusal, ProgramFailure};
-use layerx_proof::program::{verify_program_execution, ProgramExecutionExpectation};
+use layerx_proof::program::{
+    verify_program_execution_with_payers, OccupancyPayer, ProgramExecutionExpectation,
+};
 use layerx_types::intent::{CapabilityRequest, ProgramCall, ProgramCallOutcome};
 use layerx_types::payload::{ModuleId, ModuleRegistry};
 use layerx_types::program_call::NativeProgramCall;
@@ -521,7 +523,7 @@ impl<T> ReceiptVerifiedProgramSimulator<T> {
         let activity = decode_signed(signed_activity, &self.registry)
             .map_err(|_| ProgramOperationError::InvalidRequest)?;
         let expected = activity_id(&activity).map_err(|_| ProgramOperationError::InvalidRequest)?;
-        let verified = verify_program_execution(
+        let verified = verify_program_execution_with_payers(
             &raw.receipt,
             &raw.terminal_payload,
             &raw.call_graph,
@@ -534,6 +536,10 @@ impl<T> ReceiptVerifiedProgramSimulator<T> {
                 program_id: self.expected_program.bytes(),
                 guest_abi_version: self.expected_abi_version,
             },
+            &[OccupancyPayer {
+                did: activity.actor_did(),
+                account: None,
+            }],
         )
         .map_err(|_| ProgramOperationError::UnverifiedReceipt)?;
         let protocol = verified
