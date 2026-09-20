@@ -83,7 +83,7 @@ require (
 	github.com/tendermint/crypto v0.0.0-20191022145703-50d29ede1e15
 	github.com/tendermint/go-amino v0.16.0
 	github.com/tendermint/tm-db v0.6.8-0.20220519162814-e24b96538a12
-	github.com/tidwall/btree v1.7.0
+	github.com/tidwall/btree v1.8.1
 	github.com/tidwall/gjson v1.14.2
 	github.com/tidwall/wal v1.2.1
 	github.com/zbiljic/go-filelock v0.0.0-20170914061330-1dbf7103ab7d
