@@ -303,8 +303,8 @@ func (p PrecompileExecutor) Execute(ctx sdk.Context, method *abi.Method, caller 
 		if err = pcommon.ValidateArgsLength(args, 1); err != nil {
 			return nil, err
 		}
-		registration, _ := p.keeper.GetDepositRoot(ctx, args[0].([32]byte))
-		return method.Outputs.Pack(hash32(registration.DepositRoot))
+		_, registered := p.keeper.GetDepositRoot(ctx, args[0].([32]byte))
+		return method.Outputs.Pack(registered)
 	case DepositRegistrationDigestMethod:
 		if err = pcommon.ValidateArgsLength(args, 1); err != nil {
 			return nil, err

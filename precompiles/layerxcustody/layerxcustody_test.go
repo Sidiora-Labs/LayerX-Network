@@ -413,7 +413,7 @@ func TestDepositRootThroughThePrecompile(t *testing.T) {
 	params.DepositRootAuthority = h.withdrawal.Fields["public_key"]
 	require.NoError(t, h.keeper.SetParams(h.ctx, params))
 	require.Equal(t, array(t, h.withdrawal, "public_key"), h.view(layerxcustody.DepositRootAuthorityMethod)[0])
-	require.Equal(t, [32]byte{}, h.view(layerxcustody.DepositRootRegisteredMethod, checkpointID)[0])
+	require.Equal(t, false, h.view(layerxcustody.DepositRootRegisteredMethod, checkpointID)[0])
 	require.Equal(t, [32]byte{}, h.view(layerxcustody.DepositRegistrationDigestMethod, checkpointID)[0])
 
 	registration := append([]byte("LX:PAXEER:DEPOSIT:ROOT:v1"), make([]byte, 134)...)

@@ -188,8 +188,7 @@ interface ILayerXCustody {
     /// Ed25519 key that signs deposit root registrations; zero when unset.
     function depositRootAuthority() external view returns (bytes32 authority);
 
-    /// Registered deposit root of a checkpoint; zero when none.
-    function depositRootRegistered(bytes32 checkpointId) external view returns (bytes32 depositRoot);
+    function depositRootRegistered(bytes32 checkpointId) external view returns (bool registered);
 
     /// SHA-256 of abi.encode(uint16 2, registration, signature, leafOrdering); zero when none.
     function depositRegistrationDigest(bytes32 checkpointId) external view returns (bytes32 commitment);
