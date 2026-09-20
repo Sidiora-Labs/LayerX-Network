@@ -10,10 +10,17 @@ via_ir = true
 bytecode_hash = "none"
 cbor_metadata = false
 extra_output = ["storageLayout"]
+# contracts/src and contracts/test belong to the Paxeer chain Foundry project
+# (foundry.paxeer.toml, libs under contracts/lib, npm deps under
+# contracts/node_modules); keep them out of this one.
+skip = ["contracts/src/**", "contracts/test/**", "contracts/lib/**", "contracts/node_modules/**"]
 fs_permissions = [
     { access = "read", path = "./contracts/config" },
     { access = "read", path = "./tests/vectors/checkpoint" },
 ]
+
+[fmt]
+ignore = ["contracts/src/**/*.sol", "contracts/test/**/*.sol", "contracts/lib/**/*.sol", "contracts/node_modules/**/*.sol"]
 
 [fuzz]
 runs = 10000

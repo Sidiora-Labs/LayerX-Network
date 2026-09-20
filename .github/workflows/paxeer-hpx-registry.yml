@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - paxeer-network/hpx/registry/**
+      - hpx/registry/**
       - .github/workflows/paxeer-hpx-registry.yml
   workflow_dispatch:
 
@@ -31,8 +31,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version-file: paxeer-network/hpx/registry/go.mod
-          cache-dependency-path: paxeer-network/hpx/registry/go.mod
+          go-version-file: hpx/registry/go.mod
+          cache-dependency-path: hpx/registry/go.mod
 
       - name: Set up Dockerless image publication
         uses: ko-build/setup-ko@61b4d1d396f5b2e7d6bb6fefdce3dc38d1a13445 # v0.10
@@ -40,7 +40,7 @@ jobs:
           version: v0.19.1
 
       - name: Build revision-bound registry executables
-        working-directory: paxeer-network/hpx/registry
+        working-directory: hpx/registry
         env:
           SOURCE_REVISION: ${{ github.sha }}
         run: |
@@ -63,17 +63,17 @@ jobs:
             echo "Release already exists: $RELEASE_TAG"
           else
             gh release create "$RELEASE_TAG" \
-              paxeer-network/hpx/registry/dist/hpx-registry-linux-amd64 \
-              paxeer-network/hpx/registry/dist/hpx-registry-linux-amd64.sha256 \
-              paxeer-network/hpx/registry/dist/hpx-registry-linux-arm64 \
-              paxeer-network/hpx/registry/dist/hpx-registry-linux-arm64.sha256 \
+              hpx/registry/dist/hpx-registry-linux-amd64 \
+              hpx/registry/dist/hpx-registry-linux-amd64.sha256 \
+              hpx/registry/dist/hpx-registry-linux-arm64 \
+              hpx/registry/dist/hpx-registry-linux-arm64.sha256 \
               --target "$GITHUB_SHA" \
               --title "HPX Registry ${GITHUB_SHA::12}" \
               --notes "Revision-bound HPX registry runtime for ${GITHUB_SHA}."
           fi
 
       - name: Publish revision-bound registry image
-        working-directory: paxeer-network/hpx/registry
+        working-directory: hpx/registry
         env:
           KO_DOCKER_REPO: ${{ env.IMAGE }}
           SOURCE_REVISION: ${{ github.sha }}

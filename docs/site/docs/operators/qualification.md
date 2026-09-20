@@ -87,7 +87,7 @@ that evidence but cannot satisfy or authorize the live gate by themselves.
 
 ## Paxeer qualification
 
-Paxeer Network has its own qualification gates under `paxeer-network/`:
+Paxeer Network has its own qualification gates, driven by `chain.mk` at the repository root:
 
 ```sh
 make paxeer-build

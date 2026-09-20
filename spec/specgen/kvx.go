@@ -17,8 +17,8 @@ import (
 // preserves the insertion ORDER of both sections and the keys within each
 // section, so rendered output is deterministic.
 type Doc struct {
-	order    []string                // section names in file order
-	keyOrder map[string][]string     // section -> keys in file order
+	order    []string            // section names in file order
+	keyOrder map[string][]string // section -> keys in file order
 	sections map[string]map[string]string
 }
 

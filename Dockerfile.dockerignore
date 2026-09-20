@@ -1,0 +1,48 @@
+build/
+**/node_modules/
+**/target/
+.github
+assets
+docker
+**/*.md
+**/README*
+**/LICENSE*
+
+# Ignore all go test files as no tests are run during docker build.
+**/*_test.go
+
+# Version comes from version.json; CI supplies the enclosing monorepo commit
+# through the PAX_CHAIN_REF build argument.
+
+# This file is the ignore list for the chain image only (BuildKit reads
+# <Dockerfile>.dockerignore next to the Dockerfile). The build context is the
+# repository root, so keep the LayerX trees out of the chain image context.
+.git
+.agents
+.claude
+.codify
+.cursor
+.devcontainer
+.devin
+.gemini
+.kiro
+.opencode
+.zed
+agent
+cmd
+contributors
+fuzz
+human
+include
+interop
+layerx
+layerx-network.png
+migrations
+paxeer-docs
+platform
+programs
+signatures
+spec
+src
+test
+tests

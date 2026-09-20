@@ -41,6 +41,6 @@ GOMAXPROCS=4 GOFLAGS="${GOFLAGS:-} -p=4" make paxeer-build
 
 export LAYERX_TEST_NATIVE_BIN_DIR=$LAYERX_TEST_NATIVE_BUILD_DIR/bin
 export LAYERX_CUSTODY_PROOF_BIN=$LAYERX_TEST_NATIVE_BIN_DIR/layerx-custody-proof
-export PAXD=$repo_root/paxeer-network/build/paxd
+export PAXD=$repo_root/build/paxd
 sha256sum "$LAYERX_TEST_NATIVE_BIN_DIR/layerxd" \
     "$LAYERX_TEST_NATIVE_BIN_DIR/layerx-genesis-build" "$PAXD"

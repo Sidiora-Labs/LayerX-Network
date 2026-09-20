@@ -27,7 +27,7 @@ Where the rest of the system fits:
 - **Settlement** happens on Paxeer Network (EVM chain ID `125`). LayerX orders and
   executes activity; periodic checkpoints settle on Paxeer. Since the monorepo
   integration, the Paxeer settlement stack lives in this same repository under
-  [`paxeer-network/`](../paxeer-network) - co-located, but with its own trust and build
+  the chain directories at the [repository root](..) - co-located, but with its own trust and build
   boundary (see [`docs/MONOREPO.md`](../docs/MONOREPO.md) and the root
   [`README.md`](../README.md)).
 
@@ -265,7 +265,7 @@ Project status is deliberately narrow:
 | Availability | The public testnet exposes a gateway API and a faucet. There is no LayerX mainnet. |
 | Source | Licensed under the Apache License, Version 2.0. |
 | Public endpoints | Gateway API and faucet on the public testnet. |
-| Settlement | Checkpoints settle on Paxeer Network (EVM chain ID `125`); custody and settlement live on Paxeer. The settlement stack is co-located under `paxeer-network/`. |
+| Settlement | Checkpoints settle on Paxeer Network (EVM chain ID `125`); custody and settlement live on Paxeer. The settlement stack is co-located at the repository root. |
 
 A successful local build is development evidence, not authorization to deploy, move
 custody, or handle real assets.

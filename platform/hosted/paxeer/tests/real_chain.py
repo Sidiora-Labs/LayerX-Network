@@ -13,7 +13,7 @@ import time
 from comet import qualify as qualify_comet
 
 ROOT = Path(__file__).resolve().parents[4]
-PAXD = os.environ.get('PAXD', str(ROOT / 'paxeer-network/build/paxd'))
+PAXD = os.environ.get('PAXD', str(ROOT / 'build/paxd'))
 
 
 def port():

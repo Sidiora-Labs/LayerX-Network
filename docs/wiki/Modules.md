@@ -22,7 +22,7 @@ Oracle intake remains an outside adapter, not a module ID. Programs is module ID
 
 Module IDs are stable and never reused. They occupy the high 16 bits of `activity_type` (`include/layerx/lxp_module.h`). An unknown or epoch-disabled module is refused - not best-effort decoded.
 
-Runtime sources live under `src/modules/` (`asset`, `escrow`, `budget`, `stream`, `service`, `perps`, `governance`, `bridge`, `programs`). Genesis registers Programs v4 for every accepted protocol version; Asset v1 is protocol-3-conditional (`src/protocol/lxp_genesis.c:594-598`). Since the monorepo integration, the Paxeer settlement stack these modules checkpoint to lives in the same repository under `paxeer-network/` (EVM chain ID `125`).
+Runtime sources live under `src/modules/` (`asset`, `escrow`, `budget`, `stream`, `service`, `perps`, `governance`, `bridge`, `programs`). Genesis registers Programs v4 for every accepted protocol version; Asset v1 is protocol-3-conditional (`src/protocol/lxp_genesis.c:594-598`). Since the monorepo integration, the Paxeer settlement stack these modules checkpoint to lives in the same repository under the repository root (`go.mod`, `chain.mk`, `daemon/`, `node/`, `modules/`, `consensus/`, `sdk/`, `rpc/`) (EVM chain ID `125`).
 
 ---
 

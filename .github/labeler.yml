@@ -31,7 +31,75 @@ area:contracts:
 
 area:paxeer:
   - changed-files:
-      - any-glob-to-any-file: paxeer-network/**
+      - any-glob-to-any-file:
+          - go.mod
+          - go.sum
+          - chain.mk
+          - Dockerfile
+          - Dockerfile.dockerignore
+          - foundry.paxeer.toml
+          - buf.gen.yaml
+          - buf.lock
+          - buf.yaml
+          - codecov.yml
+          - config.yml
+          - .golangci.yml
+          - gen.go
+          - link_directives_test.go
+          - mod_test.go
+          - run_blocktests.sh
+          - version.json
+          - admin/**
+          - api/**
+          - assets/**
+          - benchmark/**
+          - consensus/**
+          - custodyproof/**
+          - daemon/**
+          - docker/**
+          - engine/**
+          - example/**
+          - hpx/**
+          - integration_test/**
+          - interchain/**
+          - loadtest/**
+          - modules/**
+          - node/**
+          - occ_tests/**
+          - parallelization/**
+          - paxeer-docs/**
+          - precompiles/**
+          - ratelimiter/**
+          - rpc/**
+          - sdk/**
+          - storage/**
+          - store/**
+          - sync/**
+          - testutil/**
+          - types/**
+          - utils/**
+          - wasm/**
+          - wasm-runtime/**
+          - wasmbinding/**
+          - contracts/src/**
+          - contracts/test/**
+          - contracts/scripts/**
+          - contracts/wasm/**
+          - docs/swagger/**
+          - docs/swagger-ui/**
+          - tests/chain/**
+          - tools/chain/**
+          - tools/tx-scanner/**
+          - tools/utils/**
+          - contracts/config/client.toml
+          - contracts/hardhat.config.js
+          - contracts/package.json
+          - contracts/package-lock.json
+          - contracts/tsconfig.json
+          - docs/evm_jsonrpc_unsupported.md
+          - docs/paxeer-network.md
+          - docs/paxeer-chain-docs.md
+          - scripts/**
 
 area:spec:
   - changed-files:

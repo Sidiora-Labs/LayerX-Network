@@ -102,7 +102,7 @@ make paxeer-ci
 | `programs/` | Runtime programable de LayerX y herramientas de programas |
 | `interop/` | Superficies de comercio entre agentes e interoperabilidad entre redes |
 | `contracts/` | Contratos Solidity para custodia de Paxeer, puntos de control, fianzas de garantes, reclamaciones, disputas y salidas |
-| `paxeer-network/` | Nodo de Paxeer Network, compatibilidad EVM/RPC, motores de almacenamiento, módulos, contratos y compilaciones locales del subsistema |
+| `go.mod`, `chain.mk`, `daemon/`, `node/`, `modules/`, `consensus/`, `sdk/`, `rpc/`, `precompiles/`, `storage/`, `wasm/`, `docker/` | Nodo de Paxeer Network, compatibilidad EVM/RPC, motores de almacenamiento, módulos, contratos y compilaciones locales del subsistema |
 | `spec/` | Especificaciones normativas KVX, diseños generados, requisitos y grafos de tareas |
 | `tests/`, `test/`, `fuzz/` | Suites nativas, de contratos, replay, invariantes, fallos y fuzz |
 | `migrations/` | Trabajo de génesis, migración, conciliación y shadow-replay |

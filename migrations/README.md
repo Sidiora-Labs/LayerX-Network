@@ -17,6 +17,6 @@ The activity log is authoritative. These tables are projections and import bookk
 | Normative genesis / cutover procedure | [`spec/layerx-protocol/docs/migration.md`](../spec/layerx-protocol/docs/migration.md) |
 | Genesis CLI | `cmd/layerx-genesis/` |
 | Ethereum / Solana source-chain migration | [`interop/crates/layerx-migrate`](../interop/crates/layerx-migrate/OPERATIONS.md) |
-| Paxeer EVM store migrations | `paxeer-network/modules/evm/migrations/` |
+| Paxeer EVM store migrations | `modules/evm/migrations/` |
 
 `402LXP` is the only balance writer after genesis. Custody reconciliation is against Paxeer, not against a mirror chain.

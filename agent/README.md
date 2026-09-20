@@ -11,7 +11,7 @@ This Rust 2021 workspace owns agent-facing types, canonical encoding, cryptograp
 The full workspace tests and sanitizers require the real native daemon and a
 disposable Paxeer chain. Install the pinned Rust and Go toolchains, Foundry
 (`forge`, `cast`, and `anvil`), and `tests/bridge/requirements.txt` in a Python
-environment on `PATH`; download `paxeer-network/go.mod` dependencies with
+environment on `PATH`; download `go.mod` dependencies with
 `go mod download` in that directory. Run
 `sudo env "PATH=$PATH" "CARGO_HOME=$HOME/.cargo" "RUSTUP_HOME=$HOME/.rustup" "GOMODCACHE=$(go env GOMODCACHE)" "GOPATH=$(go env GOPATH)" sh agent/tools/run-real-node-tests.sh test`
 from the repository root, or use `sanitizers` for both sanitizer variants.

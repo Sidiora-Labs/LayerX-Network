@@ -7,9 +7,10 @@
 // writes is generated output — do not hand-edit it.
 //
 // Usage:
-//   go run .                 # repo root inferred as ../.. from spec/specgen
-//   go run . -root /path     # explicit repo root
-//   go run . -check          # fail (non-zero) if any output is stale
+//
+//	go run .                 # repo root inferred as ../.. from spec/specgen
+//	go run . -root /path     # explicit repo root
+//	go run . -check          # fail (non-zero) if any output is stale
 package main
 
 import (
@@ -152,8 +153,8 @@ func discoverFeatures(specDir string) ([]string, error) {
 // writer writes files idempotently (skips unchanged) and supports -check mode
 // (reports staleness without writing).
 type writer struct {
-	check                      bool
-	written, unchanged, stale  int
+	check                     bool
+	written, unchanged, stale int
 }
 
 func (w *writer) write(path, content string) error {

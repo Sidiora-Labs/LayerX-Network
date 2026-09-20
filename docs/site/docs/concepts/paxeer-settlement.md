@@ -6,7 +6,7 @@ not require a Paxeer transaction (`spec/layerx-protocol/spec.kvx`,
 requirement 1).
 
 Paxeer Network is EVM chain ID `125`. Its node and contracts live under
-`paxeer-network/`. Co-location in this monorepo does not grant either side new
+the repository root (`go.mod`, `chain.mk`, `daemon/`, `node/`, `modules/`, `consensus/`, `sdk/`, `rpc/`). Co-location in this monorepo does not grant either side new
 authority over the other ([Monorepo](../overview/monorepo.md)).
 
 ## Division of responsibility

@@ -247,7 +247,7 @@ def main():
     registry = deploy(rpc, account, "contracts/custody/AssetRegistry.sol:AssetRegistry",
                       timelock, account, config, 1)
     token = deploy(rpc, account,
-                   "paxeer-network/loadtest/contracts/evm/lib/solmate/src/tokens/WETH.sol:WETH")
+                   "loadtest/contracts/evm/lib/solmate/src/tokens/WETH.sol:WETH")
     vault = deploy(rpc, account, "contracts/custody/LayerXVault.sol:LayerXVault",
                    registry, timelock, account, config, 1)
     register = calldata("registerAsset(bytes32,address,uint8,uint128,uint128)",

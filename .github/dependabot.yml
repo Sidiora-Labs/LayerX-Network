@@ -6,42 +6,42 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
   - package-ecosystem: gomod
-    directory: /paxeer-network
+    directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
   - package-ecosystem: gomod
-    directory: /paxeer-network/hpx/registry
+    directory: /hpx/registry
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
   - package-ecosystem: gomod
-    directory: /paxeer-network/sdk/cosmovisor
+    directory: /sdk/cosmovisor
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
   - package-ecosystem: gomod
-    directory: /paxeer-network/sdk/ics23
+    directory: /sdk/ics23
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
   - package-ecosystem: npm
-    directory: /paxeer-network/contracts
+    directory: /contracts
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
   - package-ecosystem: npm
-    directory: /paxeer-network/integration_test/dapp_tests
+    directory: /integration_test/dapp_tests
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
   - package-ecosystem: npm
-    directory: /paxeer-network/integration_test/rpc_tests
+    directory: /integration_test/rpc_tests
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
   - package-ecosystem: cargo
-    directory: /paxeer-network/wasm-runtime/libwasmvm
+    directory: /wasm-runtime/libwasmvm
     schedule:
       interval: weekly
     open-pull-requests-limit: 3

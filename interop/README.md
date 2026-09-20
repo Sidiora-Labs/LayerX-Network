@@ -34,7 +34,7 @@ agent status, and per-principal canonical TAP targets, are documented in
 
 ## Mirrors are archives
 
-`layerx-mirror-publisher` and `layerx-mirror-verify` publish and check batch commitments on Ethereum and Solana. Anyone can verify LayerX state from a mirror. Funds do not live on those chains. Settlement stays on Paxeer (EVM chain ID `125`), whose node now lives in [`paxeer-network/`](../paxeer-network/).
+`layerx-mirror-publisher` and `layerx-mirror-verify` publish and check batch commitments on Ethereum and Solana. Anyone can verify LayerX state from a mirror. Funds do not live on those chains. Settlement stays on Paxeer (EVM chain ID `125`), whose node now lives in the chain directories at the [repository root](..).
 
 Remote signer framing: [`deploy/mirror/signer-protocol.md`](deploy/mirror/signer-protocol.md).
 
@@ -44,7 +44,7 @@ Remote signer framing: [`deploy/mirror/signer-protocol.md`](deploy/mirror/signer
 | --- | --- |
 | ETH / Solana source migration into LayerX | this workspace, `crates/layerx-migrate` |
 | LayerX genesis / cutover from the prior Go system | [`spec/layerx-protocol/docs/migration.md`](../spec/layerx-protocol/docs/migration.md) and [`migrations/`](../migrations/) |
-| Paxeer EVM store migrations | `paxeer-network/modules/evm/migrations/` (chain-internal; not a LayerX surface) |
+| Paxeer EVM store migrations | `modules/evm/migrations/` (chain-internal; not a LayerX surface) |
 
 ## Build and test
 

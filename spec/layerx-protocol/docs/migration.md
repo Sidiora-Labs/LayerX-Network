@@ -17,8 +17,8 @@ migration. Those live elsewhere in this monorepo:
 |---|---|
 | Genesis SQL and projections | [`migrations/`](../../../migrations/README.md) |
 | Ethereum / Solana source verifiers | [`interop/crates/layerx-migrate`](../../../interop/crates/layerx-migrate/OPERATIONS.md) |
-| Paxeer EVM store migrations | `paxeer-network/modules/evm/migrations/` |
-| Paxeer Network (settlement L1) | [`paxeer-network/`](../../../paxeer-network/README.md) |
+| Paxeer EVM store migrations | `modules/evm/migrations/` |
+| Paxeer Network (settlement L1) | [chain directories at the repository root](../../../docs/paxeer-network.md) |
 
 ## 1. Posture
 

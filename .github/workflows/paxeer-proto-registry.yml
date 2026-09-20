@@ -7,8 +7,8 @@ on:
     branches:
       - main
     paths:
-      - 'paxeer-network/api/**'
-      - 'paxeer-network/buf.yaml'
+      - 'api/**'
+      - 'buf.yaml'
       - '.github/workflows/paxeer-proto-registry.yml'
 
 jobs:
@@ -22,5 +22,5 @@ jobs:
         env:
           BUF_TOKEN: ${{ secrets.BUF_TOKEN }}
         with:
-          input: paxeer-network
+          input: .
           buf_token: ${{ secrets.BUF_TOKEN }}
