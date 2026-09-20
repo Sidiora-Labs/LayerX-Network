@@ -466,6 +466,254 @@ export function encodeVerificationReport(
   });
 }
 
+export type AccountIdentifierKind = "evm" | "did" | "account";
+
+/// One account spelling, normalised to the single form its page lives at.
+export interface AccountIdentifier {
+  readonly kind: AccountIdentifierKind;
+  readonly canonical: string;
+}
+
+const DID_PREFIX = "did:layerx:";
+
+export function parseAccountIdentifier(value: string): AccountIdentifier | undefined {
+  const candidate = value.trim().normalize("NFC").toLowerCase();
+  if (/^0x[0-9a-f]{40}$/u.test(candidate)) {
+    return Object.freeze({ kind: "evm" as const, canonical: candidate });
+  }
+  if (candidate.startsWith(DID_PREFIX)) {
+    const key = candidate.slice(DID_PREFIX.length);
+    return validExplorerIdentifier(key)
+      ? Object.freeze({ kind: "did" as const, canonical: `${DID_PREFIX}${key}` })
+      : undefined;
+  }
+  if (validExplorerIdentifier(candidate)) {
+    return Object.freeze({ kind: "account" as const, canonical: candidate });
+  }
+  return undefined;
+}
+
+export function accountIdentifierPath(canonical: string): string {
+  return `/explorer/accounts/${encodeURIComponent(canonical)}`;
+}
+
+export type UnifiedAccountEvidence = "gateway-reported";
+
+export type PaxeerActivityEvent =
+  | "custody-deposit"
+  | "claim-queued"
+  | "claim-finalised"
+  | "custody-release"
+  | "emergency-exit"
+  | "bound"
+  | "unbound";
+
+export interface UnifiedIdentities {
+  readonly evmAddress?: string;
+  readonly paxAddress?: string;
+  readonly layerxDid?: string;
+  readonly layerxAccount?: string;
+  readonly bound: boolean;
+}
+
+export interface UnifiedBalanceRecord {
+  readonly assetId: string;
+  readonly denom: string;
+  readonly custody?: string;
+  readonly paxeer?: string;
+  readonly layerx?: string;
+}
+
+export interface UnifiedSettlement {
+  readonly networkId: string;
+  readonly chainId: string;
+  readonly instantBlock: string;
+  readonly sealedBatch: string;
+  readonly finalizedBatch: string;
+  readonly anchorStatus: string;
+  readonly anchorStatusName: string;
+}
+
+export interface PaxeerActivityRecord {
+  readonly event: PaxeerActivityEvent;
+  readonly blockNumber: string;
+  readonly logIndex: string;
+  readonly transactionHash: string;
+  readonly assetId?: string;
+  readonly amount?: string;
+  readonly address?: string;
+  readonly account?: string;
+}
+
+export interface PaxeerActivityWindow {
+  readonly items: readonly PaxeerActivityRecord[];
+  readonly fromBlock: string;
+  readonly toBlock: string;
+  readonly nextBeforeBlock?: string;
+}
+
+export interface UnifiedAccountRecord {
+  readonly requested: string;
+  readonly canonical: string;
+  readonly evidence: UnifiedAccountEvidence;
+  readonly identities: UnifiedIdentities;
+  readonly balances: Readonly<{ items: readonly UnifiedBalanceRecord[]; joinedLimit: string }>;
+  readonly settlement: UnifiedSettlement;
+  readonly paxeerActivity: PaxeerActivityWindow;
+}
+
+function evmAddress(value: unknown, at: string): string {
+  const candidate = text(value, at).toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/u.test(candidate)) {
+    throw new TypeError(`${at} must be a 20-byte lowercase hex address`);
+  }
+  return candidate;
+}
+
+function absent(value: unknown): boolean {
+  return value === undefined || value === null;
+}
+
+function optionalEvmAddress(value: unknown, at: string): string | undefined {
+  return absent(value) ? undefined : evmAddress(value, at);
+}
+
+function optionalDecimal(value: unknown, at: string): string | undefined {
+  return absent(value) ? undefined : decimal(value, at);
+}
+
+function did(value: unknown, at: string): string {
+  const candidate = text(value, at).toLowerCase();
+  if (!candidate.startsWith(DID_PREFIX) || !validExplorerIdentifier(candidate.slice(DID_PREFIX.length))) {
+    throw new TypeError(`${at} must be a did:layerx identifier`);
+  }
+  return candidate;
+}
+
+function transactionHash(value: unknown, at: string): string {
+  const candidate = text(value, at).toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/u.test(candidate)) {
+    throw new TypeError(`${at} must be a 32-byte lowercase hex transaction hash`);
+  }
+  return candidate;
+}
+
+function paxeerEvent(value: unknown, at: string): PaxeerActivityEvent {
+  const candidate = text(value, at);
+  if (
+    candidate !== "custody-deposit"
+    && candidate !== "claim-queued"
+    && candidate !== "claim-finalised"
+    && candidate !== "custody-release"
+    && candidate !== "emergency-exit"
+    && candidate !== "bound"
+    && candidate !== "unbound"
+  ) {
+    throw new TypeError(`${at} is not a declared network event`);
+  }
+  return candidate;
+}
+
+function decodeIdentities(value: unknown, at: string): UnifiedIdentities {
+  const item = record(value, at);
+  const evm = optionalEvmAddress(item.evm_address, `${at}.evm_address`);
+  const pax = absent(item.pax_address) ? undefined : text(item.pax_address, `${at}.pax_address`);
+  const identifier = absent(item.layerx_did) ? undefined : did(item.layerx_did, `${at}.layerx_did`);
+  const account = absent(item.layerx_account) ? undefined : hex(item.layerx_account, `${at}.layerx_account`);
+  return Object.freeze({
+    ...(evm === undefined ? {} : { evmAddress: evm }),
+    ...(pax === undefined ? {} : { paxAddress: pax }),
+    ...(identifier === undefined ? {} : { layerxDid: identifier }),
+    ...(account === undefined ? {} : { layerxAccount: account }),
+    bound: boolean(item.bound, `${at}.bound`),
+  });
+}
+
+function decodeUnifiedBalance(value: unknown, at: string): UnifiedBalanceRecord {
+  const item = record(value, at);
+  const custody = optionalDecimal(item.custody, `${at}.custody`);
+  const paxeer = optionalDecimal(item.paxeer, `${at}.paxeer`);
+  const layerx = optionalDecimal(item.layerx, `${at}.layerx`);
+  return Object.freeze({
+    assetId: hex(item.asset_id, `${at}.asset_id`),
+    denom: text(item.denom, `${at}.denom`),
+    ...(custody === undefined ? {} : { custody }),
+    ...(paxeer === undefined ? {} : { paxeer }),
+    ...(layerx === undefined ? {} : { layerx }),
+  });
+}
+
+function decodeSettlement(value: unknown, at: string): UnifiedSettlement {
+  const item = record(value, at);
+  return Object.freeze({
+    networkId: text(item.network_id, `${at}.network_id`),
+    chainId: decimal(item.chain_id, `${at}.chain_id`),
+    instantBlock: decimal(item.instant_block, `${at}.instant_block`),
+    sealedBatch: decimal(item.sealed_batch, `${at}.sealed_batch`),
+    finalizedBatch: decimal(item.finalized_batch, `${at}.finalized_batch`),
+    anchorStatus: decimal(item.anchor_status, `${at}.anchor_status`),
+    anchorStatusName: text(item.anchor_status_name, `${at}.anchor_status_name`),
+  });
+}
+
+function decodePaxeerActivity(value: unknown, at: string): PaxeerActivityRecord {
+  const item = record(value, at);
+  const assetId = absent(item.asset_id) ? undefined : hex(item.asset_id, `${at}.asset_id`);
+  const amount = optionalDecimal(item.amount, `${at}.amount`);
+  const address = optionalEvmAddress(item.address, `${at}.address`);
+  const account = absent(item.account) ? undefined : hex(item.account, `${at}.account`);
+  return Object.freeze({
+    event: paxeerEvent(item.event, `${at}.event`),
+    blockNumber: decimal(item.block_number, `${at}.block_number`),
+    logIndex: decimal(item.log_index, `${at}.log_index`),
+    transactionHash: transactionHash(item.transaction_hash, `${at}.transaction_hash`),
+    ...(assetId === undefined ? {} : { assetId }),
+    ...(amount === undefined ? {} : { amount }),
+    ...(address === undefined ? {} : { address }),
+    ...(account === undefined ? {} : { account }),
+  });
+}
+
+export function decodeUnifiedAccount(value: unknown, at = "unified_account"): UnifiedAccountRecord {
+  const item = record(value, at);
+  if (item.evidence !== "gateway-reported") {
+    throw new TypeError(`${at}.evidence is not a declared provenance`);
+  }
+  const requested = parseAccountIdentifier(text(item.requested, `${at}.requested`));
+  const canonical = parseAccountIdentifier(text(item.canonical, `${at}.canonical`));
+  if (requested === undefined || canonical === undefined) {
+    throw new TypeError(`${at} must name accounts of this network`);
+  }
+  const balances = record(item.balances, `${at}.balances`);
+  if (!Array.isArray(balances.items) || balances.items.length > 1_024) {
+    throw new TypeError(`${at}.balances.items must be a bounded array`);
+  }
+  const activity = record(item.paxeer_activity, `${at}.paxeer_activity`);
+  if (!Array.isArray(activity.items) || activity.items.length > 100) {
+    throw new TypeError(`${at}.paxeer_activity.items must be a bounded array`);
+  }
+  const nextBeforeBlock = optionalDecimal(activity.next_before_block, `${at}.paxeer_activity.next_before_block`);
+  return Object.freeze({
+    requested: requested.canonical,
+    canonical: canonical.canonical,
+    evidence: "gateway-reported",
+    identities: decodeIdentities(item.identities, `${at}.identities`),
+    balances: Object.freeze({
+      items: Object.freeze(balances.items.map((entry, index) =>
+        decodeUnifiedBalance(entry, `${at}.balances.items[${String(index)}]`))),
+      joinedLimit: decimal(balances.joined_limit, `${at}.balances.joined_limit`),
+    }),
+    settlement: decodeSettlement(item.settlement, `${at}.settlement`),
+    paxeerActivity: Object.freeze({
+      items: Object.freeze(activity.items.map((entry, index) =>
+        decodePaxeerActivity(entry, `${at}.paxeer_activity.items[${String(index)}]`))),
+      fromBlock: decimal(activity.from_block, `${at}.paxeer_activity.from_block`),
+      toBlock: decimal(activity.to_block, `${at}.paxeer_activity.to_block`),
+      ...(nextBeforeBlock === undefined ? {} : { nextBeforeBlock }),
+    }),
+  });
+}
+
 export function validExplorerIdentifier(value: string): boolean {
   return /^[0-9a-fA-F]{64}$/u.test(value);
 }

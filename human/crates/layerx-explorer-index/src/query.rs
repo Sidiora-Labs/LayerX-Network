@@ -1,5 +1,6 @@
 //! Authentication-free queries over protocol-public explorer state.
 
+use crate::unified::{UnifiedAccountJoin, UnifiedAccountView};
 use crate::verify::{PastedInclusion, VerificationReport, Verifier, VerifyError};
 use crate::{
     AccountActivityRecord, BatchRecord, CheckpointRecord, Freshness, Indexed, Indexer,
@@ -52,6 +53,80 @@ impl Indexer {
         PublicExplorer {
             index: self,
             verifier,
+        }
+    }
+
+    /// Returns the one unified account view: the gateway-reported join across
+    /// both domains with this index's own receipt-verified LayerX activity
+    /// attached. An account the network reports no LayerX half for carries an
+    /// empty LayerX page rather than an invented one.
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid bounds and any view for which an indexed batch has not
+    /// completed independent receipt-authority verification.
+    pub fn unified_account(
+        &self,
+        join: UnifiedAccountJoin,
+        before_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<Indexed<UnifiedAccountView>, QueryFailure> {
+        let layerx_activity = match join.identities.layerx_account {
+            Some(account) => self
+                .account_activity_page(account, before_sequence, limit)
+                .map_err(|error| self.failure(error))?,
+            None => {
+                validate_limit(limit).map_err(|error| self.failure(error))?;
+                Page {
+                    items: Vec::new(),
+                    next_before: None,
+                }
+            }
+        };
+        Ok(Indexed {
+            value: UnifiedAccountView {
+                join,
+                layerx_activity,
+            },
+            freshness: self.freshness(),
+        })
+    }
+
+    fn account_activity_page(
+        &self,
+        account: [u8; 32],
+        before_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<Page<AccountActivityRecord>, QueryError> {
+        validate_limit(limit)?;
+        if let Some(batch) = self
+            .batches
+            .keys()
+            .find(|batch| !self.receipt_authority_batches.contains(batch))
+        {
+            return Err(QueryError::AccountIndexIncomplete { batch: *batch });
+        }
+        let mut records = self
+            .account_activities
+            .values()
+            .filter(|record| record.from == account || record.to == account)
+            .filter(|record| before_sequence.is_none_or(|before| record.global_sequence < before))
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| {
+            right
+                .global_sequence
+                .cmp(&left.global_sequence)
+                .then_with(|| right.receipt_id.cmp(&left.receipt_id))
+        });
+        records.truncate(limit.saturating_add(1));
+        Ok(page(&mut records, limit, |record| record.global_sequence))
+    }
+
+    fn failure(&self, error: QueryError) -> QueryFailure {
+        QueryFailure {
+            error,
+            freshness: self.freshness(),
         }
     }
 }
@@ -142,32 +217,11 @@ impl PublicExplorer<'_> {
         before_sequence: Option<u64>,
         limit: usize,
     ) -> Result<Indexed<Page<AccountActivityRecord>>, QueryFailure> {
-        validate_limit(limit).map_err(|error| self.failure(error))?;
-        if let Some(batch) = self
-            .index
-            .batches
-            .keys()
-            .find(|batch| !self.index.receipt_authority_batches.contains(batch))
-        {
-            return Err(self.failure(QueryError::AccountIndexIncomplete { batch: *batch }));
-        }
-        let mut records = self
-            .index
-            .account_activities
-            .values()
-            .filter(|record| record.from == account || record.to == account)
-            .filter(|record| before_sequence.is_none_or(|before| record.global_sequence < before))
-            .cloned()
-            .collect::<Vec<_>>();
-        records.sort_by(|left, right| {
-            right
-                .global_sequence
-                .cmp(&left.global_sequence)
-                .then_with(|| right.receipt_id.cmp(&left.receipt_id))
-        });
-        records.truncate(limit.saturating_add(1));
         Ok(Indexed {
-            value: page(&mut records, limit, |record| record.global_sequence),
+            value: self
+                .index
+                .account_activity_page(account, before_sequence, limit)
+                .map_err(|error| self.failure(error))?,
             freshness: self.index.freshness(),
         })
     }

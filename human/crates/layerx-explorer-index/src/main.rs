@@ -15,6 +15,9 @@ use layerx_explorer_index::programs::{ExplorerProgram, VerifiedProgramInterfaceM
 use layerx_explorer_index::reads::{
     self, ReadEndpoint, ReadPrincipal, ReadScope, ResolveFailure, ResolveOutcome,
 };
+use layerx_explorer_index::unified::{
+    unified_account_json, AccountIdentifier, ActivityWindow, GatewayEndpoint, UnifiedAccountReader,
+};
 use layerx_explorer_index::{Indexer, ProtocolProgramIngestor};
 use layerx_programs::{
     hex, BuildPlan, DeploymentJournal, DeploymentProof, DeploymentRecord, JournalReadAuthority,
@@ -26,6 +29,17 @@ use serde_json::Value;
 const HEADER_LIMIT: usize = 16 * 1024;
 const CA_LIMIT: u64 = 64 * 1024;
 const KEY_FILE_LIMIT: u64 = 256;
+const IDENTIFIER_LIMIT: usize = 128;
+const DEFAULT_ACTIVITY_LIMIT: usize = 25;
+
+/// The bounded recent window the unified account page reads Paxeer-side
+/// custody and binding activity from. There is no full-chain EVM index.
+const ACTIVITY_WINDOW: ActivityWindow = ActivityWindow {
+    span_blocks: 50_000,
+    chunk_blocks: 2_000,
+    max_chunks: 5,
+    limit: DEFAULT_ACTIVITY_LIMIT,
+};
 
 #[derive(Clone)]
 struct FileJournal {
@@ -76,6 +90,7 @@ struct Config {
     observed_sealed_batch: u64,
     finalised_checkpoint: [u8; 32],
     name_reads: NameReads,
+    gateway: GatewayEndpoint,
 }
 
 struct NameReads {
@@ -211,7 +226,14 @@ fn config() -> Result<Config, String> {
         observed_sealed_batch: parse_u64("LAYERX_EXPLORER_OBSERVED_SEALED_BATCH")?,
         finalised_checkpoint: parse_digest("LAYERX_EXPLORER_FINALISED_CHECKPOINT")?,
         name_reads: name_reads()?,
+        gateway: network_gateway()?,
     })
+}
+
+fn network_gateway() -> Result<GatewayEndpoint, String> {
+    let name = "LAYERX_NETWORK_GATEWAY_ENDPOINT";
+    GatewayEndpoint::parse(&required(name)?)
+        .map_err(|error| format!("{name} is invalid: {error}"))
 }
 
 struct LoadedRegistry {
@@ -700,6 +722,92 @@ fn serve_resolve(
     }
 }
 
+fn query_value<'a>(query: &'a str, name: &str) -> Option<&'a str> {
+    query.split('&').find_map(|pair| {
+        pair.split_once('=')
+            .filter(|(key, _)| *key == name)
+            .map(|(_, value)| value)
+    })
+}
+
+fn query_number(query: &str, name: &str) -> Result<Option<u64>, ()> {
+    match query_value(query, name) {
+        None => Ok(None),
+        Some(value) => value.parse::<u64>().map(Some).map_err(|_| ()),
+    }
+}
+
+/// Decodes the percent-escapes a browser applies to `did:layerx:` spellings.
+fn percent_decode(text: &str) -> Option<String> {
+    if text.len() > IDENTIFIER_LIMIT {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let mut decoded = String::with_capacity(text.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = *bytes.get(index)?;
+        if byte == b'%' {
+            let digits = text.get(index + 1..index + 3)?;
+            let value = u8::from_str_radix(digits, 16).ok()?;
+            if !value.is_ascii() {
+                return None;
+            }
+            decoded.push(char::from(value));
+            index += 3;
+        } else {
+            if !byte.is_ascii() {
+                return None;
+            }
+            decoded.push(char::from(byte));
+            index += 1;
+        }
+    }
+    Some(decoded)
+}
+
+fn serve_unified_account(
+    stream: &mut TcpStream,
+    config: &Config,
+    index: &Indexer,
+    identifier_text: &str,
+    query: &str,
+) -> Result<(), String> {
+    let Some(decoded) = percent_decode(identifier_text) else {
+        return response(stream, 400, "{\"error\":\"invalid_account\"}");
+    };
+    let Ok(identifier) = AccountIdentifier::parse(&decoded) else {
+        return response(stream, 400, "{\"error\":\"invalid_account\"}");
+    };
+    let (Ok(before_block), Ok(before_sequence), Ok(limit)) = (
+        query_number(query, "before_block"),
+        query_number(query, "before"),
+        query_number(query, "limit"),
+    ) else {
+        return response(stream, 400, "{\"error\":\"invalid_query\"}");
+    };
+    let limit = match limit {
+        None => DEFAULT_ACTIVITY_LIMIT,
+        Some(value) => match usize::try_from(value) {
+            Ok(value) => value,
+            Err(_) => return response(stream, 400, "{\"error\":\"invalid_query\"}"),
+        },
+    };
+    let Ok(reader) = UnifiedAccountReader::new(&config.gateway, ACTIVITY_WINDOW) else {
+        return response(stream, 503, "{\"error\":\"network_gateway_unavailable\"}");
+    };
+    let Ok(join) = reader.join(identifier, before_block) else {
+        return response(stream, 503, "{\"error\":\"network_gateway_unavailable\"}");
+    };
+    match index.unified_account(join, before_sequence, limit) {
+        Ok(view) => {
+            let body = unified_account_json(&view.value.join, view.freshness);
+            response(stream, 200, &body)
+        }
+        Err(_) => response(stream, 503, "{\"error\":\"account_view_unavailable\"}"),
+    }
+}
+
 fn serve_connection(
     stream: &mut TcpStream,
     config: &Config,
@@ -749,6 +857,13 @@ fn serve_connection(
         } else {
             response(stream, 503, "{\"ready\":false}")
         };
+    }
+    if let Some(remainder) = path.strip_prefix("/v1/accounts/") {
+        let (route, query) = remainder.split_once('?').unwrap_or((remainder, ""));
+        let Some(identifier) = route.strip_suffix("/unified") else {
+            return response(stream, 404, "{\"error\":\"not_found\"}");
+        };
+        return serve_unified_account(stream, config, index, identifier, query);
     }
     let Some(program_text) = path.strip_prefix("/v1/programs/") else {
         return response(stream, 404, "{\"error\":\"not_found\"}");

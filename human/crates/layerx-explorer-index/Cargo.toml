@@ -16,6 +16,7 @@ layerx-programs.workspace = true
 layerx-programs-protocol-adapter.workspace = true
 layerx-agentd.workspace = true
 sha2.workspace = true
+sha3.workspace = true
 serde_json.workspace = true
 native-tls = "=0.2.18"
 layerx-wire.workspace = true
