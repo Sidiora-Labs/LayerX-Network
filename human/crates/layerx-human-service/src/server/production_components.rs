@@ -125,6 +125,8 @@ const PRODUCTION_OPERATIONS: &[&str] = &[
     "exit.eligibility",
     "exit.start",
     "home.summary",
+    "intent.plan",
+    "intent.submit",
     "journey.get",
     "journey.list",
     "move.commit",
@@ -3251,6 +3253,207 @@ impl ProductionComponents {
         })
     }
 
+    fn intent_observed_state(
+        &self,
+        scope: &mut crate::store::PrincipalScope<'_>,
+        asset: AssetId,
+    ) -> Result<(crate::journeys::ObservedState, AccountId, String), ApiFailure> {
+        let observed_at = self.now()?;
+        let key = KeyId::new("human-primary").map_err(|_| ApiFailure::upstream_degraded())?;
+        let mut agent = self.principal_agent(scope)?;
+        let owner = resolve_principal_owner(self, scope, &mut agent)?;
+        let account = owner.account;
+        let balance = agent.balance().map_err(agent_failure)?;
+        if balance.asset != asset.bytes() {
+            return Err(ApiFailure::invalid_request(Some("asset_id")));
+        }
+        if balance.global_sequence != balance.observed_head_sequence
+            || balance.age_seconds > self.activity_freshness_seconds
+        {
+            return Err(ApiFailure::upstream_degraded());
+        }
+        let wallet = self
+            .custody
+            .evm_wallet(scope.principal(), &key)
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let endpoint = layerx_network_gateway::GatewayEndpoint::from_environment()
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let network = crate::journeys::NetworkObservation::read(
+            &endpoint,
+            layerx_network_gateway::AccountIdentifier::Evm(wallet),
+        )
+        .map_err(|error| observation_failure(&error))?;
+
+        let home = crate::journeys::Endpoint::human(account.clone())
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let mut ledger = vec![crate::journeys::BalanceEntry::new(
+            home.clone(),
+            asset,
+            ProtocolAmount::from_u128(balance.amount),
+        )];
+        let mut allowances = Vec::new();
+        let mut budgets = Vec::new();
+        let managed = CreationJourney::list(scope).map_err(|_| ApiFailure::upstream_degraded())?;
+        for journey in &managed {
+            let alias = format!("agt_{}", hex_bytes(&journey.agent_id()));
+            let context = agent.agent_context(&alias).map_err(agent_failure)?;
+            if context.seed.owner_account != account.canonical()
+                || context.seed.budget_asset != asset.bytes()
+                || context.protocol_grant_id == [0; 32]
+            {
+                continue;
+            }
+            let state = agent
+                .agent_budget_state(context.active_budget_id)
+                .map_err(agent_failure)?;
+            if state.asset != asset.bytes() || state.age_sequences > state.maximum_age_sequences {
+                return Err(ApiFailure::upstream_degraded());
+            }
+            let budget_account = AccountId::parse(&context.seed.budget_account)
+                .map_err(|_| ApiFailure::upstream_degraded())?;
+            let budget = crate::journeys::Endpoint::agent_budget(budget_account.clone())
+                .map_err(|_| ApiFailure::upstream_degraded())?;
+            budgets.push(
+                crate::journeys::BudgetBinding::new(budget_account, account.clone())
+                    .map_err(intent_failure)?,
+            );
+            ledger.push(crate::journeys::BalanceEntry::new(
+                budget.clone(),
+                asset,
+                ProtocolAmount::from_u128(state.remaining),
+            ));
+            let headroom = context.current_monthly_limit.saturating_sub(context.spent);
+            if headroom > 0 {
+                allowances.push(
+                    crate::journeys::SignedAllowance::new(
+                        crate::journeys::AllowanceId::new(context.active_budget_id)
+                            .map_err(intent_failure)?,
+                        crate::journeys::AllowanceKind::BudgetAllowance,
+                        crate::journeys::AllowanceScope::new(
+                            home.clone(),
+                            budget,
+                            asset,
+                            crate::journeys::LegMechanism::Protocol(
+                                crate::journeys::Mechanism::BudgetFund,
+                            ),
+                        ),
+                        ProtocolAmount::from_u128(headroom),
+                        ProtocolAmount::from_u128(headroom),
+                        layerx_types::intent::TimestampSeconds::from_u64(context.seed.budget_expiry_seconds),
+                    )
+                    .map_err(intent_failure)?,
+                );
+            }
+        }
+
+        let observed = crate::journeys::ObservedStateBuilder::new(
+            layerx_types::intent::TimestampSeconds::from_u64(observed_at),
+            account.clone(),
+            AccountId::parse("system:paxeer-reserve")
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            AccountId::parse("system:paxeer-withdrawals")
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+        )
+        .with_network(network)
+        .with_ledger_balances(ledger)
+        .with_allowances(allowances)
+        .with_budget_bindings(budgets)
+        .with_fees(self.intent_fee_schedule()?)
+        .requiring(asset)
+        .build()
+        .map_err(|error| observation_failure(&error))?;
+        Ok((observed, account, balance.currency.clone()))
+    }
+
+    fn intent_fee_schedule(&self) -> Result<crate::journeys::FeeSchedule, ApiFailure> {
+        use crate::journeys::{LegMechanism, Mechanism};
+        let protocol = self.agent_fee_limit;
+        crate::journeys::FeeSchedule::new(vec![
+            (LegMechanism::Protocol(Mechanism::Send), protocol),
+            (LegMechanism::Protocol(Mechanism::BudgetFund), protocol),
+            (LegMechanism::Protocol(Mechanism::BudgetDefund), protocol),
+            (LegMechanism::Protocol(Mechanism::BridgeDepositCredit), protocol),
+            (LegMechanism::Protocol(Mechanism::BridgeWithdrawRequest), protocol),
+            (
+                LegMechanism::PaxeerCustodyDeposit,
+                u128::from(self.evm_gas_limit).saturating_mul(u128::from(self.evm_max_fee_per_gas)),
+            ),
+            (
+                LegMechanism::PaxeerWithdrawFinalise,
+                u128::from(self.evm_gas_limit).saturating_mul(u128::from(self.evm_max_fee_per_gas)),
+            ),
+        ])
+        .map_err(intent_failure)
+    }
+
+    fn intent_from_request(
+        &self,
+        request: &ScopedRequest<'_>,
+        asset: AssetId,
+    ) -> Result<crate::journeys::UnifiedIntent, ApiFailure> {
+        let source = intent_endpoint(&request.body, "source")?;
+        let destination = intent_endpoint(&request.body, "destination")?;
+        let (amount, _) = money_field(&request.body, "money")?;
+        let constraints = request
+            .body
+            .get("constraints")
+            .ok_or_else(|| ApiFailure::invalid_request(Some("constraints")))?;
+        let deadline = crate::time::seconds_from_rfc3339(text_field(constraints, "deadline")?)
+            .ok_or_else(|| ApiFailure::invalid_request(Some("constraints.deadline")))?;
+        let (max_fee, _) = money_field(constraints, "max_fee")?;
+        let allow_top_up = constraints
+            .get("allow_top_up")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| ApiFailure::invalid_request(Some("constraints.allow_top_up")))?;
+        crate::journeys::UnifiedIntent::new(
+            source,
+            destination,
+            asset,
+            ProtocolAmount::from_u128(amount),
+            crate::journeys::Constraints::new(
+                layerx_types::intent::TimestampSeconds::from_u64(deadline),
+                max_fee,
+                allow_top_up,
+            ),
+        )
+        .map_err(intent_failure)
+    }
+
+    fn execute_intent_plan(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let asset = intent_asset(&request.body)?;
+        let intent = self.intent_from_request(request, asset)?;
+        let (observed, _, currency) = self.intent_observed_state(scope, asset)?;
+        let planned = crate::journeys::plan(&intent, &observed).map_err(intent_failure)?;
+        Ok(BackendResponse {
+            result: intent_plan_json(&planned, &currency),
+            session: None,
+        })
+    }
+
+    fn execute_intent_submit(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let _ = required_idempotency(request)?;
+        let asset = intent_asset(&request.body)?;
+        let intent = self.intent_from_request(request, asset)?;
+        let (observed, _, currency) = self.intent_observed_state(scope, asset)?;
+        let planned = crate::journeys::plan(&intent, &observed).map_err(intent_failure)?;
+        let declared = text_field(&request.body, "plan_digest")?;
+        if declared != hex_bytes(&planned.digest()) {
+            return Err(ApiFailure::forbidden());
+        }
+        Ok(BackendResponse {
+            result: intent_plan_json(&planned, &currency),
+            session: None,
+        })
+    }
+
     fn execute_move_quote(
         &self,
         request: &ScopedRequest<'_>,
@@ -4919,6 +5122,8 @@ impl ProductionComponents {
             "binding.status" => Self::execute_binding_status(scope),
             "binding.rebind.action" => self.execute_binding_rebind_action(request, scope),
             "binding.rebind" => self.execute_binding_rebind(request, scope),
+            "intent.plan" => self.execute_intent_plan(request, scope),
+            "intent.submit" => self.execute_intent_submit(request, scope),
             "move.quote" => self.execute_move_quote(request, scope),
             "move.commit" => self.execute_move_commit(request, scope),
             "deposit.start" => self.execute_deposit_start(request, scope),
@@ -5632,4 +5837,161 @@ fn principal_binding_configuration() -> Result<layerx_identity_binding::Config, 
         peer_gid: number("LAYERX_HUMAN_IDENTITY_BINDING_PEER_GID")?,
         deadline: Duration::from_secs(number("LAYERX_HUMAN_IDENTITY_BINDING_DEADLINE_SECONDS")?),
     })
+}
+
+fn intent_failure(refusal: crate::journeys::Refusal) -> ApiFailure {
+    match refusal {
+        crate::journeys::Refusal::PlanDigestMismatch
+        | crate::journeys::Refusal::LegMismatch { .. }
+        | crate::journeys::Refusal::UnboundLegs { .. } => ApiFailure::forbidden(),
+        crate::journeys::Refusal::ZeroAmount
+        | crate::journeys::Refusal::EndpointsIdentical
+        | crate::journeys::Refusal::InvalidOwner
+        | crate::journeys::Refusal::InvalidAllowance
+        | crate::journeys::Refusal::InvalidAnnotation => ApiFailure::invalid_request(None),
+        _ => ApiFailure::forbidden(),
+    }
+}
+
+fn observation_failure(error: &crate::journeys::ObservationError) -> ApiFailure {
+    match error {
+        crate::journeys::ObservationError::Invalid(refusal) => intent_failure(refusal.clone()),
+        crate::journeys::ObservationError::WalletNotBound
+        | crate::journeys::ObservationError::IdentityMismatch => ApiFailure::forbidden(),
+        _ => ApiFailure::upstream_degraded(),
+    }
+}
+
+fn intent_endpoint(
+    value: &serde_json::Value,
+    field: &str,
+) -> Result<crate::journeys::Endpoint, ApiFailure> {
+    let document = value
+        .get(field)
+        .ok_or_else(|| ApiFailure::invalid_request(Some(field)))?;
+    let kind = document
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| ApiFailure::invalid_request(Some(field)))?;
+    if kind == "paxeer-wallet" {
+        return Ok(crate::journeys::Endpoint::PaxeerWallet);
+    }
+    let canonical = document
+        .get("account")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| ApiFailure::invalid_request(Some(field)))?;
+    let account =
+        AccountId::parse(canonical).map_err(|_| ApiFailure::invalid_request(Some(field)))?;
+    match kind {
+        "human" => crate::journeys::Endpoint::human(account),
+        "agent" => crate::journeys::Endpoint::agent(account),
+        "agent-budget" => crate::journeys::Endpoint::agent_budget(account),
+        _ => return Err(ApiFailure::invalid_request(Some(field))),
+    }
+    .map_err(|_| ApiFailure::invalid_request(Some(field)))
+}
+
+fn intent_endpoint_json(endpoint: &crate::journeys::Endpoint) -> serde_json::Value {
+    match endpoint {
+        crate::journeys::Endpoint::PaxeerWallet => json!({"kind": "paxeer-wallet"}),
+        crate::journeys::Endpoint::Human(account) => {
+            json!({"kind": "human", "account": account.canonical()})
+        }
+        crate::journeys::Endpoint::Agent(account) => {
+            json!({"kind": "agent", "account": account.canonical()})
+        }
+        crate::journeys::Endpoint::AgentBudget(account) => {
+            json!({"kind": "agent-budget", "account": account.canonical()})
+        }
+    }
+}
+
+fn intent_asset(value: &serde_json::Value) -> Result<AssetId, ApiFailure> {
+    let text = text_field(value, "asset_id")?;
+    if text.len() != 64 {
+        return Err(ApiFailure::invalid_request(Some("asset_id")));
+    }
+    let mut asset = [0_u8; 32];
+    for (slot, pair) in asset.iter_mut().zip(text.as_bytes().chunks_exact(2)) {
+        let nibble = |byte: u8| match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            _ => None,
+        };
+        let high = nibble(pair[0]).ok_or_else(|| ApiFailure::invalid_request(Some("asset_id")))?;
+        let low = nibble(pair[1]).ok_or_else(|| ApiFailure::invalid_request(Some("asset_id")))?;
+        *slot = (high << 4) | low;
+    }
+    Ok(AssetId::new(asset))
+}
+
+fn intent_money_json(amount: u128, currency: &str) -> serde_json::Value {
+    json!({"amount": amount.to_string(), "currency": currency})
+}
+
+fn intent_plan_json(plan: &crate::journeys::UnifiedPlan, currency: &str) -> serde_json::Value {
+    let legs = plan
+        .legs()
+        .iter()
+        .enumerate()
+        .map(|(index, leg)| {
+            json!({
+                "index": index,
+                "mechanism": leg.mechanism().label(),
+                "domain": match leg.mechanism().domain() {
+                    crate::journeys::Domain::Paxeer => "paxeer",
+                    crate::journeys::Domain::LayerX => "layerx",
+                },
+                "source": intent_endpoint_json(leg.source()),
+                "destination": intent_endpoint_json(leg.destination()),
+                "money": intent_money_json(leg.amount().value(), currency),
+                "fee": intent_money_json(leg.fee(), currency),
+            })
+        })
+        .collect::<Vec<_>>();
+    let requirements = plan.signing_requirements().map_or_else(
+        |_| Vec::new(),
+        |list| {
+            list.iter()
+                .map(|requirement| {
+                    json!({
+                        "leg_index": requirement.leg_index(),
+                        "action_key": hex_bytes(&requirement.action_key()),
+                        "signing_context": hex_bytes(&requirement.signing_context()),
+                        "authority": intent_authority_label(requirement.authority()),
+                    })
+                })
+                .collect::<Vec<_>>()
+        },
+    );
+    json!({
+        "plan_digest": hex_bytes(&plan.digest()),
+        "journey_kind": intent_journey_kind_label(plan.journey_kind()),
+        "total_fee": intent_money_json(plan.total_fee(), currency),
+        "legs": legs,
+        "signing_requirements": requirements,
+    })
+}
+
+const fn intent_authority_label(authority: crate::journeys::RequiredAuthority) -> &'static str {
+    match authority {
+        crate::journeys::RequiredAuthority::PaxeerWalletKey => "paxeer-wallet-key",
+        crate::journeys::RequiredAuthority::AccountOwner => "account-owner",
+        crate::journeys::RequiredAuthority::Allowance(_) => "allowance",
+    }
+}
+
+const fn intent_journey_kind_label(kind: crate::journeys::JourneyKind) -> &'static str {
+    match kind {
+        crate::journeys::JourneyKind::Onboarding => "onboarding",
+        crate::journeys::JourneyKind::WalletBinding => "wallet-binding",
+        crate::journeys::JourneyKind::Deposit => "deposit",
+        crate::journeys::JourneyKind::Withdraw => "withdraw",
+        crate::journeys::JourneyKind::Exit => "exit",
+        crate::journeys::JourneyKind::Move => "move",
+        crate::journeys::JourneyKind::AgentCreate => "agent-create",
+        crate::journeys::JourneyKind::AgentFund => "agent-fund",
+        crate::journeys::JourneyKind::AgentPause => "agent-pause",
+        crate::journeys::JourneyKind::AgentRetire => "agent-retire",
+    }
 }

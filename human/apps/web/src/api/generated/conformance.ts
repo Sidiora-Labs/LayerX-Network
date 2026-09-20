@@ -31,6 +31,7 @@ import {
   decodePasskeyAssertionFinish,
   decodePasskeyRegistrationBegin,
   decodePasskeyRegistrationFinish,
+  decodePlanIntentRequest,
   decodeProfileUpdate,
   decodeRebindingSubmission,
   decodeSecurityActionRequest,
@@ -42,6 +43,7 @@ import {
   decodeSessionOpenRequest,
   decodeStepUpFinish,
   decodeStepUpRequest,
+  decodeSubmitPlanRequest,
   decodeSupportCreateRequest,
   decodeSupportFeedbackRequest,
   decodeSupportReadRequest,
@@ -68,6 +70,8 @@ import {
   encodeExportArtefact,
   encodeExportedPrimaryKey,
   encodeHomeSummary,
+  encodeIntentPlan,
+  encodeIntentSubmission,
   encodeJourney,
   encodeJourneyPage,
   encodeKeyChallenge,
@@ -208,6 +212,10 @@ export const conformance: { readonly [name in OperationName]: (run: ConformanceR
     encodeJourney(await run.client.exitStart(decodeExitStartRequest(runBody(run), "golden request body"), runKey(run))),
   "home.summary": async (run) =>
     encodeHomeSummary(await run.client.homeSummary()),
+  "intent.plan": async (run) =>
+    encodeIntentPlan(await run.client.intentPlan(decodePlanIntentRequest(runBody(run), "golden request body"))),
+  "intent.submit": async (run) =>
+    encodeIntentSubmission(await run.client.intentSubmit(decodeSubmitPlanRequest(runBody(run), "golden request body"), runKey(run))),
   "journey.get": async (run) =>
     encodeJourney(await run.client.journeyGet(runParam(run, "journey_id"))),
   "journey.list": async (run) =>

@@ -1,0 +1,12 @@
+{
+  "status": 403,
+  "body": {
+    "ok": false,
+    "error": {
+      "code": "forbidden",
+      "copy_key": "error.request.forbidden",
+      "retry": "final"
+    },
+    "trace": "trc_01j2gxq5eqd3e4f5g6h7j8k9m0"
+  }
+}

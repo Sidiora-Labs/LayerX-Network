@@ -705,7 +705,7 @@ pub(super) fn component_owner(operation: &str) -> Result<&'static str, ApiFailur
             Ok("custody")
         }
         "binding" => Ok("custody"),
-        "deposit" | "exit" | "journey" | "move" | "withdraw" => Ok("journeys"),
+        "deposit" | "exit" | "intent" | "journey" | "move" | "withdraw" => Ok("journeys"),
         "agent" => Ok("agents"),
         "approval" => Ok("approvals"),
         "activity" | "evidence" => Ok("activity-explorer"),

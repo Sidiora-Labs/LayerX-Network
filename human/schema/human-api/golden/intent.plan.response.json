@@ -1,0 +1,72 @@
+{
+  "status": 200,
+  "body": {
+    "ok": true,
+    "result": {
+      "plan_digest": "4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b",
+      "journey_kind": "deposit",
+      "total_fee": {
+        "amount": "9",
+        "currency": "LXP"
+      },
+      "legs": [
+        {
+          "index": 0,
+          "mechanism": "paxeer-custody-deposit",
+          "domain": "paxeer",
+          "source": {
+            "kind": "paxeer-wallet"
+          },
+          "destination": {
+            "kind": "human",
+            "account": "agent:did:layerx:alice:main"
+          },
+          "money": {
+            "amount": "500000",
+            "currency": "LXP"
+          },
+          "fee": {
+            "amount": "1",
+            "currency": "LXP"
+          }
+        },
+        {
+          "index": 1,
+          "mechanism": "transfer",
+          "domain": "layerx",
+          "source": {
+            "kind": "human",
+            "account": "agent:did:layerx:alice:main"
+          },
+          "destination": {
+            "kind": "agent",
+            "account": "agent:did:layerx:bob:main"
+          },
+          "money": {
+            "amount": "500000",
+            "currency": "LXP"
+          },
+          "fee": {
+            "amount": "8",
+            "currency": "LXP"
+          }
+        }
+      ],
+      "signing_requirements": [
+        {
+          "leg_index": 0,
+          "action_key": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "signing_context": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+          "authority": "custody-key"
+        },
+        {
+          "leg_index": 1,
+          "action_key": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+          "signing_context": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+          "authority": "agent-authority"
+        }
+      ]
+    },
+    "trace": "trc_01j2gxq2bmd3e4f5g6h7j8k9m0"
+  }
+}

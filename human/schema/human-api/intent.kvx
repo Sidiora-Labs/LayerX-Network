@@ -1,0 +1,77 @@
+[module]
+name = "intent"
+contract_major = 1
+compatibility = "additive_only"
+spine = "A human states one intent - move an amount of one asset from one endpoint to another - and the network plans it across both settlement domains at once. Planning is pure and deterministic: the same intent over the same observed state produces byte-identical plan bytes and therefore the same plan digest."
+observed_state = "The service assembles the observed state the planner reads. The bound wallet and its Paxeer balances come from the network gateway, the spendable balances, allowance inventory and budget bindings come from the service's own authoritative records, and the fee schedule comes from the same configuration the movement journeys already read. The caller states an intent and never states the headroom that would authorise it."
+never_partial = "A source that cannot answer is a typed refusal naming that source. An unobserved balance is never planned on as zero, so an asset the gateway does not join and a joined row with no Paxeer half both refuse the plan rather than producing one."
+digest_binding = "The plan digest commits to the intent and to every leg, and each leg's action key and signing context are derived from it. A signed plan therefore cannot be re-routed: altering any leg changes the digest and invalidates every signature over it."
+replan_on_submit = "Submission re-plans server-side against the observed state at submission time and refuses when the digest no longer matches. A plan is never executed on the strength of the caller's copy of it."
+no_new_verb = "Intent planning adds no transfer type. deposit and withdraw still name the Paxeer custody boundary exclusively, movements inside LayerX are still one verb, and the route resolver still picks the mechanism."
+progress = "Progress and completion are read through the journey status operation in journeys.kvx. Done is still a receipt."
+
+[type.IntentEndpointKind]
+variants = ["paxeer-wallet","human","agent","agent-budget"]
+closed = "The only source and destination kinds the planner accepts. paxeer-wallet names the bound wallet and carries no account name."
+
+[type.IntentEndpoint]
+required = ["kind:IntentEndpointKind"]
+optional = ["account:string"]
+account_rule = "account carries the canonical protocol account name for human, agent and agent-budget endpoints and is absent for paxeer-wallet."
+
+[type.IntentDomain]
+variants = ["paxeer","layerx"]
+meaning = "The settlement domain that executes one leg."
+
+[type.IntentConstraints]
+required = ["deadline:Timestamp","max_fee:Money","allow_top_up:boolean"]
+deadline = "A plan observed after its deadline is refused rather than planned."
+top_up = "allow_top_up false forbids any top-up leg outright. allow_top_up true permits one only where a user-signed allowance already covers that exact leg."
+
+[type.PlanIntentRequest]
+required = ["source:IntentEndpoint","destination:IntentEndpoint","asset_id:string","money:Money","constraints:IntentConstraints"]
+asset_id = "The lowercase hexadecimal asset identifier, unprefixed."
+authority = "The request states the movement only. Balances, allowances and limits are read by the service and are never accepted from the caller."
+
+[type.IntentLeg]
+required = ["index:integer","mechanism:string","domain:IntentDomain","source:IntentEndpoint","destination:IntentEndpoint","money:Money","fee:Money"]
+order = "Legs execute in index order. Each leg runs to its own verified receipt before the next leg starts."
+
+[type.IntentSigningRequirement]
+required = ["leg_index:integer","action_key:string","signing_context:string","authority:string"]
+derivation = "action_key and signing_context are lowercase hexadecimal and are derived from the plan digest, so they change whenever any leg changes."
+
+[type.IntentPlan]
+required = ["plan_digest:string","journey_kind:string","total_fee:Money","legs:IntentLeg[]","signing_requirements:IntentSigningRequirement[]"]
+digest = "plan_digest is the lowercase hexadecimal plan digest, unprefixed. It is what the caller signs and what submission re-checks."
+
+[type.IntentLegBinding]
+required = ["leg_index:integer","action_key:string","actor:string","authority:string","relationship:string","account_sequence:integer","not_before:integer","not_after:integer","fee_limit:Money"]
+binding = "One binding per leg, carrying the action key it was signed against. A binding whose action key belongs to another plan is refused."
+
+[type.SubmitPlanRequest]
+required = ["plan_digest:string","signed_digest:string","bindings:IntentLegBinding[]"]
+replan = "The service re-plans the stated intent against the observed state at submission time. When the recomputed digest differs from plan_digest the submission is refused and no journey is created."
+
+[type.IntentSubmission]
+required = ["journey_id:JourneyId","plan_digest:string","state:string","state_copy_key:CopyKey"]
+progress = "The journey is then read through GET /v1/journeys/{journey_id} like every other journey."
+
+[operation.intent.plan]
+authorization_class = "money-movement"
+method = "POST"
+path = "/v1/intents/plan"
+request = "PlanIntentRequest"
+response = "IntentPlan"
+purity = "Planning performs no state change and creates no journey. It states what would happen and exactly what must be signed for it to happen."
+refusal = "A route the planner cannot serve, a deadline already passed, an unobservable balance and a top-up without a covering allowance are each typed refusals, never a partial plan."
+
+[operation.intent.submit]
+authorization_class = "money-movement"
+method = "POST"
+path = "/v1/intents/submit"
+request = "SubmitPlanRequest"
+response = "IntentSubmission"
+idempotency = true
+repeat_rule = "Repeating the request under the same Idempotency-Key returns the original journey rather than a second effect."
+digest_check = "The submission is refused when the re-planned digest no longer matches the signed one, so a plan signed against a state that has since changed never executes."
