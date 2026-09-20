@@ -133,8 +133,18 @@ class Node:
         digest = self.rpc('eth_sendRawTransaction', [enhex(signed.raw_transaction)])
         receipt = self.await_receipt(digest)
         if success:
-            assert int(receipt['status'], 16) == 1, json.dumps(receipt)
+            assert int(receipt['status'], 16) == 1, self.revert_reason(receipt, to, data, value)
         return receipt
+
+    def revert_reason(self, receipt, to, data, value):
+        # A reverted module call carries its error only in the return data, so the
+        # failing transaction is replayed at the block that rejected it.
+        call = {'from': self.account.address, 'to': to, 'data': data, 'value': hex(value)}
+        try:
+            self.rpc('eth_call', [call, receipt['blockNumber']])
+        except RuntimeError as failure:
+            return str(failure)
+        return json.dumps(receipt)
 
     def await_receipt(self, digest):
         deadline = time.monotonic() + 120
@@ -208,6 +218,7 @@ class Node:
         with (self.work / 'paxd-init.log').open('w') as log:
             command('bash', ROOT / 'platform/hosted/paxeer/init-chain.sh',
                     env=environment, stdout=log, stderr=log)
+        self.escrow_genesis_bond(int(request['guarantor_bond']))
         binary = environment.get('PAXD', 'paxd')
         with (self.work / 'paxd.log').open('w') as log:
             self.process = subprocess.Popen(
@@ -239,6 +250,22 @@ class Node:
                 'comet_chain_id': COSMOS_CHAIN_ID, 'home': str(self.home),
                 'deployer': self.account.address, 'guarantor_id': enhex(self.guarantor_id),
                 'sequencer_id': enhex(sequencer_id)}
+
+    def escrow_genesis_bond(self, bond):
+        # layerxanchor refuses to initialise when its module account does not already
+        # hold every genesis bond. init-chain.sh registers guarantors through the
+        # precompile once the chain is up, so a genesis guarantor set funds the escrow.
+        import hashlib
+
+        address = self.bech32(hashlib.sha256(b'layerxanchor').digest()[:20].hex())
+        genesis_file = self.home / 'config' / 'genesis.json'
+        genesis = json.loads(genesis_file.read_text())
+        balances = genesis['app_state']['bank']['balances']
+        assert all(entry['address'] != address for entry in balances), \
+            'the anchor module account already holds a genesis balance'
+        balances.append({'address': address, 'coins': [{'denom': BOND_DENOM, 'amount': str(bond)}]})
+        balances.sort(key=lambda entry: entry['address'])
+        genesis_file.write_text(json.dumps(genesis))
 
     @staticmethod
     def bech32(address):
