@@ -194,12 +194,48 @@ An operator running the guarantor by hand has the same two options:
   file default to the cluster locations and are overridden with
   `--treasury-socket`, `--human-socket`, `--peer-uid`, `--peer-gid` and
   `--deposit-authority-key-file`. `guarantor.sh` refuses to start when the policy
-  it is given is not readable.
+  it is given is not readable. The human recipient socket only signs for owners
+  whose key the Human service custodies; `--human-socket none` names no recipient
+  signer, and every owner other than the treasury is then awaited as a signed
+  file, the second option.
 - or deliver the signed `<checkpoint-id>.json` files into
   `LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR` from wherever the owner and
-  checkpoint authority actually sign, using the
-  `<checkpoint-id>.publication-request.json` the producer writes after
-  registration.
+  checkpoint authority actually sign. `cmd/layerx-guarantor/publication-sign.py`
+  turns the `<checkpoint-id>.publication-request.json` the producer writes after
+  registration into that file:
+
+  ```sh
+  python3 cmd/layerx-guarantor/publication-sign.py \
+      "$STATE/<checkpoint-id>.publication-request.json" \
+      "$LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR" \
+      --owner owner.key=0x<recipient address> \
+      --checkpoint-authority-key checkpoint-authority.pem
+  ```
+
+  `--owner` is repeated once per account owner and names the owner's Ed25519 key
+  file and the address its balance is bound to; `--checkpoint-authority-key` is
+  needed only when the batch replays a deposit. A key file is a PEM private key
+  or 64 hexadecimal characters of seed, mode `0600`, and never leaves the machine
+  of the party that holds it: a signer who holds only some of the keys adds
+  `--partial`, which writes `<checkpoint-id>.partial.json` into a directory of
+  their choice, and the next signer passes that file with `--merge`. The tool
+  runs the producer's own checks over the result and writes the final
+  `<checkpoint-id>.json` only when every signature the checkpoint needs is there
+  and verifies. It runs as the user that owns the inputs directory and needs the
+  packages in `cmd/layerx-guarantor/requirements.txt`.
+
+The two options compose. With a policy in place, an owner that holds its own
+key runs the tool with `--partial` straight into
+`LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR`; the producer merges that
+`<checkpoint-id>.partial.json` with the bindings its signer sockets produce,
+verifies every binding, and writes `<checkpoint-id>.json` only when all of them
+are present. Running the tool again for a checkpoint whose file is already there
+and valid exits 0 and leaves it unchanged; a different existing file is never
+overwritten.
+
+A signer that cannot be reached is treated exactly like a file that has not
+arrived: the publication is pending. A signer that answers with a refusal, or a
+signature that does not verify, is a refusal and stops the producer.
 
 Until the file for a registered checkpoint arrives, the producer reports the
 publication as pending and asks again rather than exiting: the checkpoint stays

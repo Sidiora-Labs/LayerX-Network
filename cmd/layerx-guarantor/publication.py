@@ -320,6 +320,45 @@ def publication_transaction(api, rpc, target, digest, commitment, deposit_root):
     return log['transactionHash']
 
 
+def verified_bindings(authorization, balances, h, digest):
+    require(authorization['version'] == 2 and raw(authorization['checkpoint_id'], 32) == digest, 'publication authorization version or checkpoint')
+    require(len(authorization['recipient_bindings']) == len(balances), 'complete recipient bindings required')
+    bound = {}
+    for v in authorization['recipient_bindings']:
+        key = raw(v['account'], 32), raw(v['asset'], 32)
+        require(key not in bound, 'duplicate recipient binding')
+        bound[key] = v
+    verified = []
+    for fact in balances:
+        v = bound.get((fact['account'], fact['asset']))
+        require(v is not None, 'owner recipient binding absent')
+        recipient, anchor, signed = raw(v['recipient'], 20), raw(v['request_anchor'], 32), raw(v['signature'], 64)
+        require(any(recipient) and any(anchor), 'recipient binding empty field')
+        signature(fact['authority'], b'LX:SETTLE:RECIPIENT:v1\0' + h[1].to_bytes(4, 'big') + fact['account'] + fact['asset'] + recipient + anchor, signed)
+        verified.append((fact, recipient, anchor, signed))
+    return verified
+
+
+def verified_deposit(authorization, deposits, profile, h, digest):
+    if not deposits:
+        require(authorization.get('deposit_registration') is None, 'deposit registration without replayed deposits')
+        return None, None, [], None, None
+    v = authorization['deposit_registration']
+    vault = v['vault']
+    require(profile is not None and raw(vault, 20) == profile[13:33], 'deposit vault mismatch')
+    reference = raw(v['custody_reference'], 32)
+    require(any(reference), 'deposit custody reference empty')
+    ordering = []
+    for fact in deposits:
+        leaf = b'LX:PAXEER:DEPOSIT:LEAF:v1' + fact['identity'] + reference + fact['asset'] + fact['amount'] + digest + h[1].to_bytes(4, 'big') + h[0].to_bytes(2, 'big')
+        ordering.append(sha(b'LXP/v1/merkle-leaf\0' + leaf))
+    level = list(ordering)
+    while len(level) > 1:
+        level = [sha(b'LXP/v1/merkle-internal\0' + level[i] + level[min(i + 1, len(level) - 1)]) for i in range(0, len(level), 2)]
+    message = b'LX:PAXEER:DEPOSIT:ROOT:v1' + digest + h[7] + level[0] + reference + h[1].to_bytes(4, 'big') + h[0].to_bytes(2, 'big')
+    return message, raw(v['signature'], 64), ordering, vault, level[0]
+
+
 def publish(api, rpc, request):
     h = api.values(api.HEADER_TYPES, request['header'])
     digest = raw(request['checkpoint_id'], 32)
@@ -352,20 +391,8 @@ def publish(api, rpc, request):
         raise api.AuthorizationPending('owner and checkpoint-authority signatures for checkpoint '
                                        + digest.hex() + ' are not yet in ' + str(source.parent))
     authorization = read_authorizations(source)
-    require(authorization['version'] == 2 and raw(authorization['checkpoint_id'], 32) == digest, 'publication authorization version or checkpoint')
-    require(len(authorization['recipient_bindings']) == len(balances), 'complete recipient bindings required')
-    bound = {}
-    for v in authorization['recipient_bindings']:
-        key = raw(v['account'], 32), raw(v['asset'], 32)
-        require(key not in bound, 'duplicate recipient binding')
-        bound[key] = v
     balance_items = []
-    for fact in balances:
-        v = bound.get((fact['account'], fact['asset']))
-        require(v is not None, 'owner recipient binding absent')
-        recipient, anchor, signed = raw(v['recipient'], 20), raw(v['request_anchor'], 32), raw(v['signature'], 64)
-        require(any(recipient) and any(anchor), 'recipient binding empty field')
-        signature(fact['authority'], b'LX:SETTLE:RECIPIENT:v1\0' + h[1].to_bytes(4, 'big') + fact['account'] + fact['asset'] + recipient + anchor, signed)
+    for fact, recipient, anchor, signed in verified_bindings(authorization, balances, h, digest):
         require(recorded_ancestor(api, rpc, anchor, h), 'recipient anchor not recorded ancestor')
         balance_items.append(fact['account'] + fact['asset'] + fact['amount'] + recipient + checkpoint_wire(api, request, h, digest, anchor, fact['witness'], signed))
     records = {fact['anchor']: anchor_record(api, rpc, fact['anchor']) for fact in withdrawals}
@@ -373,25 +400,10 @@ def publish(api, rpc, request):
     withdrawal_vector = vector(b'LXP/Paxeer/withdrawal-witnesses/v2\0', withdrawal_items)
     balance_vector = vector(b'LXP/Paxeer/balance-witnesses/v2\0', balance_items)
     require(len(withdrawal_vector) + len(balance_vector) <= 1_000_000, 'publication vector bounds')
-    deposit_registration, deposit_signature, ordering, vault = None, None, [], None
+    deposit_registration, deposit_signature, ordering, vault, deposit_root = verified_deposit(authorization, deposits, profile, h, digest)
     if deposits:
-        v = authorization['deposit_registration']
-        vault = v['vault']
-        require(profile is not None and raw(vault, 20) == profile[13:33], 'deposit vault mismatch')
-        reference = raw(v['custody_reference'], 32)
-        require(any(reference), 'deposit custody reference empty')
-        for fact in deposits:
-            leaf = b'LX:PAXEER:DEPOSIT:LEAF:v1' + fact['identity'] + reference + fact['asset'] + fact['amount'] + digest + h[1].to_bytes(4, 'big') + h[0].to_bytes(2, 'big')
-            ordering.append(sha(b'LXP/v1/merkle-leaf\0' + leaf))
-        level = list(ordering)
-        while len(level) > 1:
-            level = [sha(b'LXP/v1/merkle-internal\0' + level[i] + level[min(i + 1, len(level) - 1)]) for i in range(0, len(level), 2)]
-        deposit_registration = b'LX:PAXEER:DEPOSIT:ROOT:v1' + digest + h[7] + level[0] + reference + h[1].to_bytes(4, 'big') + h[0].to_bytes(2, 'big')
-        deposit_signature = raw(v['signature'], 64)
         authority = rpc.view(vault, 'depositRootAuthority()', outputs=('bytes32',))[0]
         signature(authority, deposit_registration, deposit_signature)
-    else:
-        require(authorization.get('deposit_registration') is None, 'deposit registration without replayed deposits')
     deposit_tx = None
     if deposits:
         commitment_deposit = sha(api.encode(['uint16', 'bytes', 'bytes', 'bytes32[]'], [2, deposit_registration, deposit_signature, ordering]))
@@ -399,7 +411,7 @@ def publish(api, rpc, request):
         if not published_deposit:
             deposit_tx = transact(api, rpc, request, vault, api.calldata('registerDepositRoot(bytes,bytes,bytes32[])', ('bytes', 'bytes', 'bytes32[]'), (deposit_registration, deposit_signature, ordering)))
         require(rpc.view(vault, 'depositRegistrationDigest(bytes32)', ('bytes32',), (digest,), ('bytes32',))[0] == commitment_deposit, 'published deposit registration differs')
-        deposit_tx = publication_transaction(api, rpc, vault, digest, commitment_deposit, level[0])
+        deposit_tx = publication_transaction(api, rpc, vault, digest, commitment_deposit, deposit_root)
     evidence = {'version': 2, 'checkpoint_id': hx(digest), 'withdrawal_witnesses': hx(withdrawal_vector), 'balance_witnesses': hx(balance_vector), 'withdrawal_count': len(withdrawal_items), 'refused_withdrawal_count': len(refused_withdrawals), 'refused_withdrawals': refused_withdrawals, 'balance_count': len(balances), 'deposit_count': len(deposits), 'deposit_transaction': deposit_tx, 'deposit_registration': None if deposit_registration is None else hx(deposit_registration), 'deposit_signature': None if deposit_signature is None else hx(deposit_signature), 'leaf_ordering': [hx(v) for v in ordering]}
     atomic_json(directory / (digest.hex() + '.evidence.json'), evidence)
     return evidence

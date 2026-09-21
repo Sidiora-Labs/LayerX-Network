@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# The state directory is setgid, a directory created under it inherits that bit, and an octal
+# chmod leaves it set on a directory. The producer accepts a publication inputs directory of
+# exactly 0700, so the special bits are cleared by name.
+private_directory() {
+    mkdir -p "$1"
+    chmod u=rwx,go=,ug-s,-t "$1"
+}
+if [ "${1:-}" = --publication-inputs-dir ]; then
+    [ "$#" = 2 ] || exit 2
+    umask 077
+    private_directory "$2"
+    exit 0
+fi
 if [ "${1:-}" = --checkpoint-authority-public ]; then
     [ "$#" = 2 ] || exit 2
     exec python3 "$(dirname "$0")/checkpoint-authority.py" "$2"
@@ -69,8 +82,7 @@ while :; do
     install -m 0600 "$submitter_source" "$LAYERX_GUARANTOR_STATE_DIR/signer/submitter.key"
     export LAYERX_GUARANTOR_SUBMITTER_KEY_FILE="$LAYERX_GUARANTOR_STATE_DIR/signer/submitter.key"
     export LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR="${inputs_override:-$LAYERX_GUARANTOR_STATE_DIR/publication-inputs}"
-    mkdir -p "$LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR"
-    chmod 0700 "$LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR"
+    private_directory "$LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR"
     if [ -n "${LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_SOURCE:-}" ]; then
         install -m 0600 "$LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_SOURCE" \
             "$LAYERX_GUARANTOR_STATE_DIR/signer/publication-authorization.json"
