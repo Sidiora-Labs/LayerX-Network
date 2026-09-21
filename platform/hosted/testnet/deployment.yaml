@@ -191,9 +191,9 @@ metadata:
   annotations: {nginx.ingress.kubernetes.io/backend-protocol: HTTPS}
 spec:
   ingressClassName: nginx
-  tls: [{hosts: [layerx.network], secretName: layerx-testnet-ingress-tls}]
+  tls: [{hosts: [beta.layerx.network], secretName: layerx-testnet-ingress-tls}]
   rules:
-    - host: layerx.network
+    - host: beta.layerx.network
       http:
         paths:
           - path: /

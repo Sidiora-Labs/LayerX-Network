@@ -122,7 +122,7 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 
 | Key | Value | Source |
 | --- | --- | --- |
-| testnet_public_url | https://layerx.network | platform/hosted/testnet/deployment.yaml Ingress layerx-testnet-public; .github/workflows/platform.yml LAYERX_TESTNET_URL; platform/hosted/testnet/src/lib.rs; platform/hosted/testnet/status.json; platform/docs/beta-environment.md |
+| testnet_public_url | https://beta.layerx.network | platform/hosted/testnet/deployment.yaml Ingress layerx-testnet-public; .github/workflows/platform.yml LAYERX_TESTNET_URL; platform/hosted/testnet/src/lib.rs; platform/hosted/testnet/status.json; platform/docs/beta-environment.md |
 | gateway_url | https://api.layerx.network | .github/workflows/platform.yml LAYERX_GATEWAY_URL; platform/hosted/testnet/src/lib.rs; platform/docs/beta-environment.md; platform/examples/*/layerx.example.json |
 | faucet_url | https://faucet.layerx.network | .github/workflows/platform.yml LAYERX_FAUCET_URL; platform/hosted/testnet/src/lib.rs; platform/docs/beta-environment.md |
 | status_url | https://status.layerx.network | platform/hosted/testnet/src/lib.rs; platform/docs/beta-environment.md |

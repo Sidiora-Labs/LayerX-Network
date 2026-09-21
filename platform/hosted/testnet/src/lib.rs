@@ -72,7 +72,7 @@ pub fn platform_testnet() -> TestnetConfig {
         package_semver: env!("CARGO_PKG_VERSION").to_owned(),
         wire_protocol_version: LXP_WIRE_PROTOCOL_VERSION,
         network_id: TESTNET_NETWORK_ID,
-        public_endpoint: "https://layerx.network".to_owned(),
+        public_endpoint: "https://beta.layerx.network".to_owned(),
         gateway_endpoint: "https://api.layerx.network".to_owned(),
         faucet_endpoint: "https://faucet.layerx.network".to_owned(),
         status_endpoint: "https://status.layerx.network".to_owned(),
