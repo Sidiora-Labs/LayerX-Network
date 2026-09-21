@@ -13,23 +13,18 @@ import provision
 HERE = Path(__file__).resolve().parent
 PROVIDER = HERE.parents[2] / 'human/crates/layerx-human-movement-provider/src'
 CLUSTER = HERE.parents[0] / 'tests/beta-cluster.sh'
+FIXTURES = HERE.parents[2] / 'tests/fixtures/custody/paxeer-light-v1'
 TRANSACTION = '0x' + bytes(range(32)).hex()
 
 
-def big(value, length):
-    return value.to_bytes(length, 'big')
-
-
-def light_credit(bundle=b'LXLB1' + bytes([15] * 600)):
-    profile = (b'LXBC3' + big(125, 8) + bytes([8] * 20) + bytes([1] * 32) + bytes([10] * 32) + bytes([2] * 32)
-               + bytes([3] * 32) + big(1, 8) + b'hyperpax_125-1'.ljust(32, b'\0') + big(77, 4) + big(3, 2))
-    assert len(profile) == 223
-    head = (b'LXDC3' + hashlib.sha256(profile).digest() + big(77, 4) + big(3, 2) + bytes([5] * 32)
-            + bytes([2] * 32) + bytes([6] * 32) + bytes([7] * 32) + bytes([9] * 20) + big(10 ** 18, 16)
-            + big(1, 8) + big(12, 8) + bytes([11] * 32) + bytes([12] * 32) + big(13, 8) + bytes([14] * 32)
-            + hashlib.sha256(bundle).digest() + big(2, 4))
-    assert len(head) == 363
-    return profile, head + bundle
+def light_credit(name='custody.credit'):
+    profile = (FIXTURES / 'custody.profile').read_bytes()
+    credit = (FIXTURES / name).read_bytes()
+    assert len(profile) == 223 and profile[:5] == b'LXBC3'
+    assert len(credit) > 363 and credit[:5] == b'LXDC3'
+    assert credit[5:37] == hashlib.sha256(profile).digest()
+    assert credit[327:359] == hashlib.sha256(credit[363:]).digest()
+    return profile, credit
 
 
 def evidence_input(directory):
@@ -45,7 +40,9 @@ class OwnerCustodyCreditMaterialTests(unittest.TestCase):
         self.assertRegex(name, r'^credit-[0-9a-f]{64}\.bin$')
         service = (PROVIDER / 'service.rs').read_text()
         self.assertIn('.join(format!("credit-{}.bin", hex_string(&transaction.bytes())));', service)
-        self.assertIn('read_private(&path, 427)', service)
+        self.assertIn('read_private(&path, layerx_paxeer_client::NATIVE_CUSTODY_CREDIT_MAX_BYTES)', service)
+        self.assertIn('pub const NATIVE_CUSTODY_CREDIT_MAX_BYTES: usize = MAX_PAYLOAD_BYTES;',
+                      (HERE.parents[2] / 'human/crates/layerx-paxeer-client/src/native_custody.rs').read_text())
         self.assertIn('const DIGITS: &[u8; 16] = b"0123456789abcdef";', (PROVIDER / 'config.rs').read_text())
         for refused in ('ab' * 32, '0x' + 'ab' * 31, '0x' + 'ab' * 33, '0x' + 'zz' * 32):
             with self.assertRaises(ValueError):
@@ -134,7 +131,7 @@ class ClusterEvidenceDeliveryTests(unittest.TestCase):
             self.assertEqual(sorted(path.name for path in root.iterdir()), sorted([deposit.name, published.name]))
             self.assertEqual(deliver(root, credit).returncode, 0)
             self.assertEqual(published.read_bytes(), credit)
-            _, other = light_credit(b'LXLB1' + bytes([16] * 600))
+            _, other = light_credit('custody-later.credit')
             tampered = deliver(root, other)
             self.assertNotEqual(tampered.returncode, 0)
             self.assertIn('custody credit bytes differ from the produced credit', tampered.stderr.decode())
@@ -160,7 +157,9 @@ class ClusterEvidenceDeliveryTests(unittest.TestCase):
     def test_cluster_up_publishes_the_deposit_proof_in_the_movement_container_before_delivery(self):
         text = CLUSTER.read_text()
         step = text.split('human_custody_evidence_publish() {', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn("latestCanonicalCheckpointHash()", text.split('custody_latest_checkpoint() {', 1)[1].split('\n}\n', 1)[0])
+        checkpoint = text.split('custody_latest_checkpoint() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn("eth_hash(b'latestFinalized()')", checkpoint)
+        self.assertIn("eth_hash(b'checkpoint(uint64)')", checkpoint)
         self.assertIn('kube -n "$ns" exec layerx-node-0 -c human-movement -- sh -ec', step)
         self.assertIn('/usr/local/bin/layerx-runtime-clock --runtime-dir "$runtime" --', step)
         self.assertIn('/usr/local/bin/layerx-human-movement-provider --publish-deposit-proof "$@"', step)
