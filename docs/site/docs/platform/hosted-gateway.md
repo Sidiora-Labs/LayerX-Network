@@ -27,7 +27,7 @@ The image is `ghcr.io/sidiora-labs/layerx-gateway:0.1.0`, user
 `platform/hosted/gateway/deployment.yaml:67-69`). The Deployment has
 three replicas, listens on `0.0.0.0:9443`, exposes Service port `443`
 to container `9443`, and is reached as Ingress host
-`api.layerx.network`
+`api.paxeer.network`
 (`platform/hosted/gateway/deployment.yaml:60`;
 `platform/hosted/gateway/deployment.yaml:70-72`;
 `platform/hosted/gateway/deployment.yaml:123-126`;

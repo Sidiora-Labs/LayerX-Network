@@ -16,8 +16,8 @@ For a shorter environment checklist, start with
 The published gateway and faucet origins are:
 
 ```sh
-export RPC_URL=https://api.layerx.network/rpc
-export FAUCET_URL=https://faucet.layerx.network
+export RPC_URL=https://api.paxeer.network/rpc
+export FAUCET_URL=https://faucet.paxeer.network
 ```
 
 You also need:

@@ -58,7 +58,7 @@ sudo platform/relay_archive/install.sh \
   --public-url https://relay.example.net \
   --upstream https://archive-1.example.net \
   --upstream https://archive-2.example.net \
-  --submission-upstream https://api.layerx.network/v1/activities \
+  --submission-upstream https://api.paxeer.network/v1/activities \
   --peer-seed https://relay-seed.example.net \
   --tls-cert /etc/layerx/tls/relay.crt \
   --tls-key /etc/layerx/tls/relay.key \
@@ -66,7 +66,7 @@ sudo platform/relay_archive/install.sh \
 ```
 
 Hostnames in that example other than
-`https://api.layerx.network/v1/activities` are installer
+`https://api.paxeer.network/v1/activities` are installer
 placeholders from `platform/relay_archive/README.md`. Replace them
 with independently pinned origins. The installer never accepts or
 copies a bearer token, API key, TLS private key, or other credential.

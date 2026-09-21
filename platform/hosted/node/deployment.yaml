@@ -526,7 +526,7 @@ spec:
             - name: LAYERX_HUMAN_COMPONENT_SOCKET
               value: /run/layerx/human/components.sock
             - name: LAYERX_HUMAN_WEB_ORIGIN
-              value: https://human.layerx.network
+              value: https://app.paxeer.network
             - name: LAYERX_NETWORK_GATEWAY_ENDPOINT
               value: https://layerx-gateway.layerx-testnet.svc.cluster.local:443/rpc
           ports:

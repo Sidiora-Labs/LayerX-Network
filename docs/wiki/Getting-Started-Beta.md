@@ -6,8 +6,8 @@ and independently supplied verification policy.
 ## Endpoints and trust
 
 ```sh
-export RPC_URL=https://api.layerx.network/rpc
-export FAUCET_URL=https://faucet.layerx.network
+export RPC_URL=https://api.paxeer.network/rpc
+export FAUCET_URL=https://faucet.paxeer.network
 ```
 
 Store a gateway `LayerX-Key` credential under the CLI alias `beta`, keep the

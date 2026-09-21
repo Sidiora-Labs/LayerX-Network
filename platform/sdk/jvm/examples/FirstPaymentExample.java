@@ -22,7 +22,7 @@ public final class FirstPaymentExample {
         var credential = new HttpProductionTransport.BearerCredential(
             new SecretBytes(apiKey.getBytes()));
         var transport = HttpProductionTransport.create(
-            URI.create("https://api.layerx.network"),
+            URI.create("https://api.paxeer.network"),
             URI.create("https://agent.layerx.network/rpc"),
             credential);
         var client = new ProductionClient(transport);

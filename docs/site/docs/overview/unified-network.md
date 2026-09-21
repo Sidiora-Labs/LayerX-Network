@@ -126,7 +126,7 @@ Genesis for the anchor module is written by `platform/hosted/paxeer/anchor-genes
 ## The single network endpoint
 
 One endpoint serves the whole network: the hosted gateway at
-`https://api.layerx.network/rpc`. A caller does not choose a chain — the
+`https://api.paxeer.network/rpc`. A caller does not choose a chain — the
 method name decides the domain.
 
 - `eth_*`, `net_*` and `web3_*` are the Paxeer EVM JSON-RPC, relayed verbatim to

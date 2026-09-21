@@ -79,7 +79,7 @@ already-configured `beta` profile
 
 Non-loopback endpoints must use `https://`
 (`platform/cli/src/http.rs:27-37`). The public gateway Ingress host
-in `layerx-testnet` is `api.layerx.network`
+in `layerx-testnet` is `api.paxeer.network`
 (`platform/hosted/gateway/deployment.yaml:182, 190-192`). The CLI
 does not default that URL.
 

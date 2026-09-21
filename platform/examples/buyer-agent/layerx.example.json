@@ -14,8 +14,8 @@
       "idempotencyEnvironment": "LAYERX_EMULATOR_PAYMENT_KEY"
     },
     "beta": {
-      "humanUrl": "https://api.layerx.network",
-      "receiptAuthorityUrl": "https://api.layerx.network",
+      "humanUrl": "https://api.paxeer.network",
+      "receiptAuthorityUrl": "https://api.paxeer.network",
       "resourceUrl": "http://127.0.0.1:8081/paid",
       "scheme": "exact",
       "network": "layerx:beta",

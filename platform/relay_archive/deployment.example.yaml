@@ -15,7 +15,7 @@ data:
       "codec": "/usr/local/bin/layerx-archive-codec",
       "allow_loopback_dev": false,
       "upstreams": ["https://archive-seed.example.net"],
-      "submission_upstreams": ["https://api.layerx.network/v1/activities"],
+      "submission_upstreams": ["https://api.paxeer.network/v1/activities"],
       "tls_cert": "/run/layerx/tls/tls.crt",
       "tls_key": "/run/layerx/tls/tls.key",
       "ca_file": "/etc/ssl/certs/ca-certificates.crt",

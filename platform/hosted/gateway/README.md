@@ -14,7 +14,7 @@ URL (`LAYERX_GATEWAY_PUBLIC_CORE_URL`). Native DID enumeration, asset
 listing/detail, and canonical fee estimation use authenticated core reads and
 return explicit JSON-RPC unavailability when evidence is absent, never
 fabricated results.
-The public gateway origin is `https://api.layerx.network`.
+The public gateway origin is `https://api.paxeer.network`.
 See [Hosted gateway](../../../docs/wiki/HostedGateway.md).
 
 `lx_sendActivity` accepts the strictly decoded native Asset operations register
