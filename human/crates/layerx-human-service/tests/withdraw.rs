@@ -578,10 +578,25 @@ use paxd::{JourneyChain, PaxdNode, Settlement, VAULT_BALANCE};
 use support::{directory, principal, retention_uniform, tenancy};
 
 const NETWORK_ID: u32 = 77;
-const ASSET: [u8; 32] = [
-    0xb5, 0xa3, 0x2b, 0x12, 0x02, 0x9f, 0x8d, 0xdf, 0xb9, 0x05, 0xf9, 0x0f, 0x28, 0x0f, 0x66, 0x4b,
-    0x46, 0x39, 0x0d, 0xe0, 0xfc, 0x62, 0x77, 0x0f, 0xc1, 0x97, 0xdd, 0x87, 0xb1, 0x8c, 0xd8, 0x98,
-];
+/// The light-client custody profile the native fixture bootstraps the node
+/// with: real `LXBC3` bytes from a disposable `paxd`, written by
+/// `layerx-custody-proof light-profile`. The asset it carries at `[97..129]`
+/// is the one the credit bound to it credits, so the journey reads it out of
+/// the vector instead of restating it.
+const CUSTODY_PROFILE: &[u8; 223] =
+    include_bytes!("../../../../tests/fixtures/custody/paxeer-light-v1/custody.profile");
+/// The seed of the actor that vector's credit names as its owner.
+const OWNER_SEED: &[u8; 32] =
+    include_bytes!("../../../../tests/fixtures/custody/paxeer-light-v1/actor.seed");
+const ASSET: [u8; 32] = {
+    let mut asset = [0u8; 32];
+    let mut index = 0;
+    while index < 32 {
+        asset[index] = CUSTODY_PROFILE[97 + index];
+        index += 1;
+    }
+    asset
+};
 const AMOUNT: u128 = 25;
 const RECIPIENT: [u8; 20] = [
     0x3c, 0x44, 0xcd, 0xdd, 0xb6, 0xa9, 0x00, 0xfa, 0x2b, 0x58, 0x5d, 0xd2, 0x99, 0xe0, 0x3d, 0x12,
@@ -630,7 +645,7 @@ fn account(value: &str) -> AccountId {
 }
 
 fn owner_public() -> [u8; 32] {
-    SigningKey::from_bytes(&[0x11; 32])
+    SigningKey::from_bytes(OWNER_SEED)
         .verifying_key()
         .to_bytes()
 }

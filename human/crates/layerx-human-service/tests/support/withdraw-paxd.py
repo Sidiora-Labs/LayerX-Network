@@ -219,7 +219,7 @@ class Node:
         with (self.work / 'paxd-init.log').open('w') as log:
             command('bash', ROOT / 'platform/hosted/paxeer/init-chain.sh',
                     env=environment, stdout=log, stderr=log)
-        self.escrow_genesis_bond(int(request['guarantor_bond']))
+        self.check_escrow_genesis_bond(int(request['guarantor_bond']))
         binary = environment.get('PAXD', 'paxd')
         self.rpc_port = ports['RPC']
         self.custody_authority = self.validator_custody_authority(binary)
@@ -269,21 +269,20 @@ class Node:
         genesis_file.write_text(json.dumps(genesis))
         return authority
 
-    def escrow_genesis_bond(self, bond):
+    def check_escrow_genesis_bond(self, bond):
         # layerxanchor refuses to initialise when its module account does not already
-        # hold every genesis bond. init-chain.sh registers guarantors through the
-        # precompile once the chain is up, so a genesis guarantor set funds the escrow.
+        # hold every genesis bond, so init-chain.sh brings the escrow with a genesis
+        # guarantor set. This anchor genesis carries one, so the escrow is the bond.
         import hashlib
 
         address = self.bech32(hashlib.sha256(b'layerxanchor').digest()[:20].hex())
         genesis_file = self.home / 'config' / 'genesis.json'
         genesis = json.loads(genesis_file.read_text())
         balances = genesis['app_state']['bank']['balances']
-        assert all(entry['address'] != address for entry in balances), \
-            'the anchor module account already holds a genesis balance'
-        balances.append({'address': address, 'coins': [{'denom': BOND_DENOM, 'amount': str(bond)}]})
-        balances.sort(key=lambda entry: entry['address'])
-        genesis_file.write_text(json.dumps(genesis))
+        escrow = [entry for entry in balances if entry['address'] == address]
+        assert len(escrow) == 1, 'init-chain.sh did not fund the anchor module account'
+        assert escrow[0]['coins'] == [{'denom': BOND_DENOM, 'amount': str(bond)}], \
+            f'the anchor escrow holds {escrow[0]["coins"]}, not the {bond} {BOND_DENOM} genesis bond'
 
     @staticmethod
     def bech32(address):
