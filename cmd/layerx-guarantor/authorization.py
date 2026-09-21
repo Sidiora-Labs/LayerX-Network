@@ -69,8 +69,9 @@ def configuration(path):
     endpoint(value['treasury'])
     for name, length in (('public_key', 32), ('asset_id', 32), ('recipient', 20)):
         unhex(value['treasury'][name], length)
-    fields(value['human'], 'socket peer_uid peer_gid')
-    endpoint(value['human'])
+    if value['human'] is not None:
+        fields(value['human'], 'socket peer_uid peer_gid')
+        endpoint(value['human'])
     key = Path(value['deposit_authority_key_file'])
     require(key.is_absolute() and key.parent.resolve() == key.parent, 'deposit authority key path')
     return value
@@ -112,25 +113,41 @@ def principal(publication, fact, root):
     return matched[1].decode('ascii')
 
 
-def recipient_binding(publication, policy, fact, header, digest):
+def recipient_binding(api, publication, policy, fact, header, digest):
+    # A signer that cannot be reached has not answered, so the signature it owes has not arrived
+    # yet: the registration stands, nothing is published and the producer asks again. A signer
+    # that does answer, with a refusal or with a signature that does not verify, is a refusal.
     owner = principal(publication, fact, header[7])
     treasury = policy['treasury']
     public = unhex(treasury['public_key'], 32)
     if owner == treasury['public_key']:
-        from signer.client import SignerClient
+        from signer.client import SignerClient, SignerError
         require(fact['authority'] == public and fact['asset'] == unhex(treasury['asset_id'], 32),
                 'treasury native authority or asset differs')
         recipient = unhex(treasury['recipient'], 20)
         client = SignerClient(treasury['socket'], expected_peer_uid=treasury['peer_uid'],
                               expected_peer_gid=treasury['peer_gid'], expected_public_key=public)
-        signed = client.bind(header[1], fact['account'], fact['asset'], recipient, digest)
+        try:
+            signed = client.bind(header[1], fact['account'], fact['asset'], recipient, digest)
+        except SignerError as error:
+            if isinstance(error.__cause__, OSError):
+                raise api.AuthorizationPending('treasury signer is not reachable at '
+                                               + treasury['socket']) from None
+            raise
         publication.signature(public, b'LX:SETTLE:RECIPIENT:v1\0' + header[1].to_bytes(4, 'big')
                               + fact['account'] + fact['asset'] + recipient + digest, signed)
         return dict(account=publication.hx(fact['account']), asset=publication.hx(fact['asset']),
                     recipient=publication.hx(recipient), request_anchor=publication.hx(digest),
                     signature=publication.hx(signed))
+    if policy['human'] is None:
+        raise api.AuthorizationPending('owner ' + owner + ' signs its own recipient binding; its signed '
+                                       'authorization for checkpoint ' + digest.hex() + ' has not been delivered')
     from recipient_binding import sign_binding
-    return sign_binding(policy['human'], owner, fact, header[1], digest)
+    try:
+        return sign_binding(policy['human'], owner, fact, header[1], digest)
+    except OSError:
+        raise api.AuthorizationPending('recipient signer for owner ' + owner + ' is not reachable at '
+                                       + policy['human']['socket']) from None
 
 
 def deposit_message(publication, deposits, header, digest, reference):
@@ -180,17 +197,21 @@ def sign_deposit(publication, policy, expected_public, message):
         os.close(descriptor)
 
 
-def authorize(api, publication, rpc, request, source, policy_path):
-    policy = configuration(policy_path)
-    header, digest = registered_checkpoint(api, publication, rpc, request, policy)
-    balances, _, deposits, profile = publication.native_request(api, request, header, digest)
-    require(balances, 'authorization requires native owner balances')
+def private_output(source, digest):
     info = source.parent.lstat()
     require(source.parent.is_absolute() and source.parent.resolve() == source.parent
             and stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700
             and info.st_uid == os.geteuid(), 'authorization output directory is not private')
     require(source.name == digest.hex() + '.json', 'authorization output checkpoint mismatch')
-    bindings = [recipient_binding(publication, policy, fact, header, digest) for fact in balances]
+
+
+def authorize(api, publication, rpc, request, source, policy_path):
+    policy = configuration(policy_path)
+    header, digest = registered_checkpoint(api, publication, rpc, request, policy)
+    balances, _, deposits, profile = publication.native_request(api, request, header, digest)
+    require(balances, 'authorization requires native owner balances')
+    private_output(source, digest)
+    bindings = [recipient_binding(api, publication, policy, fact, header, digest) for fact in balances]
     deposit = None
     if deposits:
         vault = unhex(policy['vault'], 20)

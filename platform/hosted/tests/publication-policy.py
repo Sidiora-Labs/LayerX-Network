@@ -35,6 +35,9 @@ def absolute(value):
 # file. A guarantor run outside the cluster reaches the same signers over its own socket paths and
 # keeps its checkpoint authority key where its operator put it, so each of these is an override
 # `--name value` after the positional arguments rather than a constant.
+# `--human-socket none` names no recipient signer at all: every owner other than the treasury then
+# holds its own key, and its recipient binding is awaited as a signed authorization file
+# (cmd/layerx-guarantor/publication-sign.py) instead of being asked of a signer socket.
 DEFAULTS = {'treasury-socket': '/run/layerx/node/treasury-signer.sock',
             'human-socket': '/run/layerx/human/recipient.sock',
             'peer-uid': '4020',
@@ -75,7 +78,8 @@ def main(arguments):
                      treasury=dict(socket=absolute(option['treasury-socket']), **peers,
                                    public_key=hexadecimal(public, 32),
                                    asset_id=hexadecimal(asset, 32), recipient=hexadecimal(recipient, 20)),
-                     human=dict(socket=absolute(option['human-socket']), **peers),
+                     human=None if option['human-socket'] == 'none'
+                     else dict(socket=absolute(option['human-socket']), **peers),
                      deposit_authority_key_file=absolute(option['deposit-authority-key-file']))
     else:
         raise ValueError('publication policy arguments invalid')
