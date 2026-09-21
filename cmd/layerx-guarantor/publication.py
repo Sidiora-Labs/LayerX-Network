@@ -21,6 +21,7 @@ CUSTODY_STORE = b'layerxcustody'
 CUSTODY_RESERVE_ACCOUNT = b'system:paxeer-reserve'
 DEPOSIT_DOMAIN = b'LXP/Paxeer/custody-deposit/v1'
 MAX_TIMESTAMP_SECONDS = 253402300799
+AUTHORIZATION_WAIT_SECONDS = 30
 
 
 def require(value, message):
@@ -341,10 +342,15 @@ def publish(api, rpc, request):
         spec.loader.exec_module(authorizer)
         from types import SimpleNamespace
         authorizer.authorize(api, SimpleNamespace(**globals()), rpc, request, source, policy)
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + AUTHORIZATION_WAIT_SECONDS
     while not source.exists() and time.monotonic() < deadline:
         time.sleep(.1)
-    require(source.exists(), 'owner and checkpoint-authority signatures unavailable')
+    if not source.exists():
+        # The owner and checkpoint-authority signatures are produced outside this process. Their
+        # absence is not a refusal of the checkpoint: the registration stands, nothing is published,
+        # and the producer asks again. Publishing without them stays impossible either way.
+        raise api.AuthorizationPending('owner and checkpoint-authority signatures for checkpoint '
+                                       + digest.hex() + ' are not yet in ' + str(source.parent))
     authorization = read_authorizations(source)
     require(authorization['version'] == 2 and raw(authorization['checkpoint_id'], 32) == digest, 'publication authorization version or checkpoint')
     require(len(authorization['recipient_bindings']) == len(balances), 'complete recipient bindings required')

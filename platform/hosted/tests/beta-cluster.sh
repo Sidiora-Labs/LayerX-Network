@@ -765,6 +765,21 @@ ed25519_public_hex() {
     openssl pkey -in "$1" -pubout -outform DER 2>/dev/null | tail -c 32 | od -An -v -tx1 | tr -d ' \n'
 }
 
+guarantor_checkpoint_authority_generate() {
+    # guarantor_checkpoint_authority_generate SECRETS_DIR -> the one Ed25519 key every guarantor signs
+    # its deposit-root registrations with. layerxcustody reads deposit_root_authority from genesis state
+    # and nothing sets it afterwards, so the key has to exist before the Paxeer genesis is built: the
+    # bring-up generates it here and the node pods receive it, instead of each pod minting its own after
+    # the chain is already running and its parameter is already fixed.
+    local d=$1 der
+    [ ! -e "$d/checkpoint-authority.pem" ] || fail "the guarantor checkpoint authority key already exists in $d"
+    (umask 077; openssl genpkey -algorithm ed25519 -out "$d/checkpoint-authority.pem" 2>/dev/null)
+    der=$(openssl pkey -in "$d/checkpoint-authority.pem" -pubout -outform DER 2>/dev/null | od -An -v -tx1 | tr -d ' \n')
+    [ "${#der}" -eq 88 ] && [ "${der:0:24}" = 302a300506032b6570032100 ] \
+        || fail "the generated guarantor checkpoint authority key is not Ed25519"
+    printf '0x%s\n' "${der:24}" > "$d/checkpoint-authority.public.hex"
+}
+
 explorer_read_principal_generate() {
     # explorer_read_principal_generate SECRETS_DIR -> the explorer index's own read identity. The bring-up
     # generates and keeps this key like every other service principal; it is never an owner input.
@@ -1018,6 +1033,7 @@ secrets_generate() {
     evm_key_generate paxeer-guarantor-controller
     evm_key_generate paxeer-guarantor-second-controller
     evm_key_generate paxeer-checkpoint-submitter
+    guarantor_checkpoint_authority_generate "$d"
     if [ -n "${LAYERX_BETA_MIRROR_ETHEREUM_KEY_FILE:-}" ]; then
         [ -r "$LAYERX_BETA_MIRROR_ETHEREUM_KEY_FILE" ] \
             || fail "LAYERX_BETA_MIRROR_ETHEREUM_KEY_FILE=$LAYERX_BETA_MIRROR_ETHEREUM_KEY_FILE is not readable"
@@ -1326,12 +1342,23 @@ secrets_apply() {
     # The guarantor pays for every submitCheckpoint from this account and nothing tops it up after
     # genesis, so init-chain.sh reads the address from this secret and funds its cast account.
     apply_secret "$ns" paxeer-checkpoint-submitter-address --from-file=address="$s/paxeer-checkpoint-submitter.address"
+    # Every guarantor signs its deposit-root registrations with one Ed25519 key, and layerxcustody only
+    # accepts those signatures while its genesis parameter deposit_root_authority holds that key's
+    # public half. The parameter cannot be set after genesis, so the public half goes out before the
+    # chain is built (init-chain.sh reads it, and human provisioning reads the same secret) and the
+    # private half goes to the node pods, whose guarantor-checkpoint-authority init container installs
+    # it for the guarantors under the one shared guarantor-submitter volume subpath.
+    apply_secret "$ns" layerx-guarantor-checkpoint-authority \
+        --from-file=public.hex="$s/checkpoint-authority.public.hex"
+    apply_secret "$ns" layerx-guarantor-checkpoint-authority-key \
+        --from-file=key.pem="$s/checkpoint-authority.pem"
     # Paxeer custody is the layerxcustody module behind the precompile at 0x…1013. Nothing is deployed
     # for it: the network id, the sequencer authorization and the asset map are Paxeer genesis state,
     # which init-chain.sh merges from this ConfigMap before it validates the genesis.
     rm -f "$WORK_DIR/paxeer-custody-genesis.json"
     python3 "$REPO_ROOT/platform/hosted/paxeer/custody-genesis.py" --network-id "$NODE_NETWORK_ID" \
         --sequencer-id "$SEQUENCER_ID" --sequencer-public-key "$(cat "$CA_DIR/sequencer.pub.hex")" \
+        --deposit-root-authority "$(deposit_root_authority "$s")" \
         --asset "$NODE_ASSET_ID:uhpx" --output "$WORK_DIR/paxeer-custody-genesis.json"
     apply_configmap "$ns" paxeer-custody-genesis --from-file=genesis.json="$WORK_DIR/paxeer-custody-genesis.json"
     # Checkpoint settlement and the guarantor bond are the layerxanchor module behind the precompile
@@ -2077,13 +2104,18 @@ wait_for_node_genesis() {
     [ "$NODE_SEQUENCER_PUBLIC_KEY" = "$(cat "$CA_DIR/sequencer.pub.hex")" ] || fail "the node sequencer public key differs from the generated sequencer key"
     [ "$GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE" = /var/lib/guarantor-submitter/checkpoint-authority.pem ] \
         || fail "the node manifest no longer binds every guarantor to one checkpoint authority key file"
+    # The key itself was generated and published before the Paxeer genesis, because the custody
+    # parameter that accepts its signatures is genesis state. What is checked here is that the
+    # guarantors really do hold it: a pod that installed a different key would register deposit roots
+    # the chain rejects, and this bring-up would rather stop than run a cluster that cannot settle.
+    local checkpoint_authority pod_authority
+    checkpoint_authority=$(deposit_root_authority "$SECRETS_DIR")
     kube -n "$TESTNET_NAMESPACE" exec layerx-node-0 -c guarantor-1 -- \
         /opt/layerx/guarantor.sh --checkpoint-authority-public \
         "$GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE" > "$WORK_DIR/genesis/checkpoint-authority.public.hex"
-    local checkpoint_authority
-    checkpoint_authority=$(deposit_root_authority "$WORK_DIR/genesis")
-    apply_secret "$TESTNET_NAMESPACE" layerx-guarantor-checkpoint-authority \
-        --from-file=public.hex="$WORK_DIR/genesis/checkpoint-authority.public.hex"
+    pod_authority=$(deposit_root_authority "$WORK_DIR/genesis")
+    [ "$pod_authority" = "$checkpoint_authority" ] \
+        || fail "the guarantors sign deposit roots with $pod_authority but the Paxeer genesis authorizes $checkpoint_authority"
     log "guarantor checkpoint authority $checkpoint_authority signs the deposit roots of this cluster"
 }
 
@@ -2142,21 +2174,38 @@ guarantor_sequence_test() (
 
 deposit_root_authority_test() (
     set -euo pipefail
-    local dir key der expected policy scenario
+    local dir key der expected policy scenario observed custody
     dir=$(mktemp -d)
     trap 'rm -rf "$dir"' EXIT
     umask 077
     mkdir -p "$dir/genesis"
-    bash "$REPO_ROOT/platform/hosted/node/guarantor.sh" --checkpoint-authority-public \
-        "$dir/checkpoint-authority.pem" > "$dir/genesis/checkpoint-authority.public.hex"
+    guarantor_checkpoint_authority_generate "$dir/genesis"
     key=$(deposit_root_authority "$dir/genesis")
     [[ $key =~ ^0x[0-9a-fA-F]{64}$ ]] || fail "the extracted deposit-root authority is not a 32-byte key"
     [ "$key" != "0x$(printf '%064d' 0)" ] || fail "the extracted deposit-root authority is zero"
-    der=$(openssl pkey -in "$dir/checkpoint-authority.pem" -pubout -outform DER | od -An -v -tx1 | tr -d ' \n')
+    der=$(openssl pkey -in "$dir/genesis/checkpoint-authority.pem" -pubout -outform DER | od -An -v -tx1 | tr -d ' \n')
     [ "${#der}" -eq 88 ] && [ "${der:0:24}" = 302a300506032b6570032100 ] \
         || fail "the guarantor checkpoint authority key is not Ed25519"
     expected="0x${der:24}"
     [ "$key" = "$expected" ] || fail "the deposit-root authority $key differs from the signing key public half $expected"
+    # The guarantor reads back the key the bring-up generated for it instead of minting one of its own,
+    # which is what lets the custody genesis authorize the signatures the guarantor will actually make.
+    observed=$(bash "$REPO_ROOT/platform/hosted/node/guarantor.sh" --checkpoint-authority-public \
+        "$dir/genesis/checkpoint-authority.pem")
+    [ "$observed" = "$key" ] \
+        || fail "the guarantor reports the checkpoint authority $observed for the key published as $key"
+    custody="$dir/custody-genesis.json"
+    if python3 "$REPO_ROOT/platform/hosted/paxeer/custody-genesis.py" --network-id "$NODE_NETWORK_ID" \
+        --sequencer-id "$(printf '%064d' 6)" --sequencer-public-key "$(printf '%064d' 7)" \
+        --asset "$NODE_ASSET_ID:uhpx" --output "$custody" > "$dir/refusal.log" 2>&1; then
+        fail "a custody genesis without a deposit-root authority was accepted"
+    fi
+    rm -f "$custody"
+    python3 "$REPO_ROOT/platform/hosted/paxeer/custody-genesis.py" --network-id "$NODE_NETWORK_ID" \
+        --sequencer-id "$(printf '%064d' 6)" --sequencer-public-key "$(printf '%064d' 7)" \
+        --deposit-root-authority "$key" --asset "$NODE_ASSET_ID:uhpx" --output "$custody"
+    [ "$(jq -r '.params.deposit_root_authority' "$custody")" = "${key#0x}" ] \
+        || fail "the custody genesis does not carry the guarantor checkpoint authority"
     policy="$dir/authorization.json"
     python3 "$REPO_ROOT/platform/hosted/tests/publication-policy.py" authorization "$policy" \
         "$NODE_NETWORK_ID" "$PAXEER_CHAIN_ID" 0x"$(printf '%040d' 1)" 0x"$(printf '%040d' 2)" \
@@ -2173,7 +2222,7 @@ deposit_root_authority_test() (
             fail "a $scenario deposit-root authority was accepted"
         fi
     done
-    log "deposit-root authority $key extracted from the guarantor checkpoint authority key with three refusals"
+    log "deposit-root authority $key generated, read back by the guarantor, carried into the custody genesis, with four refusals"
 )
 
 genesis_metadata_test() (

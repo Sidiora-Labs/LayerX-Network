@@ -60,6 +60,22 @@ def command(*args, **kwargs):
     return subprocess.run([str(argument) for argument in args], cwd=ROOT, check=True, **kwargs)
 
 
+def deposit_root_authority(work):
+    """Generate the Ed25519 key layerxcustody accepts deposit-root registrations from.
+
+    The module refuses every registration while the genesis parameter is empty and nothing sets it
+    after genesis, so the key exists before the chain does. The private half stays in the work
+    directory, which is what a registration against this chain would have to be signed with.
+    """
+    key_file = work / 'deposit-root-authority.pem'
+    command('openssl', 'genpkey', '-algorithm', 'ed25519', '-out', key_file)
+    os.chmod(key_file, 0o600)
+    der = command('openssl', 'pkey', '-in', key_file, '-pubout', '-outform', 'DER',
+                  stdout=subprocess.PIPE).stdout
+    assert len(der) == 44 and der[:12] == bytes.fromhex('302a300506032b6570032100'), 'ed25519 public key'
+    return key_file, enhex(der[12:])
+
+
 def free_port():
     with socket.socket() as reservation:
         reservation.bind(('127.0.0.1', 0))
@@ -177,12 +193,14 @@ class Node:
         sequencer_id = hashlib.sha256(b'layerx-sequencer:' + sequencer_public.hex().encode()).digest()
         asset = unhex(request['asset'], 32)
 
+        self.deposit_authority_key_file, deposit_authority = deposit_root_authority(self.work)
         custody_genesis = self.work / 'custody-genesis.json'
         command('python3', ROOT / 'platform/hosted/paxeer/custody-genesis.py',
                 '--network-id', request['network_id'],
                 '--sequencer-id', enhex(sequencer_id),
                 '--sequencer-public-key', enhex(sequencer_public),
                 '--withdrawal-delay-seconds', request['withdrawal_delay_seconds'],
+                '--deposit-root-authority', deposit_authority,
                 '--asset', enhex(asset) + ':' + BOND_DENOM,
                 '--authority', self.bech32(self.account.address),
                 '--output', custody_genesis)

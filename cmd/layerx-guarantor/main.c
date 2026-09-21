@@ -764,6 +764,7 @@ int main(int argc, char **argv)
         fprintf(stdout, "attested batch=%llu\n", (unsigned long long)batch);
         (void)fflush(stdout);
         uint64_t peer_deadline = milliseconds() + 30000U;
+        uint64_t authorization_deadline = 0U;
         while (!stopped) {
             uint8_t remote[GP_EXCHANGE_MAX_BODY];
             size_t length = 0U, count;
@@ -791,6 +792,28 @@ int main(int argc, char **argv)
                 (void)pthread_mutex_lock(&p->mutex);
                 status = gp_settlement_register(&p->settlement, &certificate, signature, runtime, &registration,
                                                 &already, &registered_version);
+                if (status == LXP_ERR_NOT_YET_VALID) {
+                    /* The checkpoint is registered and nothing was published: the owner and
+                       checkpoint-authority signatures for it have not been delivered into
+                       LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR yet. Wait for them and ask again
+                       rather than terminate; a single-batch run still gives up on its deadline. */
+                    (void)pthread_mutex_unlock(&p->mutex);
+                    if (authorization_deadline == 0U) {
+                        authorization_deadline = milliseconds() + 300000U;
+                        fprintf(stderr,
+                                "waiting batch=%llu field=publication authorization: owner and "
+                                "checkpoint-authority signatures not delivered yet\n",
+                                (unsigned long long)batch);
+                        (void)fflush(stderr);
+                    }
+                    if (once && milliseconds() >= authorization_deadline) {
+                        field = "publication authorization";
+                        goto batch_failed;
+                    }
+                    struct timespec pending = {1, 0};
+                    (void)nanosleep(&pending, NULL);
+                    continue;
+                }
                 if (status != LXP_OK) {
                     (void)pthread_mutex_unlock(&p->mutex);
                     goto batch_failed;

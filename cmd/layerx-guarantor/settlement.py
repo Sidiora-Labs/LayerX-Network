@@ -44,6 +44,14 @@ EQUIVOCATION_KIND = 1
 MEMBERSHIP_EVENTS = [REGISTERED_EVENT, ACTIVATED_EVENT, BOND_EVENT, UNBOND_EVENT, SLASHED_EVENT]
 GUARANTOR_ACTIVE = 2
 STATUS_UNKNOWN, STATUS_SUBMITTED, STATUS_FINAL = 0, 1, 2
+# A checkpoint whose publication authorization has not arrived yet is not a refused checkpoint: the
+# registration stands and the producer asks again. settlement.c maps this exit status to
+# LXP_ERR_NOT_YET_VALID so the guarantor waits instead of terminating.
+AUTHORIZATION_PENDING_EXIT = 75
+
+
+class AuthorizationPending(Exception):
+    """The owner and checkpoint-authority signatures for this checkpoint are not delivered yet."""
 
 
 def require(condition, message):
@@ -620,6 +628,9 @@ def main():
 if __name__ == '__main__':
     try:
         main()
+    except AuthorizationPending as error:
+        print('settlement publication pending: ' + str(error), file=sys.stderr)
+        sys.exit(AUTHORIZATION_PENDING_EXIT)
     except Exception as error:
         print('settlement refusal: ' + (str(error) if isinstance(error, ValueError) else type(error).__name__), file=sys.stderr)
         sys.exit(1)

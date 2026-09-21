@@ -42,8 +42,11 @@ custody-skip.credit        the same deposit proven at header height N = 140, sta
 
 Commands (RPC=http://127.0.0.1:46657, DEPOSIT and OWNER as above):
 
+  openssl genpkey -algorithm ed25519 -out deposit-root-authority.pem
+  DEPOSIT_ROOT_AUTHORITY=$(openssl pkey -in deposit-root-authority.pem -pubout -outform DER | tail -c 32 | xxd -p -c 32)
   python3 platform/hosted/paxeer/custody-genesis.py --network-id 77 --sequencer-id SEQ_ID \
-      --sequencer-public-key SEQ_PUB --asset e8890d7035362c007aec07cbf1d263f99f2583c2852992679d775f29e5b81c3d:uhpx --output custody-genesis.json
+      --sequencer-public-key SEQ_PUB --deposit-root-authority $DEPOSIT_ROOT_AUTHORITY \
+      --asset e8890d7035362c007aec07cbf1d263f99f2583c2852992679d775f29e5b81c3d:uhpx --output custody-genesis.json
   PAXD=paxd LAYERX_PAXEER_HOME=home LAYERX_PAXEER_DEPLOYER_ADDRESS=0x37A46da10789FA52607b02696309a3C29a141231 \
       LAYERX_PAXEER_CUSTODY_GENESIS_FILE=custody-genesis.json LAYERX_PAXEER_RPC_PORT=46657 LAYERX_PAXEER_P2P_PORT=46656 \
       LAYERX_PAXEER_EVM_PORT=48545 LAYERX_PAXEER_EVM_WS_PORT=48546 LAYERX_PAXEER_GRPC_PORT=49090 \

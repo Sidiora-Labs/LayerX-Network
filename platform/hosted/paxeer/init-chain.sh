@@ -16,6 +16,13 @@
 # paxd validate-genesis runs the module's own validation over it. Without the file the module
 # keeps its default genesis, which maps no asset and therefore accepts no deposit.
 #
+# That section must also carry the deposit-root authority: the Ed25519 public key the guarantor's
+# checkpoint authority signs every deposit-root registration with. Nothing sets it after genesis in
+# this bring-up, and the module refuses registerDepositRoot with "no deposit root authority" while
+# it is empty, so a custody genesis without one is refused here rather than on the first deposit.
+# LAYERX_PAXEER_DEPOSIT_ROOT_AUTHORITY (or ..._FILE) names that public key as 0x and 64 lowercase
+# hexadecimal characters, and the custody genesis section must carry exactly it.
+#
 # Checkpoint settlement and the guarantor bond are the native layerxanchor module behind the
 # precompile at 0x0000000000000000000000000000000000001014; no checkpoint or bond contract is
 # deployed. LAYERX_PAXEER_ANCHOR_GENESIS_FILE names the section written by anchor-genesis.py. Its
@@ -54,6 +61,7 @@ GRPC_WEB_PORT=${LAYERX_PAXEER_GRPC_WEB_PORT:-9091}
 COMMIT_TIMEOUT_NANOSECONDS=${LAYERX_PAXEER_COMMIT_TIMEOUT_NANOSECONDS:-}
 CUSTODY_GENESIS=${LAYERX_PAXEER_CUSTODY_GENESIS_FILE:-}
 ANCHOR_GENESIS=${LAYERX_PAXEER_ANCHOR_GENESIS_FILE:-}
+DEPOSIT_ROOT_AUTHORITY=${LAYERX_PAXEER_DEPOSIT_ROOT_AUTHORITY:-}
 MARKER="$HOME_DIR/config/.layerx-beta-initialised"
 
 fail() {
@@ -103,6 +111,21 @@ if [ -n "$SUBMITTER_ADDRESS" ]; then
         || fail "LAYERX_PAXEER_CHECKPOINT_SUBMITTER_FUNDING must be a positive uhpx amount"
 fi
 
+if [ -n "${LAYERX_PAXEER_DEPOSIT_ROOT_AUTHORITY_FILE:-}" ]; then
+    [ -r "$LAYERX_PAXEER_DEPOSIT_ROOT_AUTHORITY_FILE" ] \
+        || fail "deposit-root authority $LAYERX_PAXEER_DEPOSIT_ROOT_AUTHORITY_FILE is not readable"
+    DEPOSIT_ROOT_AUTHORITY=$(tr -d '[:space:]' < "$LAYERX_PAXEER_DEPOSIT_ROOT_AUTHORITY_FILE")
+fi
+if [ -n "$DEPOSIT_ROOT_AUTHORITY" ]; then
+    DEPOSIT_ROOT_AUTHORITY=$(printf '%s' "${DEPOSIT_ROOT_AUTHORITY#0x}" | tr 'A-F' 'a-f')
+    [[ "$DEPOSIT_ROOT_AUTHORITY" =~ ^[0-9a-f]{64}$ ]] \
+        || fail "the deposit-root authority must be a 32-byte Ed25519 public key"
+    [ "$DEPOSIT_ROOT_AUTHORITY" != "$(printf '%064d' 0)" ] \
+        || fail "the deposit-root authority must be nonzero"
+    [ -n "$CUSTODY_GENESIS" ] \
+        || fail "a deposit-root authority was given without LAYERX_PAXEER_CUSTODY_GENESIS_FILE"
+fi
+
 command -v "$PAXD" >/dev/null 2>&1 || fail "paxd binary $PAXD is not available"
 command -v "$JQ" >/dev/null 2>&1 || fail "jq is not available"
 [ -r "$USDL_RUNTIME" ] || fail "USDL runtime bytecode $USDL_RUNTIME is not readable"
@@ -112,6 +135,17 @@ if [ -n "$CUSTODY_GENESIS" ]; then
         and (.params.sequencer_authorizations | type == "array" and length > 0)
         and (.assets | type == "array" and length > 0)' "$CUSTODY_GENESIS" >/dev/null \
         || fail "custody genesis must carry a network id, a sequencer authorization and an asset"
+    # Nothing sets this parameter after genesis, and the module refuses every deposit-root
+    # registration while it is empty, so an absent authority is a genesis failure.
+    CUSTODY_AUTHORITY=$("$JQ" -r '.params.deposit_root_authority // ""' "$CUSTODY_GENESIS")
+    [[ "$CUSTODY_AUTHORITY" =~ ^[0-9a-f]{64}$ ]] && [ "$CUSTODY_AUTHORITY" != "$(printf '%064d' 0)" ] \
+        || fail "custody genesis must carry a nonzero 32-byte deposit_root_authority; the guarantor checkpoint authority public key is required before genesis"
+    if [ -n "$DEPOSIT_ROOT_AUTHORITY" ]; then
+        [ "$CUSTODY_AUTHORITY" = "$DEPOSIT_ROOT_AUTHORITY" ] \
+            || fail "custody genesis deposit_root_authority $CUSTODY_AUTHORITY differs from the requested $DEPOSIT_ROOT_AUTHORITY"
+    else
+        DEPOSIT_ROOT_AUTHORITY=$CUSTODY_AUTHORITY
+    fi
 fi
 if [ -n "$ANCHOR_GENESIS" ]; then
     [ -r "$ANCHOR_GENESIS" ] || fail "anchor genesis $ANCHOR_GENESIS is not readable"
@@ -127,9 +161,16 @@ if [ -f "$MARKER" ]; then
     if [ -n "$CUSTODY_GENESIS" ]; then
         "$JQ" -e --slurpfile custody "$CUSTODY_GENESIS" \
             '.app_state.layerxcustody.params.network_id == $custody[0].params.network_id
+             and .app_state.layerxcustody.params.deposit_root_authority == $custody[0].params.deposit_root_authority
              and ([.app_state.layerxcustody.assets[].asset_id] == [$custody[0].assets[].asset_id])' \
             "$HOME_DIR/config/genesis.json" >/dev/null \
             || fail "requested custody genesis differs from initialised genesis"
+    fi
+    if [ -n "$DEPOSIT_ROOT_AUTHORITY" ]; then
+        "$JQ" -e --arg authority "$DEPOSIT_ROOT_AUTHORITY" \
+            '.app_state.layerxcustody.params.deposit_root_authority == $authority' \
+            "$HOME_DIR/config/genesis.json" >/dev/null \
+            || fail "requested deposit-root authority $DEPOSIT_ROOT_AUTHORITY is not the one in the initialised genesis"
     fi
     if [ -n "$ANCHOR_GENESIS" ]; then
         "$JQ" -e --slurpfile anchor "$ANCHOR_GENESIS" \
@@ -224,6 +265,9 @@ fi
 if [ -n "$CUSTODY_GENESIS" ]; then
     "$JQ" --slurpfile custody "$CUSTODY_GENESIS" '.app_state.layerxcustody = $custody[0]' "$GENESIS" > "$GENESIS.tmp"
     mv "$GENESIS.tmp" "$GENESIS"
+    "$JQ" -e --arg authority "$DEPOSIT_ROOT_AUTHORITY" \
+        '.app_state.layerxcustody.params.deposit_root_authority == $authority' "$GENESIS" >/dev/null \
+        || fail "genesis does not carry the deposit-root authority $DEPOSIT_ROOT_AUTHORITY"
 fi
 if [ -n "$ANCHOR_GENESIS" ]; then
     "$JQ" -e --arg authority "$DEPLOYER_CAST" '.params.authority == $authority' "$ANCHOR_GENESIS" >/dev/null \
@@ -292,6 +336,9 @@ fi
     printf 'deployer_cast=%s\n' "$DEPLOYER_CAST"
     printf 'usdl=%s\n' "$USDL_ADDRESS"
     printf 'custody=0x0000000000000000000000000000000000001013\n'
+    if [ -n "$DEPOSIT_ROOT_AUTHORITY" ]; then
+        printf 'deposit_root_authority=0x%s\n' "$DEPOSIT_ROOT_AUTHORITY"
+    fi
     printf 'anchor=0x0000000000000000000000000000000000001014\n'
     printf 'evm_port=%s\n' "$EVM_PORT"
     if [ -n "$SUBMITTER_HEX" ]; then

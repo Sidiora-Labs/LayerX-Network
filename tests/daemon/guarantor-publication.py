@@ -3,7 +3,9 @@ import copy
 import hashlib
 import importlib.util
 from pathlib import Path
+import tempfile
 import unittest
+import unittest.mock
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / 'tests/fixtures/custody/paxeer-light-v1'
@@ -233,6 +235,92 @@ class LightProfilePublicationTests(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             self.run_native(header, facts)
         self.assertEqual(str(caught.exception), 'native witness root or trailing data')
+
+
+def balance_witness(key, value, modules):
+    """A module-0 account witness: the account tree under the module subtree under the state root."""
+    account_path, account_root = merkle([p.state_leaf(key, value)], 0)
+    leaf_path, subtree = merkle([p.state_leaf(b'account-tree', account_root)], 0)
+    modules = list(modules)
+    modules[0] = p.state_leaf((0).to_bytes(2, 'big'), subtree)
+    module_path, root = merkle(modules, 0)
+    wire = ((2).to_bytes(2, 'big') + (0).to_bytes(2, 'big') +
+            len(key).to_bytes(4, 'big') + key + len(value).to_bytes(4, 'big') + value +
+            (0).to_bytes(4, 'big') + (1).to_bytes(4, 'big') +
+            len(account_path).to_bytes(1, 'big') + b''.join(account_path) +
+            (0).to_bytes(4, 'big') + (1).to_bytes(4, 'big') +
+            len(leaf_path).to_bytes(1, 'big') + b''.join(leaf_path) +
+            len(modules).to_bytes(4, 'big') +
+            len(module_path).to_bytes(1, 'big') + b''.join(module_path))
+    return p.hx(wire), root
+
+
+class PublicationAuthorizationPendingTests(unittest.TestCase):
+    """A batch whose publication authorization has not arrived is pending, not refused.
+
+    The owner and checkpoint-authority signatures are produced outside the producer. While they are
+    missing the checkpoint stays registered and nothing is published, so the producer reports the
+    publication as pending and asks again instead of terminating the guarantor.
+    """
+
+    def setUp(self):
+        self.account = sha(b'pending publication account')
+        self.asset = sha(b'pending publication asset')
+        self.authority = sha(b'pending publication owner authority')
+        self.digest = sha(b'pending publication checkpoint')
+        name = b'agent-main'
+        tail = (b'\x01' + (1234).to_bytes(16, 'big') + self.asset + b'\x01' + bytes(16) +
+                b'\x00\x00' + self.authority + b'\x01')
+        self.assertEqual(len(tail), 101)
+        value = len(name).to_bytes(2, 'big') + name + tail
+        key = b'\x04' + self.account
+        modules = [p.state_leaf(index.to_bytes(2, 'big'), sha(b'LXP/v1/state-subtree\0' +
+                   index.to_bytes(2, 'big'))) for index in range(9)]
+        encoded, root = balance_witness(key, value, modules)
+        self.facts = {'balances': [encoded], 'withdrawals': [], 'deposits': [], 'profile': None}
+        self.header = ([2, 7, 7, 11, 1, 1000] + [p.hx(bytes(32))] * 7 + [1, p.hx(bytes(32))])
+        self.header[7] = p.hx(root)
+
+    def request(self, state, inputs):
+        return dict(chain_id=125, header=self.header, checkpoint_id=p.hx(self.digest),
+                    settlement_contract=s.ANCHOR, checkpoint_registry=s.ANCHOR,
+                    attestations=[], native_facts=self.facts,
+                    publication_state_dir=str(state), publication_inputs_dir=str(inputs))
+
+    def test_the_owner_balance_is_proved_before_the_authorization_is_wanted(self):
+        balances, withdrawals, deposits, profile = p.native_request(
+            s, self.request('/nonexistent', '/nonexistent'), s.values(s.HEADER_TYPES, self.header),
+            self.digest)
+        self.assertEqual((withdrawals, deposits, profile), ([], [], None))
+        self.assertEqual(len(balances), 1)
+        self.assertEqual(balances[0]['account'], self.account)
+        self.assertEqual(balances[0]['asset'], self.asset)
+        self.assertEqual(balances[0]['authority'], self.authority)
+
+    def test_missing_authorization_is_pending_and_keeps_the_registration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state, inputs = Path(temporary) / 'state', Path(temporary) / 'inputs'
+            state.mkdir()
+            inputs.mkdir()
+            with unittest.mock.patch.object(p, 'AUTHORIZATION_WAIT_SECONDS', 0):
+                with self.assertRaises(s.AuthorizationPending) as caught:
+                    p.publish(s, None, self.request(state, inputs))
+            self.assertNotIsInstance(caught.exception, ValueError)
+            self.assertIn(self.digest.hex(), str(caught.exception))
+            self.assertIn(str(inputs), str(caught.exception))
+            self.assertTrue((state / (self.digest.hex() + '.publication-request.json')).is_file())
+            self.assertFalse((state / (self.digest.hex() + '.evidence.json')).exists())
+            self.assertEqual(sorted(path.name for path in inputs.iterdir()), [])
+
+    def test_the_pending_status_reaches_the_daemon_as_not_yet_valid(self):
+        self.assertEqual(s.AUTHORIZATION_PENDING_EXIT, 75)
+        self.assertTrue(issubclass(s.AuthorizationPending, Exception))
+        source = (ROOT / 'cmd/layerx-guarantor/settlement.c').read_text()
+        self.assertRegex(source, r'GP_AUTHORIZATION_PENDING_EXIT\s*=\s*75\b')
+        self.assertRegex(source, r'WEXITSTATUS\(status\)\s*==\s*GP_AUTHORIZATION_PENDING_EXIT\)\s*\n'
+                                 r'\s*return LXP_ERR_NOT_YET_VALID;')
+        self.assertRegex((ROOT / 'cmd/layerx-guarantor/main.c').read_text(),
+                         r'if \(status == LXP_ERR_NOT_YET_VALID\)')
 
 
 class WithdrawalAnchorPublicationTests(unittest.TestCase):
