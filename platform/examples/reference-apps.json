@@ -9,7 +9,7 @@
       "symbol": "platform_ref_buyer",
       "commands": {
         "emulator": ["npm", "run", "start:emulator", "--workspace", "@sidiora/layerx-example-buyer-agent"],
-        "testnet": ["npm", "run", "start:testnet", "--workspace", "@sidiora/layerx-example-buyer-agent"]
+        "beta": ["npm", "run", "start:beta", "--workspace", "@sidiora/layerx-example-buyer-agent"]
       }
     },
     {
@@ -20,7 +20,7 @@
       "symbol": "platform_ref_seller",
       "commands": {
         "emulator": ["npm", "run", "start:emulator", "--workspace", "@sidiora/layerx-example-paid-api"],
-        "testnet": ["npm", "run", "start:testnet", "--workspace", "@sidiora/layerx-example-paid-api"]
+        "beta": ["npm", "run", "start:beta", "--workspace", "@sidiora/layerx-example-paid-api"]
       }
     },
     {
@@ -32,7 +32,7 @@
       "symbol": "platform_ref_merchant",
       "commands": {
         "emulator": ["npm", "run", "start:emulator", "--workspace", "@sidiora/layerx-example-merchant-shop"],
-        "testnet": ["npm", "run", "start:testnet", "--workspace", "@sidiora/layerx-example-merchant-shop"]
+        "beta": ["npm", "run", "start:beta", "--workspace", "@sidiora/layerx-example-merchant-shop"]
       }
     },
     {
@@ -43,7 +43,7 @@
       "symbol": "platform_ref_marketplace",
       "commands": {
         "emulator": ["npm", "run", "start:emulator", "--workspace", "@sidiora/layerx-example-marketplace"],
-        "testnet": ["npm", "run", "start:testnet", "--workspace", "@sidiora/layerx-example-marketplace"]
+        "beta": ["npm", "run", "start:beta", "--workspace", "@sidiora/layerx-example-marketplace"]
       }
     }
   ]

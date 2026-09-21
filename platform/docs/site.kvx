@@ -238,7 +238,7 @@ order = 8
 [page.guide/reference-applications]
 section = "guides"
 title = "Reference applications"
-summary = "Run receipt-verifying buyer, seller, merchant and Programs applications against the emulator or testnet."
+summary = "Run receipt-verifying buyer, seller, merchant and Programs applications against the emulator or beta."
 file = "content/guide/reference-applications.md"
 order = 9
 
@@ -282,11 +282,11 @@ file = "content/reference/samples.md"
 order = 5
 generated = true
 
-[page.environments/testnet]
+[page.environments/beta]
 section = "environments"
-title = "Hosted testnet"
-summary = "The public testnet, its faucet, its limits and its reset schedule."
-file = "testnet.md"
+title = "Hosted beta"
+summary = "The public beta network, its faucet, its limits and its reset schedule."
+file = "beta-environment.md"
 order = 1
 
 [page.environments/emulator]

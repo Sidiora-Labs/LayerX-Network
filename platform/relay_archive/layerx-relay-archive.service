@@ -1,6 +1,6 @@
 [Unit]
 Description=LayerX non-executing relay and canonical archive
-Documentation=https://github.com/Sidiora-Labs/LayerX-Network/tree/main/platform/relay_archive
+Documentation=https://github.com/Sidiora-Labs/Paxeer-X-Network/tree/main/platform/relay_archive
 Wants=network-online.target
 After=network-online.target
 

@@ -16,9 +16,9 @@ See [Commitment levels](CommitmentLevels.md), [Assets](Assets.md),
 
 | Transport | Endpoint | Use |
 | --- | --- | --- |
-| HTTPS | `https://api.testnet.layerx.network/rpc` | JSON-RPC 2.0 request or batch |
-| HTTPS | `https://api.testnet.layerx.network/rpc/schema` | Embedded OpenRPC document |
-| WebSocket | `wss://api.testnet.layerx.network/rpc/ws` | `lx_subscribe` |
+| HTTPS | `https://api.layerx.network/rpc` | JSON-RPC 2.0 request or batch |
+| HTTPS | `https://api.layerx.network/rpc/schema` | Embedded OpenRPC document |
+| WebSocket | `wss://api.layerx.network/rpc/ws` | `lx_subscribe` |
 
 `POST /rpc` requires `Content-Type: application/json`. It accepts a single
 request or a batch of 1–32 requests. A request that carries no `id`, alone or

@@ -69,7 +69,7 @@ Sources and extraction rules:
     the "| Language | Install |" table, whose coordinate is the last word of
     the first backtick span of each row.
   * platform/docs/content/environments/emulator.md: the same emulator line.
-  * platform/docs/testnet.md (docs page environments/testnet): the values in
+  * platform/docs/beta-environment.md (docs page environments/beta): the values in
     "LXP wire protocol version `N`", "network ID `N`", "at `<url>`",
     "The developer gateway is `<url>`" and the faucet claims URL origin.
   * platform/hosted/testnet/src/lib.rs: TESTNET_NETWORK_ID and the
@@ -630,7 +630,7 @@ paxeer = load_manifest("platform/hosted/paxeer/deployment.yaml")
 registry_manifest = load_manifest("platform/hosted/registry/deployment.yaml")
 install = read("platform/docs/content/install.md")
 emulator_doc = read("platform/docs/content/environments/emulator.md")
-docs_testnet = read("platform/docs/testnet.md")
+docs_testnet = read("platform/docs/beta-environment.md")
 testnet_lib = read("platform/hosted/testnet/src/lib.rs")
 wire_limits = read("agent/crates/layerx-wire/src/limits.rs")
 registries = parse_kvx("platform/release/registries.kvx")
@@ -690,7 +690,7 @@ except (ValueError, KeyError, TypeError) as error:
 docs_public = re.search(r"at `(https://[^`]+)`", docs_testnet)
 docs_gateway = re.search(r"The developer gateway is `(https://[^`]+)`", docs_testnet)
 docs_faucet = re.search(r"`(https://faucet[^`]+)/v1/faucet/claims`", docs_testnet)
-docs_status = re.search(r"`(https://status[^`/]+)/testnet-resets\.ics`", docs_testnet)
+docs_status = re.search(r"`(https://status[^`/]+)/beta-resets\.ics`", docs_testnet)
 docs_wire = re.search(r"LXP wire protocol version `(\d+)`", docs_testnet)
 docs_network = re.search(r"network ID `(\d+)`", docs_testnet)
 for key, match, label in (
@@ -700,9 +700,9 @@ for key, match, label in (
     ("status_url", docs_status, "status host"),
 ):
     if match is None:
-        violation(f"platform/docs/testnet.md: {label} is missing")
+        violation(f"platform/docs/beta-environment.md: {label} is missing")
     else:
-        expect("Beta endpoints and hostnames", endpoints, key, match.group(1), f"platform/docs/testnet.md {label}")
+        expect("Beta endpoints and hostnames", endpoints, key, match.group(1), f"platform/docs/beta-environment.md {label}")
 
 for key, name in (
     ("testnet_core_url", "LAYERX_TESTNET_CORE_URL"),
@@ -755,9 +755,9 @@ if lib_network is None:
 else:
     expect("Network id", network, "network_id", lib_network.group(1), "platform/hosted/testnet/src/lib.rs TESTNET_NETWORK_ID")
 if docs_network is None:
-    violation("platform/docs/testnet.md: network ID is missing")
+    violation("platform/docs/beta-environment.md: network ID is missing")
 else:
-    expect("Network id", network, "network_id", docs_network.group(1), "platform/docs/testnet.md network ID")
+    expect("Network id", network, "network_id", docs_network.group(1), "platform/docs/beta-environment.md network ID")
 gateway_network = manifest_value(gateway, "LAYERX_GATEWAY_NETWORK_ID")
 if gateway_network is None:
     violation("platform/hosted/gateway/deployment.yaml: LAYERX_GATEWAY_NETWORK_ID is not set")
@@ -797,7 +797,7 @@ legacy_default = re.search(r"pub const PROTOCOL_VERSION:\s*u16\s*=\s*(\d+);", wi
 if legacy_default is None or legacy_default.group(1) != "2":
     violation("agent/crates/layerx-wire/src/limits.rs: default protocol compatibility must remain 2")
 if docs_wire is None:
-    violation("platform/docs/testnet.md: LXP wire protocol version is missing")
+    violation("platform/docs/beta-environment.md: LXP wire protocol version is missing")
 elif docs_wire.group(1) != wire.get("wire_protocol_version"):
     contradiction("docs_wire_protocol_version", wire.get("wire_protocol_version", ""), docs_wire.group(1))
 jvm_version = re.search(r"`com\.sidiora\.layerx:layerx-sdk:([0-9][^`]*)`", install)

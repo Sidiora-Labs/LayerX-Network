@@ -68,7 +68,7 @@ register or fund an identity.
 ### Request beta funds
 
 Use the faucet address and CA certificate supplied with your beta access.
-Set `FAUCET_URL`, `TESTNET_CA_FILE`, `WALLET_DID`, and `WALLET_PUBLIC_KEY`
+Set `FAUCET_URL`, `BETA_CA_FILE`, `WALLET_DID`, and `WALLET_PUBLIC_KEY`
 to your endpoint and the public values from `layerx wallet list`.
 Choose a unique `FAUCET_REQUEST_ID` of 16–128 letters, digits, dashes, or
 underscores, and retain it for retries.
@@ -76,7 +76,7 @@ underscores, and retain it for retries.
 ```bash
 jq -n --arg did "$WALLET_DID" --arg public_key "$WALLET_PUBLIC_KEY" \
   '{did:$did, public_key:$public_key}' > faucet-request.json
-curl --fail --silent --show-error --cacert "$TESTNET_CA_FILE" \
+curl --fail --silent --show-error --cacert "$BETA_CA_FILE" \
   --request POST "$FAUCET_URL/v1/faucet/claims" \
   --header 'Content-Type: application/json' \
   --header "Idempotency-Key: $FAUCET_REQUEST_ID" \
@@ -93,7 +93,7 @@ hexadecimal identifier; `RECIPIENT_DID` is the recipient's DID.
 The recipient's account must already exist for that asset.
 
 Configure your beta environment with its network ID and store your gateway
-credential under the `testnet` alias. Obtain a receipt policy
+credential under the `beta` alias. Obtain a receipt policy
 from an independently trusted operator; do not derive trust pins from the RPC
 response being verified. The JSON file contains `protocol_version` (3),
 `network_id`, `sequencer_id` and `sequencer_key` (64 hexadecimal characters each),
@@ -104,15 +104,15 @@ is needed. Set `RECEIPT_POLICY` to this file and `FEE_LIMIT` to your maximum fee
 in base units.
 
 ```bash
-layerx --rpc "$RPC_URL" --gateway-credential testnet token create --symbol PAY --name 'Payment Token' \
+layerx --rpc "$RPC_URL" --gateway-credential beta token create --symbol PAY --name 'Payment Token' \
   --decimals 6 --supply-cap 1000000000 --salt "$(openssl rand -hex 32)" \
   --receipt-policy "$RECEIPT_POLICY" --fee-limit "$FEE_LIMIT" --wait executed
-layerx --rpc "$RPC_URL" --gateway-credential testnet wallet open-account --asset "$ASSET_ID" \
+layerx --rpc "$RPC_URL" --gateway-credential beta wallet open-account --asset "$ASSET_ID" \
   --receipt-policy "$RECEIPT_POLICY" --fee-limit "$FEE_LIMIT"
-layerx --rpc "$RPC_URL" --gateway-credential testnet token mint --asset "$ASSET_ID" \
+layerx --rpc "$RPC_URL" --gateway-credential beta token mint --asset "$ASSET_ID" \
   --to "$RECIPIENT_DID" --amount 100 \
   --receipt-policy "$RECEIPT_POLICY" --fee-limit "$FEE_LIMIT"
-layerx --rpc "$RPC_URL" --gateway-credential testnet token burn --asset "$ASSET_ID" --amount 1 \
+layerx --rpc "$RPC_URL" --gateway-credential beta token burn --asset "$ASSET_ID" --amount 1 \
   --receipt-policy "$RECEIPT_POLICY" --fee-limit "$FEE_LIMIT"
 ```
 
@@ -129,10 +129,10 @@ creates a new idempotency key.
 The Send command syntax is:
 
 ```bash
-layerx --rpc "$RPC_URL" --gateway-credential testnet wallet send --to "$RECIPIENT_DID" \
+layerx --rpc "$RPC_URL" --gateway-credential beta wallet send --to "$RECIPIENT_DID" \
   --asset "$ASSET_ID" --amount 100 --wait executed \
   --receipt-policy "$RECEIPT_POLICY" --fee-limit "$FEE_LIMIT"
-layerx --rpc "$RPC_URL" --gateway-credential testnet token transfer --to "$RECIPIENT_DID" \
+layerx --rpc "$RPC_URL" --gateway-credential beta token transfer --to "$RECIPIENT_DID" \
   --asset "$ASSET_ID" --amount 10 --wait finalised \
   --receipt-policy "$RECEIPT_POLICY" --fee-limit "$FEE_LIMIT"
 ```
@@ -156,7 +156,7 @@ produces an error. Emulator Send remains unavailable.
 Retrieve or wait for a receipt with:
 
 ```bash
-layerx --rpc "$RPC_URL" --gateway-credential testnet wallet receipt "$ACTIVITY_ID" \
+layerx --rpc "$RPC_URL" --gateway-credential beta wallet receipt "$ACTIVITY_ID" \
   --receipt-policy "$RECEIPT_POLICY" --wait finalised
 ```
 
@@ -169,10 +169,10 @@ RPC and the explicit receipt policy.
 Estimate fees using already encoded canonical activity bytes:
 
 ```bash
-layerx --rpc "$RPC_URL" --gateway-credential testnet wallet estimate-fee "$CANONICAL_HEX"
-layerx --rpc "$RPC_URL" --gateway-credential testnet wallet watch receipts
-layerx --rpc "$RPC_URL" --gateway-credential testnet wallet watch checkpoints
-layerx --rpc "$RPC_URL" --gateway-credential testnet wallet watch account --account-id "$ACCOUNT_ID"
+layerx --rpc "$RPC_URL" --gateway-credential beta wallet estimate-fee "$CANONICAL_HEX"
+layerx --rpc "$RPC_URL" --gateway-credential beta wallet watch receipts
+layerx --rpc "$RPC_URL" --gateway-credential beta wallet watch checkpoints
+layerx --rpc "$RPC_URL" --gateway-credential beta wallet watch account --account-id "$ACCOUNT_ID"
 ```
 
 Fee estimation forwards to the native fee schedule and preserves unavailable
@@ -189,11 +189,11 @@ The stream provides no durable replay. Remote connections require validated TLS.
 Select a configured beta profile, then pass the complete RPC endpoint:
 
 ```bash
-layerx --rpc "$RPC_URL" --gateway-credential testnet wallet balance --did "$WALLET_DID"
-layerx --rpc "$RPC_URL" --gateway-credential testnet wallet balance --did "$WALLET_DID" --asset "$ASSET_ID"
-layerx --rpc "$RPC_URL" --gateway-credential testnet wallet receipt "$ACTIVITY_ID" --receipt-policy "$RECEIPT_POLICY"
-layerx --rpc "$RPC_URL" --gateway-credential testnet token info "$ASSET_ID"
-layerx --rpc "$RPC_URL" --gateway-credential testnet token list
+layerx --rpc "$RPC_URL" --gateway-credential beta wallet balance --did "$WALLET_DID"
+layerx --rpc "$RPC_URL" --gateway-credential beta wallet balance --did "$WALLET_DID" --asset "$ASSET_ID"
+layerx --rpc "$RPC_URL" --gateway-credential beta wallet receipt "$ACTIVITY_ID" --receipt-policy "$RECEIPT_POLICY"
+layerx --rpc "$RPC_URL" --gateway-credential beta token info "$ASSET_ID"
+layerx --rpc "$RPC_URL" --gateway-credential beta token list
 ```
 
 `RPC_URL` must end in `/rpc`; remote endpoints require HTTPS. Requests use

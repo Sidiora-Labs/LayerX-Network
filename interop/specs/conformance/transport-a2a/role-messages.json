@@ -19,7 +19,7 @@
       "accepts": [
         {
           "scheme": "exact",
-          "network": "layerx:testnet",
+          "network": "layerx:beta",
           "amount": "25",
           "asset": "0505050505050505050505050505050505050505050505050505050505050505",
           "payTo": "50ed0f69f4b8ad6a4a4722993ebba1107f34d9b04978a64038dc9d2a95a4ff2b",
@@ -48,7 +48,7 @@
       },
       "accepted": {
         "scheme": "exact",
-        "network": "layerx:testnet",
+        "network": "layerx:beta",
         "amount": "25",
         "asset": "0505050505050505050505050505050505050505050505050505050505050505",
         "payTo": "50ed0f69f4b8ad6a4a4722993ebba1107f34d9b04978a64038dc9d2a95a4ff2b",
@@ -73,7 +73,7 @@
       "success": false,
       "errorReason": "settlement_pending",
       "transaction": "pending:provider-reference",
-      "network": "layerx:testnet"
+      "network": "layerx:beta"
     }
   },
   {
@@ -91,7 +91,7 @@
         },
         "accepted": {
           "scheme": "exact",
-          "network": "layerx:testnet",
+          "network": "layerx:beta",
           "amount": "25",
           "asset": "0505050505050505050505050505050505050505050505050505050505050505",
           "payTo": "50ed0f69f4b8ad6a4a4722993ebba1107f34d9b04978a64038dc9d2a95a4ff2b",
@@ -107,7 +107,7 @@
       },
       "paymentRequirements": {
         "scheme": "exact",
-        "network": "layerx:testnet",
+        "network": "layerx:beta",
         "amount": "25",
         "asset": "0505050505050505050505050505050505050505050505050505050505050505",
         "payTo": "50ed0f69f4b8ad6a4a4722993ebba1107f34d9b04978a64038dc9d2a95a4ff2b",
@@ -146,7 +146,7 @@
       "success": false,
       "errorReason": "settlement_pending",
       "transaction": "pending:provider-reference",
-      "network": "layerx:testnet"
+      "network": "layerx:beta"
     }
   },
   {
@@ -160,7 +160,7 @@
         {
           "x402Version": 2,
           "scheme": "exact",
-          "network": "layerx:testnet"
+          "network": "layerx:beta"
         }
       ],
       "extensions": [],
@@ -192,7 +192,7 @@
       "accepts": [
         {
           "scheme": "exact",
-          "network": "layerx:testnet",
+          "network": "layerx:beta",
           "amount": "25",
           "asset": "0505050505050505050505050505050505050505050505050505050505050505",
           "payTo": "50ed0f69f4b8ad6a4a4722993ebba1107f34d9b04978a64038dc9d2a95a4ff2b",

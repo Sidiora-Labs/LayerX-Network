@@ -40,6 +40,6 @@ active feature and carries its requirements and tasks verbatim.
 
 ## Contributing and security
 
-- [CONTRIBUTING.md](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/CONTRIBUTING.md)
-- [SECURITY.md](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/SECURITY.md)
-- [LICENSE](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/LICENSE)
+- [CONTRIBUTING.md](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/CONTRIBUTING.md)
+- [SECURITY.md](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/SECURITY.md)
+- [LICENSE](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/LICENSE)

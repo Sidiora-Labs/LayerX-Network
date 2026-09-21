@@ -439,7 +439,7 @@ mode_push() {
 mode_verify() {
     local name
     require_tools docker jq git cosign gh
-    export GITHUB_REPOSITORY=Sidiora-Labs/LayerX-Network
+    export GITHUB_REPOSITORY=Sidiora-Labs/Paxeer-X-Network
     for name in "${IMAGE_NAMES[@]}"; do IMAGE_TARGETS[$name]="$REGISTRY_ORG/$name"; done
     read_publication_record
     resolve_release_binding
@@ -553,10 +553,10 @@ mode_self_test() {
     self_test_run "published only from the gated $PUBLISH_WORKFLOW job" \
         -u GITHUB_ACTIONS bash "$SCRIPT_PATH" --phase push --release-candidate "$head_commit" "$SELF_TEST_DIR/valid"
     self_test_run "LAYERX_PUBLISH_GATE_REVISION is unset" \
-        -u LAYERX_PUBLISH_GATE_REVISION GITHUB_ACTIONS=true GITHUB_REPOSITORY=Sidiora-Labs/LayerX-Network \
+        -u LAYERX_PUBLISH_GATE_REVISION GITHUB_ACTIONS=true GITHUB_REPOSITORY=Sidiora-Labs/Paxeer-X-Network \
         bash "$SCRIPT_PATH" --phase push --release-candidate "$head_commit" "$SELF_TEST_DIR/valid"
     self_test_run "not on the published revision" \
-        GITHUB_ACTIONS=true GITHUB_REPOSITORY=Sidiora-Labs/LayerX-Network "LAYERX_PUBLISH_GATE_REVISION=$unrelated" \
+        GITHUB_ACTIONS=true GITHUB_REPOSITORY=Sidiora-Labs/Paxeer-X-Network "LAYERX_PUBLISH_GATE_REVISION=$unrelated" \
         bash "$SCRIPT_PATH" --phase push --release-candidate "$head_commit" "$SELF_TEST_DIR/valid"
 
     dirty_inventory="$SELF_TEST_DIR/dirty"
@@ -567,7 +567,7 @@ mode_self_test() {
         printf '%s %s %s %s\n' "$name" "$canonical" "${ref}-dirty" "$id" >> "$dirty_inventory"
     done < "$SELF_TEST_DIR/valid"
     self_test_run "only a clean checkout of the release revision is published" \
-        GITHUB_ACTIONS=true GITHUB_REPOSITORY=Sidiora-Labs/LayerX-Network "LAYERX_PUBLISH_GATE_REVISION=$head_commit" \
+        GITHUB_ACTIONS=true GITHUB_REPOSITORY=Sidiora-Labs/Paxeer-X-Network "LAYERX_PUBLISH_GATE_REVISION=$head_commit" \
         bash "$SCRIPT_PATH" --phase push --release-candidate "$head_commit" "$dirty_inventory"
 
     self_test_run "" bash "$SCRIPT_PATH" --dry-run --release-candidate "$head_commit" \

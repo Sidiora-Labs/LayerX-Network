@@ -34,17 +34,17 @@ The relationship between the layers is worth stating plainly: x402 is the transp
 
 ## Agent transports: MCP and A2A
 
-Two more edges exist for the case where the counterparty is a model rather than a service. Both are served by the CLI and expose the same receipt and canonical-payment tools. Installation targets the hosted testnet or production gateway; it does not silently fall back to the emulator, whose route set does not include hosted key provisioning.
+Two more edges exist for the case where the counterparty is a model rather than a service. Both are served by the CLI and expose the same receipt and canonical-payment tools. Installation targets the hosted beta or production gateway; it does not silently fall back to the emulator, whose route set does not include hosted key provisioning.
 
 ```
-layerx environment use testnet --endpoint https://api.testnet.layerx.network --network-id <network-id>
+layerx environment use beta --endpoint https://api.layerx.network --network-id <network-id>
 layerx key create agent-runtime
 
-layerx install mcp --environment testnet --key agent-runtime \
+layerx install mcp --environment beta --key agent-runtime \
   --host claude-code --source-account <64-hex-funded-account> \
   --asset <64-hex-asset> --token-stdin
 
-layerx install a2a --environment testnet --key agent-runtime \
+layerx install a2a --environment beta --key agent-runtime \
   --source-account <64-hex-funded-account> --asset <64-hex-asset> \
   --listen 127.0.0.1:9433
 ```

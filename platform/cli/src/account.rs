@@ -41,7 +41,7 @@ pub fn create(
     }
     if amount != 0 {
         return Err(
-            "hosted account creation cannot mint an initial balance; use the testnet faucet or a deposit"
+            "hosted account creation cannot mint an initial balance; use the beta faucet or a deposit"
                 .into(),
         );
     }

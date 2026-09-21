@@ -23,7 +23,7 @@ umask 077
 export LAYERX_CONFIG="$journey_root/config.json"
 export LAYERX_INSTALL_ROOT="$journey_root"
 
-"$LAYERX_BIN" --json environment use testnet \
+"$LAYERX_BIN" --json environment use beta \
   --endpoint "$LAYERX_GATEWAY_URL" --network-id "$LAYERX_NETWORK_ID" >/dev/null
 printf '%s\n' "$LAYERX_SIGNING_SEED" | \
   "$LAYERX_BIN" --json key import agent-runtime >/dev/null
@@ -39,7 +39,7 @@ test ! -e "$journey_root/mcp.json"
 
 a2a_port="${LAYERX_A2A_PORT:-19433}"
 printf '%s\n' "$LAYERX_IDENTITY_TOKEN" | \
-  "$LAYERX_BIN" --json install a2a --environment testnet --key agent-runtime \
+  "$LAYERX_BIN" --json install a2a --environment beta --key agent-runtime \
     --token-stdin --source-account "$LAYERX_SOURCE_ACCOUNT" \
     --asset "$LAYERX_PAYMENT_ASSET" --listen "127.0.0.1:$a2a_port" \
     >"$journey_root/a2a-install.json"

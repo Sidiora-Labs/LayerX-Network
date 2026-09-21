@@ -7,7 +7,7 @@ are served by this tree. The LXT20 example is not: neither
 `programs/sdk/rust/examples` nor `programs/fixtures/pay5` is present here.
 
 For a shorter environment checklist, start with
-[Getting started](Getting-Started-Testnet.md). Wire details are in
+[Getting started](Getting-Started-Beta.md). Wire details are in
 [Assets](Assets.md), [Public JSON-RPC](PublicRpc.md),
 [Commitment levels](CommitmentLevels.md), and
 [SDK quickstarts](SdkQuickstarts.md).
@@ -17,8 +17,8 @@ For a shorter environment checklist, start with
 The published gateway and faucet origins are:
 
 ```sh
-export RPC_URL=https://api.testnet.layerx.network/rpc
-export FAUCET_URL=https://faucet.testnet.layerx.network
+export RPC_URL=https://api.layerx.network/rpc
+export FAUCET_URL=https://faucet.layerx.network
 ```
 
 You also need:
@@ -113,7 +113,7 @@ export FEE_LIMIT='<maximum fee in base units>'
 Create a native Asset:
 
 ```sh
-layerx --rpc "$RPC_URL" --gateway-credential testnet token create \
+layerx --rpc "$RPC_URL" --gateway-credential beta token create \
   --symbol PAY --name 'Payment Token' --decimals 6 \
   --supply-cap 1000000000 --salt "$(openssl rand -hex 32)" \
   --receipt-policy "$RECEIPT_POLICY" --fee-limit "$FEE_LIMIT" \
@@ -128,11 +128,11 @@ recipient's per-Asset account before minting or transferring:
 export ASSET_ID='<64-hex Asset id>'
 export RECIPIENT_DID='<recipient DID>'
 
-layerx --rpc "$RPC_URL" --gateway-credential testnet wallet open-account \
+layerx --rpc "$RPC_URL" --gateway-credential beta wallet open-account \
   --asset "$ASSET_ID" --receipt-policy "$RECEIPT_POLICY" \
   --fee-limit "$FEE_LIMIT"
 
-layerx --rpc "$RPC_URL" --gateway-credential testnet token mint \
+layerx --rpc "$RPC_URL" --gateway-credential beta token mint \
   --asset "$ASSET_ID" --to "$RECIPIENT_DID" --amount 100 \
   --receipt-policy "$RECEIPT_POLICY" --fee-limit "$FEE_LIMIT"
 ```
@@ -142,12 +142,12 @@ recipient wallet selected when preparing the recipient account. Other writes
 use the same path:
 
 ```sh
-layerx --rpc "$RPC_URL" --gateway-credential testnet wallet send \
+layerx --rpc "$RPC_URL" --gateway-credential beta wallet send \
   --to "$RECIPIENT_DID" --asset "$ASSET_ID" --amount 10 \
   --wait executed --receipt-policy "$RECEIPT_POLICY" \
   --fee-limit "$FEE_LIMIT"
 
-layerx --rpc "$RPC_URL" --gateway-credential testnet token transfer \
+layerx --rpc "$RPC_URL" --gateway-credential beta token transfer \
   --to "$RECIPIENT_DID" --asset "$ASSET_ID" --amount 10 \
   --wait finalised --receipt-policy "$RECEIPT_POLICY" \
   --fee-limit "$FEE_LIMIT"
@@ -174,7 +174,7 @@ Every invocation creates a new idempotency key. If a write times out or remains
 pending, retain its activity id and recover it rather than repeating the write:
 
 ```sh
-layerx --rpc "$RPC_URL" --gateway-credential testnet wallet receipt \
+layerx --rpc "$RPC_URL" --gateway-credential beta wallet receipt \
   "$ACTIVITY_ID" --receipt-policy "$RECEIPT_POLICY" --wait finalised
 ```
 
@@ -183,11 +183,11 @@ layerx --rpc "$RPC_URL" --gateway-credential testnet wallet receipt \
 ## 5. Inspect Assets, balances, and fees
 
 ```sh
-layerx --rpc "$RPC_URL" --gateway-credential testnet wallet balance \
+layerx --rpc "$RPC_URL" --gateway-credential beta wallet balance \
   --did "$WALLET_DID"
-layerx --rpc "$RPC_URL" --gateway-credential testnet token info "$ASSET_ID"
-layerx --rpc "$RPC_URL" --gateway-credential testnet token list
-layerx --rpc "$RPC_URL" --gateway-credential testnet wallet estimate-fee \
+layerx --rpc "$RPC_URL" --gateway-credential beta token info "$ASSET_ID"
+layerx --rpc "$RPC_URL" --gateway-credential beta token list
+layerx --rpc "$RPC_URL" --gateway-credential beta wallet estimate-fee \
   "$CANONICAL_HEX"
 ```
 

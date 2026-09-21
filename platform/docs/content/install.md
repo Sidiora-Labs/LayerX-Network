@@ -17,7 +17,7 @@ The binary is called `layerx`. Every subcommand accepts `--json` and will then e
 | Environment | What it is | Money |
 |---|---|---|
 | Local emulator | The real transition function running on your machine | Freely prefunded, worthless |
-| Hosted testnet | A shared network reset on a published schedule | Faucet-issued, worthless |
+| Hosted beta | A shared network reset on a published schedule | Faucet-issued, worthless |
 | Production | The live network | Real |
 
 Start on the emulator. It runs the same transition function as production, so a payment it accepts is a payment production would accept, and a refusal it gives you is a real refusal rather than a stub.
@@ -40,11 +40,11 @@ If `XDG_CONFIG_HOME` or `LAYERX_CONFIG` is set, the profile directory moves with
 
 ## Get credentials
 
-For the hosted testnet and for production you provision with a short-lived identity session. The CLI reads it from standard input and stores it in your operating system credential store, so it never lands in your shell history or a dotfile:
+For the hosted beta network and for production you provision with a short-lived identity session. The CLI reads it from standard input and stores it in your operating system credential store, so it never lands in your shell history or a dotfile:
 
 ```text
-layerx auth set --environment testnet
-layerx auth status --environment testnet
+layerx auth set --environment beta
+layerx auth status --environment beta
 ```
 
 For the emulator you create a local account keyed by an Ed25519 seed the CLI generates from operating-system randomness. You never type key material:
@@ -65,7 +65,7 @@ layerx payment test --from "$LAYERX_SOURCE" --to "$LAYERX_DESTINATION" \
 That performs a real quote and a real commit against the active endpoint and prints the journey. If it works, your language quickstart will work.
 
 Native `layerx wallet` and `layerx token` commands are a separate surface,
-documented in the [CLI wallet quickstart](https://github.com/Sidiora-Labs/LayerX-Network/blob/86fa9803386b75d1fea152cb40cacb3f1069cf4a/platform/cli/README.md#wallet-quickstart).
+documented in the [CLI wallet quickstart](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/86fa9803386b75d1fea152cb40cacb3f1069cf4a/platform/cli/README.md#wallet-quickstart).
 Wallet creation on the emulator registers an identity and opens its main account.
 Hosted wallet send is implemented through the shared debit-authorization signer
 and verifies the returned receipt; it requires the RPC transport, a receipt policy,
@@ -89,7 +89,7 @@ layerx install mcp --host claude-code --json
 For A2A, the already stored identity session provisions a separate least-scoped key and the command starts the loopback runtime:
 
 ```text
-layerx install a2a --environment testnet --key agent-runtime \
+layerx install a2a --environment beta --key agent-runtime \
   --source-account "$LAYERX_SOURCE_ACCOUNT" --asset "$LAYERX_ASSET" \
   --listen 127.0.0.1:9433 --json
 layerx a2a status --json
@@ -130,7 +130,7 @@ A mobile or browser application gets a different arrangement entirely: it holds 
 
 | Capability | Layer | What that means here |
 |---|---|---|
-| Atomic settlement | `protocol` | True on the emulator, the testnet and production alike, because it is the same transition function. |
+| Atomic settlement | `protocol` | True on the emulator, the beta network and production alike, because it is the same transition function. |
 | Refusal to publish a secret | `service` | The mobile configuration accepts publishable values only, and the Next.js bundle scanner fails a build whose client bundle contains a declared secret. |
-| Testnet faucet funding | `hosted-surface` | Faucet eligibility is a hosted control. Once issued, test funds are ordinary protocol balances. |
-| Scheduled testnet resets | `hosted-surface` | Nothing on the testnet is durable, and no protocol rule promises otherwise. |
+| Beta faucet funding | `hosted-surface` | Faucet eligibility is a hosted control. Once issued, test funds are ordinary protocol balances. |
+| Scheduled beta resets | `hosted-surface` | Nothing on the beta network is durable, and no protocol rule promises otherwise. |

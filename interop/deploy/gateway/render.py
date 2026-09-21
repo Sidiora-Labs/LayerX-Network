@@ -861,9 +861,9 @@ def self_test():
         assert any(expected in reason for reason in reasons), (broken, reasons)
     supported = document["x402_supported"]
     assert supported["kinds"] == [
-        {"x402Version": 2, "scheme": "exact", "network": "layerx:testnet"}
+        {"x402Version": 2, "scheme": "exact", "network": "layerx:beta"}
     ]
-    assert supported["signers"] == {"layerx:testnet": ["did:layerx:%s" % key]}
+    assert supported["signers"] == {"layerx:beta": ["did:layerx:%s" % key]}
     handler = document["ucp_payment_handler"]
     assert handler["version"] == UCP_REVISION and len(handler["version"]) == 10
     assert handler["spec"].startswith("https://ucp.dev/%s/" % UCP_REVISION)

@@ -6,11 +6,11 @@ and independently supplied verification policy.
 ## Endpoints and trust
 
 ```sh
-export RPC_URL=https://api.testnet.layerx.network/rpc
-export FAUCET_URL=https://faucet.testnet.layerx.network
+export RPC_URL=https://api.layerx.network/rpc
+export FAUCET_URL=https://faucet.layerx.network
 ```
 
-Store a gateway `LayerX-Key` credential under the CLI alias `testnet`, keep the
+Store a gateway `LayerX-Key` credential under the CLI alias `beta`, keep the
 faucet bearer session out of command history, and obtain the network id and
 receipt-policy trust pins independently of any response you are verifying.
 

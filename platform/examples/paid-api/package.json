@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node index.mjs --environment emulator",
     "start:emulator": "node index.mjs --environment emulator",
-    "start:testnet": "node index.mjs --environment testnet"
+    "start:beta": "node index.mjs --environment beta"
   },
   "dependencies": {
     "@sidiora/layerx-sdk": "0.1.0",

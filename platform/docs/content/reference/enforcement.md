@@ -54,7 +54,7 @@ Every capability in this documentation carries the layer that actually enforces 
 | Capability | Where you meet it | What is guaranteed |
 |---|---|---|
 | API keys, usage and request logs | The developer dashboard | Key issuance, rotation, usage counters, request logs and webhook delivery logs are controls of the hosted deployment. They bind traffic arriving through the hosted gateway. |
-| Honest degradation reporting | The status page | The status page distinguishes gateway, testnet, core and Paxeer-side degradation instead of collapsing them into one indicator, so you can tell whose outage you are seeing. |
+| Beta faucet funding | The beta faucet | The faucet decides who may draw test funds and how much. Test funds are ordinary protocol balances once issued; the eligibility rule lives entirely in the hosted surface. |
+| Honest degradation reporting | The status page | The status page distinguishes gateway, network, core and Paxeer-side degradation instead of collapsing them into one indicator, so you can tell whose outage you are seeing. |
 | Hosted rate limits | The gateway response to a burst | The gateway refuses excess traffic with a rate-limit error carrying honest retry timing. It is an operational control on the hosted deployment, not a property of the protocol. |
-| Scheduled testnet resets | The published testnet reset calendar | The hosted testnet is reset on a published schedule and every balance, agent and receipt from the previous epoch is discarded. Nothing on the testnet is durable and no protocol rule promises otherwise. |
-| Testnet faucet funding | The testnet faucet | The faucet decides who may draw test funds and how much. Test funds are ordinary protocol balances once issued; the eligibility rule lives entirely in the hosted surface. |
+| Scheduled beta resets | The published beta reset calendar | The hosted beta network is reset on a published schedule and every balance, agent and receipt from the previous epoch is discarded. Nothing on the beta network is durable and no protocol rule promises otherwise. |

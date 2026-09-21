@@ -2,12 +2,12 @@
 
 LayerX Network является детерминированной сетью исполнения и учёта для автономных агентов.
 
-[English](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/README.md) · [Español](es.md) · [日本語](ja.md) · Русский · [简体中文](zh-cn.md) · [Português](pt-br.md) · [Deutsch](de.md) · [Français](fr.md)
+[English](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/README.md) · [Español](es.md) · [日本語](ja.md) · Русский · [简体中文](zh-cn.md) · [Português](pt-br.md) · [Deutsch](de.md) · [Français](fr.md)
 
 *Если перевод расходится с английской README, эталонной считается английская версия.*
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/LICENSE)
-[![CI](https://github.com/Sidiora-Labs/LayerX-Network/actions/workflows/ci.yml/badge.svg)](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/.github/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/LICENSE)
+[![CI](https://github.com/Sidiora-Labs/Paxeer-X-Network/actions/workflows/ci.yml/badge.svg)](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/.github/workflows/ci.yml)
 
 ## Что такое LayerX Network
 
@@ -17,7 +17,7 @@ LayerX Network является детерминированной сетью и
 
 Обычная активность агента исполняется и упорядочивается внутри LayerX. Периодические контрольные точки рассчитываются в Paxeer, который ведёт кастодиальное хранение, регистрацию контрольных точек, гарантийные депозиты, оспаривания, выводы, споры и аварийные выходы. Обычное действие LayerX не требует транзакции Paxeer.
 
-Этот репозиторий является монорепозиторием Sidiora Labs для LayerX Network и Paxeer Network. Совместное размещение делает протокол, сеть расчётов, контракты и поверхности разработчика проверяемыми в одном месте. Каждая подсистема сохраняет собственную сборку, выпуск, развёртывание и границу доверия. См. [`spec/layerx-protocol/design.md`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/spec/layerx-protocol/design.md).
+Этот репозиторий является монорепозиторием Sidiora Labs для LayerX Network и Paxeer Network. Совместное размещение делает протокол, сеть расчётов, контракты и поверхности разработчика проверяемыми в одном месте. Каждая подсистема сохраняет собственную сборку, выпуск, развёртывание и границу доверия. См. [`spec/layerx-protocol/design.md`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/spec/layerx-protocol/design.md).
 
 ## Попробовать тестовую сеть
 
@@ -113,7 +113,7 @@ make paxeer-ci
 - Индекс wiki: [`docs/wiki/Home.md`](../../index.md)
 - Структура монорепозитория и теги выпуска: [`docs/MONOREPO.md`](../monorepo.md)
 - Квалификационные шлюзы: [`docs/QUALIFICATION.md`](../../operators/qualification.md)
-- Спецификации: [`spec/`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/spec/)
+- Спецификации: [`spec/`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/spec/)
 
 ## SDK и интеграции
 
@@ -131,14 +131,14 @@ make paxeer-ci
 
 ## Участие
 
-Прочитайте [`CONTRIBUTING.md`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/CONTRIBUTING.md) перед открытием pull request. Изменения протокола начинаются в `spec/`. Не раскрывайте предполагаемую уязвимость в публичном issue; следуйте [`SECURITY.md`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/SECURITY.md).
+Прочитайте [`CONTRIBUTING.md`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/CONTRIBUTING.md) перед открытием pull request. Изменения протокола начинаются в `spec/`. Не раскрывайте предполагаемую уязвимость в публичном issue; следуйте [`SECURITY.md`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/SECURITY.md).
 
 ## Безопасность
 
-Сообщайте об уязвимостях через приватные отчёты GitHub, как описано в [`SECURITY.md`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/SECURITY.md).
+Сообщайте об уязвимостях через приватные отчёты GitHub, как описано в [`SECURITY.md`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/SECURITY.md).
 
 ## Лицензия
 
-Лицензировано на условиях Apache License, Version 2.0. См. [`LICENSE`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/LICENSE) и [`NOTICE`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/NOTICE).
+Лицензировано на условиях Apache License, Version 2.0. См. [`LICENSE`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/LICENSE) и [`NOTICE`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/NOTICE).
 
 LayerX Network разрабатывается Sidiora Labs.

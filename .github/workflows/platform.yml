@@ -1513,9 +1513,9 @@ jobs:
           printf '%s' "$TESTNET_CA_BASE64" | base64 --decode > "$RUNNER_TEMP/layerx-testnet-ca.pem"
       - name: Fund, pay, fetch, and independently verify the receipt
         env:
-          LAYERX_TESTNET_URL: https://testnet.layerx.network
-          LAYERX_GATEWAY_URL: https://api.testnet.layerx.network
-          LAYERX_FAUCET_URL: https://faucet.testnet.layerx.network
+          LAYERX_TESTNET_URL: https://beta.layerx.network
+          LAYERX_GATEWAY_URL: https://api.layerx.network
+          LAYERX_FAUCET_URL: https://faucet.layerx.network
           LAYERX_TEST_AUTH_TOKEN_FILE: ${{ runner.temp }}/layerx-testnet-token
           LAYERX_TEST_CA_FILE: ${{ runner.temp }}/layerx-testnet-ca.pem
           LAYERX_TEST_SOURCE_DID: ${{ vars.LAYERX_SCHEDULED_SOURCE_DID }}
@@ -1528,7 +1528,7 @@ jobs:
       - name: Install MCP and A2A runtimes and complete real scoped payments
         env:
           LAYERX_BIN: platform/target/release/layerx
-          LAYERX_GATEWAY_URL: https://api.testnet.layerx.network
+          LAYERX_GATEWAY_URL: https://api.layerx.network
           LAYERX_NETWORK_ID: ${{ vars.LAYERX_AGENT_INSTALL_NETWORK_ID }}
           LAYERX_IDENTITY_TOKEN: ${{ secrets.LAYERX_AGENT_INSTALL_IDENTITY_TOKEN }}
           LAYERX_SIGNING_SEED: ${{ secrets.LAYERX_AGENT_INSTALL_SIGNING_SEED }}
@@ -1558,4 +1558,4 @@ jobs:
           LAYERX_TESTNET_MARKETPLACE_LISTING_ID: ${{ vars.LAYERX_REFERENCE_MARKETPLACE_LISTING_ID }}
           LAYERX_TESTNET_MARKETPLACE_RECEIPT_DIGEST: ${{ vars.LAYERX_REFERENCE_MARKETPLACE_RECEIPT_DIGEST }}
           LAYERX_TESTNET_MARKETPLACE_KEY: ${{ vars.LAYERX_REFERENCE_MARKETPLACE_KEY }}
-        run: node platform/examples/run-reference-apps.mjs --scenario testnet
+        run: node platform/examples/run-reference-apps.mjs --scenario beta

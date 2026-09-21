@@ -9,7 +9,7 @@ const evidence = { canonicalReceipt: b(f.canonical_receipt_hex), authorizedBatch
 const request = { tenant: "tenant", actor: "actor", authority: "authority", accountSequence: "1", timestampBound: "1", idempotencyKey: "request", feeLimit: "1", payloadBase64: "AA==", payloadHash: "00".repeat(32), asset: a.asset_hex, amount: f.expected.amount, recipient: f.expected.to_hex };
 test("agent receipt verification enforces selected commitment before budget commit", async () => {
   await verifyAgentPayment(evidence, request);
-  await verifyAgentPayment(evidence, { ...request, commitment: { network: "layerx:testnet", level: "executed" } });
-  for (const level of ["batched", "finalised", "acknowledged"]) await assert.rejects(verifyAgentPayment(evidence, { ...request, commitment: { network: "layerx:testnet", level } }));
+  await verifyAgentPayment(evidence, { ...request, commitment: { network: "layerx:beta", level: "executed" } });
+  for (const level of ["batched", "finalised", "acknowledged"]) await assert.rejects(verifyAgentPayment(evidence, { ...request, commitment: { network: "layerx:beta", level } }));
   await assert.rejects(verifyAgentPayment(evidence, { ...request, amount: "1" }));
 });

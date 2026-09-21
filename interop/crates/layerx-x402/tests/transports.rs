@@ -82,7 +82,7 @@ fn pay_to(account: &str) -> String {
 fn requirements() -> PaymentRequirements {
     PaymentRequirements {
         scheme: "exact".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
         amount: AtomicAmount::from_u128(25),
         asset: "05".repeat(32),
         pay_to: pay_to(MERCHANT_ACCOUNT),
@@ -402,7 +402,7 @@ fn supported() -> SupportedResponse {
         kinds: vec![FacilitatorKind {
             x402_version: X402_VERSION,
             scheme: "exact".to_owned(),
-            network: "layerx:testnet".to_owned(),
+            network: "layerx:beta".to_owned(),
             extra: None,
         }],
         extensions: Vec::new(),
