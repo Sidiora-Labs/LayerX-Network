@@ -37,11 +37,11 @@ Bring-up then waits until the LayerX node has `node.env`, `genesis/paxeer-deploy
 
 ## Custody-profile input
 
-`LAYERX_BETA_CUSTODY_PROFILE` defaults to empty (`platform/hosted/tests/beta-cluster.sh:94`). Empty skips validation (`platform/hosted/tests/beta-cluster.sh:1203-1204`). A set value is refused unless it names a readable regular file that is not a symlink (`platform/hosted/tests/beta-cluster.sh:1205-1206`). It is refused unless the file is exactly 207 bytes (`platform/hosted/tests/beta-cluster.sh:1207-1208`). Validation runs on both `up` and `render` (`platform/hosted/tests/beta-cluster.sh:1220`, `platform/hosted/tests/beta-cluster.sh:1303`).
+`LAYERX_BETA_CUSTODY_PROFILE` defaults to empty (`platform/hosted/tests/beta-cluster.sh:264`). Empty skips validation (`platform/hosted/tests/beta-cluster.sh:3187`). A set value is refused unless it names a readable regular file that is not a symlink (`platform/hosted/tests/beta-cluster.sh:3188-3189`). It is refused unless the file is exactly 223 bytes (`platform/hosted/tests/beta-cluster.sh:3190-3191`). Validation runs on both `up` and `render` (`platform/hosted/tests/beta-cluster.sh:3610`, `platform/hosted/tests/beta-cluster.sh:3781`).
 
 An accepted profile is applied as ConfigMap `layerx-node-custody-profile` and mounted read-only at `/run/layerx/custody.profile` with `layerxd --custody-profile` (`platform/hosted/tests/beta-cluster.sh:603-605`, `platform/hosted/tests/beta-cluster.sh:791-805`).
 
-The 207-byte profile layout used by `tests/bridge/custody_genesis.py` is magic `LXBC1`, protocol `3` at the last two bytes, EVM chain id at bytes `5:13`, and genesis document sha256 at bytes `169:201` (`tests/bridge/custody_genesis.py:22-24`, `tests/bridge/custody_genesis.py:30`). Chain id `125` requires `disposable_rpc` against a disposable identity (`tests/bridge/custody_genesis.py:25-30`).
+The 223-byte light-client profile layout used by `tests/bridge/custody_genesis.py` is magic `LXBC3`, protocol `3` at bytes `205:207`, EVM chain id at bytes `5:13`, and the NUL-padded Comet chain id at bytes `169:201` (`tests/bridge/custody_genesis.py:23-24`, `tests/bridge/custody_genesis.py:31`). Chain id `125` requires `disposable_rpc` against a disposable identity (`tests/bridge/custody_genesis.py:26-31`).
 
 ## Primary node and observer node
 

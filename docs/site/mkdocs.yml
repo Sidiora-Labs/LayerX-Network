@@ -1,8 +1,8 @@
 site_name: Paxeer X Network
 site_description: Documentation for Paxeer X Network — one network: the Paxeer EVM chain and the LayerX agent-native domain behind one interface.
 site_url: https://sidiora-labs.github.io/LayerX-Network/
-repo_url: https://github.com/Sidiora-Labs/LayerX-Network
-repo_name: Sidiora-Labs/LayerX-Network
+repo_url: https://github.com/Sidiora-Labs/Paxeer-X-Network
+repo_name: Sidiora-Labs/Paxeer-X-Network
 edit_uri: blob/main/docs/site/docs/
 docs_dir: docs
 site_dir: site
@@ -49,7 +49,7 @@ plugins:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/Sidiora-Labs/LayerX-Network
+      link: https://github.com/Sidiora-Labs/Paxeer-X-Network
 nav:
   - Overview:
       - Home: index.md
@@ -132,7 +132,7 @@ nav:
   - Operators:
       - operators/index.md
       - Beta cluster: operators/beta-cluster.md
-      - Control: operators/testnet-control.md
+      - Control: operators/beta-control.md
       - Hosted internal: operators/hosted-internal.md
       - Guarantor: operators/guarantor.md
       - Settlement evidence: operators/settlement-evidence.md

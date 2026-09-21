@@ -10,7 +10,7 @@
       "accepts": [
         {
           "scheme": "exact",
-          "network": "layerx:testnet",
+          "network": "layerx:beta",
           "amount": "1000",
           "asset": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
           "payTo": "0xb2e9cfee9af5130a2c7ab8d51afc378d894454b0bf69fe44bc7979d026617ab6",
@@ -75,7 +75,7 @@
       "accepts": [
         {
           "scheme": "exact",
-          "network": "layerx:testnet",
+          "network": "layerx:beta",
           "amount": "100",
           "asset": "0x1111111111111111111111111111111111111111111111111111111111111111",
           "payTo": "0xcdcf5a81aab9172926df31939dd76ae8049e2a8c7acd2fc130f09f6c1a541c97",
@@ -117,7 +117,7 @@
       "accepts": [
         {
           "scheme": "exact",
-          "network": "layerx:testnet",
+          "network": "layerx:beta",
           "amount": "1000",
           "asset": "0xabababababababababababababababababababababababababababababababab",
           "payTo": "0xb2e9cfee9af5130a2c7ab8d51afc378d894454b0bf69fe44bc7979d026617ab6",
@@ -155,7 +155,7 @@
       "accepts": [
         {
           "scheme": "exact",
-          "network": "layerx:testnet",
+          "network": "layerx:beta",
           "amount": "0",
           "asset": "0xabababababababababababababababababababababababababababababababab",
           "payTo": "0xb2e9cfee9af5130a2c7ab8d51afc378d894454b0bf69fe44bc7979d026617ab6",
@@ -182,7 +182,7 @@
       "accepts": [
         {
           "scheme": "exact",
-          "network": "layerx:testnet",
+          "network": "layerx:beta",
           "amount": "-100",
           "asset": "0xabababababababababababababababababababababababababababababababab",
           "payTo": "0xb2e9cfee9af5130a2c7ab8d51afc378d894454b0bf69fe44bc7979d026617ab6",
@@ -209,7 +209,7 @@
       "accepts": [
         {
           "scheme": "exact",
-          "network": "layerx:testnet",
+          "network": "layerx:beta",
           "amount": "1000",
           "asset": "0xabababababababababababababababababababababababababababababababab",
           "payTo": "0xb2e9cfee9af5130a2c7ab8d51afc378d894454b0bf69fe44bc7979d026617ab6",
@@ -236,7 +236,7 @@
       "accepts": [
         {
           "scheme": "exact",
-          "network": "layerx:testnet",
+          "network": "layerx:beta",
           "amount": "1000",
           "asset": "0xabababababababababababababababababababababababababababababababab",
           "payTo": "0xb2e9cfee9af5130a2c7ab8d51afc378d894454b0bf69fe44bc7979d026617ab6",
@@ -256,7 +256,7 @@
       "accepts": [
         {
           "scheme": "exact",
-          "network": "layerx:testnet",
+          "network": "layerx:beta",
           "amount": "1000",
           "asset": "0xabababababababababababababababababababababababababababababababab",
           "payTo": "0x63cc8a55d2280c7709b7ba4b6925d9bd9419f50799a9c716411b7158e2c5bc3c",
@@ -283,7 +283,7 @@
       "accepts": [
         {
           "scheme": "exact",
-          "network": "layerx:testnet",
+          "network": "layerx:beta",
           "amount": "1000",
           "asset": "0xabababababababababababababababababababababababababababababababab",
           "payTo": "0xb2e9cfee9af5130a2c7ab8d51afc378d894454b0bf69fe44bc7979d026617ab6",

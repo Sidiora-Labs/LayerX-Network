@@ -220,9 +220,9 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "10"
 spec:
   ingressClassName: nginx
-  tls: [{hosts: [api.testnet.layerx.network], secretName: layerx-gateway-ingress-tls}]
+  tls: [{hosts: [api.layerx.network], secretName: layerx-gateway-ingress-tls}]
   rules:
-    - host: api.testnet.layerx.network
+    - host: api.layerx.network
       http:
         paths:
           - path: /

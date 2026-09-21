@@ -24,7 +24,7 @@
       "success": false,
       "errorReason": "settlement_pending",
       "transaction": "pending:ref-123",
-      "network": "layerx:testnet"
+      "network": "layerx:beta"
     }
   },
   {
@@ -34,7 +34,7 @@
       "success": false,
       "errorReason": "insufficient_balance",
       "transaction": "",
-      "network": "layerx:testnet"
+      "network": "layerx:beta"
     }
   },
   {
@@ -44,7 +44,7 @@
       "success": true,
       "errorReason": "should-not-be-here",
       "transaction": "lxp:abababababababababababababababababababababababababababababababab",
-      "network": "layerx:testnet",
+      "network": "layerx:beta",
       "amount": "500"
     }
   },
@@ -54,7 +54,7 @@
     "document": {
       "success": false,
       "transaction": "",
-      "network": "layerx:testnet"
+      "network": "layerx:beta"
     }
   }
 ]

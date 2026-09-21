@@ -128,10 +128,7 @@ fn api_token_is_never_written_to_configuration() {
         .status
         .success());
 
-    let output = cli.run_with_stdin(
-        &["--json", "auth", "set", "--environment", "testnet"],
-        TOKEN,
-    );
+    let output = cli.run_with_stdin(&["--json", "auth", "set", "--environment", "beta"], TOKEN);
     assert!(
         output.status.success(),
         "auth set should succeed: {}",

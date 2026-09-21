@@ -71,7 +71,7 @@ fn pay_to(account: &str) -> String {
 fn test_requirements() -> PaymentRequirements {
     PaymentRequirements {
         scheme: "exact".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
         amount: AtomicAmount::from_u128(1000),
         asset: "0x".to_owned() + &"ab".repeat(32),
         pay_to: pay_to(PAYEE_ACCOUNT),
@@ -341,7 +341,7 @@ fn payment_plane_request_contains_all_requirements() {
 
     let captured = plane.captured.unwrap_or_else(|| panic!("plane was called"));
     assert_eq!(captured.scheme, "exact");
-    assert_eq!(captured.network, "layerx:testnet");
+    assert_eq!(captured.network, "layerx:beta");
     assert_eq!(captured.amount.value(), 1000);
     assert!(captured.idempotency_key != [0; 32]);
     assert!(captured.request_digest != [0; 32]);
@@ -357,7 +357,7 @@ fn seller_outcome_types_are_distinct_and_typed() {
             error_reason: Some("test_refused".to_owned()),
             payer: None,
             transaction: String::new(),
-            network: "layerx:testnet".to_owned(),
+            network: "layerx:beta".to_owned(),
             amount: None,
             extensions: BTreeMap::new(),
         },

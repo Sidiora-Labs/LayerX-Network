@@ -1,10 +1,10 @@
 {
   "version": 1,
   "components": [
-    {"id": "testnet", "source": "https://testnet.layerx.network/v1/status", "field": "testnet"},
-    {"id": "gateway", "source": "https://testnet.layerx.network/v1/status", "field": "gateway"},
-    {"id": "core", "source": "https://testnet.layerx.network/v1/status", "field": "core"},
-    {"id": "paxeer", "source": "https://testnet.layerx.network/v1/status", "field": "paxeer"}
+    {"id": "testnet", "source": "https://beta.layerx.network/v1/status", "field": "testnet"},
+    {"id": "gateway", "source": "https://beta.layerx.network/v1/status", "field": "gateway"},
+    {"id": "core", "source": "https://beta.layerx.network/v1/status", "field": "core"},
+    {"id": "paxeer", "source": "https://beta.layerx.network/v1/status", "field": "paxeer"}
   ],
   "redaction": {"request_headers": ["authorization", "cookie", "idempotency-key"], "component_urls": true, "query_values": true}
 }

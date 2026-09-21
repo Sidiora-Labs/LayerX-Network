@@ -2,7 +2,7 @@
 
 # Human API reference
 
-Schema `LayerX Human API`, contract major `1`, minor `4`, generated from `human/schema/human-api`.
+Schema `LayerX Human API`, contract major `1`, minor `5`, generated from `human/schema/human-api`.
 
 Transport is HTTPS with JSON bodies under the `/v1` base path. Every amount is a decimal string of base units and always travels with its currency code. Every mutation that can move money requires the `Idempotency-Key` header, and repeating the request returns the original journey rather than a second effect.
 
@@ -75,6 +75,8 @@ Additive only within a major version: a release may only add sections, keys, lis
 | `session.revoke-all` | `POST` | `/v1/sessions/revoke-all` | `Empty` | `SessionRevocation` | required |
 | `stepup.begin` | `POST` | `/v1/step-up` | `StepUpRequest` | `StepUpChallenge` | not used |
 | `stepup.finish` | `POST` | `/v1/step-up/{challenge_id}` | `StepUpFinish` | `StepUpEvidence` | not used |
+| `intent.plan` | `POST` | `/v1/intents/plan` | `PlanIntentRequest` | `IntentPlan` | not used |
+| `intent.submit` | `POST` | `/v1/intents/submit` | `SubmitPlanRequest` | `IntentSubmission` | required |
 | `evidence.get` | `GET` | `/v1/evidence/{evidence_id}` | `Empty` | `EvidenceMaterial` | not used |
 | `journey.get` | `GET` | `/v1/journeys/{journey_id}` | `Empty` | `Journey` | not used |
 | `journey.list` | `GET` | `/v1/journeys` | `Empty` | `JourneyPage` | not used |
@@ -257,6 +259,24 @@ additive_only
 | `StepUpRequest` | type | required: `confirms:OperationDigest` |
 | `TimedSecret` | type | required: `value:string`, `remask_at:Timestamp`, `copyable:boolean` |
 | `WalletBinding` | type | required: `state:BindingState`<br>optional: `address:EvmAddress`, `bound_at:Timestamp`, `evidence:EvidenceRef` |
+
+### Module `intent`
+
+additive_only
+
+| Declaration | Kind | Shape |
+|---|---|---|
+| `IntentConstraints` | type | required: `deadline:Timestamp`, `max_fee:Money`, `allow_top_up:boolean` |
+| `IntentDomain` | type | variants: `paxeer`, `layerx` |
+| `IntentEndpoint` | type | required: `kind:IntentEndpointKind`<br>optional: `account:string` |
+| `IntentEndpointKind` | type | variants: `paxeer-wallet`, `human`, `agent`, `agent-budget` |
+| `IntentLeg` | type | required: `index:integer`, `mechanism:string`, `domain:IntentDomain`, `source:IntentEndpoint`, `destination:IntentEndpoint`, `money:Money`, `fee:Money` |
+| `IntentLegBinding` | type | required: `leg_index:integer`, `action_key:string`, `actor:string`, `authority:string`, `relationship:string`, `account_sequence:integer`, `not_before:integer`, `not_after:integer`, `fee_limit:Money` |
+| `IntentPlan` | type | required: `plan_digest:string`, `journey_kind:string`, `total_fee:Money`, `legs:IntentLeg[]`, `signing_requirements:IntentSigningRequirement[]` |
+| `IntentSigningRequirement` | type | required: `leg_index:integer`, `action_key:string`, `signing_context:string`, `authority:string` |
+| `IntentSubmission` | type | required: `journey_id:JourneyId`, `plan_digest:string`, `state:string`, `state_copy_key:CopyKey` |
+| `PlanIntentRequest` | type | required: `source:IntentEndpoint`, `destination:IntentEndpoint`, `asset_id:string`, `money:Money`, `constraints:IntentConstraints` |
+| `SubmitPlanRequest` | type | required: `plan_digest:string`, `signed_digest:string`, `bindings:IntentLegBinding[]` |
 
 ### Module `journeys`
 

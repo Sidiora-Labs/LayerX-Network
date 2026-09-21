@@ -9,7 +9,7 @@ Paxeer X Network — 一个网络：Paxeer EVM 链与 LayerX 智能体原生域�
 *当本文与英文 README 不一致时，以英文 README 为参考版本。*
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](../../LICENSE)
-[![CI](https://github.com/Sidiora-Labs/LayerX-Network/actions/workflows/ci.yml/badge.svg)](../../.github/workflows/ci.yml)
+[![CI](https://github.com/Sidiora-Labs/Paxeer-X-Network/actions/workflows/ci.yml/badge.svg)](../../.github/workflows/ci.yml)
 
 ## Paxeer X Network 是什么
 

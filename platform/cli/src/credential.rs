@@ -217,10 +217,10 @@ pub fn set_default_key(configuration: &mut Configuration, name: &str) -> Result<
 }
 
 pub fn set_token(environment: &str) -> Result<(), String> {
-    Configuration::validate_environment_name(environment)?;
+    let environment = Configuration::canonical_environment_name(environment)?;
     let mut token = read_secret()?;
     validate_bearer_secret(&token)?;
-    entry("token", environment)?
+    entry("token", &environment)?
         .set_password(&token)
         .map_err(|error| {
             format!("could not save token in credential storage: {error}. {FILE_STORE_HELP}")
@@ -230,8 +230,8 @@ pub fn set_token(environment: &str) -> Result<(), String> {
 }
 
 pub fn delete_token(environment: &str) -> Result<(), String> {
-    Configuration::validate_environment_name(environment)?;
-    entry("token", environment)?
+    let environment = Configuration::canonical_environment_name(environment)?;
+    entry("token", &environment)?
         .delete_credential()
         .map_err(|error| format!("could not delete token from credential storage: {error}"))
 }

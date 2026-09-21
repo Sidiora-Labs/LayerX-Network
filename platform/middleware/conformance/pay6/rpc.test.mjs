@@ -6,7 +6,7 @@ const f = JSON.parse(readFileSync(new URL("../../../sdk/conformance/fixtures/rec
 const b = v => Uint8Array.from(Buffer.from(v, "hex"));
 const a = f.authorized_batch;
 const authorized = { batchId: b(a.batch_id_hex), asset: b(a.asset_hex), previousStateRoot: b(a.previous_state_root_hex), resultingStateRoot: b(a.resulting_state_root_hex), sequencerPublicKey: b(a.sequencer_public_key_hex) };
-const offer = { scheme: "exact", network: "layerx:testnet", amount: f.expected.amount, asset: a.asset_hex, payTo: f.expected.to_hex, maxTimeoutSeconds: 30 };
+const offer = { scheme: "exact", network: "layerx:beta", amount: f.expected.amount, asset: a.asset_hex, payTo: f.expected.to_hex, maxTimeoutSeconds: 30 };
 test("RPC receipt response binds actual signed activity and payer; pending never succeeds", async () => {
   const verified = await verifyPaymentReceipt({ canonicalReceipt: b(f.canonical_receipt_hex), authorizedBatch: authorized }, offer);
   const activity = Buffer.from(verified.receipt.activityId).toString("hex");
@@ -39,7 +39,7 @@ test("RPC batched result is verified against caller-configured sequencer authori
   const authorization = { sequencerId: b(batch.sequencer_id), publicKey: authorized.sequencerPublicKey,
     firstBatchNumber: 1n, lastBatchNumber: 1n };
   const commitments = { async resolve(receipt, network, commitment) {
-    assert.equal(network, "layerx:testnet"); assert.equal(commitment, "batched");
+    assert.equal(network, "layerx:beta"); assert.equal(commitment, "batched");
     return rpcBatchEvidence(result, activity, receipt, { networkId: 7, authorization });
   } };
   const batched = { ...offer, extra: { layerx: { commitment: "batched", payer } } };

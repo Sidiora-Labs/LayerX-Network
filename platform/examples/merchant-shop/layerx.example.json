@@ -19,12 +19,12 @@
       "stateDirectory": "state",
       "port": 8082
     },
-    "testnet": {
+    "beta": {
       "publicUrl": "http://127.0.0.1:8082",
-      "settlementUrl": "https://api.testnet.layerx.network/v1/settle",
-      "receiptAuthorityUrl": "https://api.testnet.layerx.network",
+      "settlementUrl": "https://api.layerx.network/v1/settle",
+      "receiptAuthorityUrl": "https://api.layerx.network",
       "scheme": "exact",
-      "network": "layerx:testnet",
+      "network": "layerx:beta",
       "protocolVersion": 3,
       "tokenEnvironment": "LAYERX_TESTNET_TOKEN",
       "webhookKeysEnvironment": "LAYERX_TESTNET_WEBHOOK_PUBLIC_KEYS_JSON",

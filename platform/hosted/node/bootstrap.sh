@@ -615,19 +615,21 @@ GENESIS_RECEIPT_STATE_ROOT=$(tail -c 32 "$REGISTRATION_REQUEST" | bin_to_hex)
 
 # Bootstrap registration (LXGR v1): the beta anchors genesis to its own
 # receipt state root, the same self-registration the conformance node performs.
+# layerxd refuses to start without it (-904), so a custody-profile genesis writes it
+# too: the anchor module starts every network holding no roots of its own, and these
+# are the bytes the cluster's own registration publish derives from the deployment
+# descriptor and writes over this one once it has checked the anchor is still empty.
 REGISTRATION="$GENESIS_DIR/genesis.registration"
-if [ -z "$CUSTODY_PROFILE" ]; then
-    {
-        printf 'LXGR'
-        hex_to_bin 01
-        hex_to_bin "$(be_hex "$NETWORK_ID" 4)"
-        hex_to_bin "$(be_hex 0 8)"
-        hex_to_bin "$GENESIS_RECEIPT_STATE_ROOT"
-        hex_to_bin "$GENESIS_RECEIPT_STATE_ROOT"
-        hex_to_bin 01
-    } > "$REGISTRATION"
-    [ "$(stat -c %s "$REGISTRATION")" -eq 82 ] || fail "bootstrap registration has an unexpected length"
-fi
+{
+    printf 'LXGR'
+    hex_to_bin 01
+    hex_to_bin "$(be_hex "$NETWORK_ID" 4)"
+    hex_to_bin "$(be_hex 0 8)"
+    hex_to_bin "$GENESIS_RECEIPT_STATE_ROOT"
+    hex_to_bin "$GENESIS_RECEIPT_STATE_ROOT"
+    hex_to_bin 01
+} > "$REGISTRATION"
+[ "$(stat -c %s "$REGISTRATION")" -eq 82 ] || fail "bootstrap registration has an unexpected length"
 
 # --- identities, tokens, configurations ------------------------------------
 IDENTITIES="$DATA_DIR/identities.txt"

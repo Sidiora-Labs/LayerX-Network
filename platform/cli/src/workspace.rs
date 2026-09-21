@@ -1042,13 +1042,14 @@ fn select_modules(
 
 fn environment_context(selected: Option<&str>) -> Result<EnvironmentContext, String> {
     let configuration = Configuration::load()?;
-    let name = selected.unwrap_or(&configuration.current_environment);
-    Configuration::validate_environment_name(name)?;
+    let name = Configuration::canonical_environment_name(
+        selected.unwrap_or(&configuration.current_environment),
+    )?;
     let environment = configuration
         .environments
-        .get(name)
+        .get(&name)
         .ok_or_else(|| format!("environment {name} is not configured"))?;
-    Ok(environment_from(name, environment))
+    Ok(environment_from(&name, environment))
 }
 
 fn environment_from(name: &str, environment: &Environment) -> EnvironmentContext {
@@ -1230,8 +1231,7 @@ fn prompt_environment() -> Result<Option<String>, String> {
             .map(|name| Some((*name).clone()))
             .ok_or_else(|| format!("environment number {index} is out of range"));
     }
-    Configuration::validate_environment_name(&answer)?;
-    Ok(Some(answer))
+    Configuration::canonical_environment_name(&answer).map(Some)
 }
 
 fn production_confirmation(action: Action, environment: &str) -> Result<bool, String> {

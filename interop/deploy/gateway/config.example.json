@@ -72,9 +72,9 @@
     }
   ],
   "x402_supported": {
-    "kinds": [{"x402Version": 2, "scheme": "exact", "network": "layerx:testnet"}],
+    "kinds": [{"x402Version": 2, "scheme": "exact", "network": "layerx:beta"}],
     "extensions": [],
-    "signers": {"layerx:testnet": ["did:layerx:9999999999999999999999999999999999999999999999999999999999999999"]}
+    "signers": {"layerx:beta": ["did:layerx:9999999999999999999999999999999999999999999999999999999999999999"]}
   },
   "ap2_keys": [
     {

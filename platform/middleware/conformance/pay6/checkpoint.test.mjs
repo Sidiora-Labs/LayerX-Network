@@ -18,7 +18,7 @@ const authority = { canonicalContext: hex(f.operator.context), requiredGuarantor
     return result.status === 0;
   } },
 };
-const offer = { scheme: "exact", network: "layerx:testnet", asset: a.asset_hex, amount: r.expected.amount, payTo: r.expected.to_hex, maxTimeoutSeconds: 30 };
+const offer = { scheme: "exact", network: "layerx:beta", asset: a.asset_hex, amount: r.expected.amount, payTo: r.expected.to_hex, maxTimeoutSeconds: 30 };
 test("published checkpoint binary verifies finalised receipt with configured authority", async () => {
   const verified = await verifyPaymentReceipt({ canonicalReceipt: hex(r.canonical_receipt_hex), authorizedBatch }, offer);
   await verifyPaymentCommitmentEvidence(verified, authorizedBatch.sequencerPublicKey, "finalised", rpcCheckpointEvidence(f, batch, authority));

@@ -1388,9 +1388,11 @@ layerx-handover: $(BUILD_DIR)/bin/layerx-handover
 build: layerx-handover
 
 $(BUILD_DIR)/tests/test_layerxd: tests/test_layerxd.c $(LAYERXD_SOURCES) \
+		cmd/layerxd/lxp_daemon_finality_authority.h \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_layerxd.c $(LAYERXD_SOURCES) \
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) \
+		tests/test_layerxd.c $(LAYERXD_SOURCES) \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(EXTRA_LDFLAGS) \
 		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 
@@ -3673,8 +3675,14 @@ test-light-credit: $(BUILD_DIR)/tests/bridge/test-light-credit
 		tests/fixtures/custody/paxeer-state-v2/custody.profile tests/fixtures/custody/paxeer-state-v2/custody.credit \
 		$(LIGHT_CREDIT_FIXTURES)/did.txt $(LIGHT_CREDIT_FIXTURES)/custody-skip.profile $(LIGHT_CREDIT_FIXTURES)/custody-skip.credit
 
+$(BUILD_DIR)/tests/bridge/test-credit-admission: tests/bridge/test_credit_admission.c tests/bridge/files.h \
+		$(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+
 .PHONY: test-bridge-credit
-test-bridge-credit: $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit build/bin/layerx-genesis-build
+test-bridge-credit: $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit $(BUILD_DIR)/tests/bridge/test-credit-admission build/bin/layerx-genesis-build
 	$(BRIDGE_PYTHON) tests/bridge/qualify_credit.py --build-dir $(BUILD_DIR)
 
 .PHONY: test-daemon-maintenance-publication test-maintenance-publication
@@ -3830,6 +3838,7 @@ test-daemon-guarantor-unit: $(BUILD_DIR)/tests/lxp_test_guarantor_core \
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_guarantor_core
 	python3 tests/daemon/guarantor-exchange.py $(BUILD_DIR)/tests/lxp_test_guarantor_exchange
 	$(GUARANTOR_PYTHON) tests/daemon/guarantor-settlement.py
+	$(GUARANTOR_PYTHON) tests/daemon/guarantor-publication.py
 test-daemon-guarantor-integration: layerx-guarantor layerxd layerx-genesis-build \
 	$(BUILD_DIR)/tests/lxp_test_guarantor_integration $(BUILD_DIR)/tests/lxp_test_program_admission
 	LAYERX_TEST_BUILD_DIR=$(BUILD_DIR) $(GUARANTOR_PYTHON) tests/daemon/guarantor-integration.py \

@@ -101,7 +101,7 @@ fn create_payment_required() -> PaymentRequired {
         accepts: vec![
             PaymentRequirements {
                 scheme: "exact".to_owned(),
-                network: "layerx:testnet".to_owned(),
+                network: "layerx:beta".to_owned(),
                 amount: AtomicAmount::from_u128(1000),
                 asset: "0x".to_owned() + &"aa".repeat(32),
                 pay_to: pay_to(TESTNET_ACCOUNT, 0),
@@ -136,7 +136,7 @@ fn buyer_and_seller_complete_payment_flow_over_http() {
     let buyer = Buyer::new(vec![
         SupportedKind {
             scheme: "exact".to_owned(),
-            network: "layerx:testnet".to_owned(),
+            network: "layerx:beta".to_owned(),
         },
         SupportedKind {
             scheme: "402lxp".to_owned(),
@@ -169,7 +169,7 @@ fn buyer_and_seller_complete_payment_flow_over_http() {
 
     assert_eq!(payment.payload.x402_version, X402_VERSION);
     assert_eq!(payment.payload.accepted.scheme, "exact");
-    assert_eq!(payment.payload.accepted.network, "layerx:testnet");
+    assert_eq!(payment.payload.accepted.network, "layerx:beta");
     assert_eq!(payment.idempotency_key, [5; 32]);
 
     let mut gateway = registered_gateway();
@@ -232,7 +232,7 @@ fn seller_validates_buyer_payment_matches_issued_requirements() {
         payload: json!({"scheme": "exact"}),
         accepted: PaymentRequirements {
             scheme: "exact".to_owned(),
-            network: "layerx:testnet".to_owned(),
+            network: "layerx:beta".to_owned(),
             amount: AtomicAmount::from_u128(9999),
             asset: "0x".to_owned() + &"aa".repeat(32),
             pay_to: pay_to(TESTNET_ACCOUNT, 0),
@@ -278,7 +278,7 @@ fn payment_flow_preserves_extensions_end_to_end() {
 
     let buyer = Buyer::new(vec![SupportedKind {
         scheme: "exact".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
     }])
     .unwrap_or_else(|error| panic!("buyer created: {error:?}"));
 
@@ -317,7 +317,7 @@ fn seller_refuses_payment_when_extension_missing() {
         payload: json!({"scheme": "exact"}),
         accepted: PaymentRequirements {
             scheme: "exact".to_owned(),
-            network: "layerx:testnet".to_owned(),
+            network: "layerx:beta".to_owned(),
             amount: AtomicAmount::from_u128(1000),
             asset: "0x".to_owned() + &"aa".repeat(32),
             pay_to: pay_to(TESTNET_ACCOUNT, 0),
@@ -362,7 +362,7 @@ fn transport_independent_payment_flow_over_mcp() {
 
     let buyer = Buyer::new(vec![SupportedKind {
         scheme: "exact".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
     }])
     .unwrap_or_else(|error| panic!("buyer created: {error:?}"));
 
@@ -402,7 +402,7 @@ fn seller_refuses_payment_before_plane_execution_when_validation_fails() {
         payload: json!({"scheme": "exact"}),
         accepted: PaymentRequirements {
             scheme: "exact".to_owned(),
-            network: "layerx:testnet".to_owned(),
+            network: "layerx:beta".to_owned(),
             amount: AtomicAmount::from_u128(1000),
             asset: "0x".to_owned() + &"aa".repeat(32),
             pay_to: pay_to(TESTNET_ACCOUNT, 0),
@@ -434,7 +434,7 @@ fn buyer_constructs_payment_with_correct_idempotency_semantics() {
 
     let buyer = Buyer::new(vec![SupportedKind {
         scheme: "exact".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
     }])
     .unwrap_or_else(|error| panic!("buyer created: {error:?}"));
 
@@ -470,7 +470,7 @@ fn seller_outcome_types_distinguish_pending_refused_and_settled() {
 
     let buyer = Buyer::new(vec![SupportedKind {
         scheme: "exact".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
     }])
     .unwrap_or_else(|error| panic!("buyer created: {error:?}"));
 
@@ -527,7 +527,7 @@ fn seller_outcome_types_distinguish_pending_refused_and_settled() {
 fn payment_requirements_layerx_facts_extraction() {
     let requirements = PaymentRequirements {
         scheme: "exact".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
         amount: AtomicAmount::from_u128(1000),
         asset: "0x".to_owned() + &"ab".repeat(32),
         pay_to: pay_to(TESTNET_ACCOUNT, 0),
@@ -566,7 +566,7 @@ fn resource_info_with_all_fields_is_preserved() {
 
     let buyer = Buyer::new(vec![SupportedKind {
         scheme: "exact".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
     }])
     .unwrap_or_else(|error| panic!("buyer created: {error:?}"));
 

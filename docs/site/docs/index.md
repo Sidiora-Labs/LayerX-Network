@@ -1,7 +1,7 @@
 # Welcome to Paxeer X Network
 
 This is the documentation site for Paxeer X Network — one network: the Paxeer EVM chain and the LayerX agent-native domain behind one interface. Normative text lives in the
-specifications under [`spec/`](https://github.com/Sidiora-Labs/LayerX-Network/tree/main/spec).
+specifications under [`spec/`](https://github.com/Sidiora-Labs/Paxeer-X-Network/tree/main/spec).
 Where a surface is specified but not yet present in this tree, the page says so.
 
 Paxeer X Network is a deterministic execution and accounting network built for autonomous agents.
@@ -69,9 +69,9 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [Modules](protocol/modules.md)
 - [Finality](protocol/finality.md)
 - [Custody](human/custody.md)
-- [Protocol design](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/spec/layerx-protocol/design.md)
-- [Contributing guide](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/CONTRIBUTING.md)
-- [Security policy](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/SECURITY.md)
+- [Protocol design](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/spec/layerx-protocol/design.md)
+- [Contributing guide](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/CONTRIBUTING.md)
+- [Security policy](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/SECURITY.md)
 - [Qualification documentation](operators/qualification.md)
 - [Monorepo layout](overview/monorepo.md)
 - [Programs](programs/index.md)
@@ -80,8 +80,8 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [SDK terminal verification](agents/sdk-verification.md)
 - [Portable receipt verifier](interop/portable-receipts.md)
 - [x402 transport](interop/x402.md)
-- [402LXP protocol](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/spec/402lxp/protocol.md)
-- [402LXP RPC verification guide](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/spec/402lxp/README.md)
+- [402LXP protocol](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/spec/402lxp/protocol.md)
+- [402LXP RPC verification guide](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/spec/402lxp/README.md)
 - [Agentd](agents/agentd.md)
 - [CLI](platform/cli.md)
 - [Hosted core](platform/hosted-core.md)
@@ -97,7 +97,7 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [Hosted internal](operators/hosted-internal.md)
 - [Hosted identity](platform/identity.md)
 - [Hosted faucet](platform/faucet.md)
-- [Hosted control](operators/testnet-control.md)
+- [Hosted control](operators/beta-control.md)
 - [Hosted node](platform/hosted-node.md)
 - [Hosted agent boundary](platform/agent-boundary.md)
 - [Paxeer boundary](concepts/paxeer-boundary.md)

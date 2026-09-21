@@ -15,7 +15,7 @@
     "https://archive-2.example.net"
   ],
   "submission_upstreams": [
-    "https://api.testnet.layerx.network/v1/activities"
+    "https://api.layerx.network/v1/activities"
   ],
   "tls_cert": "/etc/layerx/tls/relay.crt",
   "tls_key": "/etc/layerx/tls/relay.key",

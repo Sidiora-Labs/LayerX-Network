@@ -21,7 +21,7 @@ QEMU.
 | Deployment evidence | Independently reviewed bytecode, deterministic deployment manifests, live custody reconciliation, sequencer-offline exit drill, and a bounded real-value canary | Owner-gated runbook; never automatic |
 
 The authoritative acceptance criteria and current completion state are in the
-[task board](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/spec/layerx-protocol/tasks.md).
+[task board](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/spec/layerx-protocol/tasks.md).
 
 ## Standard suites
 

@@ -122,12 +122,12 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 
 | Key | Value | Source |
 | --- | --- | --- |
-| testnet_public_url | https://testnet.layerx.network | platform/hosted/testnet/deployment.yaml Ingress layerx-testnet-public; .github/workflows/platform.yml LAYERX_TESTNET_URL; platform/hosted/testnet/src/lib.rs; platform/hosted/testnet/status.json; platform/docs/testnet.md |
-| gateway_url | https://api.testnet.layerx.network | .github/workflows/platform.yml LAYERX_GATEWAY_URL; platform/hosted/testnet/src/lib.rs; platform/docs/testnet.md; platform/examples/*/layerx.example.json |
-| faucet_url | https://faucet.testnet.layerx.network | .github/workflows/platform.yml LAYERX_FAUCET_URL; platform/hosted/testnet/src/lib.rs; platform/docs/testnet.md |
-| status_url | https://status.layerx.network | platform/hosted/testnet/src/lib.rs; platform/docs/testnet.md |
+| testnet_public_url | https://beta.layerx.network | platform/hosted/testnet/deployment.yaml Ingress layerx-testnet-public; .github/workflows/platform.yml LAYERX_TESTNET_URL; platform/hosted/testnet/src/lib.rs; platform/hosted/testnet/status.json; platform/docs/beta-environment.md |
+| gateway_url | https://api.layerx.network | .github/workflows/platform.yml LAYERX_GATEWAY_URL; platform/hosted/testnet/src/lib.rs; platform/docs/beta-environment.md; platform/examples/*/layerx.example.json |
+| faucet_url | https://faucet.layerx.network | .github/workflows/platform.yml LAYERX_FAUCET_URL; platform/hosted/testnet/src/lib.rs; platform/docs/beta-environment.md |
+| status_url | https://status.layerx.network | platform/hosted/testnet/src/lib.rs; platform/docs/beta-environment.md |
 | developer_host | developers.layerx.example | platform/hosted/webhooks/deployment.yaml Ingress layerx-developer and layerx-developer-web (placeholder, see Contradictions) |
-| ramp_host | ramp.testnet.layerx.network | platform/ramps/deployment.yaml Ingress |
+| ramp_host | ramp.layerx.network | platform/ramps/deployment.yaml Ingress |
 | emulator_endpoint | http://127.0.0.1:9402 | platform/docs/content/install.md; platform/docs/content/environments/emulator.md |
 | testnet_core_url | https://layerx-pending-core.layerx-testnet.svc.cluster.local:9443 | platform/hosted/testnet/deployment.yaml LAYERX_TESTNET_CORE_URL; platform/hosted/node/deployment.yaml Service layerx-pending-core |
 | testnet_core_admin_url | https://layerx-pending-core-admin.layerx-testnet.svc.cluster.local:9444 | platform/hosted/testnet/deployment.yaml LAYERX_TESTNET_CORE_ADMIN_URL; platform/hosted/node/deployment.yaml Service layerx-pending-core-admin |
@@ -142,7 +142,7 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 
 | Key | Value | Source |
 | --- | --- | --- |
-| network_id | 402 | platform/docs/content/install.md `--network-id 402`; platform/hosted/testnet/src/lib.rs TESTNET_NETWORK_ID; platform/docs/testnet.md |
+| network_id | 402 | platform/docs/content/install.md `--network-id 402`; platform/hosted/testnet/src/lib.rs TESTNET_NETWORK_ID; platform/docs/beta-environment.md |
 | gateway_network_id | layerx-testnet | platform/hosted/gateway/deployment.yaml LAYERX_GATEWAY_NETWORK_ID |
 
 ## Wire protocol version
@@ -245,7 +245,7 @@ The go/no-go report is local, ignored build output. Run `make beta-report` to ge
 | reference/errors | hosted-gateway | generated reference |
 | reference/enforcement | native-core | generated reference |
 | reference/samples | docs-site | generated reference |
-| environments/testnet | hosted-testnet | hosted testnet |
+| environments/beta | hosted-testnet | hosted beta |
 | environments/emulator | emulator | emulator |
 
 ## Unknown-state behaviour
@@ -297,7 +297,7 @@ Checkpoint identity and freshness are declared once, in `contracts/config/checkp
 
 | Key | Canonical value | Divergent source | Divergent value | Resolving task |
 | --- | --- | --- | --- | --- |
-| faucet_hostname | faucet.testnet.layerx.network | platform/hosted/testnet/deployment.yaml: Service layerx-faucet-public is a LoadBalancer with no Ingress host | (no ingress host) | 3.7 |
+| faucet_hostname | faucet.layerx.network | platform/hosted/testnet/deployment.yaml: Service layerx-faucet-public is a LoadBalancer with no Ingress host | (no ingress host) | 3.7 |
 | placeholder_hostname | layerx.network | platform/hosted/webhooks/deployment.yaml Ingress layerx-developer and layerx-developer-web host | developers.layerx.example | 3.7 |
 
 Each row records a value that a source carries today and that disagrees with the canonical value. The contract check recomputes every row from the sources; a row that disappears from the sources must be removed here, a disagreement that is not listed here fails the build, and the readiness claim cannot become `true` while any row remains.

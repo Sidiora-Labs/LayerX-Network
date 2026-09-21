@@ -37,9 +37,9 @@
 #                                       else in the bring-up uses Foundry: custody (0x…1013) and the checkpoint
 #                                       anchor (0x…1014) are native chain modules configured in the Paxeer genesis,
 #                                       and every Paxeer transaction is signed by platform/hosted/paxeer/evm.py
-#   LAYERX_BETA_FAUCET_HOST             public faucet hostname (default faucet.testnet.layerx.network)
-#   LAYERX_BETA_DEVELOPER_HOST          public developer hostname (default developers.testnet.layerx.network)
-#   LAYERX_BETA_RELAY_HOST              public relay/archive hostname (default relay.testnet.layerx.network)
+#   LAYERX_BETA_FAUCET_HOST             public faucet hostname (default faucet.layerx.network)
+#   LAYERX_BETA_DEVELOPER_HOST          public developer hostname (default developers.layerx.network)
+#   LAYERX_BETA_RELAY_HOST              public relay/archive hostname (default relay.layerx.network)
 #   LAYERX_BETA_RELAY_UPSTREAM          comma-separated public HTTPS relay/archive origins the beta relay reads
 #                                       canonical history from; unset leaves the colocated canonical availability
 #                                       log of the sequencer node as its only source
@@ -87,10 +87,10 @@
 #   LAYERX_BETA_GATEWAY_PORT            (defaults 19443, 19444, 19445)
 #   LAYERX_BETA_FAUCET_PORT
 #   LAYERX_BETA_HUMAN_WEB_PORT          443 (default) or empty. The browser origin of the human web application
-#                                       is https://human.testnet.layerx.network and carries no port, so the
+#                                       is https://human.layerx.network and carries no port, so the
 #                                       passkey ceremony configuration, the human service allowed origin and
 #                                       human/apps/web/e2e/software-authenticator.ts only accept it on 443, and
-#                                       the owner adds `127.0.0.1 human.testnet.layerx.network` to /etc/hosts and
+#                                       the owner adds `127.0.0.1 human.layerx.network` to /etc/hosts and
 #                                       trusts the beta internal CA. Set it empty on a host where
 #                                       human/apps/web/e2e/run-production-browser.sh serves that same origin from
 #                                       its own authbind listener, which leaves the forward and its readiness
@@ -229,12 +229,12 @@ CALICO_VERSION=v3.30.3
 CALICO_SHA256=9382d2b27a76f40c170454b408653e6d71e2205ef0aef069e942bb690e7381d0
 
 CLUSTER_NAME=${LAYERX_BETA_CLUSTER_NAME:-layerx-beta}
-FAUCET_HOST=${LAYERX_BETA_FAUCET_HOST:-faucet.testnet.layerx.network}
-DEVELOPER_HOST=${LAYERX_BETA_DEVELOPER_HOST:-developers.testnet.layerx.network}
-RELAY_HOST=${LAYERX_BETA_RELAY_HOST:-relay.testnet.layerx.network}
-HUMAN_WEB_HOST=human.testnet.layerx.network
-TESTNET_HOST=testnet.layerx.network
-GATEWAY_HOST=api.testnet.layerx.network
+FAUCET_HOST=${LAYERX_BETA_FAUCET_HOST:-faucet.layerx.network}
+DEVELOPER_HOST=${LAYERX_BETA_DEVELOPER_HOST:-developers.layerx.network}
+RELAY_HOST=${LAYERX_BETA_RELAY_HOST:-relay.layerx.network}
+HUMAN_WEB_HOST=human.layerx.network
+TESTNET_HOST=beta.layerx.network
+GATEWAY_HOST=api.layerx.network
 KIND_CNI=${LAYERX_BETA_KIND_CNI:-calico}
 READY_TIMEOUT=${LAYERX_BETA_READY_TIMEOUT:-900}
 MIN_FREE_GIB=${LAYERX_BETA_MIN_FREE_GIB:-24}
@@ -244,7 +244,7 @@ GATEWAY_PORT=${LAYERX_BETA_GATEWAY_PORT:-19444}
 FAUCET_PORT=${LAYERX_BETA_FAUCET_PORT:-19445}
 HUMAN_WEB_PORT=${LAYERX_BETA_HUMAN_WEB_PORT-443}
 RAMP_PORT=${LAYERX_BETA_RAMP_PORT:-19459}
-RAMP_HOST=ramp.testnet.layerx.network
+RAMP_HOST=ramp.layerx.network
 RAMP_WORKER_ID=${LAYERX_BETA_RAMP_WORKER_ID:-layerx-beta-ramp-1}
 RAMP_FEE_LIMIT=${LAYERX_BETA_RAMP_FEE_LIMIT:-1000}
 RAMP_ENABLED=1
@@ -645,9 +645,9 @@ ca_generate() {
     issue_cert gateway layerx-gateway serverAuth \
         "DNS:layerx-gateway.$svc,DNS:layerx-gateway.$TESTNET_NAMESPACE.svc,DNS:layerx-gateway,DNS:$GATEWAY_HOST,DNS:localhost,IP:127.0.0.1"
     issue_cert human layerx-human serverAuth \
-        "DNS:layerx-human.$svc,DNS:layerx-human.$TESTNET_NAMESPACE.svc,DNS:layerx-human,DNS:human.testnet.layerx.network,DNS:localhost,IP:127.0.0.1"
+        "DNS:layerx-human.$svc,DNS:layerx-human.$TESTNET_NAMESPACE.svc,DNS:layerx-human,DNS:human.layerx.network,DNS:localhost,IP:127.0.0.1"
     issue_cert human-web layerx-human-web serverAuth \
-        "DNS:layerx-human-web.$svc,DNS:layerx-human-web.$TESTNET_NAMESPACE.svc,DNS:layerx-human-web,DNS:human.testnet.layerx.network,DNS:localhost,IP:127.0.0.1"
+        "DNS:layerx-human-web.$svc,DNS:layerx-human-web.$TESTNET_NAMESPACE.svc,DNS:layerx-human-web,DNS:human.layerx.network,DNS:localhost,IP:127.0.0.1"
     issue_cert explorer-index layerx-explorer-index serverAuth \
         "DNS:layerx-explorer-index.$svc,DNS:layerx-explorer-index.$TESTNET_NAMESPACE.svc,DNS:layerx-explorer-index,DNS:localhost,IP:127.0.0.1"
     issue_cert faucet layerx-faucet serverAuth \
@@ -1323,6 +1323,9 @@ secrets_apply() {
     done
     apply_secret "$ns" paxeer-checkpoint-submitter --from-file=key="$s/paxeer-checkpoint-submitter.key"
     apply_secret "$ns" paxeer-deployer-address --from-file=address="$s/paxeer-deployer.address"
+    # The guarantor pays for every submitCheckpoint from this account and nothing tops it up after
+    # genesis, so init-chain.sh reads the address from this secret and funds its cast account.
+    apply_secret "$ns" paxeer-checkpoint-submitter-address --from-file=address="$s/paxeer-checkpoint-submitter.address"
     # Paxeer custody is the layerxcustody module behind the precompile at 0x…1013. Nothing is deployed
     # for it: the network id, the sequencer authorization and the asset map are Paxeer genesis state,
     # which init-chain.sh merges from this ConfigMap before it validates the genesis.

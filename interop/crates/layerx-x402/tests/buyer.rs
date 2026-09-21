@@ -55,7 +55,7 @@ fn test_supported() -> Vec<SupportedKind> {
     vec![
         SupportedKind {
             scheme: "exact".to_owned(),
-            network: "layerx:testnet".to_owned(),
+            network: "layerx:beta".to_owned(),
         },
         SupportedKind {
             scheme: "402lxp".to_owned(),
@@ -67,7 +67,7 @@ fn test_supported() -> Vec<SupportedKind> {
 fn test_requirements() -> PaymentRequirements {
     PaymentRequirements {
         scheme: "exact".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
         amount: AtomicAmount::from_u128(500),
         asset: "0x".to_owned() + &"12".repeat(32),
         pay_to: pay_to(PAYEE_ACCOUNT),
@@ -120,11 +120,11 @@ fn buyer_validates_supported_kinds_on_construction() {
     let duplicate = vec![
         SupportedKind {
             scheme: "exact".to_owned(),
-            network: "layerx:testnet".to_owned(),
+            network: "layerx:beta".to_owned(),
         },
         SupportedKind {
             scheme: "exact".to_owned(),
-            network: "layerx:testnet".to_owned(),
+            network: "layerx:beta".to_owned(),
         },
     ];
     assert!(Buyer::new(duplicate).is_err());
@@ -132,7 +132,7 @@ fn buyer_validates_supported_kinds_on_construction() {
     let too_many = (0..100)
         .map(|i| SupportedKind {
             scheme: format!("scheme{i}"),
-            network: "layerx:testnet".to_owned(),
+            network: "layerx:beta".to_owned(),
         })
         .collect();
     assert!(Buyer::new(too_many).is_err());
@@ -165,7 +165,7 @@ fn buyer_selects_first_supported_offer_in_seller_order() {
     let mut required = test_payment_required();
     let unsupported = PaymentRequirements {
         scheme: "unsupported".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
         amount: AtomicAmount::from_u128(100),
         asset: "0x".to_owned() + &"aa".repeat(32),
         pay_to: pay_to(ALTERNATE_ACCOUNT),
@@ -187,7 +187,7 @@ fn buyer_selects_first_supported_offer_in_seller_order() {
         .unwrap_or_else(|error| panic!("payment built: {error:?}"));
 
     assert_eq!(payment.payload.accepted.scheme, "exact");
-    assert_eq!(payment.payload.accepted.network, "layerx:testnet");
+    assert_eq!(payment.payload.accepted.network, "layerx:beta");
 }
 
 #[test]
@@ -408,7 +408,7 @@ fn buyer_capture_refuses_failed_settlement_as_success() {
         error_reason: Some("payment_refused".to_owned()),
         payer: None,
         transaction: String::new(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
         amount: None,
         extensions: BTreeMap::new(),
     };
@@ -443,7 +443,7 @@ fn buyer_capture_refuses_missing_layerx_evidence() {
         error_reason: None,
         payer: Some("0x".to_owned() + &"ab".repeat(32)),
         transaction: "test".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
         amount: Some(AtomicAmount::from_u128(500)),
         extensions: BTreeMap::new(),
     };
@@ -488,7 +488,7 @@ fn buyer_capture_refuses_wrong_verification_level() {
         error_reason: None,
         payer: Some("0x".to_owned() + &"ab".repeat(32)),
         transaction: "test".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
         amount: Some(AtomicAmount::from_u128(500)),
         extensions,
     };
@@ -533,7 +533,7 @@ fn buyer_capture_refuses_malformed_receipt() {
         error_reason: None,
         payer: Some("0x".to_owned() + &"ab".repeat(32)),
         transaction: "test".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
         amount: Some(AtomicAmount::from_u128(500)),
         extensions,
     };
@@ -553,15 +553,15 @@ fn buyer_capture_refuses_malformed_receipt() {
 fn supported_kind_equality_matches_both_scheme_and_network() {
     let kind1 = SupportedKind {
         scheme: "exact".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
     };
     let kind2 = SupportedKind {
         scheme: "exact".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
     };
     let kind3 = SupportedKind {
         scheme: "402lxp".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
     };
 
     assert_eq!(kind1, kind2);

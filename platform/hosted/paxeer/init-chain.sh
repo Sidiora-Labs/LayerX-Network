@@ -22,6 +22,12 @@
 # authority must be the deployer's cast account and its paxeer_chain_id this chain's EVM chain id,
 # the two values guarantors and the bring-up depend on. Without the file the module keeps its
 # default genesis, which authorizes no sequencer and therefore accepts no checkpoint.
+#
+# The guarantor submits every checkpoint to that precompile from its own account, which pays its
+# own gas and is never the deployer. LAYERX_PAXEER_CHECKPOINT_SUBMITTER_ADDRESS (or
+# ..._ADDRESS_FILE) names it, and genesis funds its cast account with
+# LAYERX_PAXEER_CHECKPOINT_SUBMITTER_FUNDING and binds the association the same way the deployer's
+# is bound, so submitCheckpoint works from the first batch without a manual transfer.
 set -euo pipefail
 
 PAXD=${PAXD:-paxd}
@@ -34,6 +40,8 @@ VALIDATOR_FUNDING=${LAYERX_PAXEER_VALIDATOR_FUNDING:-100000000000000000000uhpx}
 VALIDATOR_STAKE=${LAYERX_PAXEER_VALIDATOR_STAKE:-7000000000000000uhpx}
 VALIDATOR_POWER=${LAYERX_PAXEER_VALIDATOR_POWER:-7000000000}
 DEPLOYER_FUNDING=${LAYERX_PAXEER_DEPLOYER_FUNDING:-1000000000000000000000000uhpx}
+# Gas only: one uhpx is 1e12 wei, so this is 1e24 wei for the guarantor's checkpoint submissions.
+SUBMITTER_FUNDING=${LAYERX_PAXEER_CHECKPOINT_SUBMITTER_FUNDING:-1000000000000uhpx}
 USDL_ADDRESS=0x85FcD13735F4309833A503EE804ea32395851479
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 USDL_RUNTIME=${LAYERX_PAXEER_USDL_RUNTIME:-$SCRIPT_DIR/contracts/BetaUsdl.runtime.hex}
@@ -74,6 +82,26 @@ case "$DEPLOYER_ADDRESS" in
     *) fail "LAYERX_PAXEER_DEPLOYER_ADDRESS must be a 0x-prefixed 20-byte EVM address" ;;
 esac
 DEPLOYER_HEX=$(printf '%s' "${DEPLOYER_ADDRESS#0x}" | tr 'A-F' 'a-f')
+
+if [ -n "${LAYERX_PAXEER_CHECKPOINT_SUBMITTER_ADDRESS_FILE:-}" ]; then
+    [ -r "$LAYERX_PAXEER_CHECKPOINT_SUBMITTER_ADDRESS_FILE" ] \
+        || fail "checkpoint submitter address $LAYERX_PAXEER_CHECKPOINT_SUBMITTER_ADDRESS_FILE is not readable"
+    SUBMITTER_ADDRESS=$(tr -d '\r\n' < "$LAYERX_PAXEER_CHECKPOINT_SUBMITTER_ADDRESS_FILE")
+else
+    SUBMITTER_ADDRESS=${LAYERX_PAXEER_CHECKPOINT_SUBMITTER_ADDRESS:-}
+fi
+SUBMITTER_HEX=""
+if [ -n "$SUBMITTER_ADDRESS" ]; then
+    case "$SUBMITTER_ADDRESS" in
+        0x[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;;
+        *) fail "LAYERX_PAXEER_CHECKPOINT_SUBMITTER_ADDRESS must be a 0x-prefixed 20-byte EVM address" ;;
+    esac
+    SUBMITTER_HEX=$(printf '%s' "${SUBMITTER_ADDRESS#0x}" | tr 'A-F' 'a-f')
+    [ "$SUBMITTER_HEX" != "$DEPLOYER_HEX" ] \
+        || fail "the checkpoint submitter must differ from the deployer"
+    [[ "$SUBMITTER_FUNDING" =~ ^[1-9][0-9]*uhpx$ ]] \
+        || fail "LAYERX_PAXEER_CHECKPOINT_SUBMITTER_FUNDING must be a positive uhpx amount"
+fi
 
 command -v "$PAXD" >/dev/null 2>&1 || fail "paxd binary $PAXD is not available"
 command -v "$JQ" >/dev/null 2>&1 || fail "jq is not available"
@@ -116,6 +144,12 @@ if [ -f "$MARKER" ]; then
             "$HOME_DIR/config/genesis.json" >/dev/null \
             || fail "requested commit timeout differs from initialised genesis"
     fi
+    if [ -n "$SUBMITTER_HEX" ]; then
+        "$JQ" -e --arg submitter "$SUBMITTER_ADDRESS" \
+            'any(.app_state.evm.address_associations[]?; (.eth_address | ascii_downcase) == ($submitter | ascii_downcase))' \
+            "$HOME_DIR/config/genesis.json" >/dev/null \
+            || fail "requested checkpoint submitter $SUBMITTER_ADDRESS is not funded in the initialised genesis"
+    fi
     echo "init-chain: $HOME_DIR already initialised for $COSMOS_CHAIN_ID" >&2
     exit 0
 fi
@@ -149,6 +183,16 @@ case "$DEPLOYER_CAST" in
     *) fail "paxd could not derive the deployer cast address" ;;
 esac
 "$PAXD" add-genesis-account "$DEPLOYER_CAST" "$DEPLOYER_FUNDING" --home "$HOME_DIR"
+SUBMITTER_CAST=""
+if [ -n "$SUBMITTER_HEX" ]; then
+    SUBMITTER_CAST=$("$PAXD" debug addr "$SUBMITTER_HEX" --home "$HOME_DIR" 2>/dev/null | sed -n 's/^Bech32 Acc: //p')
+    case "$SUBMITTER_CAST" in
+        pax1*) ;;
+        *) fail "paxd could not derive the checkpoint submitter cast address" ;;
+    esac
+    [ "$SUBMITTER_CAST" != "$DEPLOYER_CAST" ] || fail "the checkpoint submitter must differ from the deployer"
+    "$PAXD" add-genesis-account "$SUBMITTER_CAST" "$SUBMITTER_FUNDING" --home "$HOME_DIR"
+fi
 "$PAXD" gentx "$VALIDATOR_KEY" "$VALIDATOR_STAKE" --chain-id "$COSMOS_CHAIN_ID" --keyring-backend test \
     --home "$HOME_DIR" --moniker "$MONIKER" --ip 127.0.0.1 --p2p-port "$P2P_PORT" >/dev/null 2>&1
 
@@ -170,6 +214,13 @@ VALIDATOR_PUBKEY=$("$JQ" -c '.pub_key' "$HOME_DIR/config/priv_validator_key.json
         "base": "uhpx", "display": "uhpx", "name": "UHPX", "symbol": "UHPX"}]
 ' "$GENESIS" > "$GENESIS.tmp"
 mv "$GENESIS.tmp" "$GENESIS"
+if [ -n "$SUBMITTER_HEX" ]; then
+    "$JQ" --arg submitter "$SUBMITTER_ADDRESS" --arg submitter_cast "$SUBMITTER_CAST" '
+        .app_state.evm.address_associations = ((.app_state.evm.address_associations // [])
+            | map(select(.eth_address != $submitter)) + [{"eth_address": $submitter, "pax_address": $submitter_cast}])
+    ' "$GENESIS" > "$GENESIS.tmp"
+    mv "$GENESIS.tmp" "$GENESIS"
+fi
 if [ -n "$CUSTODY_GENESIS" ]; then
     "$JQ" --slurpfile custody "$CUSTODY_GENESIS" '.app_state.layerxcustody = $custody[0]' "$GENESIS" > "$GENESIS.tmp"
     mv "$GENESIS.tmp" "$GENESIS"
@@ -227,6 +278,12 @@ grep -q '^mode = "validator"' "$CONFIG" || fail "config.toml mode was not set"
 grep -q "^http_port = ${EVM_PORT}$" "$APP" || fail "app.toml evm http_port was not set"
 "$JQ" -e --arg usdl "$USDL_ADDRESS" '.app_state.evm.codes[0].address == $usdl and (.validators | length) == 1' "$GENESIS" >/dev/null \
     || fail "genesis does not carry the USDL code and the validator"
+if [ -n "$SUBMITTER_HEX" ]; then
+    "$JQ" -e --arg address "$SUBMITTER_CAST" --arg amount "${SUBMITTER_FUNDING%uhpx}" \
+        'any(.app_state.bank.balances[]; .address == $address
+            and any(.coins[]; .denom == "uhpx" and .amount == $amount))' "$GENESIS" >/dev/null \
+        || fail "genesis does not fund the checkpoint submitter $SUBMITTER_ADDRESS"
+fi
 
 {
     printf 'cosmos_chain_id=%s\n' "$COSMOS_CHAIN_ID"
@@ -237,5 +294,9 @@ grep -q "^http_port = ${EVM_PORT}$" "$APP" || fail "app.toml evm http_port was n
     printf 'custody=0x0000000000000000000000000000000000001013\n'
     printf 'anchor=0x0000000000000000000000000000000000001014\n'
     printf 'evm_port=%s\n' "$EVM_PORT"
+    if [ -n "$SUBMITTER_HEX" ]; then
+        printf 'checkpoint_submitter=%s\n' "$SUBMITTER_ADDRESS"
+        printf 'checkpoint_submitter_cast=%s\n' "$SUBMITTER_CAST"
+    fi
 } > "$MARKER"
 echo "init-chain: initialised $COSMOS_CHAIN_ID at $HOME_DIR (deployer $DEPLOYER_ADDRESS, cast $DEPLOYER_CAST)" >&2

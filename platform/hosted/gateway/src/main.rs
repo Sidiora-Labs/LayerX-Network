@@ -5339,9 +5339,9 @@ mod settlement_contract_tests {
                     "receiptDigest": hex(&digest),
                     "verificationLevel": "sequencer-signed",
                 },
-                "accepted": { "scheme": "exact", "network": "layerx:testnet" },
+                "accepted": { "scheme": "exact", "network": "layerx:beta" },
             },
-            "requirements": { "scheme": "exact", "network": "layerx:testnet" },
+            "requirements": { "scheme": "exact", "network": "layerx:beta" },
             "idempotencyKey": hex(&idempotency),
             "requestDigest": hex(&REQUEST_DIGEST),
         })

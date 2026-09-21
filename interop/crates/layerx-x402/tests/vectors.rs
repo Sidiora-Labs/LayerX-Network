@@ -274,7 +274,7 @@ fn payment_required_http_transport_encoding_is_base64_json() {
         },
         accepts: vec![PaymentRequirements {
             scheme: "exact".to_owned(),
-            network: "layerx:testnet".to_owned(),
+            network: "layerx:beta".to_owned(),
             amount: AtomicAmount::from_u128(750),
             asset: "0x".to_owned() + &"aa".repeat(32),
             pay_to: pay_to(PAYEE_ACCOUNT),
@@ -315,7 +315,7 @@ fn payment_required_mcp_transport_encoding_is_json() {
         },
         accepts: vec![PaymentRequirements {
             scheme: "exact".to_owned(),
-            network: "layerx:testnet".to_owned(),
+            network: "layerx:beta".to_owned(),
             amount: AtomicAmount::from_u128(750),
             asset: "0x".to_owned() + &"aa".repeat(32),
             pay_to: pay_to(PAYEE_ACCOUNT),
@@ -374,7 +374,7 @@ fn resource_info_validates_url_format() {
 fn payment_requirements_validates_layerx_network_format() {
     let valid = PaymentRequirements {
         scheme: "exact".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
         amount: AtomicAmount::from_u128(100),
         asset: "0x".to_owned() + &"ab".repeat(32),
         pay_to: pay_to(PAYEE_ACCOUNT),
@@ -469,7 +469,7 @@ fn wire_encoding_round_trip_preserves_all_fields() {
 fn layerx_offer(pay_to: String, extra: Option<Value>) -> PaymentRequirements {
     PaymentRequirements {
         scheme: "exact".to_owned(),
-        network: "layerx:testnet".to_owned(),
+        network: "layerx:beta".to_owned(),
         amount: AtomicAmount::from_u128(100),
         asset: "0x".to_owned() + &"ab".repeat(32),
         pay_to,

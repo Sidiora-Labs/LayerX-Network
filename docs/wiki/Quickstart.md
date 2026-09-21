@@ -16,7 +16,7 @@ cited to the tree. Related pages: [CLI](Cli.md), [Beta cluster](BetaCluster.md),
 
 Faucet, send, Asset, program, and 402 surfaces are on
 [Payments developer path](PaymentsQuickstart.md). The public endpoint
-checklist is [Getting started](Getting-Started-Testnet.md).
+checklist is [Getting started](Getting-Started-Beta.md).
 Asset encodings: [Assets](Assets.md). Public `POST /rpc`: [Public JSON-RPC](PublicRpc.md).
 `executed` / `batched` / `finalised`:
 [Commitment levels](CommitmentLevels.md).
@@ -210,10 +210,10 @@ current identity sequence through `lx_getSequence`. The examples read
 [402LXP transport](X402Transport.md) for the offer, grant and commitment
 contracts.
 
-The public hosted equivalents are `https://api.testnet.layerx.network/rpc` and
-`wss://api.testnet.layerx.network/rpc/ws`; the faucet origin is
-`https://faucet.testnet.layerx.network`. See
-[Getting started](Getting-Started-Testnet.md) for the public
+The public hosted equivalents are `https://api.layerx.network/rpc` and
+`wss://api.layerx.network/rpc/ws`; the faucet origin is
+`https://faucet.layerx.network`. See
+[Getting started](Getting-Started-Beta.md) for the public
 checklist and [Public JSON-RPC](PublicRpc.md) for every method and typed error.
 
 ---
@@ -248,7 +248,7 @@ and `public_key` (`platform/cli/src/config.rs:19-23`).
 Store the cluster session token (do not print the file contents):
 
 ```sh
-tr -d '\r\n' < "$LAYERX_TEST_AUTH_TOKEN_FILE" | layerx auth set --environment testnet
+tr -d '\r\n' < "$LAYERX_TEST_AUTH_TOKEN_FILE" | layerx auth set --environment beta
 ```
 
 `auth set` reads stdin and saves it (`platform/cli/src/main.rs:153-158,
@@ -260,17 +260,17 @@ operating-system-credential-store}` by default, or
 Bring-up mints that token as `ses_` plus 32 hex, `.`, 64 hex when the source
 is identity-provisioning (`platform/hosted/tests/beta-cluster.sh:1020-1026`).
 
-Bind the hosted profile. `name` must be `emulator`, `testnet`, or `production`
+Bind the hosted profile. `name` must be `emulator`, `beta`, or `production`
 (`platform/cli/src/config.rs:121-126`). `--endpoint`, `--network-id`, and one
 of `--sequencer-trust-anchor` / `--sequencer-trust-anchor-file` must be
 supplied together or omitted together (`platform/cli/src/emulator.rs:751-791`).
 The anchor is 32-byte hex Ed25519 (`platform/cli/src/emulator.rs:821-824`).
 `up` writes `sequencer_public_key` into `build/beta-cluster/identity`
-(`platform/hosted/tests/beta-cluster.sh:1157`). For `testnet`, sequencer
+(`platform/hosted/tests/beta-cluster.sh:1157`). For `beta`, sequencer
 identity is not probed (`platform/cli/src/main.rs:771-805`).
 
 ```sh
-layerx environment use testnet \
+layerx environment use beta \
   --endpoint "$LAYERX_GATEWAY_URL" \
   --network-id 402 \
   --sequencer-trust-anchor "$(sed -n 's/^sequencer_public_key=//p' build/beta-cluster/identity)"
@@ -280,7 +280,7 @@ Human output is `Using LayerX {name}` with data `{name, endpoint, network_id,
 sequencer_trust_anchor}` (`platform/cli/src/main.rs:813-820`). `kind` is
 `environment.selected`.
 
-`layerx auth status --environment testnet` prints whether a token exists
+`layerx auth status --environment beta` prints whether a token exists
 without printing it (`platform/cli/src/main.rs:159-163, 908-919`).
 
 Hosted account create is a different command: `--email`, `--display-name`,
