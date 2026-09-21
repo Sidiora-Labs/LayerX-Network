@@ -107,6 +107,18 @@ def sign(values):
             'publication request checkpoint hash mismatch')
     balances, _, deposits, profile = publication.native_request(api, request, header, digest)
     require(balances, 'publication request carries no owner balance to authorize')
+    require(options.output.is_dir(), 'output directory absent: ' + str(options.output))
+    final = options.output / (digest.hex() + '.json')
+    if final.exists() and not final.is_symlink():
+        # A delivery loop runs this again for a checkpoint that is already authorized. A file that
+        # carries every signature this request needs, all verifying, is the work already done.
+        try:
+            existing = publication.read_authorizations(final)
+            publication.verified_bindings(existing, balances, header, digest)
+            publication.verified_deposit(existing, deposits, profile, header, digest)
+            return final, [], True
+        except (ValueError, KeyError, TypeError):
+            pass
     bindings, deposit = {}, None
     for path in options.merge:
         earlier = publication.read_authorizations(path)
@@ -167,17 +179,19 @@ def sign(values):
             publication.signature(public_bytes(private_key(options.authority)), message, signed)
     require(not missing or options.partial, 'authorization is incomplete, still unsigned: ' + ', '.join(missing)
             + ' (pass --partial to hand it to the next signer)')
-    require(options.output.is_dir(), 'output directory absent: ' + str(options.output))
     destination = options.output / (digest.hex() + ('.partial.json' if missing else '.json'))
+    if destination.exists() and not destination.is_symlink() \
+            and publication.read_authorizations(destination) == value:
+        return destination, missing, True
     require(not destination.exists() and not destination.is_symlink(),
-            'authorization output already exists: ' + str(destination))
+            'a different authorization already exists and is not overwritten: ' + str(destination))
     publication.atomic_json(destination, value)
-    return destination, missing
-
+    return destination, missing, False
 
 if __name__ == '__main__':
     try:
-        written, unsigned = sign(sys.argv[1:])
+        written, unsigned, present = sign(sys.argv[1:])
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise SystemExit('publication signing refused: ' + str(error)) from None
-    print(str(written) + (' (partial; still unsigned: ' + ', '.join(unsigned) + ')' if unsigned else ''))
+    print(str(written) + (' (already delivered, left unchanged)' if present else '')
+          + (' (partial; still unsigned: ' + ', '.join(unsigned) + ')' if unsigned else ''))

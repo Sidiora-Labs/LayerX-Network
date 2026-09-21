@@ -11,6 +11,7 @@ import sys
 import tempfile
 import textwrap
 import threading
+import time
 import unittest
 
 from cryptography.exceptions import InvalidSignature
@@ -21,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / 'tests/fixtures/custody/paxeer-light-v1'
 SIGN = ROOT / 'cmd/layerx-guarantor/publication-sign.py'
 GUARANTOR = ROOT / 'platform/hosted/node/guarantor.sh'
+TREASURY_SIGNER = ROOT / 'platform/hosted/node/signer/signer.py'
 sys.path[:0] = [str(ROOT / 'platform/hosted/node'), str(ROOT / 'platform/hosted/human')]
 
 
@@ -52,6 +54,39 @@ def owner_record(principal, authority, asset):
     account = p.account_id(name)
     tail = (b'\x01' + (1234).to_bytes(16, 'big') + asset + b'\x01' + bytes(16) + b'\x00\x00' + authority + b'\x01')
     return account, b'\x04' + account, len(name).to_bytes(2, 'big') + name + tail
+
+
+def account_witnesses(records, modules):
+    """Module-0 account witnesses for several accounts under one account tree and one state root."""
+    leaves = [p.state_leaf(key, value) for key, value in records]
+    _, account_root = t.merkle(leaves, 0)
+    leaf_path, subtree = t.merkle([p.state_leaf(b'account-tree', account_root)], 0)
+    modules = list(modules)
+    modules[0] = p.state_leaf((0).to_bytes(2, 'big'), subtree)
+    module_path, root = t.merkle(modules, 0)
+    encoded = []
+    for index, (key, value) in enumerate(records):
+        account_path, _ = t.merkle(leaves, index)
+        encoded.append(p.hx((2).to_bytes(2, 'big') + (0).to_bytes(2, 'big') +
+                            len(key).to_bytes(4, 'big') + key + len(value).to_bytes(4, 'big') + value +
+                            index.to_bytes(4, 'big') + len(leaves).to_bytes(4, 'big') +
+                            len(account_path).to_bytes(1, 'big') + b''.join(account_path) +
+                            (0).to_bytes(4, 'big') + (1).to_bytes(4, 'big') +
+                            len(leaf_path).to_bytes(1, 'big') + b''.join(leaf_path) +
+                            len(modules).to_bytes(4, 'big') +
+                            len(module_path).to_bytes(1, 'big') + b''.join(module_path)))
+    return encoded, root
+
+
+def seed_of(key):
+    return key.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
+
+
+def secret(path, data):
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, 'wb') as out:
+        out.write(data)
+    return path
 
 
 class PublicationInputsDirectoryTests(unittest.TestCase):
@@ -208,6 +243,119 @@ class RecipientSignerTests(unittest.TestCase):
         self.assertEqual(verified[0][1:3], (bytes([0x56]) * 20, self.digest))
 
 
+class ComposedAuthorizationTests(unittest.TestCase):
+    """One checkpoint holding a treasury balance, signed over the real treasury signer socket, and a
+    self-custodied owner balance, delivered as a signed partial file, under a policy with no
+    recipient signer."""
+    NETWORK = 7
+    OWNER_RECIPIENT = '0x' + '9a' * 20
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.work = Path(self.directory.name).resolve()
+        self.treasury, self.owner = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+        self.asset = t.sha(b'composed authorization asset')
+        records = []
+        for principal, key in ((public(self.treasury).hex(), self.treasury), ('self-custodied-owner', self.owner)):
+            _, leaf_key, value = owner_record(principal, public(key), self.asset)
+            records.append((leaf_key, value))
+        encoded, root = account_witnesses(records, others())
+        header = ([2, self.NETWORK, 7, 11, 1, 1000] + [p.hx(bytes(32)), p.hx(root)] + [p.hx(bytes(32))] * 5
+                  + [1, p.hx(bytes(32))])
+        self.header = s.values(s.HEADER_TYPES, header)
+        proof = b'composed authorization validity proof'
+        self.digest = s.checkpoint_hash(self.header, proof)
+        self.request = dict(chain_id=125, header=header, checkpoint_id=p.hx(self.digest), validity_proof=p.hx(proof),
+                            attestations=[], native_facts={'balances': encoded, 'withdrawals': [], 'deposits': [],
+                                                           'profile': None})
+        self.balances, _, _, _ = p.native_request(s, self.request, self.header, self.digest)
+        self.assertEqual({fact['authority'] for fact in self.balances}, {public(self.treasury), public(self.owner)})
+        self.inputs = self.work / 'inputs'
+        self.inputs.mkdir(mode=0o700)
+        self.source = self.inputs / (self.digest.hex() + '.json')
+        self.manifest = self.work / (self.digest.hex() + '.publication-request.json')
+        self.manifest.write_text(json.dumps(self.request))
+        self.owner_file = secret(self.work / 'owner.key', seed_of(self.owner).hex().encode())
+        self.socket = self.work / 'treasury-signer.sock'
+        self.policy = dict(treasury=dict(socket=str(self.socket), peer_uid=os.geteuid(), peer_gid=os.getegid(),
+                                         public_key=public(self.treasury).hex(), asset_id=self.asset.hex(),
+                                         recipient='56' * 20), human=None)
+
+    def start_treasury_signer(self):
+        key = secret(self.work / 'treasury.key', seed_of(self.treasury))
+        binding = secret(self.work / 'binding.json', json.dumps(dict(
+            version=1, network_id=self.NETWORK, asset_id=self.asset.hex(), recipient='56' * 20)).encode())
+        log = (self.work / 'treasury-signer.log').open('wb')
+        self.addCleanup(log.close)
+        process = subprocess.Popen([sys.executable, str(TREASURY_SIGNER), '--socket', str(self.socket),
+                                    '--allowed-uid', str(os.getuid()), '--provider', 'file', '--key-file', str(key),
+                                    '--binding-policy', str(binding)], stdout=subprocess.PIPE, stderr=log, cwd=str(ROOT))
+        self.addCleanup(process.wait, 30)
+        self.addCleanup(process.terminate)
+        deadline = time.monotonic() + 30
+        while not self.socket.is_socket():
+            self.assertIsNone(process.poll(), (self.work / 'treasury-signer.log').read_text())
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(.05)
+
+    def deliver(self):
+        completed = subprocess.run([sys.executable, str(SIGN), str(self.manifest), str(self.inputs), '--owner',
+                                    str(self.owner_file) + '=' + self.OWNER_RECIPIENT, '--partial'],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return self.inputs / (self.digest.hex() + '.partial.json')
+
+    def compose(self):
+        delivered, deposit = a.delivered_partial(p, self.source, self.digest)
+        self.assertIsNone(deposit)
+        return a.recipient_bindings(s, p, self.policy, self.balances, self.header, self.digest, delivered)
+
+    def test_socket_signed_and_delivered_bindings_compose_into_one_authorization(self):
+        self.start_treasury_signer()
+        with self.assertRaises(s.AuthorizationPending) as caught:
+            self.compose()
+        self.assertIn('self-custodied-owner', str(caught.exception))
+        self.assertEqual(list(self.inputs.iterdir()), [])
+        self.deliver()
+        bindings = self.compose()
+        authorization = dict(version=2, checkpoint_id=p.hx(self.digest), recipient_bindings=bindings,
+                             deposit_registration=None)
+        verified = p.verified_bindings(authorization, self.balances, self.header, self.digest)
+        recipients = {fact['authority']: recipient for fact, recipient, _, _ in verified}
+        self.assertEqual(recipients, {public(self.treasury): bytes([0x56]) * 20,
+                                      public(self.owner): bytes.fromhex(self.OWNER_RECIPIENT[2:])})
+        p.verified_deposit(authorization, [], None, self.header, self.digest)
+
+    def test_delivered_binding_alone_stays_pending_while_the_treasury_signer_is_away(self):
+        self.deliver()
+        with self.assertRaises(s.AuthorizationPending) as caught:
+            self.compose()
+        self.assertIn('treasury signer', str(caught.exception))
+        self.assertFalse(self.source.exists())
+
+    def test_tampered_delivered_binding_is_a_refusal_even_with_the_treasury_signer_up(self):
+        self.start_treasury_signer()
+        partial = self.deliver()
+        value = json.loads(partial.read_text())
+        value['recipient_bindings'][0]['recipient'] = '0x' + '9b' * 20
+        partial.write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError, 'publication signature invalid'):
+            self.compose()
+        value['checkpoint_id'] = p.hx(t.sha(b'another checkpoint'))
+        partial.write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError, 'delivered authorization version or checkpoint'):
+            self.compose()
+
+    def test_the_owner_tool_alone_never_writes_the_final_file_for_a_mixed_checkpoint(self):
+        completed = subprocess.run([sys.executable, str(SIGN), str(self.manifest), str(self.inputs), '--owner',
+                                    str(self.owner_file) + '=' + self.OWNER_RECIPIENT],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn('incomplete', completed.stderr)
+        self.assertEqual(list(self.inputs.iterdir()), [])
+
+
 class PublicationSigningToolTests(unittest.TestCase):
     RECIPIENT = '0x' + '9a' * 20
 
@@ -358,6 +506,42 @@ class PublicationSigningToolTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn('publication signature invalid', completed.stderr)
         self.assertEqual(list(self.inputs.iterdir()), [])
+
+    def test_repeated_delivery_leaves_a_valid_authorization_alone(self):
+        self.signed()
+        path = self.inputs / (self.digest.hex() + '.json')
+        before = path.read_bytes()
+        again = self.sign('--owner', str(self.owner_file) + '=' + self.RECIPIENT,
+                          '--checkpoint-authority-key', str(self.authority_file))
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertIn('already delivered', again.stdout)
+        self.assertEqual(path.read_bytes(), before)
+        loop = self.sign('--owner', str(self.owner_file) + '=' + self.RECIPIENT, '--partial')
+        self.assertEqual(loop.returncode, 0, loop.stderr)
+        self.assertEqual([item.name for item in self.inputs.iterdir()], [path.name])
+
+    def test_repeated_partial_delivery_is_unchanged_and_a_different_file_is_not_overwritten(self):
+        options = ('--owner', str(self.owner_file) + '=' + self.RECIPIENT, '--partial')
+        self.assertEqual(self.sign(*options).returncode, 0)
+        partial = self.inputs / (self.digest.hex() + '.partial.json')
+        before = partial.read_bytes()
+        again = self.sign(*options)
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertIn('already delivered', again.stdout)
+        self.assertEqual(partial.read_bytes(), before)
+        other = self.sign('--owner', str(self.owner_file) + '=0x' + '9b' * 20, '--partial')
+        self.assertNotEqual(other.returncode, 0)
+        self.assertIn('not overwritten', other.stderr)
+        self.assertEqual(partial.read_bytes(), before)
+        final = self.inputs / (self.digest.hex() + '.json')
+        value = json.loads(before)
+        value['recipient_bindings'][0]['signature'] = p.hx(bytes(64))
+        final.write_text(json.dumps(value))
+        invalid = final.read_bytes()
+        refused = self.sign('--merge', str(partial), '--checkpoint-authority-key', str(self.authority_file))
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn('not overwritten', refused.stderr)
+        self.assertEqual(final.read_bytes(), invalid)
 
     def test_unprotected_key_and_altered_request_are_refused(self):
         self.owner_file.chmod(0o644)

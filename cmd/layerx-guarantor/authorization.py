@@ -197,6 +197,48 @@ def sign_deposit(publication, policy, expected_public, message):
         os.close(descriptor)
 
 
+def delivered_partial(publication, source, digest):
+    # Owners that hold their own key deliver their bindings as <checkpoint-id>.partial.json
+    # (publication-sign.py --partial) beside the file this authorizer writes. They are merged with
+    # the bindings the signer sockets produce, so one checkpoint may draw on both sources.
+    path = source.with_name(digest.hex() + '.partial.json')
+    if not path.exists() and not path.is_symlink():
+        return {}, None
+    value = publication.read_authorizations(path)
+    fields(value, 'version checkpoint_id recipient_bindings deposit_registration')
+    require(type(value['version']) is int and value['version'] == 2
+            and publication.raw(value['checkpoint_id'], 32) == digest
+            and type(value['recipient_bindings']) is list, 'delivered authorization version or checkpoint')
+    bindings = {}
+    for item in value['recipient_bindings']:
+        key = publication.raw(item['account'], 32), publication.raw(item['asset'], 32)
+        require(key not in bindings, 'delivered recipient binding repeated')
+        bindings[key] = item
+    return bindings, value['deposit_registration']
+
+
+def recipient_bindings(api, publication, policy, balances, header, digest, delivered):
+    known = {(fact['account'], fact['asset']): fact for fact in balances}
+    require(set(delivered) <= set(known), 'delivered recipient binding for a balance outside this checkpoint')
+    document = dict(version=2, checkpoint_id=publication.hx(digest))
+    publication.verified_bindings(dict(document, recipient_bindings=list(delivered.values())),
+                                  [fact for key, fact in known.items() if key in delivered], header, digest)
+    bindings, pending = [], None
+    for fact in balances:
+        item = delivered.get((fact['account'], fact['asset']))
+        if item is None:
+            try:
+                item = recipient_binding(api, publication, policy, fact, header, digest)
+            except api.AuthorizationPending as error:
+                pending = pending or error
+                continue
+        bindings.append(item)
+    if pending is not None:
+        raise pending
+    publication.verified_bindings(dict(document, recipient_bindings=bindings), balances, header, digest)
+    return bindings
+
+
 def private_output(source, digest):
     info = source.parent.lstat()
     require(source.parent.is_absolute() and source.parent.resolve() == source.parent
@@ -211,9 +253,14 @@ def authorize(api, publication, rpc, request, source, policy_path):
     balances, _, deposits, profile = publication.native_request(api, request, header, digest)
     require(balances, 'authorization requires native owner balances')
     private_output(source, digest)
-    bindings = [recipient_binding(api, publication, policy, fact, header, digest) for fact in balances]
-    deposit = None
-    if deposits:
+    delivered, deposit = delivered_partial(publication, source, digest)
+    bindings = recipient_bindings(api, publication, policy, balances, header, digest, delivered)
+    if deposit is not None:
+        message, signed, _, vault, _ = publication.verified_deposit(
+            dict(deposit_registration=deposit), deposits, profile, header, digest)
+        require(publication.raw(vault, 20) == unhex(policy['vault'], 20), 'authorization native vault mismatch')
+        publication.signature(rpc.view(vault, 'depositRootAuthority()', outputs=('bytes32',))[0], message, signed)
+    elif deposits:
         vault = unhex(policy['vault'], 20)
         require(profile is not None and profile[13:33] == vault, 'authorization native vault mismatch')
         reference = unhex(policy['custody_reference'], 32)

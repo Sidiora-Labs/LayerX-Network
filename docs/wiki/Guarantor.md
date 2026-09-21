@@ -224,6 +224,15 @@ An operator running the guarantor by hand has the same two options:
   and verifies. It runs as the user that owns the inputs directory and needs the
   packages in `cmd/layerx-guarantor/requirements.txt`.
 
+The two options compose. With a policy in place, an owner that holds its own
+key runs the tool with `--partial` straight into
+`LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR`; the producer merges that
+`<checkpoint-id>.partial.json` with the bindings its signer sockets produce,
+verifies every binding, and writes `<checkpoint-id>.json` only when all of them
+are present. Running the tool again for a checkpoint whose file is already there
+and valid exits 0 and leaves it unchanged; a different existing file is never
+overwritten.
+
 A signer that cannot be reached is treated exactly like a file that has not
 arrived: the publication is pending. A signer that answers with a refusal, or a
 signature that does not verify, is a refusal and stops the producer.
