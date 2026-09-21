@@ -28,25 +28,33 @@ custody and settlement, not additional module ordinals.
 
 ## CREDIT
 
-Payload is exactly `LXP_BRIDGE_CREDIT_BYTES` (427). Decode copies the bytes
+Payload is the 363-byte `LXDC3` head (`LXP_BRIDGE_CREDIT_BYTES`) followed by
+the `LXLB1` light-client bundle: at least
+`LXP_BRIDGE_CREDIT_MIN_PAYLOAD_BYTES` (368) and at most
+`LXP_MAX_PAYLOAD_BYTES`. The committed vectors in
+`tests/fixtures/custody/paxeer-light-v1` are 1495 bytes. Decode copies the
+head and keeps the bundle by reference
 (`src/modules/bridge/lxp_bridge_credit.c`). `lxp_bridge_credit_verify`
 checks:
 
-- magic `LXDC1` or `LXDC2`
-- profile digest, network, protocol, deposit digest, asset id, beneficiary,
-  attestation key, amounts, block/finality fields
-- Ed25519 over the 363-byte signed prefix (`LXP_BRIDGE_CREDIT_SIGNED_BYTES`)
+- magic `LXDC3` and protocol 3
+- profile digest, network, deposit id, asset id, beneficiary, owner key,
+  depositor, amount, nonce, and the recomputed
+  `LXP/Paxeer/custody-deposit/v1` deposit-id preimage
+- the bundle SHA-256 carried by the head, then the Tendermint light-client
+  proof of the `layerxcustody` `Deposit` record against the trusted header
+  (`src/modules/bridge/lxp_bridge_light.c`)
 
 Requirement 24 acceptance 11: Comet chain `hyperpax_125-1` mapped to EVM
-chain 125 uses profile `LXBC2` and credit `LXDC2` with signature domain
-`LX:CUSTODY:CREDIT:v2`. The 207-byte profile (`LXP_BRIDGE_PROFILE_BYTES`) and
-427-byte credit preserve identity, beneficiary, asset, amount, nonce, and
-deposit-nullifier fields. Offsets 215, 223, 255, 287, 295, 327, and 359 are
-state height H, signed header H+1 hash, H application root, finalized height
-F, signed header F+1 hash, retained proof-bundle SHA-256, and proof-kind 1.
-Those fields are not a transaction hash, log index, or Ethereum receipt
-root. `LXBC1` / `LXDC1` keep the Ethereum layout. Profile and credit versions
-must match.
+chain 125 uses profile `LXBC3` and credit `LXDC3`. The 223-byte profile
+(`LXP_BRIDGE_PROFILE_BYTES`) and the 363-byte credit head preserve identity,
+beneficiary, asset, amount, nonce, and deposit-nullifier fields. Offsets 215,
+223, 255, 287, 295, 327, and 359 are state height H, signed header H+1 hash,
+its application root, signed header height H+1, that header's validators
+hash, the retained proof-bundle SHA-256, and proof-kind 2. Those fields are
+not a transaction hash, log index, or Ethereum receipt root. There is no
+custody attestor key and no signature over the head: the deposit record is
+proven, not attested.
 
 Execute (`lxp_ctx_bridge_credit`) refusals include
 `LXP_ERR_UNAUTHORIZED_DEBIT`, envelope and signature errors,

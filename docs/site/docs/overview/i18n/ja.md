@@ -2,12 +2,12 @@
 
 LayerX Network は自律エージェント向けの決定的実行および会計ネットワークです。
 
-[English](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/README.md) · [Español](es.md) · 日本語 · [Русский](ru.md) · [简体中文](zh-cn.md) · [Português](pt-br.md) · [Deutsch](de.md) · [Français](fr.md)
+[English](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/README.md) · [Español](es.md) · 日本語 · [Русский](ru.md) · [简体中文](zh-cn.md) · [Português](pt-br.md) · [Deutsch](de.md) · [Français](fr.md)
 
 *内容が異なる場合は、英語版 README を参照版とします。*
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/LICENSE)
-[![CI](https://github.com/Sidiora-Labs/LayerX-Network/actions/workflows/ci.yml/badge.svg)](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/.github/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/LICENSE)
+[![CI](https://github.com/Sidiora-Labs/Paxeer-X-Network/actions/workflows/ci.yml/badge.svg)](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/.github/workflows/ci.yml)
 
 ## LayerX Network とは
 
@@ -17,7 +17,7 @@ LayerX Network は自律エージェント向けの決定的実行および会�
 
 通常のエージェント Activity は LayerX 内で実行および順序付けされます。定期チェックポイントは Paxeer に決済され、Paxeer はカストディ、チェックポイント登録、保証人ボンド、チャレンジ、出金、紛争、緊急退出を保持します。通常の LayerX 操作に Paxeer トランザクションは不要です。
 
-本リポジトリは LayerX Network および Paxeer Network 向けの Sidiora Labs モノレポです。同一配置により、プロトコル、決済ネットワーク、コントラクト、開発者向け面を一箇所で監査できます。各サブシステムは独自のビルド、リリース、デプロイ、信頼境界を維持します。[`spec/layerx-protocol/design.md`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/spec/layerx-protocol/design.md) を参照してください。
+本リポジトリは LayerX Network および Paxeer Network 向けの Sidiora Labs モノレポです。同一配置により、プロトコル、決済ネットワーク、コントラクト、開発者向け面を一箇所で監査できます。各サブシステムは独自のビルド、リリース、デプロイ、信頼境界を維持します。[`spec/layerx-protocol/design.md`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/spec/layerx-protocol/design.md) を参照してください。
 
 ## テストネットを試す
 
@@ -113,7 +113,7 @@ make paxeer-ci
 - Wiki 索引: [`docs/wiki/Home.md`](../../index.md)
 - モノレポ構成とリリースタグ: [`docs/MONOREPO.md`](../monorepo.md)
 - 適格化ゲート: [`docs/QUALIFICATION.md`](../../operators/qualification.md)
-- 仕様: [`spec/`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/spec/)
+- 仕様: [`spec/`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/spec/)
 
 ## SDK と統合
 
@@ -131,14 +131,14 @@ make paxeer-ci
 
 ## コントリビューション
 
-プルリクエストを開く前に [`CONTRIBUTING.md`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/CONTRIBUTING.md) を読んでください。プロトコル変更は `spec/` から始めます。疑わしい脆弱性を公開 Issue に記載しないでください。[`SECURITY.md`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/SECURITY.md) に従ってください。
+プルリクエストを開く前に [`CONTRIBUTING.md`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/CONTRIBUTING.md) を読んでください。プロトコル変更は `spec/` から始めます。疑わしい脆弱性を公開 Issue に記載しないでください。[`SECURITY.md`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/SECURITY.md) に従ってください。
 
 ## セキュリティ
 
-脆弱性は GitHub の非公開報告機能で報告してください。手順は [`SECURITY.md`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/SECURITY.md) にあります。
+脆弱性は GitHub の非公開報告機能で報告してください。手順は [`SECURITY.md`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/SECURITY.md) にあります。
 
 ## ライセンス
 
-Apache License, Version 2.0 のもとでライセンスされます。[`LICENSE`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/LICENSE) および [`NOTICE`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/NOTICE) を参照してください。
+Apache License, Version 2.0 のもとでライセンスされます。[`LICENSE`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/LICENSE) および [`NOTICE`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/NOTICE) を参照してください。
 
 LayerX Network は Sidiora Labs が開発しています。

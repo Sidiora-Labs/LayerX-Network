@@ -2,10 +2,16 @@
 
 #include "layerx/lxp_daemon.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_paxeer.h"
+#include "lxp_daemon_finality_authority.h"
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -184,6 +190,303 @@ static int run_window(
     return 0;
 }
 
+enum { HTTP_CAPACITY = 262143, HTTP_BUFFER = 262144 };
+
+typedef struct http_case {
+    const char *name;
+    const char *text;
+    lxp_daemon_http_parse expected;
+    const char *body;
+} http_case;
+
+static const char HTTP_CHUNKED_OK[] =
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Type: application/json\r\n"
+    "Transfer-Encoding: chunked\r\n"
+    "\r\n"
+    "9\r\n{\"result\"\r\n"
+    "6\r\n:true}\r\n"
+    "0\r\n\r\n";
+
+static const http_case HTTP_CASES[] = {
+    {"identity body",
+     "HTTP/1.1 200 OK\r\nContent-Length: 15\r\n\r\n{\"result\":true}",
+     LXP_DAEMON_HTTP_COMPLETE, "{\"result\":true}"},
+    {"identity short",
+     "HTTP/1.1 200 OK\r\nContent-Length: 15\r\n\r\n{\"result\":tru",
+     LXP_DAEMON_HTTP_INCOMPLETE, NULL},
+    {"identity overrun",
+     "HTTP/1.1 200 OK\r\nContent-Length: 14\r\n\r\n{\"result\":true}",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"chunked body", HTTP_CHUNKED_OK,
+     LXP_DAEMON_HTTP_COMPLETE, "{\"result\":true}"},
+    {"chunked mixed case and trailer",
+     "HTTP/1.1 200 OK\r\ntransfer-encoding:  CHUNKED \r\n\r\n"
+     "A\r\n0123456789\r\n6\r\nabcdef\r\n0\r\nX-Checksum: 1\r\n\r\n",
+     LXP_DAEMON_HTTP_COMPLETE, "0123456789abcdef"},
+    {"http/1.0 chunked",
+     "HTTP/1.0 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nokay\r\n0\r\n\r\n",
+     LXP_DAEMON_HTTP_COMPLETE, "okay"},
+    {"chunked truncated terminator",
+     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nokay\r\n0\r\n",
+     LXP_DAEMON_HTTP_INCOMPLETE, NULL},
+    {"chunked truncated data",
+     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nok",
+     LXP_DAEMON_HTTP_INCOMPLETE, NULL},
+    {"chunk extension rejected",
+     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+     "4;name=value\r\nokay\r\n0\r\n\r\n",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"chunk size not hex",
+     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nokay\r\n0\r\n\r\n",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"chunk size missing",
+     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n\r\nokay\r\n0\r\n\r\n",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"chunk size digits unbounded",
+     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+     "00000000000000004\r\nokay\r\n0\r\n\r\n",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"chunk size above capacity",
+     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nffffffff\r\nokay\r\n",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"chunk data unterminated",
+     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nokayXX0\r\n\r\n",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"chunk line lone carriage return",
+     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\rokay\r\n0\r\n\r\n",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"chunked body empty",
+     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"chunked trailing bytes",
+     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nokay\r\n0\r\n\r\nx",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"chunked trailer without colon",
+     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+     "4\r\nokay\r\n0\r\nbogus\r\n\r\n",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"length and chunked together",
+     "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\n\r\n"
+     "4\r\nokay\r\n0\r\n\r\n",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"transfer encoding not chunked",
+     "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\n4\r\nokay\r\n0\r\n\r\n",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"transfer encoding repeated",
+     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n"
+     "Transfer-Encoding: chunked\r\n\r\n4\r\nokay\r\n0\r\n\r\n",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"transfer encoding with trailing token",
+     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked, gzip\r\n\r\n"
+     "4\r\nokay\r\n0\r\n\r\n",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"framing absent", "HTTP/1.1 200 OK\r\nServer: paxd\r\n\r\n{}",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"status not ok",
+     "HTTP/1.1 500 Internal Server Error\r\nTransfer-Encoding: chunked\r\n\r\n"
+     "4\r\nokay\r\n0\r\n\r\n",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"header without colon",
+     "HTTP/1.1 200 OK\r\nbogus\r\nTransfer-Encoding: chunked\r\n\r\n"
+     "4\r\nokay\r\n0\r\n\r\n",
+     LXP_DAEMON_HTTP_MALFORMED, NULL},
+    {"headers incomplete", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n",
+     LXP_DAEMON_HTTP_INCOMPLETE, NULL}};
+
+static int http_parse_cases(void)
+{
+    static char buffer[HTTP_BUFFER];
+    size_t i;
+    for (i = 0U; i < sizeof(HTTP_CASES) / sizeof(HTTP_CASES[0]); ++i) {
+        const http_case *item = &HTTP_CASES[i];
+        lxp_daemon_http_response message;
+        size_t length = strlen(item->text);
+        lxp_daemon_http_parse parsed;
+        (void)memset(&message, 0, sizeof(message));
+        (void)memcpy(buffer, item->text, length);
+        parsed = lxp_daemon_http_response_parse(
+            buffer, length, HTTP_CAPACITY, &message);
+        if (parsed != item->expected) {
+            (void)fprintf(
+                stderr, "test_layerxd: http case %s: parsed %d expected %d\n",
+                item->name, (int)parsed, (int)item->expected);
+            return 1;
+        }
+        if (item->body == NULL) continue;
+        if (message.body_length != strlen(item->body) ||
+            memcmp(buffer + message.body_offset, item->body,
+                   message.body_length) != 0) {
+            (void)fprintf(
+                stderr, "test_layerxd: http case %s: body mismatch\n",
+                item->name);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int http_oversize_header(void)
+{
+    static char buffer[HTTP_BUFFER];
+    lxp_daemon_http_response message;
+    size_t length = 8193U;
+    (void)memset(&message, 0, sizeof(message));
+    (void)memset(buffer, 'a', length);
+    (void)memcpy(buffer, "HTTP/1.1 200 OK\r\n", 17U);
+    return lxp_daemon_http_response_parse(
+               buffer, length, HTTP_CAPACITY, &message) !=
+           LXP_DAEMON_HTTP_MALFORMED;
+}
+
+static int http_incremental_chunked(void)
+{
+    static char buffer[HTTP_BUFFER];
+    size_t length = sizeof(HTTP_CHUNKED_OK) - 1U;
+    size_t prefix;
+    for (prefix = 0U; prefix <= length; ++prefix) {
+        lxp_daemon_http_response message;
+        lxp_daemon_http_parse parsed;
+        lxp_daemon_http_parse expected = prefix == length
+            ? LXP_DAEMON_HTTP_COMPLETE : LXP_DAEMON_HTTP_INCOMPLETE;
+        (void)memset(&message, 0, sizeof(message));
+        (void)memcpy(buffer, HTTP_CHUNKED_OK, prefix);
+        parsed = lxp_daemon_http_response_parse(
+            buffer, prefix, HTTP_CAPACITY, &message);
+        if (parsed != expected) {
+            (void)fprintf(
+                stderr,
+                "test_layerxd: chunked prefix %zu: parsed %d expected %d\n",
+                prefix, (int)parsed, (int)expected);
+            return 1;
+        }
+        if (parsed == LXP_DAEMON_HTTP_COMPLETE &&
+            (message.body_length != 15U ||
+             memcmp(buffer + message.body_offset, "{\"result\":true}",
+                    15U) != 0))
+            return 1;
+    }
+    return 0;
+}
+
+typedef struct rpc_server {
+    int listener;
+    const char *response;
+    size_t length;
+} rpc_server;
+
+static void *serve_response(void *context)
+{
+    rpc_server *server = (rpc_server *)context;
+    char request[4096];
+    int client = accept(server->listener, NULL, NULL);
+    ssize_t count;
+    if (client < 0) return NULL;
+    count = recv(client, request, sizeof(request), 0);
+    if (count > 0)
+        (void)send(client, server->response, server->length, MSG_NOSIGNAL);
+    (void)close(client);
+    return NULL;
+}
+
+static void hex_address(const uint8_t *bytes, size_t length, char *text)
+{
+    static const char digits[] = "0123456789abcdef";
+    size_t i;
+    text[0] = '0';
+    text[1] = 'x';
+    for (i = 0U; i < length; ++i) {
+        text[2U + i * 2U] = digits[bytes[i] >> 4U];
+        text[3U + i * 2U] = digits[bytes[i] & 15U];
+    }
+    text[2U + length * 2U] = '\0';
+}
+
+static int finality_rpc_case(
+    const char *response, size_t length, lxp_result expected,
+    lxp_daemon_anchor_ladder expected_ladder)
+{
+    lxp_daemon_finality_authority authority;
+    struct sockaddr_in address;
+    socklen_t address_length = sizeof(address);
+    rpc_server server;
+    pthread_t thread;
+    char anchor[43], port[16];
+    lxp_daemon_anchor_ladder ladder = LXP_DAEMON_ANCHOR_INSTANT;
+    lxp_result status;
+    int listener = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (listener < 0) return 1;
+    (void)memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(listener, (const struct sockaddr *)&address, sizeof(address)) !=
+            0 ||
+        listen(listener, 1) != 0 ||
+        getsockname(listener, (struct sockaddr *)&address, &address_length) !=
+            0) {
+        (void)close(listener);
+        return 1;
+    }
+    hex_address(lxp_paxeer_anchor_address, 20U, anchor);
+    (void)snprintf(
+        port, sizeof(port), "%u", (unsigned)ntohs(address.sin_port));
+    if (setenv("LAYERX_NODE_PAXEER_RPC_ADDRESS", "127.0.0.1", 1) != 0 ||
+        setenv("LAYERX_NODE_PAXEER_CHAIN_ID", "9125", 1) != 0 ||
+        setenv("LAYERX_NODE_PAXEER_RPC_PORT", port, 1) != 0 ||
+        setenv("LAYERX_NODE_SETTLEMENT_CONTRACT", anchor, 1) != 0 ||
+        setenv("LAYERX_NODE_CHECKPOINT_REGISTRY", anchor, 1) != 0 ||
+        lxp_daemon_finality_authority_init_pins(&authority) != LXP_OK) {
+        (void)close(listener);
+        return 1;
+    }
+    server.listener = listener;
+    server.response = response;
+    server.length = length;
+    if (pthread_create(&thread, NULL, serve_response, &server) != 0) {
+        (void)close(listener);
+        return 1;
+    }
+    status = lxp_daemon_finality_authority_ladder(&authority, 1U, &ladder);
+    (void)pthread_join(thread, NULL);
+    (void)close(listener);
+    if (status != expected) {
+        (void)fprintf(
+            stderr, "test_layerxd: finality rpc status %d expected %d\n",
+            status, expected);
+        return 1;
+    }
+    return status == LXP_OK && ladder != expected_ladder;
+}
+
+static int finality_rpc_chunked(void)
+{
+    static const char body[] =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"0x"
+        "0000000000000000000000000000000000000000000000000000000000000002\"}";
+    char response[512];
+    size_t length = sizeof(body) - 1U;
+    size_t split = 40U;
+    int written = snprintf(
+        response, sizeof(response),
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Transfer-Encoding: chunked\r\n\r\n"
+        "%zx\r\n%.*s\r\n%zx\r\n%s\r\n0\r\n\r\n",
+        split, (int)split, body, length - split, body + split);
+    if (written < 0 || (size_t)written >= sizeof(response)) return 1;
+    return finality_rpc_case(
+        response, (size_t)written, LXP_OK, LXP_DAEMON_ANCHOR_FINAL);
+}
+
+static int finality_rpc_malformed_chunked(void)
+{
+    static const char response[] =
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+        "zz\r\n{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"0x00\"}\r\n0\r\n\r\n";
+    return finality_rpc_case(
+        response, sizeof(response) - 1U, LXP_ERR_IO,
+        LXP_DAEMON_ANCHOR_INSTANT);
+}
+
 int main(void)
 {
     char parallel_path[64] = "/tmp/layerxd-parallel-XXXXXX";
@@ -199,6 +502,13 @@ int main(void)
     uint8_t parallel_root[32];
     uint8_t serial_root[32];
     uint64_t restart_sequence;
+
+    REQUIRE(http_parse_cases() == 0, "http response cases");
+    REQUIRE(http_oversize_header() == 0, "http header bound");
+    REQUIRE(http_incremental_chunked() == 0, "chunked reassembly");
+    REQUIRE(finality_rpc_chunked() == 0, "chunked finality rpc");
+    REQUIRE(finality_rpc_malformed_chunked() == 0,
+            "malformed chunked finality rpc");
 
     REQUIRE(write_config(
         parallel_path, "sequencer", 0U, 2U, false) == 0,

@@ -1,6 +1,6 @@
 # Running an agent
 
-At the end of this path the operator has a `testnet` CLI profile, one
+At the end of this path the operator has a `beta` CLI profile, one
 Ed25519 key in operating-system credential storage, an agent daemon
 that has enrolled and published a binding document, an MCP server
 registered into an agent-runtime host document against that document,
@@ -63,7 +63,7 @@ inventory.
 Required command:
 
 ```
-layerx environment use testnet --endpoint <url> --network-id <id> \
+layerx environment use beta --endpoint <url> --network-id <id> \
   --sequencer-trust-anchor <hex>
 ```
 
@@ -74,12 +74,12 @@ inputs must be supplied together or omitted together
 (`platform/cli/src/emulator.rs:751-791`). Omitting them selects an
 already-configured `beta` profile
 (`platform/cli/src/main.rs:745-764`). The name must be `emulator`,
-`testnet`, or `production`
+`beta`, or `production`
 (`platform/cli/src/config.rs:121-126`).
 
 Non-loopback endpoints must use `https://`
 (`platform/cli/src/http.rs:27-37`). The public gateway Ingress host
-in `layerx-testnet` is `api.testnet.layerx.network`
+in `layerx-testnet` is `api.layerx.network`
 (`platform/hosted/gateway/deployment.yaml:182, 190-192`). The CLI
 does not default that URL.
 
@@ -106,7 +106,7 @@ normalised path, not an `https://` URL
 
 ```
 layerx key create <name>
-printf '%s\n' "<identity-session>" | layerx auth set --environment testnet
+printf '%s\n' "<identity-session>" | layerx auth set --environment beta
 ```
 
 `key create` stores a 32-byte OS-random Ed25519 seed under keyring

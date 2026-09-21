@@ -37,7 +37,7 @@ exposes Service `layerx-faucet-public` port `443` to container `9443`
 `platform/hosted/testnet/deployment.yaml:174-181`). That Service is
 `type: LoadBalancer` with `externalTrafficPolicy: Local`. Beta-cluster
 render appends Ingress `layerx-faucet-public` host
-`faucet.testnet.layerx.network` (override `LAYERX_BETA_FAUCET_HOST`)
+`faucet.layerx.network` (override `LAYERX_BETA_FAUCET_HOST`)
 path `/` backend that Service
 (`platform/hosted/tests/beta-cluster.sh:74`;
 `platform/hosted/tests/beta-cluster.sh:837-854`). Bring-up
@@ -47,7 +47,7 @@ port-forwards `19445:443` and exports `LAYERX_FAUCET_URL`
 `platform/hosted/tests/beta-cluster.sh:1260`;
 `platform/hosted/tests/beta-cluster.sh:1280`). Library
 `platform_testnet` names the same faucet origin
-`https://faucet.testnet.layerx.network`
+`https://faucet.layerx.network`
 (`platform/hosted/testnet/src/lib.rs:77`). The source Deployment has
 no Ingress object; the cluster apply path adds one. Those two
 manifests differ.
@@ -58,7 +58,7 @@ The developer payments path that starts with this claim is
 This page covers that binary, its Redis, and the claim path through
 control. It does not document treasury SEND construction.
 That path is on [Hosted core](HostedCore.md). Journey admission is on
-[Hosted control](HostedTestnetControl.md). Session minting is
+[Hosted control](HostedBetaControl.md). Session minting is
 on [Hosted identity](HostedIdentity.md).
 
 ---

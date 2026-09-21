@@ -113,7 +113,7 @@ enum Command {
     New(NewArgs),
     /// Install, build, and test every repository module from one visual workspace.
     Workspace(workspace::WorkspaceArgs),
-    /// Inspect or switch the emulator, testnet, and production endpoint.
+    /// Inspect or switch the emulator, beta, and production endpoint.
     #[command(subcommand)]
     Environment(EnvironmentCommand),
     /// Manage Ed25519 keys in the selected credential store.
@@ -127,7 +127,7 @@ enum Command {
     Account(AccountCommand),
     /// Register a self-service identity principal for one local signing key.
     Register(register::RegisterArgs),
-    /// Claim one testnet faucet grant for the active identity and local key.
+    /// Claim one beta faucet grant for the active identity and local key.
     Faucet(faucet::FaucetArgs),
     /// Quote and commit a real test payment through the active endpoint.
     #[command(subcommand)]
@@ -721,7 +721,7 @@ fn environment_of(data: &Value) -> &str {
 fn serving_configuration(environment: Option<String>) -> Result<Configuration, String> {
     let mut configuration = Configuration::load()?;
     if let Some(name) = environment {
-        Configuration::validate_environment_name(&name)?;
+        let name = Configuration::canonical_environment_name(&name)?;
         if !configuration.environments.contains_key(&name) {
             return Err(format!(
                 "environment {name} is not configured; run layerx environment use {name} --endpoint <url> --network-id <id>"
@@ -795,7 +795,7 @@ fn environment(command: EnvironmentCommand) -> Result<CommandOutput, String> {
             sequencer_trust_anchor,
             sequencer_trust_anchor_file,
         } => {
-            Configuration::validate_environment_name(&name)?;
+            let name = Configuration::canonical_environment_name(&name)?;
             let bound = emulator::resolve_inputs(emulator::EnvironmentInputs {
                 endpoint,
                 network_id,
@@ -1500,8 +1500,7 @@ fn selected_environment(
     selected: Option<String>,
 ) -> Result<String, String> {
     let name = selected.unwrap_or_else(|| configuration.current_environment.clone());
-    Configuration::validate_environment_name(&name)?;
-    Ok(name)
+    Configuration::canonical_environment_name(&name)
 }
 
 fn emulator_arguments(arguments: EmulatorUpArgs) -> Vec<String> {

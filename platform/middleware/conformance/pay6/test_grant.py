@@ -58,7 +58,7 @@ class GrantTests(unittest.TestCase):
         r = decode_receive(wire)
         offer = dict(
             scheme="subscription",
-            network="layerx:testnet",
+            network="layerx:beta",
             maxTimeoutSeconds=30,
             asset=r["asset"],
             amount=r["amount"],

@@ -187,7 +187,7 @@ pub fn description(name: &str) -> &'static str {
             "Sign and submit a canonical payment from the installation-bound account and asset."
         }
         "faucet.request" => {
-            "Claim one bounded testnet faucet grant for the stored identity session, the named DID, and the named signer key."
+            "Claim one bounded beta faucet grant for the stored identity session, the named DID, and the named signer key."
         }
         _ => "This tool is not served by this deployment.",
     }

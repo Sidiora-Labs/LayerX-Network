@@ -27,7 +27,7 @@ class HttpTests(unittest.TestCase):
         f = self.fixture
         self.offer = dict(
             scheme="exact",
-            network="layerx:testnet",
+            network="layerx:beta",
             amount=f.offer["amount"],
             asset=f.offer["asset"],
             payTo=f.offer["pay_to"],
@@ -71,7 +71,7 @@ class HttpTests(unittest.TestCase):
             PaymentRpc("http://127.0.0.1:1/rpc"),
             self.fixture.signatures,
             self.authority,
-            [("exact", "layerx:testnet")],
+            [("exact", "layerx:beta")],
         )
         verified = buyer.capture_settlement(first[1]["PAYMENT-RESPONSE"], header)
         self.assertEqual(verified.canonical_bytes, self.fixture.wire)
@@ -154,7 +154,7 @@ class HttpTests(unittest.TestCase):
                 PaymentRpc("http://127.0.0.1:1/rpc"),
                 self.fixture.signatures,
                 self.authority,
-                [("exact", "layerx:testnet")],
+                [("exact", "layerx:beta")],
             )
             response = buyer.fetch(
                 f"http://127.0.0.1:{server.server_port}/paid",

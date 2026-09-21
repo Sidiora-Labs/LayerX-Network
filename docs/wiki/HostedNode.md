@@ -166,8 +166,8 @@ that ConfigMap from the authoritative Asset records before the
 node manifest is applied.
 
 `--custody-profile` must name a readable regular file that is
-not a symlink and is exactly 207 bytes
-(`platform/hosted/node/bootstrap.sh:196-201`). When set,
+not a symlink and is exactly 223 bytes
+(`platform/hosted/node/bootstrap.sh:292-297`). When set,
 `layerx-genesis-build` receives `--custody-profile` and
 bootstrap does not write `genesis.registration`
 (`platform/hosted/node/bootstrap.sh:405-407`;

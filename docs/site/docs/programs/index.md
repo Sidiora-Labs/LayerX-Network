@@ -536,13 +536,14 @@ a zero `custody-issued:` supply key (`src/protocol/lxp_genesis.c:549-553`).
 
 Custody credit is Bridge module 8 ordinal 1:
 `LXP_BRIDGE_CREDIT = (8U << 16U) | 1U`. It exists only when genesis carries
-the 207-byte profile under key `custody-credit-profile/v1` (`LXBC1` … protocol
+the 223-byte profile under key `custody-credit-profile/v1` (`LXBC3` … protocol
 bytes `0, 3`). Profile genesis requires protocol 3
 (`lxp_bridge_genesis_profile`). Credit verify and credit validate also
 require protocol 3. The activity actor must be `LXP_AUTHORITY_OWNER`.
 
-Credit does not preallocate balances. It issues against a finalized external
-deposit into the pinned vault, then `lxp_ctx_bridge_credit`
+Credit does not preallocate balances. It issues against a Paxeer deposit
+proven by light client against the profile's trusted header, then
+`lxp_ctx_bridge_credit`
 (`src/protocol/lxp_module_ctx.c:1215`) credits the beneficiary main account via
 `402LXP`. That account can then pay CALL fees and ABI-2 `PROGRAM_FUNDING`
 legs into `module:programs:value:<account-id>` accounts. A principal can

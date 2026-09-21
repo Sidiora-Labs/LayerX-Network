@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 enum { RPC_CAPACITY = 262144, TOKEN_CAPACITY = 16384, RPC_TIMEOUT_MS = 5000 };
+enum { HEADER_LIMIT = 8192, CHUNK_SIZE_DIGITS = 16, TRAILER_LINE_LIMIT = 1024 };
 typedef struct json_token { const char *text; size_t length; size_t end; char kind; } json_token;
 typedef struct json_document { json_token *tokens; size_t count; const char *cursor; const char *end; } json_document;
 
@@ -176,12 +177,121 @@ static int ready(int fd, short events, int64_t deadline)
         if (status == 0 || errno != EINTR) return -1;
     }
 }
+static const char *crlf(const char *data, size_t length)
+{
+    size_t i;
+    for (i = 0U; i + 1U < length; ++i) { if (data[i] == '\r' && data[i + 1U] == '\n') return data + i; }
+    return NULL;
+}
+static lxp_daemon_http_parse chunked_body(char *data, size_t length, size_t limit, char *out, size_t *consumed, size_t *decoded)
+{
+    size_t offset = 0U, total = 0U;
+    for (;;) {
+        size_t digits = 0U, size = 0U;
+        while (offset + digits < length && nibble(data[offset + digits]) >= 0) {
+            if (digits == CHUNK_SIZE_DIGITS) return LXP_DAEMON_HTTP_MALFORMED;
+            size = size * 16U + (size_t)nibble(data[offset + digits]);
+            if (size > limit) return LXP_DAEMON_HTTP_MALFORMED;
+            ++digits;
+        }
+        if (offset + digits == length) return LXP_DAEMON_HTTP_INCOMPLETE;
+        if (digits == 0U || data[offset + digits] != '\r') return LXP_DAEMON_HTTP_MALFORMED;
+        if (offset + digits + 1U == length) return LXP_DAEMON_HTTP_INCOMPLETE;
+        if (data[offset + digits + 1U] != '\n') return LXP_DAEMON_HTTP_MALFORMED;
+        offset += digits + 2U;
+        if (size == 0U) break;
+        if (total > limit - size) return LXP_DAEMON_HTTP_MALFORMED;
+        if (length - offset < size + 2U) return LXP_DAEMON_HTTP_INCOMPLETE;
+        if (data[offset + size] != '\r' || data[offset + size + 1U] != '\n') return LXP_DAEMON_HTTP_MALFORMED;
+        if (out != NULL) (void)memmove(out + total, data + offset, size);
+        total += size;
+        offset += size + 2U;
+    }
+    for (;;) {
+        const char *line = crlf(data + offset, length - offset);
+        size_t used;
+        if (line == NULL) return length - offset > TRAILER_LINE_LIMIT ? LXP_DAEMON_HTTP_MALFORMED : LXP_DAEMON_HTTP_INCOMPLETE;
+        used = (size_t)(line - (data + offset));
+        if (used == 0U) { offset += 2U; break; }
+        if (used > TRAILER_LINE_LIMIT || memchr(data + offset, ':', used) == NULL) return LXP_DAEMON_HTTP_MALFORMED;
+        offset += used + 2U;
+    }
+    *consumed = offset;
+    *decoded = total;
+    return LXP_DAEMON_HTTP_COMPLETE;
+}
+lxp_daemon_http_parse lxp_daemon_http_response_parse(char *buffer, size_t received, size_t capacity, lxp_daemon_http_response *response)
+{
+    const char *end; const char *line;
+    size_t header_length = 0U, content_length = 0U, consumed = 0U, decoded = 0U, i;
+    bool has_length = false, chunked = false;
+    lxp_daemon_http_parse status;
+    if (buffer == NULL || response == NULL || capacity <= HEADER_LIMIT || received > capacity) return LXP_DAEMON_HTTP_MALFORMED;
+    for (i = 0U; i + 3U < received; ++i) {
+        if (buffer[i] == '\r' && buffer[i + 1U] == '\n' && buffer[i + 2U] == '\r' && buffer[i + 3U] == '\n') { header_length = i + 4U; break; }
+    }
+    if (header_length == 0U) return received > (size_t)HEADER_LIMIT ? LXP_DAEMON_HTTP_MALFORMED : LXP_DAEMON_HTTP_INCOMPLETE;
+    if (header_length > (size_t)HEADER_LIMIT || header_length < 17U) return LXP_DAEMON_HTTP_MALFORMED;
+    if (memcmp(buffer, "HTTP/1.1 200 ", 13U) != 0 && memcmp(buffer, "HTTP/1.0 200 ", 13U) != 0) return LXP_DAEMON_HTTP_MALFORMED;
+    end = buffer + header_length - 4U;
+    line = crlf(buffer, header_length - 2U);
+    if (line == NULL) return LXP_DAEMON_HTTP_MALFORMED;
+    line += 2U;
+    while (line < end) {
+        const char *next = crlf(line, (size_t)(end - line) + 2U);
+        const char *colon; const char *value;
+        size_t name;
+        if (next == NULL) return LXP_DAEMON_HTTP_MALFORMED;
+        colon = memchr(line, ':', (size_t)(next - line));
+        if (colon == NULL) return LXP_DAEMON_HTTP_MALFORMED;
+        name = (size_t)(colon - line);
+        value = colon + 1;
+        while (value < next && (*value == ' ' || *value == '\t')) ++value;
+        if (name == 14U && strncasecmp(line, "Content-Length", 14U) == 0) {
+            if (has_length || value == next) return LXP_DAEMON_HTTP_MALFORMED;
+            has_length = true;
+            while (value < next && *value >= '0' && *value <= '9') {
+                if (content_length > capacity / 10U) return LXP_DAEMON_HTTP_MALFORMED;
+                content_length = content_length * 10U + (size_t)(*value++ - '0');
+            }
+            while (value < next && (*value == ' ' || *value == '\t')) ++value;
+            if (value != next || content_length == 0U || content_length >= capacity - header_length) return LXP_DAEMON_HTTP_MALFORMED;
+        }
+        if (name == 17U && strncasecmp(line, "Transfer-Encoding", 17U) == 0) {
+            if (chunked || (size_t)(next - value) < 7U || strncasecmp(value, "chunked", 7U) != 0) return LXP_DAEMON_HTTP_MALFORMED;
+            chunked = true;
+            value += 7U;
+            while (value < next && (*value == ' ' || *value == '\t')) ++value;
+            if (value != next) return LXP_DAEMON_HTTP_MALFORMED;
+        }
+        line = next + 2U;
+    }
+    if (has_length == chunked) return LXP_DAEMON_HTTP_MALFORMED;
+    response->header_length = header_length;
+    response->chunked = chunked;
+    response->body_offset = header_length;
+    response->body_length = 0U;
+    if (!chunked) {
+        if (received < header_length + content_length) return LXP_DAEMON_HTTP_INCOMPLETE;
+        if (received != header_length + content_length) return LXP_DAEMON_HTTP_MALFORMED;
+        response->body_length = content_length;
+        return LXP_DAEMON_HTTP_COMPLETE;
+    }
+    status = chunked_body(buffer + header_length, received - header_length, capacity - header_length, NULL, &consumed, &decoded);
+    if (status != LXP_DAEMON_HTTP_COMPLETE) return status;
+    if (consumed != received - header_length || decoded == 0U) return LXP_DAEMON_HTTP_MALFORMED;
+    if (chunked_body(buffer + header_length, received - header_length, capacity - header_length, buffer + header_length, &consumed, &decoded) != LXP_DAEMON_HTTP_COMPLETE) return LXP_DAEMON_HTTP_MALFORMED;
+    response->body_length = decoded;
+    return LXP_DAEMON_HTTP_COMPLETE;
+}
 static lxp_result rpc(const lxp_daemon_finality_authority *authority, const char *method, const char *params, char *response, json_document *doc, const json_token **result)
 {
     char body[512]; char request[1024];
     struct sockaddr_in address;
-    size_t sent = 0U, received = 0U, header_length = 0U, content_length = 0U;
+    lxp_daemon_http_response message;
+    size_t sent = 0U, received = 0U;
     int length, fd, error = 0;
+    bool complete = false;
     socklen_t error_length = sizeof(error);
     int64_t deadline = milliseconds() + RPC_TIMEOUT_MS;
     lxp_result status = LXP_ERR_IO;
@@ -205,47 +315,18 @@ static lxp_result rpc(const lxp_daemon_finality_authority *authority, const char
     }
     while (received < RPC_CAPACITY - 1U) {
         ssize_t count;
+        lxp_daemon_http_parse parsed;
         if (ready(fd, POLLIN, deadline) != 0) goto cleanup;
         count = recv(fd, response + received, RPC_CAPACITY - 1U - received, 0);
         if (count < 0 && (errno == EINTR || errno == EAGAIN)) continue;
         if (count <= 0) goto cleanup;
-        received += (size_t)count; response[received] = '\0';
-        if (header_length == 0U) {
-            char *end = strstr(response, "\r\n\r\n"); char *line;
-            bool has_length = false;
-            if (end == NULL) { if (received > 8192U) goto cleanup; continue; }
-            header_length = (size_t)(end - response) + 4U;
-            if (strncmp(response, "HTTP/1.1 200 ", 13U) != 0 && strncmp(response, "HTTP/1.0 200 ", 13U) != 0) goto cleanup;
-            line = strstr(response, "\r\n");
-            if (line == NULL) goto cleanup;
-            line += 2U;
-            while (line < end) {
-                char *next = strstr(line, "\r\n"); char *colon;
-                if (next == NULL) goto cleanup;
-                colon = memchr(line, ':', (size_t)(next - line));
-                if (colon == NULL) goto cleanup;
-                if ((size_t)(colon - line) == 14U && strncasecmp(line, "Content-Length", 14U) == 0) {
-                    char *value = colon + 1;
-                    if (has_length) goto cleanup;
-                    has_length = true;
-                    while (value < next && (*value == ' ' || *value == '\t')) ++value;
-                    if (value == next) goto cleanup;
-                    while (value < next && *value >= '0' && *value <= '9') {
-                        if (content_length > RPC_CAPACITY / 10U) goto cleanup;
-                        content_length = content_length * 10U + (unsigned)(*value++ - '0');
-                    }
-                    while (value < next && (*value == ' ' || *value == '\t')) ++value;
-                    if (value != next || content_length == 0U || content_length >= RPC_CAPACITY - header_length) goto cleanup;
-                }
-                if ((size_t)(colon - line) == 17U && strncasecmp(line, "Transfer-Encoding", 17U) == 0) goto cleanup;
-                line = next + 2U;
-            }
-            if (!has_length) goto cleanup;
-        }
-        if (received >= header_length + content_length) break;
+        received += (size_t)count;
+        parsed = lxp_daemon_http_response_parse(response, received, RPC_CAPACITY - 1U, &message);
+        if (parsed == LXP_DAEMON_HTTP_MALFORMED) goto cleanup;
+        if (parsed == LXP_DAEMON_HTTP_COMPLETE) { complete = true; break; }
     }
-    if (header_length == 0U || received != header_length + content_length) goto cleanup;
-    doc->count = 0U; doc->cursor = response + header_length; doc->end = response + received;
+    if (!complete) goto cleanup;
+    doc->count = 0U; doc->cursor = response + message.body_offset; doc->end = doc->cursor + message.body_length;
     status = LXP_ERR_CONTEXT_MISMATCH;
     if (parse_value(doc, 0U) != 0) goto cleanup;
     whitespace(doc);

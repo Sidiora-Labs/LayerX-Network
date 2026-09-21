@@ -2706,7 +2706,7 @@ mod tests {
     fn x402_fixture_request(payload: Value) -> FacilitatorRequest {
         let requirements = PaymentRequirements {
             scheme: "exact".to_owned(),
-            network: "layerx:testnet".to_owned(),
+            network: "layerx:beta".to_owned(),
             amount: AtomicAmount::parse("1000")
                 .unwrap_or_else(|error| panic!("fixture amount is canonical: {error:?}")),
             asset: "44".repeat(32),
@@ -2759,7 +2759,7 @@ mod tests {
             kinds: vec![FacilitatorKind {
                 x402_version: 2,
                 scheme: "exact".to_owned(),
-                network: "layerx:testnet".to_owned(),
+                network: "layerx:beta".to_owned(),
                 extra: None,
             }],
             extensions: vec![],

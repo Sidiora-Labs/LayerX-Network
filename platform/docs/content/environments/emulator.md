@@ -38,7 +38,7 @@ The CLI reads the published anchor, fetches the identity the running emulator ad
 
 ## Starting it from the reference applications
 
-`node platform/examples/run-reference-apps.mjs --scenario emulator` does all of the above for you on a host that has the CLI built. It resolves the binary from the first of `$LAYERX_BIN`, `build/bin/layerx`, and `layerx` on `PATH`, provisions the sequencer identity into a scratch profile directory, creates its signing keys with `layerx key create`, starts `layerx emulator up` with `--protocol-version 3` (the protocol version production runs and `layerx program deploy` signs; the emulator's own default stays `2`), `--time-ms` set to the current clock and one `--prefund` per DID, polls `GET /healthz` until it reports `ready`, and terminates the emulator and removes the scratch profile when the run ends, including on failure. Every `LAYERX_EMULATOR_*` value the applications need is then read back out of that emulator - the asset from a real transfer receipt, the account identifiers from `GET /v1/state` - rather than being hand-set. Set any of those variables yourself to override one input, or `LAYERX_EMULATOR_SEED_FILE` to start from a seed you already provisioned. The reference application [README](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/platform/examples/README.md) lists every derived input.
+`node platform/examples/run-reference-apps.mjs --scenario emulator` does all of the above for you on a host that has the CLI built. It resolves the binary from the first of `$LAYERX_BIN`, `build/bin/layerx`, and `layerx` on `PATH`, provisions the sequencer identity into a scratch profile directory, creates its signing keys with `layerx key create`, starts `layerx emulator up` with `--protocol-version 3` (the protocol version production runs and `layerx program deploy` signs; the emulator's own default stays `2`), `--time-ms` set to the current clock and one `--prefund` per DID, polls `GET /healthz` until it reports `ready`, and terminates the emulator and removes the scratch profile when the run ends, including on failure. Every `LAYERX_EMULATOR_*` value the applications need is then read back out of that emulator - the asset from a real transfer receipt, the account identifiers from `GET /v1/state` - rather than being hand-set. Set any of those variables yourself to override one input, or `LAYERX_EMULATOR_SEED_FILE` to start from a seed you already provisioned. The reference application [README](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/platform/examples/README.md) lists every derived input.
 
 Loopback `http://` is accepted here and only here. Every non-loopback endpoint must be `https://`, in the CLI and in the middleware transport alike, and that is a refusal rather than a warning.
 
@@ -83,9 +83,9 @@ Timeouts, expiries and settlement windows are real, and waiting for them in wall
 
 ## What the emulator is not
 
-It is a single local process holding state in memory. It is not a network, so it has no consensus, no other validators, and no external anchoring - `settlement-anchored` is not something a local run establishes. Differential conformance against the hosted testnet is what closes that gap, and it is a separate exercise from local development.
+It is a single local process holding state in memory. It is not a network, so it has no consensus, no other validators, and no external anchoring - `settlement-anchored` is not something a local run establishes. Differential conformance against the hosted beta network is what closes that gap, and it is a separate exercise from local development.
 
-For an environment with real finality and other participants, use the [testnet quickstart](https://github.com/Sidiora-Labs/LayerX-Network/blob/86fa9803386b75d1fea152cb40cacb3f1069cf4a/docs/wiki/Quickstart.md).
+For an environment with real finality and other participants, use the [beta quickstart](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/86fa9803386b75d1fea152cb40cacb3f1069cf4a/docs/wiki/Quickstart.md).
 
 ## Enforced by
 
@@ -96,4 +96,4 @@ For an environment with real finality and other participants, use the [testnet q
 | Offline receipt verification | `protocol` | Emulator receipts verify by the same pure function as production receipts. |
 | Replay refusal | `protocol` | Resubmitting a canonical activity is refused here as it is in production. |
 | Unknown is a real outcome | `agent-layer` | `drop_receipt` produces a genuine unknown, so you can test that you keep it unknown. |
-| Testnet faucet funding | `hosted-surface` | Not present locally - `--prefund` and the prefund endpoint replace it. |
+| Beta faucet funding | `hosted-surface` | Not present locally - `--prefund` and the prefund endpoint replace it. |

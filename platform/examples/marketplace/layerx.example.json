@@ -17,12 +17,12 @@
       "receiptDigestEnvironment": "LAYERX_EMULATOR_MARKETPLACE_RECEIPT_DIGEST",
       "idempotencyEnvironment": "LAYERX_EMULATOR_MARKETPLACE_KEY"
     },
-    "testnet": {
-      "endpoint": "https://api.testnet.layerx.network",
-      "network": "layerx:testnet",
+    "beta": {
+      "endpoint": "https://api.layerx.network",
+      "network": "layerx:beta",
       "protocolVersion": 3,
       "cliBinaryEnvironment": "LAYERX_BIN",
-      "receiptAuthorityUrl": "https://api.testnet.layerx.network",
+      "receiptAuthorityUrl": "https://api.layerx.network",
       "tokenEnvironment": "LAYERX_TESTNET_TOKEN",
       "programIdEnvironment": "LAYERX_TESTNET_MARKETPLACE_PROGRAM_ID",
       "listingIdEnvironment": "LAYERX_TESTNET_MARKETPLACE_LISTING_ID",

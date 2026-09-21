@@ -84,7 +84,7 @@ export async function runServiceScenarios(suite) {
     LAYERX_RESOURCE_URL: `http://127.0.0.1:${port}/paid`,
     LAYERX_RESOURCE_DESCRIPTION: "conformance paid resource",
     LAYERX_X402_SCHEME: "exact",
-    LAYERX_X402_NETWORK: "layerx:testnet",
+    LAYERX_X402_NETWORK: "layerx:beta",
     LAYERX_PRICE: amount.toString(),
     LAYERX_ASSET: toHex(asset),
     LAYERX_PAY_TO: toHex(payTo),
@@ -104,7 +104,7 @@ export async function runServiceScenarios(suite) {
   await assertServiceAccountPayTo(environment.LAYERX_ACCOUNT, environment.LAYERX_PAY_TO);
   await writeFile(configFile, JSON.stringify({ version: 1, application: "paid-api", environments: { emulator: {
     port, resourceFile, fulfillmentDirectory: join(workDir, "fulfillments"),
-    resourceUrl: environment.LAYERX_RESOURCE_URL, scheme: "exact", network: "layerx:testnet",
+    resourceUrl: environment.LAYERX_RESOURCE_URL, scheme: "exact", network: "layerx:beta",
     protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
     priceEnvironment: "LAYERX_PRICE", assetEnvironment: "LAYERX_ASSET", payToEnvironment: "LAYERX_PAY_TO",
     accountEnvironment: "LAYERX_ACCOUNT", currencyEnvironment: "LAYERX_CURRENCY",
@@ -124,7 +124,7 @@ export async function runServiceScenarios(suite) {
       })),
       source: "acct:conformance-buyer",
       protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
-      supported: [{ scheme: "exact", network: "layerx:testnet" }],
+      supported: [{ scheme: "exact", network: "layerx:beta" }],
       authorizedBatches: resolver,
     });
 
@@ -240,7 +240,7 @@ async function runMerchantServiceScenarios(suite, receipt, resolver, amount, ass
     asset: toHex(asset),
     payTo: toHex(payTo),
     scheme: "exact",
-    network: "layerx:testnet",
+    network: "layerx:beta",
     maxTimeoutSeconds: 120,
   }]), "utf8");
   const port = 10_100 + Math.floor(Math.random() * 1_000);
@@ -257,7 +257,7 @@ async function runMerchantServiceScenarios(suite, receipt, resolver, amount, ass
   const configFile = join(workDir, "example.json");
   await writeFile(configFile, JSON.stringify({ version: 1, application: "merchant-shop", environments: { emulator: {
     port, publicUrl: environment.LAYERX_PUBLIC_URL, settlementUrl: environment.LAYERX_SETTLEMENT_URL,
-    receiptAuthorityUrl: settlement.url, stateDirectory: workDir, scheme: "exact", network: "layerx:testnet",
+    receiptAuthorityUrl: settlement.url, stateDirectory: workDir, scheme: "exact", network: "layerx:beta",
     protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
     tokenEnvironment: "LAYERX_SETTLEMENT_TOKEN", priceEnvironment: "LAYERX_PRICE",
     assetEnvironment: "LAYERX_ASSET", payToEnvironment: "LAYERX_PAY_TO",
@@ -286,7 +286,7 @@ async function runMerchantServiceScenarios(suite, receipt, resolver, amount, ass
       })),
       source: "acct:merchant-conformance",
       protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
-      supported: [{ scheme: "exact", network: "layerx:testnet" }],
+      supported: [{ scheme: "exact", network: "layerx:beta" }],
       authorizedBatches: resolver,
     });
     let offerHeader = "";

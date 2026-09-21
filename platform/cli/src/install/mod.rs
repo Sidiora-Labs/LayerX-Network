@@ -572,7 +572,7 @@ pub fn select(
     let network_id = profile.network_id;
     if environment == "emulator" {
         return Err(
-            "MCP and A2A installation require a configured hosted testnet or production gateway; the emulator does not expose self-service scoped keys or the production activity route"
+            "MCP and A2A installation require a configured hosted beta or production gateway; the emulator does not expose self-service scoped keys or the production activity route"
                 .into(),
         );
     }
@@ -660,10 +660,7 @@ fn installation_environment(
     environment: Option<String>,
 ) -> Result<String, String> {
     let environment = match environment {
-        Some(name) => {
-            Configuration::validate_environment_name(&name)?;
-            name
-        }
+        Some(name) => Configuration::canonical_environment_name(&name)?,
         None => configuration.current_environment.clone(),
     };
     Ok(environment)

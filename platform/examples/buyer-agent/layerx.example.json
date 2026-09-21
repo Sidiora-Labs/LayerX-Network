@@ -13,12 +13,12 @@
       "sourceEnvironment": "LAYERX_EMULATOR_SOURCE",
       "idempotencyEnvironment": "LAYERX_EMULATOR_PAYMENT_KEY"
     },
-    "testnet": {
-      "humanUrl": "https://api.testnet.layerx.network",
-      "receiptAuthorityUrl": "https://api.testnet.layerx.network",
+    "beta": {
+      "humanUrl": "https://api.layerx.network",
+      "receiptAuthorityUrl": "https://api.layerx.network",
       "resourceUrl": "http://127.0.0.1:8081/paid",
       "scheme": "exact",
-      "network": "layerx:testnet",
+      "network": "layerx:beta",
       "protocolVersion": 3,
       "tokenEnvironment": "LAYERX_TESTNET_TOKEN",
       "sourceEnvironment": "LAYERX_TESTNET_SOURCE",

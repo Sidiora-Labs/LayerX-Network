@@ -22,12 +22,80 @@ use layerx_human_test_support as support;
 mod withdraw_native;
 
 // ---------------------------------------------------------------------------
+// Child-process supervision
+// ---------------------------------------------------------------------------
+
+/// Every harness this test starts leads its own process group, so the real
+/// `paxd` and `layerxd` processes it spawns in turn can be stopped when the
+/// fixture drops, whether the test passed or panicked.
+mod supervise {
+    use std::process::Child;
+    use std::time::{Duration, Instant};
+
+    use rustix::process::{kill_process_group, test_kill_process_group, Pid, Signal};
+
+    /// How long a group is given to leave after `SIGTERM` before `SIGKILL`.
+    const SWEEP: Duration = Duration::from_secs(20);
+    const POLL: Duration = Duration::from_millis(50);
+
+    /// Waits for one child, reporting whether it exited within `limit`.
+    fn wait_within(child: &mut Child, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return true,
+                Ok(None) => {}
+                Err(_) => return false,
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(POLL);
+        }
+    }
+
+    /// Signals every surviving member of the group `leader` leads, escalating
+    /// to `SIGKILL` when they do not leave in time. A group nobody is left in,
+    /// or one this user may not signal, is left alone.
+    fn sweep(leader: Pid) {
+        if test_kill_process_group(leader).is_err() {
+            return;
+        }
+        let _ = kill_process_group(leader, Signal::TERM);
+        let deadline = Instant::now() + SWEEP;
+        while test_kill_process_group(leader).is_ok() {
+            if Instant::now() >= deadline {
+                let _ = kill_process_group(leader, Signal::KILL);
+                return;
+            }
+            std::thread::sleep(POLL);
+        }
+    }
+
+    /// Stops one harness and everything it started: a bounded wait for the
+    /// orderly shutdown the caller already asked for, `SIGKILL` on the harness
+    /// itself when that wait runs out, then a sweep of its process group so a
+    /// wedged or killed harness cannot leave a real node behind.
+    pub(super) fn shut_down(child: &mut Child, grace: Duration) {
+        let leader = i32::try_from(child.id()).ok().and_then(Pid::from_raw);
+        if !wait_within(child, grace) {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+        if let Some(leader) = leader {
+            sweep(leader);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The real Paxeer node behind both precompiles
 // ---------------------------------------------------------------------------
 
 mod paxd {
     use std::collections::BTreeMap;
     use std::io::{BufRead as _, BufReader, Write as _};
+    use std::os::unix::process::CommandExt as _;
     use std::path::{Path, PathBuf};
     use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
     use std::sync::{Arc, Mutex, MutexGuard};
@@ -175,6 +243,9 @@ mod paxd {
             .current_dir(repo_root())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
+            // The harness starts the real `paxd` itself; leading its own group
+            // is what lets the whole tree be stopped when this node drops.
+            .process_group(0)
             .spawn()
             .unwrap_or_else(|error| panic!("spawn disposable paxd harness: {error}"));
             let input = child
@@ -366,10 +437,17 @@ mod paxd {
 
     impl Drop for PaxdNode {
         fn drop(&mut self) {
-            let _ = lock(&self.input).write_all(b"{\"command\":\"stop\"}\n");
+            {
+                let mut input = lock(&self.input);
+                let _ = input.write_all(b"{\"command\":\"stop\"}\n");
+                let _ = input.flush();
+            }
+            // `stop` terminates `paxd` and ends the harness's request loop, so
+            // it is given time to finish before anything is signalled: killing
+            // the harness outright is what used to leave `paxd` running.
             let mut child = lock(&self.child);
-            let _ = child.kill();
-            let _ = child.wait();
+            super::supervise::shut_down(&mut child, Duration::from_secs(60));
+            drop(child);
             if std::thread::panicking() {
                 eprintln!("disposable paxd evidence: {}", self.work.display());
             } else {
@@ -1117,15 +1195,24 @@ impl Fixture {
         let keystore = Keystore::open_development(root.join("custody"), NETWORK_ID, provider)
             .unwrap_or_else(|error| panic!("keystore: {error}"));
         let key = KeyId::new("human-primary").unwrap_or_else(|error| panic!("key id: {error}"));
-        keystore
+        // The custody key is the account's own owner key: the node verifies a
+        // withdrawal against the authority the envelope declares, and that
+        // authority is the actor the vector's credit opened the account for, so
+        // the human service has to hold that actor's seed to sign for it.
+        let custody_public = keystore
             .generate(
                 &principal,
                 &key,
                 KeyClass::HumanPrimary,
-                KeyEntropy::new([0x11; 32], [0x52; 16], [0x53; 24])
+                KeyEntropy::new(*OWNER_SEED, [0x52; 16], [0x53; 24])
                     .unwrap_or_else(|error| panic!("entropy: {error}")),
             )
             .unwrap_or_else(|error| panic!("generate key: {error}"));
+        assert_eq!(
+            custody_public,
+            owner_public(),
+            "the custody key is not the account owner the credit names"
+        );
         let signer_store = PrincipalStore::open(&store_root, retention_uniform(2), tenancy_digest)
             .unwrap_or_else(|error| panic!("signer store: {error}"));
         let signer = CustodySigner::new(

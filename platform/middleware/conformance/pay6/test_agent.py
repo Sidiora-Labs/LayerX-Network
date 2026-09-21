@@ -18,7 +18,7 @@ class AgentBudgetTests(CommitmentTests):
     def test_budget_receipt_commit_and_replay(self):
         offer = {
             "scheme": "exact",
-            "network": "layerx:testnet",
+            "network": "layerx:beta",
             "amount": self.offer["amount"],
             "asset": self.offer["asset"],
             "payTo": self.offer["pay_to"],
@@ -66,7 +66,7 @@ class AgentBudgetTests(CommitmentTests):
         key, digest = "04" + "00" * 31, "ab" * 32
         offer = {
             "scheme": "subscription",
-            "network": "layerx:testnet",
+            "network": "layerx:beta",
             "amount": r["amount"],
             "asset": r["asset"],
             "payTo": r["to"],
@@ -114,7 +114,7 @@ class AgentBudgetTests(CommitmentTests):
     def test_budget_requires_requested_commitment(self):
         offer = {
             "scheme": "exact",
-            "network": "layerx:testnet",
+            "network": "layerx:beta",
             "amount": self.offer["amount"],
             "asset": self.offer["asset"],
             "payTo": self.offer["pay_to"],

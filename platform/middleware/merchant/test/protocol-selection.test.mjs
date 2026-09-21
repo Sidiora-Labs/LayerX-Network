@@ -152,7 +152,7 @@ const merchantConfig = (fixture, protocolVersion, orders) => ({
       asset: fixture.asset,
       payTo: fixture.payTo,
       scheme: "exact",
-      network: "layerx:testnet",
+      network: "layerx:beta",
       maxTimeoutSeconds: 120,
     }),
   },

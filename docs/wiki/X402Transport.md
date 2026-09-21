@@ -424,7 +424,7 @@ must fail parse or validation.
 
 | Vector | File | What it proves | Expected outcome |
 | --- | --- | --- | --- |
-| `minimal_valid_payment_required` | `tests/vectors.rs:32-49` | Version 2, URL, one `exact` / `layerx:testnet` offer | parse + `validate` `Ok` |
+| `minimal_valid_payment_required` | `tests/vectors.rs:32-49` | Version 2, URL, one `exact` / `layerx:beta` offer | parse + `validate` `Ok` |
 | `payment_required_with_all_optional_fields` | `tests/vectors.rs:50-75` | Optional error, resource metadata, `extra`, empty `extensions` | parse + `validate` `Ok` |
 | `payment_required_with_multiple_accepts` | `tests/vectors.rs:76-103` | Two offers (`exact` and `402lxp`) | parse + `validate` `Ok` |
 | `payment_required_wrong_version` | `tests/vectors.rs:109-126` | `x402Version` 1 | parse may succeed; `validate` `WrongVersion` |
@@ -453,7 +453,7 @@ Additional vector tests in the same file:
 | `payment_required_http_transport_encoding_is_base64_json` | `tests/vectors.rs:507-546` | HTTP encode | header name `PAYMENT-REQUIRED`; base64 JSON version 2 |
 | `payment_required_mcp_transport_encoding_is_json` | `tests/vectors.rs:548-583` | MCP encode | `TransportValue::Json` equals input |
 | `resource_info_validates_url_format` | `tests/vectors.rs:585-616` | `https://` ok; no scheme and newline refused | `Ok` / `Err` / `Err` |
-| `payment_requirements_validates_layerx_network_format` | `tests/vectors.rs:618-654` | `layerx:testnet` facts `Ok`; `ethereum:mainnet` validates but `layerx_facts` `Err`; missing `:` invalid | as stated |
+| `payment_requirements_validates_layerx_network_format` | `tests/vectors.rs:618-654` | `layerx:beta` facts `Ok`; `ethereum:mainnet` validates but `layerx_facts` `Err`; missing `:` invalid | as stated |
 | `wire_encoding_round_trip_preserves_all_fields` | `tests/vectors.rs:656-698` | HTTP, MCP, A2A encode/decode | decoded equals original |
 
 Pinned spec (`interop/crates/layerx-x402/tests/pinned_spec.rs:16-43`):

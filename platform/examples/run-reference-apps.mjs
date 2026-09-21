@@ -34,10 +34,10 @@ const EMULATOR_KEY_NAMES = Object.freeze(["reference-buyer", "reference-seller",
 const arguments_ = process.argv.slice(2);
 if (arguments_.length === 1 && arguments_[0] === "--check") {
   await checkManifest();
-} else if (arguments_.length === 2 && arguments_[0] === "--scenario" && ["emulator", "testnet"].includes(arguments_[1])) {
+} else if (arguments_.length === 2 && arguments_[0] === "--scenario" && ["emulator", "beta"].includes(arguments_[1])) {
   await runScenario(arguments_[1]);
 } else {
-  throw new Error("usage_--check_or_--scenario_emulator_or_testnet");
+  throw new Error("usage_--check_or_--scenario_emulator_or_beta");
 }
 
 async function checkManifest() {
@@ -55,7 +55,7 @@ async function checkManifest() {
       const compatibility = exactObject(JSON.parse(await readFile(resolve(root, "platform/examples/merchant-checkout/package.json"), "utf8")));
       if (compatibility.name !== application.compatibilityPackage) throw new Error("invalid_merchant_compatibility_package");
     }
-    for (const environment of ["emulator", "testnet"]) {
+    for (const environment of ["emulator", "beta"]) {
       const command = application.commands[environment];
       if (!Array.isArray(command) || command.length < 2 || command.some((part) => typeof part !== "string" || part.length === 0)) {
         throw new Error(`invalid_reference_command_${application.name}_${environment}`);
@@ -90,7 +90,7 @@ async function checkManifest() {
   if (sources.includes("LAYERX_AUTHORIZED_BATCH_JSON") || /NEXT_PUBLIC_|window\.localStorage/u.test(sources)) {
     throw new Error("reference_application_contains_fixture_or_browser_secret_surface");
   }
-  process.stdout.write(`${JSON.stringify({ checked: [...names], environments: ["emulator", "testnet"] })}\n`);
+  process.stdout.write(`${JSON.stringify({ checked: [...names], environments: ["emulator", "beta"] })}\n`);
 }
 
 async function runScenario(environment) {

@@ -36,7 +36,7 @@ duplicate, additional or differently bound peer entries.
 ## Evidence provisioning
 
 The beta provisioning contract and output sources are documented in
-[the hosted Human README](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/platform/hosted/human/README.md#evidence-provisioning).
+[the hosted Human README](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/platform/hosted/human/README.md#evidence-provisioning).
 The owner identity is provisioned through LXIP inside a Job with the runtime identity
 PVC. Protocol registration, recovery policy, guarantor checkpoint public key and
 registry journal pairs remain explicit upstream inputs. The assembler publishes

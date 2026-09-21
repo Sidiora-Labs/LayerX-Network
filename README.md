@@ -7,7 +7,7 @@ Paxeer X Network — one network: the Paxeer EVM chain and the LayerX agent-nati
 English · [Español](docs/readme/README.es.md) · [日本語](docs/readme/README.ja.md) · [Русский](docs/readme/README.ru.md) · [简体中文](docs/readme/README.zh-CN.md) · [Português](docs/readme/README.pt-BR.md) · [Deutsch](docs/readme/README.de.md) · [Français](docs/readme/README.fr.md)
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![CI](https://github.com/Sidiora-Labs/LayerX-Network/actions/workflows/ci.yml/badge.svg)](.github/workflows/ci.yml)
+[![CI](https://github.com/Sidiora-Labs/Paxeer-X-Network/actions/workflows/ci.yml/badge.svg)](.github/workflows/ci.yml)
 
 ## What Paxeer X Network is
 
@@ -24,7 +24,7 @@ This repository is the Sidiora Labs monorepo for Paxeer X Network: the Paxeer ch
 The cluster path is [`docs/wiki/Quickstart.md`](docs/wiki/Quickstart.md): install the `layerx` CLI from `platform/cli`, bring up the cluster, source `build/beta-cluster/env`, then create a credential, claim from the faucet, submit an activity, verify the receipt, and deploy a program.
 
 The public endpoint checklist is
-[`docs/wiki/Getting-Started-Testnet.md`](docs/wiki/Getting-Started-Testnet.md).
+[`docs/wiki/Getting-Started-Beta.md`](docs/wiki/Getting-Started-Beta.md).
 The complete wallet, faucet, Asset, Programs, and HTTP 402 path is
 [`docs/wiki/PaymentsQuickstart.md`](docs/wiki/PaymentsQuickstart.md). Native
 Asset issuance, public `POST /rpc`, and 402 commitment extras are served by
@@ -124,7 +124,7 @@ make paxeer-ci
 ## Documentation
 
 - Wiki index: [`docs/wiki/Home.md`](docs/wiki/Home.md)
-- Getting started on the network: [`docs/wiki/Getting-Started-Testnet.md`](docs/wiki/Getting-Started-Testnet.md)
+- Getting started on the network: [`docs/wiki/Getting-Started-Beta.md`](docs/wiki/Getting-Started-Beta.md)
 - Payments developer path: [`docs/wiki/PaymentsQuickstart.md`](docs/wiki/PaymentsQuickstart.md)
 - Public JSON-RPC: [`docs/wiki/PublicRpc.md`](docs/wiki/PublicRpc.md)
 - Assets and tokens: [`docs/wiki/Assets.md`](docs/wiki/Assets.md)

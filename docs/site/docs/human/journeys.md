@@ -33,7 +33,7 @@ the economic effect stay disabled.
 Hosted control admits four developer journeys:
 `/v1/journeys/funding`, `/v1/journeys/payment`,
 `/v1/journeys/receipt-inspection`, and `/v1/journeys/programs`
-([Hosted control](../operators/testnet-control.md),
+([Hosted control](../operators/beta-control.md),
 [Quickstart](../overview/quickstart.md)).
 `/v1/journeys/settlement` is not one of them.
 

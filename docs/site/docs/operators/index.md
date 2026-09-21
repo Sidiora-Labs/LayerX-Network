@@ -5,7 +5,7 @@ Bring-up, hosted internals, qualification, and settlement operators.
 | Topic | Page |
 | --- | --- |
 | Disposable beta cluster | [Beta cluster](beta-cluster.md) |
-| Control and journey admission | [Control](testnet-control.md) |
+| Control and journey admission | [Control](beta-control.md) |
 | Internal KMS and event sources | [Hosted internal](hosted-internal.md) |
 | Guarantor checkpoint producer | [Guarantor](guarantor.md) |
 | Settlement evidence publication | [Settlement evidence](settlement-evidence.md) |

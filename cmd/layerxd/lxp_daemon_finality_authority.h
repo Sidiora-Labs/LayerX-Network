@@ -14,6 +14,23 @@ typedef struct lxp_daemon_finality_authority {
 #define LXP_DAEMON_ANCHOR_STATUS_OF "statusOf(uint64)"
 #define LXP_DAEMON_ANCHOR_CHECKPOINT "checkpoint(uint64)"
 
+typedef enum lxp_daemon_http_parse {
+    LXP_DAEMON_HTTP_MALFORMED = -1,
+    LXP_DAEMON_HTTP_COMPLETE = 0,
+    LXP_DAEMON_HTTP_INCOMPLETE = 1
+} lxp_daemon_http_parse;
+
+typedef struct lxp_daemon_http_response {
+    size_t header_length;
+    size_t body_offset;
+    size_t body_length;
+    bool chunked;
+} lxp_daemon_http_response;
+
+lxp_daemon_http_parse lxp_daemon_http_response_parse(
+    char *buffer, size_t received, size_t capacity,
+    lxp_daemon_http_response *response);
+
 typedef enum lxp_daemon_anchor_ladder {
     LXP_DAEMON_ANCHOR_INSTANT = 0,
     LXP_DAEMON_ANCHOR_SEALED = 1,
