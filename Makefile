@@ -3836,6 +3836,7 @@ test-daemon-guarantor-unit: $(BUILD_DIR)/tests/lxp_test_guarantor_core \
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_guarantor_core
 	python3 tests/daemon/guarantor-exchange.py $(BUILD_DIR)/tests/lxp_test_guarantor_exchange
 	$(GUARANTOR_PYTHON) tests/daemon/guarantor-settlement.py
+	$(GUARANTOR_PYTHON) tests/daemon/guarantor-publication.py
 test-daemon-guarantor-integration: layerx-guarantor layerxd layerx-genesis-build \
 	$(BUILD_DIR)/tests/lxp_test_guarantor_integration $(BUILD_DIR)/tests/lxp_test_program_admission
 	LAYERX_TEST_BUILD_DIR=$(BUILD_DIR) $(GUARANTOR_PYTHON) tests/daemon/guarantor-integration.py \
