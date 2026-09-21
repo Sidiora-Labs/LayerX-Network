@@ -1323,6 +1323,9 @@ secrets_apply() {
     done
     apply_secret "$ns" paxeer-checkpoint-submitter --from-file=key="$s/paxeer-checkpoint-submitter.key"
     apply_secret "$ns" paxeer-deployer-address --from-file=address="$s/paxeer-deployer.address"
+    # The guarantor pays for every submitCheckpoint from this account and nothing tops it up after
+    # genesis, so init-chain.sh reads the address from this secret and funds its cast account.
+    apply_secret "$ns" paxeer-checkpoint-submitter-address --from-file=address="$s/paxeer-checkpoint-submitter.address"
     # Paxeer custody is the layerxcustody module behind the precompile at 0x…1013. Nothing is deployed
     # for it: the network id, the sequencer authorization and the asset map are Paxeer genesis state,
     # which init-chain.sh merges from this ConfigMap before it validates the genesis.

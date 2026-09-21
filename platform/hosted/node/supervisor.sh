@@ -19,8 +19,10 @@
 #   status\n  -> {"state":"running","generation":N}
 #
 # The replica supervisor starts `layerxd --authority-replica` for every
-# generation the sequencer supervisor publishes and stops it when the
-# sequencer supervisor asks, via files in the run directory:
+# generation the sequencer supervisor publishes, restarts it against the new
+# generation whenever the published generation changes while it is running,
+# and stops it when the sequencer supervisor asks, via files in the run
+# directory:
 #
 #   generation                 current generation, written by the sequencer side
 #   replica-ready.<gen>        replica daemon running for <gen>
@@ -420,6 +422,13 @@ if [ "$ROLE" = replica ]; then
                 stop_daemon
                 rm -f "$stop_request" "$RUN_DIR/replica-ready.$current"
                 : > "$RUN_DIR/reset.$id.replica-stopped"
+                break
+            fi
+            published=$(cat "$GENERATION_FILE" 2>/dev/null || true)
+            if [ -n "$published" ] && [ "$published" != "$current" ]; then
+                log "generation $current superseded by $published: restarting the replica"
+                stop_daemon
+                rm -f "$RUN_DIR/replica-ready.$current"
                 break
             fi
             sleep 0.2

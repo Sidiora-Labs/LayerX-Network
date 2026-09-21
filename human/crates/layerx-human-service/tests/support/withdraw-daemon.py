@@ -36,18 +36,27 @@ def main():
         shutil.copy2(ROOT / 'platform/hosted/node' / name, node / name)
     shutil.copy2(ROOT / 'migrations/0007_history_index.sql', work / 'migrations.sql')
     shutil.copy2(ROOT / 'contracts/config/checkpoint-settlement.json', work / 'settlement.json')
-    shutil.copy2(ROOT / 'tests/fixtures/custody/paxeer-state-v2/custody.profile', work / 'profile')
-    shutil.copy2(ROOT / 'tests/fixtures/custody/paxeer-state-v2/custody.credit', work / 'credit')
+    # The real light-client vector: a 223-byte LXBC3 profile and the LXDC3 credit bound to it,
+    # both written by layerx-custody-proof against a disposable paxd. bootstrap.sh accepts only
+    # that profile, and sign-credit signs the credit only with the actor the credit names, so the
+    # asset and the owner seed are read out of the vector instead of restated here.
+    fixtures = ROOT / 'tests/fixtures/custody/paxeer-light-v1'
+    shutil.copy2(fixtures / 'custody.profile', work / 'profile')
+    shutil.copy2(fixtures / 'custody.credit', work / 'credit')
     sys.path.insert(0, str(ROOT / 'tests/support'))
     from lxgb_metadata import metadata_withdrawal
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-    owner_seed = bytes([0x11]) * 32
+    profile = (work / 'profile').read_bytes()
+    assert len(profile) == 223 and profile[:5] == b'LXBC3', 'the custody profile is not the light-client vector'
+    owner_seed = (fixtures / 'actor.seed').read_bytes()
+    assert len(owner_seed) == 32, 'the light-client actor seed is not 32 bytes'
     owner = Ed25519PrivateKey.from_private_bytes(owner_seed).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    assert (work / 'credit').read_bytes()[139:171] == owner, 'the credit names another owner'
     for name, value in (('owner', owner_seed), ('sequencer', bytes([0x22]) * 32)):
         (work / name).write_bytes(value)
         (work / name).chmod(0o600)
-    asset = bytes.fromhex('b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898')
+    asset = profile[97:129]
     (work / 'metadata').write_bytes(metadata_withdrawal(asset, owner, os.urandom(32), 7))
     validated = subprocess.run(['bash', str(node / 'bootstrap.sh'), '--check-settlement',
                                 str(ROOT / 'platform/hosted/node/tests/fixtures/settlement-configuration.txt')],
@@ -67,7 +76,7 @@ def main():
     try:
         with (work / 'bootstrap.log').open('wb') as output:
             subprocess.run(['bash', str(node / 'bootstrap.sh'), '--data-dir', str(work / 'data'),
-                            '--run-dir', str(work / 'run'), '--network-id', '77',
+                            '--run-dir', str(work / 'run'), '--network-id', '77', '--asset', asset.hex(),
                             '--genesis-metadata', str(work / 'metadata'), '--custody-profile', str(work / 'profile'),
                             '--sequencer-key', str(work / 'sequencer'), '--treasury-key', str(work / 'owner'),
                             '--settlement-env', str(work / 'settlement.env'), '--settlement-document', str(work / 'settlement.json'),
