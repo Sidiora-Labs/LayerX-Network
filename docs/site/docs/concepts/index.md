@@ -14,6 +14,7 @@ at the center ([Protocol](../protocol/index.md)):
 | --- | --- |
 | Identity, keys, grants | [Identity](identity.md) |
 | Named accounts and sequences | [Accounts](accounts.md) |
+| One secret for the EVM account and the LayerX identity | [One account](one-account.md) |
 | Assets, issuance, fees | [Assets](assets.md) |
 | Activity envelope | [Activities](activities.md) |
 | Receipts and verification | [Receipts](receipts.md) |

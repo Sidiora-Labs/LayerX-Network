@@ -70,6 +70,7 @@ nav:
       - concepts/index.md
       - Identity: concepts/identity.md
       - Accounts: concepts/accounts.md
+      - One account: concepts/one-account.md
       - Assets: concepts/assets.md
       - Activities: concepts/activities.md
       - Receipts: concepts/receipts.md

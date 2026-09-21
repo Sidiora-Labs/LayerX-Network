@@ -22,6 +22,8 @@ def _metadata() -> bytes:
         "Summary: Generated LayerX Agent API Python SDK\n"
         "Requires-Python: >=3.11\n"
         "License: See the LayerX repository LICENSE\n"
+        "Provides-Extra: derivation\n"
+        "Requires-Dist: cryptography>=41; extra == 'derivation'\n"
         "\n"
     ).encode()
 

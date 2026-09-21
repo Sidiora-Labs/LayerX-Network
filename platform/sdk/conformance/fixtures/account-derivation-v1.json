@@ -1,0 +1,251 @@
+{
+  "schema": "layerx.account-derivation.v1",
+  "notice": "Every secret in this file is a published test value. Never fund or reuse these keys.",
+  "layerx_coin_type": 19544,
+  "chain_id": 713714,
+  "origin": "https://app.paxeer.network",
+  "hkdf": {
+    "hash": "SHA-256",
+    "salt_utf8": "paxeer-x-network/layerx-account-key/v1",
+    "info_prefix_utf8": "LX:ACCOUNT-KEY:v1",
+    "info_layout": "prefix || chainId u256 BE || address 20 bytes || index u32 BE",
+    "length": 32
+  },
+  "mnemonic_vectors": [
+    {
+      "label": "BIP-39 public test mnemonic (all-zero entropy); test only, never fund",
+      "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      "passphrase": "",
+      "seed": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+      "accounts": [
+        {
+          "index": 0,
+          "bind": {
+            "transaction": {
+              "evm_nonce": 0,
+              "max_priority_fee_per_gas": "1000000000",
+              "max_fee_per_gas": "2000000000",
+              "gas_limit": 200000,
+              "raw": "02f90113830ae3f280843b9aca00847735940083030d4094000000000000000000000000000000000000100480b8a4dd9aa6280e0dd0e63aae0420ae0e2aa896013a983facb1ce537be3d368896d81412d7bb900000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000040c302431b415dfdf3a69dd7954c02f19ac4c9c778f624beb9ee7aa60f80b61894d6644bf79dd54b51d59c4f5a7a11359cf65e2fba60d4e8008ad0525404354701c080a07f515799f406370731bb384fdc7767409ed3915e175113d8089322f0b91408bfa039be16a42d608001107da5d5de96fa00362e1435c13f72ed560f47adb80de18e"
+            },
+            "chain_id": 713714,
+            "nonce": 0,
+            "to": "0x0000000000000000000000000000000000001004",
+            "calldata": "dd9aa6280e0dd0e63aae0420ae0e2aa896013a983facb1ce537be3d368896d81412d7bb900000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000040c302431b415dfdf3a69dd7954c02f19ac4c9c778f624beb9ee7aa60f80b61894d6644bf79dd54b51d59c4f5a7a11359cf65e2fba60d4e8008ad0525404354701"
+          },
+          "evm_path": "m/44'/60'/0'/0/0",
+          "layerx_path": "m/44'/19544'/0'/0'",
+          "evm_address": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+          "layerx_public_key": "0e0dd0e63aae0420ae0e2aa896013a983facb1ce537be3d368896d81412d7bb9",
+          "did": "did:layerx:0e0dd0e63aae0420ae0e2aa896013a983facb1ce537be3d368896d81412d7bb9"
+        },
+        {
+          "index": 1,
+          "bind": {
+            "transaction": {
+              "evm_nonce": 0,
+              "max_priority_fee_per_gas": "1000000000",
+              "max_fee_per_gas": "2000000000",
+              "gas_limit": 200000,
+              "raw": "02f90113830ae3f280843b9aca00847735940083030d4094000000000000000000000000000000000000100480b8a4dd9aa628aa92353b9469d1f56b28426dfa72ce3f3fabc7a5c41ee61a51f63bcbd98b942a0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000004035c7bedafbed8e05be5e1586738efd5debfc6d6b08414774b2186a78932a4c1d45078a2ace1c5fdd77df601f80599f9cbfb11e8518e954f39be33662abf3aa0cc001a0743e38dddac900353d572a157fe8016e805e127dd5a80e26e1026df722527845a021849bb0d1a1b2081190b6d9a7f4f344db3b6becdea136a538046e99cb54851a"
+            },
+            "chain_id": 713714,
+            "nonce": 0,
+            "to": "0x0000000000000000000000000000000000001004",
+            "calldata": "dd9aa628aa92353b9469d1f56b28426dfa72ce3f3fabc7a5c41ee61a51f63bcbd98b942a0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000004035c7bedafbed8e05be5e1586738efd5debfc6d6b08414774b2186a78932a4c1d45078a2ace1c5fdd77df601f80599f9cbfb11e8518e954f39be33662abf3aa0c"
+          },
+          "evm_path": "m/44'/60'/0'/0/1",
+          "layerx_path": "m/44'/19544'/1'/0'",
+          "evm_address": "0x6Fac4D18c912343BF86fa7049364Dd4E424Ab9C0",
+          "layerx_public_key": "aa92353b9469d1f56b28426dfa72ce3f3fabc7a5c41ee61a51f63bcbd98b942a",
+          "did": "did:layerx:aa92353b9469d1f56b28426dfa72ce3f3fabc7a5c41ee61a51f63bcbd98b942a"
+        }
+      ]
+    },
+    {
+      "label": "BIP-39 published Trezor test vector with passphrase TREZOR; test only, never fund",
+      "mnemonic": "legal winner thank year wave sausage worth useful legal winner thank yellow",
+      "passphrase": "TREZOR",
+      "seed": "2e8905819b8723fe2c1d161860e5ee1830318dbf49a83bd451cfb8440c28bd6fa457fe1296106559a3c80937a1c1069be3a3a5bd381ee6260e8d9739fce1f607",
+      "accounts": [
+        {
+          "index": 0,
+          "bind": {
+            "transaction": {
+              "evm_nonce": 0,
+              "max_priority_fee_per_gas": "1000000000",
+              "max_fee_per_gas": "2000000000",
+              "gas_limit": 200000,
+              "raw": "02f90113830ae3f280843b9aca00847735940083030d4094000000000000000000000000000000000000100480b8a4dd9aa6288020367c3d7d568d84ef8d5b2725431dc7bb21daf42630cceb95cc09cd9e30ba00000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000040dd95f6e14f8adc993f71442f5d5e27c2b4e29d4db126b38c6d14aa04a5c9e94e71e0c4612d8b25f21c45c6c449e54abc807264dd511051e362686d453ec99702c001a0a85e32d1b855b24cb758df533faae6dfcb5b91cfd0f3bde8cfb68bd5fb3b5798a02caa9f98d6268c3b2dd5aa7a4e16fdc6d39bf9d9ec2b59d3022918bfcbe6f8d1"
+            },
+            "chain_id": 713714,
+            "nonce": 0,
+            "to": "0x0000000000000000000000000000000000001004",
+            "calldata": "dd9aa6288020367c3d7d568d84ef8d5b2725431dc7bb21daf42630cceb95cc09cd9e30ba00000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000040dd95f6e14f8adc993f71442f5d5e27c2b4e29d4db126b38c6d14aa04a5c9e94e71e0c4612d8b25f21c45c6c449e54abc807264dd511051e362686d453ec99702"
+          },
+          "evm_path": "m/44'/60'/0'/0/0",
+          "layerx_path": "m/44'/19544'/0'/0'",
+          "evm_address": "0x6006ef1944FB519A746d00cDAf715Cbd27a5a008",
+          "layerx_public_key": "8020367c3d7d568d84ef8d5b2725431dc7bb21daf42630cceb95cc09cd9e30ba",
+          "did": "did:layerx:8020367c3d7d568d84ef8d5b2725431dc7bb21daf42630cceb95cc09cd9e30ba"
+        },
+        {
+          "index": 1,
+          "bind": {
+            "transaction": {
+              "evm_nonce": 0,
+              "max_priority_fee_per_gas": "1000000000",
+              "max_fee_per_gas": "2000000000",
+              "gas_limit": 200000,
+              "raw": "02f90113830ae3f280843b9aca00847735940083030d4094000000000000000000000000000000000000100480b8a4dd9aa628f4b28c8bd83c578c1a3b6243c773925511e74eb351384a499ec75f5c02bb838e000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000405525572346601873b6c5b5f1d7df94a67df45edd188e51b7f00ad0991b274a208e205d71a3698505a18caf5dd5de422eb4f10d86d259e67a73cf8dd353b4dd01c080a0701a2ae58b3e27225cc0362870956a63e21650f50215e9e4c11d1d6196b26287a01ac02c494840720a4053b72c5af21744bb7e175d26434bdf0d7818b28581eb0e"
+            },
+            "chain_id": 713714,
+            "nonce": 0,
+            "to": "0x0000000000000000000000000000000000001004",
+            "calldata": "dd9aa628f4b28c8bd83c578c1a3b6243c773925511e74eb351384a499ec75f5c02bb838e000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000405525572346601873b6c5b5f1d7df94a67df45edd188e51b7f00ad0991b274a208e205d71a3698505a18caf5dd5de422eb4f10d86d259e67a73cf8dd353b4dd01"
+          },
+          "evm_path": "m/44'/60'/0'/0/1",
+          "layerx_path": "m/44'/19544'/1'/0'",
+          "evm_address": "0xA5Cd5A7a353DAD72643512f25F395eC1857Bc1CA",
+          "layerx_public_key": "f4b28c8bd83c578c1a3b6243c773925511e74eb351384a499ec75f5c02bb838e",
+          "did": "did:layerx:f4b28c8bd83c578c1a3b6243c773925511e74eb351384a499ec75f5c02bb838e"
+        }
+      ]
+    }
+  ],
+  "wallet_signature": {
+    "label": "Hardhat/Anvil default account 0 private key; public, test only, never fund",
+    "private_key": "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+    "evm_address": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+    "vectors": [
+      {
+        "index": 0,
+        "typed_data": {
+          "types": {
+            "EIP712Domain": [
+              {
+                "name": "name",
+                "type": "string"
+              },
+              {
+                "name": "version",
+                "type": "string"
+              },
+              {
+                "name": "chainId",
+                "type": "uint256"
+              }
+            ],
+            "LayerXKeyDerivation": [
+              {
+                "name": "purpose",
+                "type": "string"
+              },
+              {
+                "name": "warning",
+                "type": "string"
+              },
+              {
+                "name": "address",
+                "type": "address"
+              },
+              {
+                "name": "index",
+                "type": "uint32"
+              },
+              {
+                "name": "version",
+                "type": "uint32"
+              }
+            ]
+          },
+          "primaryType": "LayerXKeyDerivation",
+          "domain": {
+            "name": "Paxeer X Network",
+            "version": "1",
+            "chainId": 713714
+          },
+          "message": {
+            "purpose": "Derive your LayerX account key",
+            "warning": "Only sign this on https://app.paxeer.network. Anyone holding this signature controls your LayerX account.",
+            "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "index": 0,
+            "version": 1
+          }
+        },
+        "eip712_hash": "5974143ac17e3f59a8ebb72e00417ff39ecd36764071e14f5298913869546f75",
+        "signature": "b8dc12244631f8184b6fd46cb99a460ca5ee6d76a90ff2c868cba688877fc9862e8e87d4f4f78646c9a80b8e51734c42380859021704e09169e29db8cce768961c",
+        "equivalent_signatures": [
+          "b8dc12244631f8184b6fd46cb99a460ca5ee6d76a90ff2c868cba688877fc986d171782b0b0879b93657f471ae8cb3bc82a683e49843bfaa55efc0d4034ed8ab1b",
+          "b8dc12244631f8184b6fd46cb99a460ca5ee6d76a90ff2c868cba688877fc9862e8e87d4f4f78646c9a80b8e51734c42380859021704e09169e29db8cce7689601"
+        ],
+        "layerx_public_key": "6075d811dba9a3eca4ce9e10ea9afa94cc2f469f67219f479202c380aa0a1940",
+        "did": "did:layerx:6075d811dba9a3eca4ce9e10ea9afa94cc2f469f67219f479202c380aa0a1940"
+      },
+      {
+        "index": 1,
+        "typed_data": {
+          "types": {
+            "EIP712Domain": [
+              {
+                "name": "name",
+                "type": "string"
+              },
+              {
+                "name": "version",
+                "type": "string"
+              },
+              {
+                "name": "chainId",
+                "type": "uint256"
+              }
+            ],
+            "LayerXKeyDerivation": [
+              {
+                "name": "purpose",
+                "type": "string"
+              },
+              {
+                "name": "warning",
+                "type": "string"
+              },
+              {
+                "name": "address",
+                "type": "address"
+              },
+              {
+                "name": "index",
+                "type": "uint32"
+              },
+              {
+                "name": "version",
+                "type": "uint32"
+              }
+            ]
+          },
+          "primaryType": "LayerXKeyDerivation",
+          "domain": {
+            "name": "Paxeer X Network",
+            "version": "1",
+            "chainId": 713714
+          },
+          "message": {
+            "purpose": "Derive your LayerX account key",
+            "warning": "Only sign this on https://app.paxeer.network. Anyone holding this signature controls your LayerX account.",
+            "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "index": 1,
+            "version": 1
+          }
+        },
+        "eip712_hash": "09a26cdb7d47812ff869199af75d762275f4f9fc5704f7f8cfe0c9aa20dda608",
+        "signature": "630449f1ca95f02fb24a52039a112d4c882a6a971aedf35cfdd1e49e25da42b66d9c01a9924363028df54c07a0da4a0c0d4c91b317cc68c55da8c1411c5f7b9f1c",
+        "equivalent_signatures": [
+          "630449f1ca95f02fb24a52039a112d4c882a6a971aedf35cfdd1e49e25da42b69263fe566dbc9cfd720ab3f85f25b5f2ad624b33977c377662299d4bb3d6c5a21b",
+          "630449f1ca95f02fb24a52039a112d4c882a6a971aedf35cfdd1e49e25da42b66d9c01a9924363028df54c07a0da4a0c0d4c91b317cc68c55da8c1411c5f7b9f01"
+        ],
+        "layerx_public_key": "6c91ec8b9552897a7a817807eb86a41364ef74f127a48870ccf58ab36009d59c",
+        "did": "did:layerx:6c91ec8b9552897a7a817807eb86a41364ef74f127a48870ccf58ab36009d59c"
+      }
+    ]
+  }
+}
