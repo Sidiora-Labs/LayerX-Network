@@ -22,7 +22,7 @@ from typing import Literal
 from .bip39_english import ENGLISH
 
 LAYERX_COIN_TYPE = 19544
-ACCOUNT_DERIVATION_ORIGIN = "https://app.layerx.network"
+ACCOUNT_DERIVATION_ORIGIN = "https://app.paxeer.network"
 ACCOUNT_DERIVATION_DOMAIN_NAME = "Paxeer X Network"
 ACCOUNT_DERIVATION_DOMAIN_VERSION = "1"
 ACCOUNT_DERIVATION_PURPOSE = "Derive your LayerX account key"

@@ -87,7 +87,7 @@ every field instead of an opaque string.
   "domain": { "name": "Paxeer X Network", "version": "1", "chainId": 713714 },
   "message": {
     "purpose": "Derive your LayerX account key",
-    "warning": "Only sign this on https://app.layerx.network. Anyone holding this signature controls your LayerX account.",
+    "warning": "Only sign this on https://app.paxeer.network. Anyone holding this signature controls your LayerX account.",
     "address": "0x<your address, lower case>",
     "index": 0,
     "version": 1

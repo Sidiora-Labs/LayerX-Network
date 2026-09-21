@@ -31,7 +31,7 @@ pub const LAYERX_COIN_TYPE: u32 = 19_544;
 /// BIP-44 coin type of every EVM account.
 pub const EVM_COIN_TYPE: u32 = 60;
 /// The origin the published wallet message names.
-pub const CANONICAL_ORIGIN: &str = "https://app.layerx.network";
+pub const CANONICAL_ORIGIN: &str = "https://app.paxeer.network";
 /// EIP-712 domain name of the wallet message.
 pub const DOMAIN_NAME: &str = "Paxeer X Network";
 /// EIP-712 domain version of the wallet message.

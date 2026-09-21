@@ -19,7 +19,7 @@ import { wordlist } from "@scure/bip39/wordlists/english.js";
 
 /** SLIP-0044 style coin type of the LayerX branch: 0x4c58, ASCII "LX". */
 export const LAYERX_COIN_TYPE = 19544;
-export const ACCOUNT_DERIVATION_ORIGIN = "https://app.layerx.network";
+export const ACCOUNT_DERIVATION_ORIGIN = "https://app.paxeer.network";
 export const ACCOUNT_DERIVATION_DOMAIN_NAME = "Paxeer X Network";
 export const ACCOUNT_DERIVATION_DOMAIN_VERSION = "1";
 export const ACCOUNT_DERIVATION_PURPOSE = "Derive your LayerX account key";

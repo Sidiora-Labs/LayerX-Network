@@ -3,7 +3,7 @@
   "notice": "Every secret in this file is a published test value. Never fund or reuse these keys.",
   "layerx_coin_type": 19544,
   "chain_id": 713714,
-  "origin": "https://app.layerx.network",
+  "origin": "https://app.paxeer.network",
   "hkdf": {
     "hash": "SHA-256",
     "salt_utf8": "paxeer-x-network/layerx-account-key/v1",
@@ -167,20 +167,20 @@
           },
           "message": {
             "purpose": "Derive your LayerX account key",
-            "warning": "Only sign this on https://app.layerx.network. Anyone holding this signature controls your LayerX account.",
+            "warning": "Only sign this on https://app.paxeer.network. Anyone holding this signature controls your LayerX account.",
             "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
             "index": 0,
             "version": 1
           }
         },
-        "eip712_hash": "6ea5701539200902e03293963f615d8a9508de4497bf924739d5a5ba99e0bd02",
-        "signature": "f09562567ed85065b6a9db17c51067906ab966341be3a56f4058febbfe538eb730720c301ef94da363073afee84846e53a0dbc831d54190a90f3fd85eb74feaf1c",
+        "eip712_hash": "5974143ac17e3f59a8ebb72e00417ff39ecd36764071e14f5298913869546f75",
+        "signature": "b8dc12244631f8184b6fd46cb99a460ca5ee6d76a90ff2c868cba688877fc9862e8e87d4f4f78646c9a80b8e51734c42380859021704e09169e29db8cce768961c",
         "equivalent_signatures": [
-          "f09562567ed85065b6a9db17c51067906ab966341be3a56f4058febbfe538eb7cf8df3cfe106b25c9cf8c50117b7b91980a1206391f487312ede6106e4c142921b",
-          "f09562567ed85065b6a9db17c51067906ab966341be3a56f4058febbfe538eb730720c301ef94da363073afee84846e53a0dbc831d54190a90f3fd85eb74feaf01"
+          "b8dc12244631f8184b6fd46cb99a460ca5ee6d76a90ff2c868cba688877fc986d171782b0b0879b93657f471ae8cb3bc82a683e49843bfaa55efc0d4034ed8ab1b",
+          "b8dc12244631f8184b6fd46cb99a460ca5ee6d76a90ff2c868cba688877fc9862e8e87d4f4f78646c9a80b8e51734c42380859021704e09169e29db8cce7689601"
         ],
-        "layerx_public_key": "3a7d75eaa2154ecc8d99d74e0d1fbf8d8f91afe72d67820121070fcd19fa819d",
-        "did": "did:layerx:3a7d75eaa2154ecc8d99d74e0d1fbf8d8f91afe72d67820121070fcd19fa819d"
+        "layerx_public_key": "6075d811dba9a3eca4ce9e10ea9afa94cc2f469f67219f479202c380aa0a1940",
+        "did": "did:layerx:6075d811dba9a3eca4ce9e10ea9afa94cc2f469f67219f479202c380aa0a1940"
       },
       {
         "index": 1,
@@ -231,20 +231,20 @@
           },
           "message": {
             "purpose": "Derive your LayerX account key",
-            "warning": "Only sign this on https://app.layerx.network. Anyone holding this signature controls your LayerX account.",
+            "warning": "Only sign this on https://app.paxeer.network. Anyone holding this signature controls your LayerX account.",
             "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
             "index": 1,
             "version": 1
           }
         },
-        "eip712_hash": "1d1c6609dc3cecd9f53cb2de5af5b85b498ddcac2e88c189d80686fa078472e3",
-        "signature": "724a2c2ef7ff39b01eb2a65f6644e5909aeb4114714153f500871445202792fe00db3c6d34532dbfac006f8adcb71e182c7571c0a5950a626207343383aae80a1b",
+        "eip712_hash": "09a26cdb7d47812ff869199af75d762275f4f9fc5704f7f8cfe0c9aa20dda608",
+        "signature": "630449f1ca95f02fb24a52039a112d4c882a6a971aedf35cfdd1e49e25da42b66d9c01a9924363028df54c07a0da4a0c0d4c91b317cc68c55da8c1411c5f7b9f1c",
         "equivalent_signatures": [
-          "724a2c2ef7ff39b01eb2a65f6644e5909aeb4114714153f500871445202792feff24c392cbacd24053ff90752348e1e68e396b2609b395d95dcb2a594c8b59371c",
-          "724a2c2ef7ff39b01eb2a65f6644e5909aeb4114714153f500871445202792fe00db3c6d34532dbfac006f8adcb71e182c7571c0a5950a626207343383aae80a00"
+          "630449f1ca95f02fb24a52039a112d4c882a6a971aedf35cfdd1e49e25da42b69263fe566dbc9cfd720ab3f85f25b5f2ad624b33977c377662299d4bb3d6c5a21b",
+          "630449f1ca95f02fb24a52039a112d4c882a6a971aedf35cfdd1e49e25da42b66d9c01a9924363028df54c07a0da4a0c0d4c91b317cc68c55da8c1411c5f7b9f01"
         ],
-        "layerx_public_key": "9710668175968591fdcc8074d4ee13bc2044d393f7fc82fd0acedb975c6f7197",
-        "did": "did:layerx:9710668175968591fdcc8074d4ee13bc2044d393f7fc82fd0acedb975c6f7197"
+        "layerx_public_key": "6c91ec8b9552897a7a817807eb86a41364ef74f127a48870ccf58ab36009d59c",
+        "did": "did:layerx:6c91ec8b9552897a7a817807eb86a41364ef74f127a48870ccf58ab36009d59c"
       }
     ]
   }
