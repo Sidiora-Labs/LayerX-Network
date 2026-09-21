@@ -17,6 +17,9 @@ classifiers = [
   "Typing :: Typed",
 ]
 
+[project.optional-dependencies]
+derivation = ["cryptography>=41"]
+
 [tool.layerx-build]
 contract-major = 1
 source-date-epoch = 315532800

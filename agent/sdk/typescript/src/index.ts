@@ -14,6 +14,7 @@ export * from "./native-capabilities.js";
 
 export * from "./intent.js";
 export * from "./px.js";
+export * from "./account-derivation.js";
 
 export * from "./rpc.js";
 
