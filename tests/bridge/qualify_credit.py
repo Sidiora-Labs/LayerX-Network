@@ -50,16 +50,17 @@ def main():
             Encoding.X962, PublicFormat.CompressedPoint)
         def be(value, length):
             return value.to_bytes(length, 'big')
-        request = (b'LXGB' + be(2, 1) + be(3, 2) + be(77, 4) + be(timestamp, 8) +
-                   be(1, 2) + be(7, 2) + b'parameter-version'.ljust(32, b'\0') + be(1, 32) +
-                   be(1, 2) + hashlib.sha256(guarantor).digest() + guarantor + be(0, 16) + asset +
-                   be(1, 4) + b''.join(be(v, 8) for v in (1, 1, 1, 1, 1, 8, 8, 64, 8)) +
-                   be(1, 8) + be(1, 1) + be(1, 4) +
-                   b''.join(be(v, 8) for v in (1, 1, 2, 4, 1, 1, 100, 100, 1, 1, 10, 1, 1000)))
-        if len(request) != 395:
-            raise ValueError('genesis request length')
-        request += metadata(asset, public, os.urandom(32))
-        (work / 'request.lxgb').write_bytes(request)
+        def genesis_request(genesis_timestamp):
+            request = (b'LXGB' + be(2, 1) + be(3, 2) + be(77, 4) + be(genesis_timestamp, 8) +
+                       be(1, 2) + be(7, 2) + b'parameter-version'.ljust(32, b'\0') + be(1, 32) +
+                       be(1, 2) + hashlib.sha256(guarantor).digest() + guarantor + be(0, 16) + asset +
+                       be(1, 4) + b''.join(be(v, 8) for v in (1, 1, 1, 1, 1, 8, 8, 64, 8)) +
+                       be(1, 8) + be(1, 1) + be(1, 4) +
+                       b''.join(be(v, 8) for v in (1, 1, 2, 4, 1, 1, 100, 100, 1, 1, 10, 1, 1000)))
+            if len(request) != 395:
+                raise ValueError('genesis request length')
+            return request + metadata(asset, public, os.urandom(32))
+        (work / 'request.lxgb').write_bytes(genesis_request(timestamp))
         profile = (FIXTURES / 'custody.profile').read_bytes()
         credit = (FIXTURES / 'custody.credit').read_bytes()
         if (len(profile) != 223 or profile[:5] != b'LXBC3' or profile[97:129] != asset
@@ -76,6 +77,15 @@ def main():
             work / 'actor', '0', timestamp, work / 'activity')
         run(build / 'tests/bridge/test-credit', work / 'genesis-output/genesis.manifest',
             work / 'activity', work / 'actor')
+        header_ms = int.from_bytes(credit[363 + 29:363 + 37], 'big') * 1000
+        fresh_timestamp = header_ms - 3600 * 1000
+        (work / 'fresh-request.lxgb').write_bytes(genesis_request(fresh_timestamp))
+        run(ROOT / 'build/bin/layerx-genesis-build', work / 'fresh-request.lxgb', work / 'genesis',
+            work / 'fresh-genesis-output', '--custody-profile', work / 'profile')
+        run(build / 'tests/bridge/sign-credit', work / 'profile', work / 'credit', did,
+            work / 'actor', '0', header_ms, work / 'fresh-activity')
+        run(build / 'tests/bridge/test-credit-admission', work / 'fresh-genesis-output/genesis.manifest',
+            work / 'fresh-activity')
         if args.compare_baseline:
             inputs = [work / 'genesis-output/genesis.manifest', work / 'activity', work / 'actor']
             run(args.compare_baseline.resolve(), *inputs, work / 'before.bin')

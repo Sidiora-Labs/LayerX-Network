@@ -1960,15 +1960,16 @@ static lxp_result lni_principal(
     return LXP_OK;
 }
 
-static lxp_result program_admission_decode(
-    lxp_daemon_protocol_owner *owner, const lxp_activity *activity)
+lxp_result lxp_daemon_credit_admission(lxp_daemon_protocol_owner *owner,
+                                       const lxp_activity *activity,
+                                       uint64_t batch_time_ms)
 {
     lxp_module_ctx ctx;
-    void *decoded = NULL;
-    size_t mark;
     lxp_result status;
-    lxp_result reset_status;
-    if (activity->activity_type == LXP_BRIDGE_CREDIT) {
+    if (owner == NULL || activity == NULL ||
+        activity->activity_type != LXP_BRIDGE_CREDIT || batch_time_ms == 0U)
+        return LXP_ERR_MALFORMED_ENVELOPE;
+    {
         lxp_bridge_profile profile;
         lxp_bridge_credit credit;
         lxp_bridge_light_trust trusted;
@@ -1994,7 +1995,7 @@ static lxp_result program_admission_decode(
         if (status != LXP_OK) return status;
         status = lxp_bridge_credit_verify(&profile, &credit, owner->network_id,
                                           activity->protocol_version, &trusted,
-                                          owner->latest_sealed_timestamp, nullifier, NULL);
+                                          batch_time_ms, nullifier, NULL);
         if (status == LXP_OK)
             status = lni_principal(owner->kernel->state->accounts, activity,
                                    activity->authority.bytes, principal,
@@ -2015,6 +2016,22 @@ static lxp_result program_admission_decode(
                 status = LXP_ERR_ACCOUNT_ID_MISMATCH;
         }
         return status;
+    }
+}
+
+static lxp_result program_admission_decode(
+    lxp_daemon_protocol_owner *owner, const lxp_activity *activity)
+{
+    lxp_module_ctx ctx;
+    void *decoded = NULL;
+    size_t mark;
+    lxp_result status;
+    lxp_result reset_status;
+    if (activity->activity_type == LXP_BRIDGE_CREDIT) {
+        uint64_t batch_time_ms;
+        status = wall_clock_milliseconds(&batch_time_ms);
+        if (status != LXP_OK) return status;
+        return lxp_daemon_credit_admission(owner, activity, batch_time_ms);
     }
     if (activity->activity_type == LX_ASSET_WITHDRAW) {
         if (owner->kernel == NULL || owner->scratch == NULL)

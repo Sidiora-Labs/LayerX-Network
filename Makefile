@@ -3673,8 +3673,14 @@ test-light-credit: $(BUILD_DIR)/tests/bridge/test-light-credit
 		tests/fixtures/custody/paxeer-state-v2/custody.profile tests/fixtures/custody/paxeer-state-v2/custody.credit \
 		$(LIGHT_CREDIT_FIXTURES)/did.txt $(LIGHT_CREDIT_FIXTURES)/custody-skip.profile $(LIGHT_CREDIT_FIXTURES)/custody-skip.credit
 
+$(BUILD_DIR)/tests/bridge/test-credit-admission: tests/bridge/test_credit_admission.c tests/bridge/files.h \
+		$(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+
 .PHONY: test-bridge-credit
-test-bridge-credit: $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit build/bin/layerx-genesis-build
+test-bridge-credit: $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit $(BUILD_DIR)/tests/bridge/test-credit-admission build/bin/layerx-genesis-build
 	$(BRIDGE_PYTHON) tests/bridge/qualify_credit.py --build-dir $(BUILD_DIR)
 
 .PHONY: test-daemon-maintenance-publication test-maintenance-publication

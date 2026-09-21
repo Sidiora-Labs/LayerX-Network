@@ -510,6 +510,9 @@ lxp_result lxp_daemon_lni_status(lxp_daemon_lni_server *server);
 lxp_result lxp_daemon_lni_observability_snapshot(
     lxp_daemon_lni_server *server,
     lxp_daemon_lni_observability *observability);
+lxp_result lxp_daemon_credit_admission(
+    lxp_daemon_protocol_owner *owner, const lxp_activity *activity,
+    uint64_t batch_time_ms);
 lxp_result lxp_daemon_lni_preparation_state(
     lxp_daemon_protocol_owner *owner, const uint8_t *request,
     size_t request_length,
