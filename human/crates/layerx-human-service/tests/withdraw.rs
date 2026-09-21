@@ -1117,15 +1117,24 @@ impl Fixture {
         let keystore = Keystore::open_development(root.join("custody"), NETWORK_ID, provider)
             .unwrap_or_else(|error| panic!("keystore: {error}"));
         let key = KeyId::new("human-primary").unwrap_or_else(|error| panic!("key id: {error}"));
-        keystore
+        // The custody key is the account's own owner key: the node verifies a
+        // withdrawal against the authority the envelope declares, and that
+        // authority is the actor the vector's credit opened the account for, so
+        // the human service has to hold that actor's seed to sign for it.
+        let custody_public = keystore
             .generate(
                 &principal,
                 &key,
                 KeyClass::HumanPrimary,
-                KeyEntropy::new([0x11; 32], [0x52; 16], [0x53; 24])
+                KeyEntropy::new(*OWNER_SEED, [0x52; 16], [0x53; 24])
                     .unwrap_or_else(|error| panic!("entropy: {error}")),
             )
             .unwrap_or_else(|error| panic!("generate key: {error}"));
+        assert_eq!(
+            custody_public,
+            owner_public(),
+            "the custody key is not the account owner the credit names"
+        );
         let signer_store = PrincipalStore::open(&store_root, retention_uniform(2), tenancy_digest)
             .unwrap_or_else(|error| panic!("signer store: {error}"));
         let signer = CustodySigner::new(
