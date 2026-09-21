@@ -11,6 +11,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+FIXTURES = ROOT / 'tests/fixtures/custody/paxeer-light-v1'
 spec = importlib.util.spec_from_file_location('material', HERE / 'material.py')
 material = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(material)
@@ -228,10 +229,12 @@ class MaterialTests(unittest.TestCase):
             account = hashlib.sha256(b'LX:ACCOUNT:v1' + owner_native.span(b'agent:' + did + b':main')).digest()
             owner_native.protected_write(secrets / 'explorer-read.seed.hex', seed.hex().encode())
             (secrets / 'explorer-read.pub.hex').write_text(public.hex())
-            asset = '11' * 32
+            profile = (FIXTURES / 'custody.profile').read_bytes()
+            asset = profile[97:129].hex()
             custody = dict(vault='0x' + '0' * 36 + '1013', asset=asset, runtime_sha256='66' * 32, payer='0x' + '77' * 20)
+            self.assertEqual((len(profile), profile[:5], '0x' + profile[13:33].hex(), profile[205:207]),
+                             (223, b'LXBC3', custody['vault'], b'\0\3'))
             provision.write_json(source / 'owner-custody.json', custody)
-            profile = b'LXBC3' + bytes(92) + bytes.fromhex(asset) + bytes(78)
             owner_native.protected_write(source / 'custody.profile', profile)
             provision.explorer_read_funding(provision._explorer_read_funding_prepare, work, secrets)
             funding = work / 'explorer-read-funding/human-evidence-input'
