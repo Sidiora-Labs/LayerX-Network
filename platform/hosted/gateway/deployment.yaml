@@ -194,6 +194,8 @@ spec:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-internal}}
           podSelector: {matchExpressions: [{key: app, operator: In, values: [layerx-internal-payments, layerx-internal-programs]}]}
       ports: [{protocol: TCP, port: 9443}]
+    - from: [{podSelector: {matchLabels: {app: layerx-node}}}, {podSelector: {matchLabels: {app: layerx-program-registry}}}]
+      ports: [{protocol: TCP, port: 9443}]
   egress:
     - to: [{podSelector: {matchLabels: {app: layerx-gateway-redis}}}]
       ports: [{protocol: TCP, port: 6379}]

@@ -146,6 +146,7 @@ spec:
             - {name: LAYERX_EXPLORER_READ_SEQUENCER_PUBLIC_KEY_FILE, value: /run/layerx/explorer-read/sequencer-public-key}
             - {name: LAYERX_EXPLORER_READ_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-id}}}
             - {name: LAYERX_EXPLORER_READ_FEE_LIMIT, value: "50000000"}
+            - {name: LAYERX_NETWORK_GATEWAY_ENDPOINT, value: "https://layerx-gateway.layerx-testnet.svc.cluster.local:443/rpc"}
           resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
           securityContext: {runAsUser: 4030, runAsGroup: 4030, runAsNonRoot: true, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
           volumeMounts:
@@ -215,6 +216,8 @@ spec:
   egress:
     - to: [{podSelector: {matchLabels: {layerx-plane: trusted-boundary}}}]
       ports: [{protocol: TCP, port: 9443}, {protocol: TCP, port: 9445}, {protocol: TCP, port: 9446}]
+    - to: [{podSelector: {matchLabels: {app: layerx-gateway}}}]
+      ports: [{protocol: TCP, port: 9443}]
     - to: [{namespaceSelector: {}}]
       ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
 ---

@@ -4,6 +4,7 @@ mod deposit;
 mod engine;
 mod exit;
 mod move_money;
+mod observed;
 mod resolver;
 mod router;
 mod wire;
@@ -34,6 +35,8 @@ pub use exit::{
     EXIT_IRREVERSIBILITY_NOTICE, EXIT_NORMAL_OPERATION_MESSAGE, EXIT_SETTINGS_SURFACE, EXIT_TITLE,
     ORDINARY_WITHDRAWAL_PATH,
 };
+
+pub use observed::{NetworkObservation, ObservationError, ObservedStateBuilder};
 
 pub use resolver::{
     BudgetCreation, BudgetRoute, ChangeSurface, CustodyRoute, Endpoint, EndpointConstructionError,

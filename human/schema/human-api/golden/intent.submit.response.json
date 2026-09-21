@@ -1,0 +1,13 @@
+{
+  "status": 200,
+  "body": {
+    "ok": true,
+    "result": {
+      "journey_id": "jrn_01j2gx3fam9kq4vte8n5w6y7z8",
+      "plan_digest": "4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b",
+      "state": "processing",
+      "state_copy_key": "status.processing"
+    },
+    "trace": "trc_01j2gxq4dpc2d3e4f5g6h7j8k9"
+  }
+}

@@ -868,6 +868,7 @@ dependencies = [
  "layerx-crypto",
  "layerx-intents",
  "layerx-mirror",
+ "layerx-network-gateway",
  "layerx-program-sdk",
  "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
@@ -984,6 +985,7 @@ dependencies = [
  "layerx-human-test-support",
  "layerx-identity-binding",
  "layerx-intents",
+ "layerx-network-gateway",
  "layerx-paxeer-client",
  "layerx-platform-internal",
  "layerx-proof",
@@ -1063,6 +1065,14 @@ dependencies = [
  "sha2",
  "sha3",
  "zeroize",
+]
+
+[[package]]
+name = "layerx-network-gateway"
+version = "0.1.0"
+dependencies = [
+ "native-tls",
+ "serde_json",
 ]
 
 [[package]]

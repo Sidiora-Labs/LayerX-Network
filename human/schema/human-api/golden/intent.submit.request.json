@@ -1,0 +1,41 @@
+{
+  "method": "POST",
+  "path": "/v1/intents/submit",
+  "headers": {
+    "Idempotency-Key": "b1946ac92492d2347c6235b4d2611184"
+  },
+  "body": {
+    "plan_digest": "4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b",
+    "signed_digest": "7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c",
+    "bindings": [
+      {
+        "leg_index": 0,
+        "action_key": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "actor": "did:layerx:alice",
+        "authority": "custody-key",
+        "relationship": "self",
+        "account_sequence": 7,
+        "not_before": 1755500000,
+        "not_after": 1755503600,
+        "fee_limit": {
+          "amount": "125",
+          "currency": "LXP"
+        }
+      },
+      {
+        "leg_index": 1,
+        "action_key": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+        "actor": "did:layerx:alice",
+        "authority": "agent-authority",
+        "relationship": "self",
+        "account_sequence": 8,
+        "not_before": 1755500000,
+        "not_after": 1755503600,
+        "fee_limit": {
+          "amount": "125",
+          "currency": "LXP"
+        }
+      }
+    ]
+  }
+}

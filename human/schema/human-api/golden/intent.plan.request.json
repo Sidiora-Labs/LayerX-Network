@@ -1,0 +1,26 @@
+{
+  "method": "POST",
+  "path": "/v1/intents/plan",
+  "body": {
+    "source": {
+      "kind": "paxeer-wallet"
+    },
+    "destination": {
+      "kind": "agent",
+      "account": "agent:did:layerx:bob:main"
+    },
+    "asset_id": "9999999999999999999999999999999999999999999999999999999999999999",
+    "money": {
+      "amount": "500000",
+      "currency": "LXP"
+    },
+    "constraints": {
+      "deadline": "2026-08-18T09:35:00Z",
+      "max_fee": {
+        "amount": "250",
+        "currency": "LXP"
+      },
+      "allow_top_up": false
+    }
+  }
+}

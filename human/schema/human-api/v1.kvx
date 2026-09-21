@@ -1,10 +1,10 @@
 [schema]
 name = "LayerX Human API"
 major = 1
-minor = 4
+minor = 5
 source_of_truth = "This schema and the schema files it includes define the human-api contract between layerx-human-service and the web application. Generated client output is never authoritative."
 compatibility = "Additive only within a major version: a release may only add sections, keys, list entries or optional fields. Removing or changing an existing declaration requires a new major version."
-includes = ["journeys.kvx","errors.kvx","stream.kvx","identity.kvx","movement.kvx","agents.kvx","activity.kvx","support.kvx","home.kvx"]
+includes = ["journeys.kvx","errors.kvx","stream.kvx","identity.kvx","movement.kvx","agents.kvx","activity.kvx","support.kvx","home.kvx","intent.kvx"]
 
 [authorization]
 model = "Every non-public operation is authorized against the durable principal-scoped passkey session and yields a one-use execution capability bound to the operation, canonical body disclosure, destination, principal, authenticated agent tenant, session, trace, random nonce, issue time and a maximum age of sixty seconds."

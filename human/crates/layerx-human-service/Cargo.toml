@@ -17,6 +17,7 @@ layerx-proof.workspace = true
 layerx-client.workspace = true
 layerx-identity-binding.workspace = true
 layerx-sdk.workspace = true
+layerx-network-gateway.workspace = true
 layerx-paxeer-client.workspace = true
 passkey-auth.workspace = true
 serde.workspace = true

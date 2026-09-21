@@ -44,6 +44,10 @@ const SCHEMA_FILES: &[(&str, &str)] = &[
         "home.kvx",
         include_str!("../../../../schema/human-api/home.kvx"),
     ),
+    (
+        "intent.kvx",
+        include_str!("../../../../schema/human-api/intent.kvx"),
+    ),
 ];
 
 const MAX_SCHEMA_DEPTH: usize = 32;

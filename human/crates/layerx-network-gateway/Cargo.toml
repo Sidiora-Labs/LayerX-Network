@@ -1,0 +1,13 @@
+[package]
+name = "layerx-network-gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+native-tls = "=0.2.18"
+
+[lints]
+workspace = true
