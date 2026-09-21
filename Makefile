@@ -1388,9 +1388,11 @@ layerx-handover: $(BUILD_DIR)/bin/layerx-handover
 build: layerx-handover
 
 $(BUILD_DIR)/tests/test_layerxd: tests/test_layerxd.c $(LAYERXD_SOURCES) \
+		cmd/layerxd/lxp_daemon_finality_authority.h \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_layerxd.c $(LAYERXD_SOURCES) \
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) \
+		tests/test_layerxd.c $(LAYERXD_SOURCES) \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(EXTRA_LDFLAGS) \
 		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 

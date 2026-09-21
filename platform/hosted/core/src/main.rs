@@ -159,9 +159,14 @@ struct ReceiptFacts {
     canonical: Vec<u8>,
 }
 
+fn read_input(variable: &str, path: &str) -> Result<Vec<u8>, String> {
+    fs::read(path).map_err(|error| format!("{variable} ({path}): {error}"))
+}
+
 fn read_secret(path_variable: &str) -> Result<Zeroizing<String>, String> {
     let path = env::var(path_variable).map_err(|_| format!("{path_variable} is required"))?;
-    let mut value = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let mut value = fs::read_to_string(&path)
+        .map_err(|error| format!("{path_variable} ({path}): {error}"))?;
     while matches!(value.as_bytes().last(), Some(b'\n' | b'\r')) {
         value.pop();
     }
@@ -206,12 +211,13 @@ fn server_tls_config(
     client_ca: Option<&[u8]>,
 ) -> Result<Arc<ServerConfig>, String> {
     install_provider()?;
-    let certificate = CertificateDer::from(
-        fs::read(required(certificate_variable)?).map_err(|error| error.to_string())?,
-    );
-    let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(
-        fs::read(required(key_variable)?).map_err(|error| error.to_string())?,
-    ));
+    let certificate_path = required(certificate_variable)?;
+    let key_path = required(key_variable)?;
+    let certificate = CertificateDer::from(read_input(certificate_variable, &certificate_path)?);
+    let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(read_input(
+        key_variable,
+        &key_path,
+    )?));
     let builder = ServerConfig::builder();
     let config = match client_ca {
         Some(ca) => {
@@ -257,7 +263,7 @@ fn parse_node_url(value: &str) -> Result<NodeEndpoint, String> {
 
 fn config() -> Result<Config, String> {
     let client_ca = match env::var("LAYERX_CORE_CLIENT_CA_DER") {
-        Ok(path) => Some(fs::read(path).map_err(|error| error.to_string())?),
+        Ok(path) => Some(read_input("LAYERX_CORE_CLIENT_CA_DER", &path)?),
         Err(_) => None,
     };
     let network_id = required("LAYERX_CORE_NETWORK_ID")?
