@@ -47,7 +47,7 @@ var credential = new HttpProductionTransport.BearerCredential(
     new SecretBytes("your-api-key".getBytes()));
 var transport = HttpProductionTransport.create(
     URI.create("https://api.paxeer.network"),
-    URI.create("https://agent.layerx.network/rpc"),
+    URI.create("https://agent.paxeer.network/rpc"),
     credential);
 var client = new ProductionClient(transport);
 
@@ -66,7 +66,7 @@ val credential = HttpProductionTransport.BearerCredential(
     SecretBytes("your-api-key".toByteArray()))
 val transport = HttpProductionTransport.create(
     URI.create("https://api.paxeer.network"),
-    URI.create("https://agent.layerx.network/rpc"),
+    URI.create("https://agent.paxeer.network/rpc"),
     credential)
 val client = ProductionClient(transport)
 

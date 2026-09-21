@@ -8,7 +8,7 @@ RRULE:FREQ=MONTHLY;BYDAY=1TU
 DURATION:PT30M
 SUMMARY:LayerX public beta reset
 DESCRIPTION:Balances and receipts on the LayerX public beta are reset.
-URL:https://status.layerx.network/beta-resets.ics
+URL:https://status.paxeer.network/beta-resets.ics
 CATEGORIES:MAINTENANCE,BETA
 TRANSP:TRANSPARENT
 END:VEVENT

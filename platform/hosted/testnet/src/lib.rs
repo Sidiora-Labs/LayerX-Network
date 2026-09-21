@@ -75,7 +75,7 @@ pub fn platform_testnet() -> TestnetConfig {
         public_endpoint: "https://beta.paxeer.network".to_owned(),
         gateway_endpoint: "https://api.paxeer.network".to_owned(),
         faucet_endpoint: "https://faucet.paxeer.network".to_owned(),
-        status_endpoint: "https://status.layerx.network".to_owned(),
+        status_endpoint: "https://status.paxeer.network".to_owned(),
         reset_schedule: "09:00 UTC on the first Tuesday of every month".to_owned(),
         snapshot_interval: Duration::from_secs(15),
     }

@@ -36,6 +36,6 @@
  * </dependency>
  * }</pre>
  *
- * @see <a href="https://docs.layerx.network/sdk/jvm">JVM SDK Documentation</a>
+ * @see <a href="https://docs.paxeer.network/sdk/jvm">JVM SDK Documentation</a>
  */
 package com.sidiora.layerx.sdk;

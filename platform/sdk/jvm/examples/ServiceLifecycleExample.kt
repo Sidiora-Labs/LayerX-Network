@@ -17,7 +17,7 @@ fun main() {
         SecretBytes(apiKey.toByteArray()))
     val transport = HttpProductionTransport.create(
         URI.create("https://api.paxeer.network"),
-        URI.create("https://agent.layerx.network/rpc"),
+        URI.create("https://agent.paxeer.network/rpc"),
         credential)
     val client = ProductionClient(transport)
 
