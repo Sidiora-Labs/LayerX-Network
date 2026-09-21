@@ -24,6 +24,7 @@ mod register;
 mod scaffold;
 mod toolset;
 mod wallet;
+mod wallet_derive;
 mod workspace;
 
 use config::{Configuration, Environment};

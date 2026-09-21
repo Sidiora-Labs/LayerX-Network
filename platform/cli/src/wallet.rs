@@ -23,6 +23,9 @@ pub enum WalletCommand {
         #[arg(long)]
         did: Option<String>,
     },
+    /// Derive the EVM account and LayerX identity of one BIP-39 phrase read
+    /// from standard input or a file.
+    Derive(crate::wallet_derive::DeriveArgs),
     /// List local wallet public metadata.
     List,
     /// Read all accounts of the selected DID.
@@ -379,6 +382,7 @@ pub fn run_wallet(
             account_id,
             timeout_seconds,
         } => watch(&config, rpc, gateway, topic, account_id, timeout_seconds),
+        WalletCommand::Derive(arguments) => crate::wallet_derive::run(&arguments, rpc, gateway),
         WalletCommand::List => crate::key(crate::KeyCommand::List),
         WalletCommand::Import { name, did } => {
             let metadata = crate::credential::import_key(&mut config, &name, did)?;
