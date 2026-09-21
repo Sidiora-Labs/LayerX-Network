@@ -136,20 +136,69 @@ cluster or chain-125 deployment qualification is claimed on the build server.
 
 ## Checkpoint authority publication
 
-The cluster genesis provisioning path generates an Ed25519 authority through
-`guarantor.sh --checkpoint-authority-public` in the first guarantor container.
-Its private key remains in the shared persistent submitter volume at
-`/var/lib/guarantor-submitter/checkpoint-authority.pem`, owned by UID 4021 with
-mode 0600. Both producer containers receive this path through
-`LAYERX_GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE`. Concurrent provisioning and
-restarts reuse the same file. Invalid permissions, symlinks and non-Ed25519 keys
-are refused without rotating the authority.
+The guarantor signs every deposit-root registration with an Ed25519 authority
+key, and `layerxcustody` only accepts those signatures while its parameter
+`deposit_root_authority` carries that key's public half. That parameter is
+genesis state and nothing sets it afterwards, so the key cannot be minted by a
+container that starts after the chain: the bring-up generates it before the
+Paxeer genesis is built (`beta-cluster.sh`,
+`guarantor_checkpoint_authority_generate`) and publishes both halves as
+Kubernetes Secrets.
 
-Only the public key leaves the container. The provisioning path publishes
-Secret `layerx-guarantor-checkpoint-authority` in `TESTNET_NAMESPACE`, with
-`public.hex` containing `0x` followed by 64 lowercase hexadecimal characters.
-The Human movement policy must consume that public key in its namespace.
-The private key is never placed in a Kubernetes Secret or provisioning output.
-This provisions authority identity only: settlement witness and deposit-root
-publication remain blocked by the native composite-state versus settlement
-Merkle-proof contract recorded in the qualification ledger.
+The public half goes to Secret `layerx-guarantor-checkpoint-authority` in
+`TESTNET_NAMESPACE`, with `public.hex` containing `0x` followed by 64 lowercase
+hexadecimal characters. The Paxeer genesis init container reads it as
+`LAYERX_PAXEER_DEPOSIT_ROOT_AUTHORITY_FILE`, and the Human movement policy
+consumes the same secret in its namespace. `init-chain.sh` refuses to build a
+custody genesis whose `deposit_root_authority` is absent or zero, rather than
+producing a chain on which no deposit root can ever be registered.
+
+The private half goes to Secret `layerx-guarantor-checkpoint-authority-key`,
+mounted only into the node's `guarantor-checkpoint-authority` init container,
+which installs it in the shared persistent submitter volume at
+`/var/lib/guarantor-submitter/checkpoint-authority.pem`, owned by UID 4021 with
+mode 0600, and fails the pod if a different key is already there. Both producer
+containers receive that path through
+`LAYERX_GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE`; restarts reuse the same file.
+Invalid permissions, symlinks and non-Ed25519 keys are refused without rotating
+the authority. Outside the cluster, `guarantor.sh --checkpoint-authority-public`
+still generates the key on first use, and the operator has to carry its public
+half into the custody genesis of the chain the guarantor will publish to.
+
+## Publication authorizations outside the cluster
+
+Every batch that replays an owner balance, a withdrawal or a deposit publishes
+settlement evidence, and the producer refuses to publish it without the owner
+and checkpoint-authority signatures for that checkpoint. They arrive as
+`<checkpoint-id>.json` in `LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR`, so
+`guarantor.sh` creates that directory on every run, not only when the cluster
+mounts a policy: a run without one would refuse its first non-empty batch.
+
+In the cluster, the node manifest mounts the signing policy
+`layerx-node-publication/authorization.json` at
+`LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_SOURCE`; `guarantor.sh` installs it
+under the producer's signer directory as
+`LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_FILE`, and
+`cmd/layerx-guarantor/authorization.py` then produces the file in process by
+asking the treasury signer socket and the human recipient socket for the owner
+signatures and signing the deposit root with `deposit_authority_key_file`.
+
+An operator running the guarantor by hand has the same two options:
+
+- point `LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_FILE` at their own copy of
+  that policy. `platform/hosted/tests/publication-policy.py authorization` writes
+  one; the socket paths, the peer uid and gid and the checkpoint-authority key
+  file default to the cluster locations and are overridden with
+  `--treasury-socket`, `--human-socket`, `--peer-uid`, `--peer-gid` and
+  `--deposit-authority-key-file`. `guarantor.sh` refuses to start when the policy
+  it is given is not readable.
+- or deliver the signed `<checkpoint-id>.json` files into
+  `LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR` from wherever the owner and
+  checkpoint authority actually sign, using the
+  `<checkpoint-id>.publication-request.json` the producer writes after
+  registration.
+
+Until the file for a registered checkpoint arrives, the producer reports the
+publication as pending and asks again rather than exiting: the checkpoint stays
+registered, nothing is published, and a `--once` run gives up after five minutes
+with `waiting batch=<n> field=publication authorization`.

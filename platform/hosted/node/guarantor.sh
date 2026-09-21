@@ -11,6 +11,22 @@ fi
 : "${LAYERX_GUARANTOR_SUBMITTER_KEY_FILE:?submitter key is required}"
 state_root=$LAYERX_GUARANTOR_STATE_DIR
 submitter_source=$LAYERX_GUARANTOR_SUBMITTER_KEY_FILE
+# Every batch that replays an owner balance, a withdrawal or a deposit publishes settlement evidence,
+# and the producer refuses to publish it without the owner and checkpoint-authority signatures for
+# that checkpoint. They arrive as <checkpoint-id>.json in the publication inputs directory, so that
+# directory exists on every run and not only in the cluster: the cluster mounts the signing policy
+# the producer then runs itself (cmd/layerx-guarantor/authorization.py against the treasury and
+# recipient signer sockets), while an operator running the guarantor by hand either points
+# LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_FILE at their own copy of that policy or delivers the
+# signed files into LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR themselves.
+inputs_override=${LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR:-}
+if [ -n "${LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_FILE:-}" ] && \
+   [ -z "${LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_SOURCE:-}" ]; then
+    [ -r "$LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_FILE" ] || {
+        echo "publication authorization policy is not readable: $LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_FILE" >&2
+        exit 2
+    }
+fi
 guarantor_binary=${LAYERX_GUARANTOR_BINARY:-/usr/local/bin/layerx-guarantor}
 [ -x "$guarantor_binary" ] || { echo "guarantor binary is not executable: $guarantor_binary" >&2; exit 2; }
 child=""
@@ -52,14 +68,16 @@ while :; do
     chmod 0700 "$LAYERX_GUARANTOR_STATE_DIR/signer"
     install -m 0600 "$submitter_source" "$LAYERX_GUARANTOR_STATE_DIR/signer/submitter.key"
     export LAYERX_GUARANTOR_SUBMITTER_KEY_FILE="$LAYERX_GUARANTOR_STATE_DIR/signer/submitter.key"
+    export LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR="${inputs_override:-$LAYERX_GUARANTOR_STATE_DIR/publication-inputs}"
+    mkdir -p "$LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR"
+    chmod 0700 "$LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR"
     if [ -n "${LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_SOURCE:-}" ]; then
         install -m 0600 "$LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_SOURCE" \
             "$LAYERX_GUARANTOR_STATE_DIR/signer/publication-authorization.json"
         export LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_FILE="$LAYERX_GUARANTOR_STATE_DIR/signer/publication-authorization.json"
-        export LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR="$LAYERX_GUARANTOR_STATE_DIR/publication-inputs"
-        mkdir -p "$LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR"
-        chmod 0700 "$LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR"
-        export PYTHONPATH=/opt/layerx:/opt/layerx/human
+    fi
+    if [ -n "${LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_FILE:-}" ]; then
+        export PYTHONPATH=${PYTHONPATH:-/opt/layerx:/opt/layerx/human}
     fi
     "$guarantor_binary" &
     child=$!

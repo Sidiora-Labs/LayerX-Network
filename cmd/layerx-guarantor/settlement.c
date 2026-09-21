@@ -16,7 +16,11 @@ enum {
     GP_MEMBERSHIP_RECORD = 85,
     GP_MEMBERSHIP_PREFIX = 76,
     GP_REGISTRATION_WIRE = 57,
-    GP_DEPOSIT_WIRE = 120
+    GP_DEPOSIT_WIRE = 120,
+    /* settlement.py exits with this status when the owner and checkpoint-authority signatures for
+       the registered checkpoint have not been delivered yet. Nothing was published and the
+       registration stands, so the caller waits and asks again instead of failing the batch. */
+    GP_AUTHORIZATION_PENDING_EXIT = 75
 };
 typedef struct gp_files {
     char directory[GP_SETTLEMENT_PATH];
@@ -161,7 +165,11 @@ static lxp_result execute(const gp_settlement_config *config, const char *mode, 
     do {
         waited = waitpid(pid, &status, 0);
     } while (waited < 0 && errno == EINTR);
-    if (waited != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+    if (waited != pid || !WIFEXITED(status))
+        return LXP_ERR_CONTEXT_MISMATCH;
+    if (WEXITSTATUS(status) == GP_AUTHORIZATION_PENDING_EXIT)
+        return LXP_ERR_NOT_YET_VALID;
+    if (WEXITSTATUS(status) != 0)
         return LXP_ERR_CONTEXT_MISMATCH;
     fd = open(files->wire, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0)

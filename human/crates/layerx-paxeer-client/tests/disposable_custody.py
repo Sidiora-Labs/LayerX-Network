@@ -299,11 +299,16 @@ class DisposableCustody(unittest.TestCase):
             asset = '0x' + hashlib.sha256(b'test asset').hexdigest()
             sequencer = ed25519.Ed25519PrivateKey.generate().public_key().public_bytes(
                 Encoding.Raw, PublicFormat.Raw)
+            # layerxcustody refuses every deposit-root registration while this parameter is empty and
+            # nothing can set it after genesis, so the chain is built with a real authority key.
+            authority = ed25519.Ed25519PrivateKey.generate().public_key().public_bytes(
+                Encoding.Raw, PublicFormat.Raw)
             custody_genesis = directory / 'custody-genesis.json'
             command('python3', str(ROOT / 'platform/hosted/paxeer/custody-genesis.py'),
                     '--network-id', '402',
                     '--sequencer-id', '0x' + hashlib.sha256(sequencer).hexdigest(),
                     '--sequencer-public-key', '0x' + sequencer.hex(),
+                    '--deposit-root-authority', '0x' + authority.hex(),
                     '--asset', asset + ':uhpx', '--output', str(custody_genesis))
             with owned_chain(directory, self.artifacts, custody_genesis) as chain:
                 with boundaries(directory, chain, self.boundary_binary) as (origins, ca_path, identity_path):

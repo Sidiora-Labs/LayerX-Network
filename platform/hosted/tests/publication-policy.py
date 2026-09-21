@@ -18,7 +18,48 @@ def integer(value, limit):
     return int(value)
 
 
+def identity(value):
+    if not value.isdecimal() or not 0 <= int(value) < 2**32:
+        raise ValueError('publication policy peer identity invalid')
+    return int(value)
+
+
+def absolute(value):
+    path = Path(value)
+    if not path.is_absolute() or path.parent.resolve() != path.parent or path.name in ('', '.', '..'):
+        raise ValueError('publication policy path invalid')
+    return str(path)
+
+
+# The cluster values of the signer sockets, their peer identities and the checkpoint authority key
+# file. A guarantor run outside the cluster reaches the same signers over its own socket paths and
+# keeps its checkpoint authority key where its operator put it, so each of these is an override
+# `--name value` after the positional arguments rather than a constant.
+DEFAULTS = {'treasury-socket': '/run/layerx/node/treasury-signer.sock',
+            'human-socket': '/run/layerx/human/recipient.sock',
+            'peer-uid': '4020',
+            'peer-gid': '4020',
+            'deposit-authority-key-file': '/var/lib/guarantor-submitter/checkpoint-authority.pem'}
+
+
+def options(arguments):
+    values, positional, index = dict(DEFAULTS), [], 0
+    while index < len(arguments):
+        item = arguments[index]
+        if not item.startswith('--'):
+            positional.append(item)
+            index += 1
+            continue
+        name = item[2:]
+        if name not in DEFAULTS or index + 1 == len(arguments):
+            raise ValueError('publication policy option invalid')
+        values[name] = arguments[index + 1]
+        index += 2
+    return positional, values
+
+
 def main(arguments):
+    arguments, option = options(arguments)
     if len(arguments) == 5 and arguments[0] == 'treasury':
         _, output, network, asset, recipient = arguments
         value = dict(version=1, network_id=integer(network, 2**32),
@@ -26,15 +67,16 @@ def main(arguments):
     elif len(arguments) == 10 and arguments[0] == 'authorization':
         _, output, network, chain, bond, registry, vault, public, asset, recipient = arguments
         vault = hexadecimal(vault, 20, True)
+        peers = dict(peer_uid=identity(option['peer-uid']), peer_gid=identity(option['peer-gid']))
         value = dict(version=1, network_id=integer(network, 2**32), chain_id=integer(chain, 2**64),
                      settlement_contract=hexadecimal(bond, 20, True),
                      checkpoint_registry=hexadecimal(registry, 20, True), vault=vault,
                      custody_reference='00' * 12 + vault,
-                     treasury=dict(socket='/run/layerx/node/treasury-signer.sock', peer_uid=4020,
-                                   peer_gid=4020, public_key=hexadecimal(public, 32),
+                     treasury=dict(socket=absolute(option['treasury-socket']), **peers,
+                                   public_key=hexadecimal(public, 32),
                                    asset_id=hexadecimal(asset, 32), recipient=hexadecimal(recipient, 20)),
-                     human=dict(socket='/run/layerx/human/recipient.sock', peer_uid=4020, peer_gid=4020),
-                     deposit_authority_key_file='/var/lib/guarantor-submitter/checkpoint-authority.pem')
+                     human=dict(socket=absolute(option['human-socket']), **peers),
+                     deposit_authority_key_file=absolute(option['deposit-authority-key-file']))
     else:
         raise ValueError('publication policy arguments invalid')
     path = Path(output)

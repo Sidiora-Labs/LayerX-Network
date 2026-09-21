@@ -20,6 +20,9 @@ spec:
             - {name: LAYERX_PAXEER_CHECKPOINT_SUBMITTER_ADDRESS_FILE, value: /run/layerx/checkpoint-submitter/address}
             - {name: LAYERX_PAXEER_CUSTODY_GENESIS_FILE, value: /run/layerx/custody/genesis.json}
             - {name: LAYERX_PAXEER_ANCHOR_GENESIS_FILE, value: /run/layerx/anchor/genesis.json}
+            # The guarantor checkpoint authority signs every deposit-root registration and nothing
+            # sets the custody parameter after genesis, so its public key is a genesis input.
+            - {name: LAYERX_PAXEER_DEPOSIT_ROOT_AUTHORITY_FILE, value: /run/layerx/deposit-root-authority/public.hex}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           volumeMounts:
             - {name: data, mountPath: /var/lib/paxeer}
@@ -27,6 +30,7 @@ spec:
             - {name: checkpoint-submitter, mountPath: /run/layerx/checkpoint-submitter, readOnly: true}
             - {name: custody-genesis, mountPath: /run/layerx/custody, readOnly: true}
             - {name: anchor-genesis, mountPath: /run/layerx/anchor, readOnly: true}
+            - {name: deposit-root-authority, mountPath: /run/layerx/deposit-root-authority, readOnly: true}
             - {name: tmp, mountPath: /tmp}
       containers:
         - name: paxd
@@ -61,6 +65,7 @@ spec:
         - {name: checkpoint-submitter, secret: {secretName: paxeer-checkpoint-submitter-address}}
         - {name: custody-genesis, configMap: {name: paxeer-custody-genesis}}
         - {name: anchor-genesis, configMap: {name: paxeer-anchor-genesis}}
+        - {name: deposit-root-authority, secret: {secretName: layerx-guarantor-checkpoint-authority, items: [{key: public.hex, path: public.hex}]}}
         - {name: tmp, emptyDir: {}}
   volumeClaimTemplates:
     - metadata: {name: data}

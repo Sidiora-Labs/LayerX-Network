@@ -44,6 +44,29 @@ spec:
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           volumeMounts:
             - {name: data, mountPath: /var/lib/layerx}
+        # The Paxeer custody genesis pins depositRootAuthority to the public half of this key, and
+        # nothing can change that parameter afterwards, so the producers must sign deposit-root
+        # registrations with this exact key. It is installed as the UID 4021 0600 file both
+        # guarantors read through LAYERX_GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE, and a volume that
+        # already holds a different key stops the pod instead of signing against a stale authority.
+        - name: guarantor-checkpoint-authority
+          image: ghcr.io/sidiora-labs/layerx-node:0.1.0
+          imagePullPolicy: Always
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              umask 077
+              if [ ! -e /var/lib/guarantor-submitter/checkpoint-authority.pem ]; then
+                install -m 0600 /run/checkpoint-authority-input/key.pem \
+                  /var/lib/guarantor-submitter/checkpoint-authority.pem
+              fi
+              cmp -s /run/checkpoint-authority-input/key.pem \
+                /var/lib/guarantor-submitter/checkpoint-authority.pem
+          securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 100m, memory: 32Mi}}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/guarantor-submitter, subPath: guarantor-submitter}
+            - {name: guarantor-checkpoint-authority, mountPath: /run/checkpoint-authority-input, readOnly: true}
         - name: publication-policy
           image: ghcr.io/sidiora-labs/layerx-node:0.1.0
           imagePullPolicy: Always
@@ -892,6 +915,7 @@ spec:
         - {name: guarantor-2-tls, secret: {secretName: layerx-guarantor-2-tls, defaultMode: 0440}}
         - {name: checkpoint-submitter, secret: {secretName: paxeer-checkpoint-submitter, defaultMode: 0440}}
         - {name: publication-policy, secret: {secretName: layerx-node-publication, defaultMode: 0440}}
+        - {name: guarantor-checkpoint-authority, secret: {secretName: layerx-guarantor-checkpoint-authority-key, defaultMode: 0400}}
         - {name: human-authority-private, emptyDir: {medium: Memory, sizeLimit: 32Mi}}
         - {name: human-module-registry, configMap: {name: layerx-core-module-registry}}
         - {name: human-identity-material, secret: {secretName: layerx-human-identity-material, defaultMode: 0440}}
