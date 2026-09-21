@@ -235,5 +235,85 @@ class LightProfilePublicationTests(unittest.TestCase):
         self.assertEqual(str(caught.exception), 'native witness root or trailing data')
 
 
+class WithdrawalAnchorPublicationTests(unittest.TestCase):
+    NETWORK = 77
+
+    def record(self, seed, anchor):
+        identity, account, asset = sha(b'withdrawal' + seed), sha(b'account' + seed), sha(b'asset')
+        amount, recipient = (25).to_bytes(16, 'big'), bytes(12) + sha(b'recipient' + seed)[:20]
+        value = b'\0\2' + self.NETWORK.to_bytes(4, 'big') + identity + account + asset + amount + recipient + anchor
+        key = b'withdrawal:' + sha(b'LX:WITHDRAWAL:v1' + self.NETWORK.to_bytes(4, 'big') + identity + account + asset + amount + anchor)
+        return key, value
+
+    def batch(self, anchors):
+        records = [self.record(bytes([index]), anchor) for index, anchor in enumerate(anchors)]
+        leaves = [p.state_leaf(key, value) for key, value in records]
+        others = [p.state_leaf(index.to_bytes(2, 'big'), sha(b'LXP/v1/state-subtree\0' +
+                  index.to_bytes(2, 'big'))) for index in range(9)]
+        encoded, root = [], None
+        for index, (key, value) in enumerate(records):
+            wire, proved = encode(1, key, value, leaves, index, others, 1)
+            self.assertIn(root, (None, proved))
+            encoded.append(wire)
+            root = proved
+        header = [3, self.NETWORK, 7, 11, 1, 1000] + [bytes(32)] * 7 + [1, bytes(32)]
+        header[7] = root
+        facts = {'balances': [], 'withdrawals': encoded, 'deposits': [], 'profile': None}
+        request = dict(chain_id=125, native_facts=facts, attestations=[])
+        _, withdrawals, _, _ = p.native_request(s, request, header, bytes(32))
+        self.assertEqual(len(withdrawals), len(anchors))
+        return request, header, withdrawals
+
+    def test_recorded_anchor_is_published(self):
+        anchor, digest = sha(b'recorded'), sha(b'checkpoint')
+        for record in ((3, s.STATUS_FINAL), (11, s.STATUS_SUBMITTED)):
+            request, header, withdrawals = self.batch([anchor])
+            items, refused = p.withdrawal_publication(s, request, header, digest, withdrawals, {anchor: record})
+            self.assertEqual(refused, [])
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0][:32], withdrawals[0]['identity'])
+            self.assertIn(anchor + digest, items[0])
+
+    def test_unrecorded_anchor_is_refused_without_stopping_the_batch(self):
+        good, garbage, digest = sha(b'recorded'), sha(b'garbage'), sha(b'checkpoint')
+        request, header, withdrawals = self.batch([good, garbage, good])
+        records = {good: (3, s.STATUS_FINAL), garbage: (0, s.STATUS_UNKNOWN)}
+        items, refused = p.withdrawal_publication(s, request, header, digest, withdrawals, records)
+        bad = [v for v in withdrawals if v['anchor'] == garbage]
+        self.assertEqual(len(bad), 1)
+        self.assertEqual([v[:32] for v in items], [v['identity'] for v in withdrawals if v['anchor'] == good])
+        self.assertEqual(refused, [{'withdrawal_id': p.hx(bad[0]['identity']), 'account': p.hx(bad[0]['account']),
+                                    'request_anchor': p.hx(garbage), 'reason': 'withdrawal anchor not recorded ancestor'}])
+        for item in items:
+            self.assertNotIn(garbage, item)
+            self.assertNotIn(bad[0]['identity'], item)
+        published = p.vector(b'LXP/Paxeer/withdrawal-witnesses/v2\0', items)
+        self.assertEqual(published[35:39], (2).to_bytes(4, 'big'))
+        self.assertNotIn(garbage, published)
+
+    def test_only_unrecorded_anchors_publish_an_empty_vector(self):
+        garbage, digest = sha(b'garbage'), sha(b'checkpoint')
+        request, header, withdrawals = self.batch([garbage])
+        items, refused = p.withdrawal_publication(s, request, header, digest, withdrawals, {garbage: (0, s.STATUS_UNKNOWN)})
+        self.assertEqual((items, len(refused)), ([], 1))
+        self.assertEqual(p.vector(b'LXP/Paxeer/withdrawal-witnesses/v2\0', items),
+                         b'LXP/Paxeer/withdrawal-witnesses/v2\0' + bytes(4))
+
+    def test_later_or_unfinished_anchor_never_authorises_a_payout(self):
+        anchor, digest = sha(b'anchor'), sha(b'checkpoint')
+        request, header, withdrawals = self.batch([anchor])
+        for record in ((12, s.STATUS_FINAL), (0, s.STATUS_FINAL), (3, s.STATUS_UNKNOWN), (3, 3)):
+            with self.subTest(record=record):
+                items, refused = p.withdrawal_publication(s, request, header, digest, withdrawals, {anchor: record})
+                self.assertEqual((items, len(refused)), ([], 1))
+
+    def test_anchor_without_a_chain_record_fails_closed(self):
+        anchor = sha(b'anchor')
+        request, header, withdrawals = self.batch([anchor])
+        with self.assertRaises(ValueError) as caught:
+            p.withdrawal_publication(s, request, header, sha(b'checkpoint'), withdrawals, {})
+        self.assertEqual(str(caught.exception), 'withdrawal anchor record absent')
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
