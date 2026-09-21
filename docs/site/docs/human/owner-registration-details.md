@@ -61,11 +61,16 @@ The retained identity file remains necessary for restart and replay; checkpoint
 identity matching is unchanged.
 
 The cluster starts disposable Paxeer before native genesis. `owner_custody.py
-bootstrap` deploys the real governance timelock, asset registry, wrapped native
-token and LayerXVault, then invokes the bridge custody-profile verifier. The
-native genesis pins that exact profile. After LXIP and owner-key provisioning,
-`deposit` wraps real disposable-chain native funds, approves the vault, deposits
-for the produced account and invokes `tests/bridge/custody_credit.py` attestation.
+bootstrap` deploys nothing on the disposable Paxeer chain: custody is the native
+`layerxcustody` module behind the precompile at
+`0x0000000000000000000000000000000000001013`, configured in the Paxeer genesis.
+It invokes the bridge custody-profile verifier, which proves the module's asset
+mapping and writes a profile pinning the precompile address and the module
+identity. The native genesis pins that exact profile. After LXIP and owner-key
+provisioning, `deposit` calls `deposit(bytes32)` on the precompile with real
+disposable-chain native funds for the produced account and invokes
+`tests/bridge/custody_credit.py` attestation. On an Anvil chain the same script
+keeps the timelock, asset registry, wrapped token and LayerXVault path.
 Both RPC origins must prove the disposable genesis and CA identity; protected
 host endpoints remain refused. `custody-bootstrap.started` and
 `custody-deposit.started` prevent blind repetition after unknown outcomes.

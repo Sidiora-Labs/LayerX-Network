@@ -1,4 +1,5 @@
 use std::io::Write as _;
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -44,6 +45,9 @@ impl NativeFixture {
             .arg(script)
             .arg(&root)
             .stdin(Stdio::piped())
+            // The harness starts the real `layerxd` replica and sequencer, so
+            // it leads its own group and the whole tree can be stopped at once.
+            .process_group(0)
             .spawn(),
         );
         let deadline = Instant::now() + Duration::from_secs(90);
@@ -156,7 +160,10 @@ impl Drop for NativeFixture {
             let _ = input.write_all(outcome);
         }
         drop(self.child.stdin.take());
-        let _ = self.child.wait();
+        // Closing stdin ends the harness's read and runs its own teardown of
+        // the daemons it started; the bounded wait and the group sweep keep a
+        // wedged harness from leaving them running.
+        super::supervise::shut_down(&mut self.child, Duration::from_secs(120));
         if std::thread::panicking() {
             eprintln!("native withdrawal evidence: {}", self.root.display());
         } else {
