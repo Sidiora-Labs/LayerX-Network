@@ -6,7 +6,7 @@ use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct FaucetArgs {
-    /// Local key whose DID and Ed25519 public key receive the testnet grant.
+    /// Local key whose DID and Ed25519 public key receive the beta grant.
     #[arg(long)]
     key: Option<String>,
 }

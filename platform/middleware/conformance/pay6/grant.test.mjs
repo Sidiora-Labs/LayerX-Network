@@ -6,7 +6,7 @@ import { decodeReceive } from "../../../../agent/sdk/typescript/dist/src/x402/re
 import { encodePaymentRequiredHeader } from "../../seller/dist/index.js";
 const wire = Uint8Array.from(Buffer.from(readFileSync(new URL("receive.hex", import.meta.url), "utf8").split("\n")[0], "hex"));
 const r = decodeReceive(wire);
-const offer = { scheme: "subscription", network: "layerx:testnet", asset: r.asset, amount: r.amount, payTo: r.to, maxTimeoutSeconds: 30, extra: { layerx: { commitment: "executed", payer: r.from, purposeHash: r.payer_grant.purpose_hash, windowSeconds: "3600" } } };
+const offer = { scheme: "subscription", network: "layerx:beta", asset: r.asset, amount: r.amount, payTo: r.to, maxTimeoutSeconds: 30, extra: { layerx: { commitment: "executed", payer: r.from, purposeHash: r.payer_grant.purpose_hash, windowSeconds: "3600" } } };
 test("native signed receive matches subscription offer without authorizing fulfillment", () => {
   assert.deepEqual(validateGrantDraw(wire, offer, r.idempotency_key, 7, 0n), r);
   for (const change of [{ amount: "1" }, { asset: "ab".repeat(32) }, { payTo: "ab".repeat(32) }, { scheme: "metered" },

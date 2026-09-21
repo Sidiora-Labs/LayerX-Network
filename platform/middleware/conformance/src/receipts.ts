@@ -162,7 +162,7 @@ export interface OfferFixture {
 export function offerFixture(payTo: Uint8Array, asset: Uint8Array, amount: bigint): OfferFixture {
   const requirements: PaymentRequirements = {
     scheme: "exact",
-    network: "layerx:testnet",
+    network: "layerx:beta",
     amount: amount.toString(),
     asset: toHex(asset),
     payTo: toHex(payTo),

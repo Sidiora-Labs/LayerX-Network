@@ -11,7 +11,7 @@ const buyerConfig = (protocolVersion) => ({
   })),
   source: "acct:buyer-protocol-test",
   protocolVersion,
-  supported: [{ scheme: "exact", network: "layerx:testnet" }],
+  supported: [{ scheme: "exact", network: "layerx:beta" }],
   authorizedBatches: { resolve: () => Promise.reject(new Error("no receipt is resolved in this test")) },
 });
 

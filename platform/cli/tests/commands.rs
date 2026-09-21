@@ -93,9 +93,9 @@ fn environment_use_requires_endpoint_and_network_together() {
         "--json",
         "environment",
         "use",
-        "testnet",
+        "beta",
         "--endpoint",
-        "https://testnet.example",
+        "https://beta.example",
     ]);
     assert!(!output.status.success());
     let value = error_envelope(&output);
@@ -118,8 +118,39 @@ fn legacy_non_emulator_profile_without_an_anchor_can_be_selected() {
       "network_id": 402,
       "sequencer_trust_anchor": null
     },
+    "beta": {
+      "endpoint": "https://beta.example",
+      "network_id": 402,
+      "sequencer_trust_anchor": null
+    }
+  },
+  "keys": {}
+}
+"#;
+    if let Err(error) = std::fs::write(cli.config_path(), configuration) {
+        panic!("legacy configuration should be writable: {error}");
+    }
+
+    let selected = cli.run(&["--json", "environment", "use", "beta"]);
+    let value = assert_success_envelope(&selected, "environment.selected");
+    assert_eq!(string_field(&value, "/data/name"), "beta");
+}
+
+#[test]
+fn the_testnet_alias_selects_the_beta_environment() {
+    let cli = Cli::new();
+    let configuration = r#"{
+  "version": 1,
+  "current_environment": "emulator",
+  "default_key": null,
+  "environments": {
+    "emulator": {
+      "endpoint": "http://127.0.0.1:9402",
+      "network_id": 402,
+      "sequencer_trust_anchor": null
+    },
     "testnet": {
-      "endpoint": "https://testnet.example",
+      "endpoint": "https://beta.example",
       "network_id": 402,
       "sequencer_trust_anchor": null
     }
@@ -133,7 +164,26 @@ fn legacy_non_emulator_profile_without_an_anchor_can_be_selected() {
 
     let selected = cli.run(&["--json", "environment", "use", "testnet"]);
     let value = assert_success_envelope(&selected, "environment.selected");
-    assert_eq!(string_field(&value, "/data/name"), "testnet");
+    assert_eq!(string_field(&value, "/data/name"), "beta");
+
+    let listed = cli.run(&["--json", "environment", "list"]);
+    let value = assert_success_envelope(&listed, "environment.list");
+    let Some(profiles) = value.pointer("/data").and_then(Value::as_array) else {
+        panic!("environment list should be an array: {value}");
+    };
+    let names = profiles
+        .iter()
+        .filter_map(|profile| profile.get("name").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"beta"), "{names:?}");
+    assert!(!names.contains(&"testnet"), "{names:?}");
+
+    let current = cli.run(&["--json", "environment", "current"]);
+    let value = assert_success_envelope(&current, "environment.current");
+    assert_eq!(
+        string_field(&value, "/data/endpoint"),
+        "https://beta.example"
+    );
 }
 
 #[test]
@@ -195,7 +245,7 @@ fn deleting_an_unknown_key_is_refused() {
 #[test]
 fn auth_status_reports_no_token_for_a_fresh_environment() {
     let cli = Cli::new();
-    let output = cli.run(&["--json", "auth", "status", "--environment", "testnet"]);
+    let output = cli.run(&["--json", "auth", "status", "--environment", "beta"]);
     let value = assert_success_envelope(&output, "auth.status");
     assert_eq!(
         value.pointer("/data/configured").and_then(Value::as_bool),

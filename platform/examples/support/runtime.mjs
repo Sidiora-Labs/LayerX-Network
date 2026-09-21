@@ -54,7 +54,7 @@ const ENDPOINT_FIELDS = Object.freeze(["humanUrl", "receiptAuthorityUrl", "settl
 
 export function applyEndpointOverride(environment, config) {
   const override = optionalEnvironment("LAYERX_EXAMPLE_ENDPOINT");
-  if (override === undefined || environment !== "testnet") return config;
+  if (override === undefined || environment !== "beta") return config;
   const base = secureBaseUrl(override);
   const rebased = { ...config };
   for (const field of ENDPOINT_FIELDS) {
@@ -171,8 +171,8 @@ export function equalBytes(left, right) {
 
 function parseArguments() {
   const arguments_ = process.argv.slice(2);
-  if ((arguments_.length !== 2 && arguments_.length !== 4) || arguments_[0] !== "--environment" || !["emulator", "testnet"].includes(arguments_[1])) {
-    throw new Error("usage_--environment_emulator_or_testnet");
+  if ((arguments_.length !== 2 && arguments_.length !== 4) || arguments_[0] !== "--environment" || !["emulator", "beta"].includes(arguments_[1])) {
+    throw new Error("usage_--environment_emulator_or_beta");
   }
   if (arguments_.length === 4 && (arguments_[2] !== "--action" || !["deploy", "list", "buy"].includes(arguments_[3]))) {
     throw new Error("usage_--action_deploy_list_or_buy");

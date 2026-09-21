@@ -30,7 +30,7 @@ admin listen is `0.0.0.0:9444`
 Service `layerx-testnet-admin` is ClusterIP port `443` targeting
 `admin-tls` `9444`
 (`platform/hosted/testnet/deployment.yaml:116-124`). Ingress
-`layerx-testnet-public` host `testnet.layerx.network` path `/`
+`layerx-testnet-public` host `layerx.network` path `/`
 uses backend protocol HTTPS
 (`platform/hosted/testnet/deployment.yaml:183-198`). Bring-up
 port-forwards `19443:443` and exports `LAYERX_TESTNET_URL`
@@ -38,14 +38,14 @@ port-forwards `19443:443` and exports `LAYERX_TESTNET_URL`
 `platform/hosted/tests/beta-cluster.sh:1114`;
 `platform/hosted/tests/beta-cluster.sh:1258`;
 `platform/hosted/tests/beta-cluster.sh:1278`). Library
-`platform_testnet` names `https://testnet.layerx.network`
+`platform_testnet` names `https://layerx.network`
 (`platform/hosted/testnet/src/lib.rs:75`).
 
 This page covers that binary, both listeners, journey probes, and the
 funding/reset proxy. Faucet claim HTTP is on
-[Hosted faucet](../platform/faucet.md). Treasury SEND construction is on
-[Hosted core](../platform/hosted-core.md). Gateway `/v1` is on
-[Hosted gateway](../platform/hosted-gateway.md).
+[Hosted faucet](HostedFaucet.md). Treasury SEND construction is on
+[Hosted core](HostedCore.md). Gateway `/v1` is on
+[Hosted gateway](HostedGateway.md).
 
 ---
 
@@ -301,7 +301,7 @@ The faucet accepts only `state == "funded"` as
 
 Core additionally requires `did == did:layerx:` plus the lowercase
 public key and refuses the treasury DID
-(`platform/hosted/core/src/main.rs:1475-1484`). Control does
+(`platform/hosted/core/src/main.rs:1475-1484`). Testnet-control does
 not apply those two checks. The faucet does not either. Those three
 DID alphabets differ.
 
@@ -441,7 +441,7 @@ Portable crate tests (no cluster):
 
 Hosted smoke (`platform/hosted/testnet/tests/hosted-smoke.sh`):
 
-- Testnet `GET /readyz` is 200, `state == "ready"`, nine named
+- Control `GET /readyz` is 200, `state == "ready"`, nine named
   dependencies ready, four journeys ready
   (`platform/hosted/testnet/tests/hosted-smoke.sh:52-65`)
 - `GET /v1/parameters` is 200 and matches readiness network id,
@@ -464,4 +464,4 @@ Make:
 | `platform-hosted-topology-check` | default manifests include testnet (`platform/Makefile.inc:177-178`; `platform/hosted/tests/topology-check.sh:21`) |
 | `platform-beta-cluster-up` | waits until testnet `GET /readyz` has `state == "ready"` and every journey ready (`platform/hosted/tests/beta-cluster.sh:1286-1287`) |
 
-[Home](../index.md)
+[Home](Home.md)

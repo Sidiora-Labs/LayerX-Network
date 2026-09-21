@@ -142,19 +142,19 @@ surface = "The gateway response to a burst"
 statement = "The gateway refuses excess traffic with a rate-limit error carrying honest retry timing. It is an operational control on the hosted deployment, not a property of the protocol."
 
 [capability.faucet-funding]
-title = "Testnet faucet funding"
+title = "Beta faucet funding"
 enforcement = "hosted-surface"
-surface = "The testnet faucet"
+surface = "The beta faucet"
 statement = "The faucet decides who may draw test funds and how much. Test funds are ordinary protocol balances once issued; the eligibility rule lives entirely in the hosted surface."
 
-[capability.testnet-reset]
-title = "Scheduled testnet resets"
+[capability.beta-reset]
+title = "Scheduled beta resets"
 enforcement = "hosted-surface"
-surface = "The published testnet reset calendar"
-statement = "The hosted testnet is reset on a published schedule and every balance, agent and receipt from the previous epoch is discarded. Nothing on the testnet is durable and no protocol rule promises otherwise."
+surface = "The published beta reset calendar"
+statement = "The hosted beta network is reset on a published schedule and every balance, agent and receipt from the previous epoch is discarded. Nothing on the beta network is durable and no protocol rule promises otherwise."
 
 [capability.status-page]
 title = "Honest degradation reporting"
 enforcement = "hosted-surface"
 surface = "The status page"
-statement = "The status page distinguishes gateway, testnet, core and Paxeer-side degradation instead of collapsing them into one indicator, so you can tell whose outage you are seeing."
+statement = "The status page distinguishes gateway, network, core and Paxeer-side degradation instead of collapsing them into one indicator, so you can tell whose outage you are seeing."

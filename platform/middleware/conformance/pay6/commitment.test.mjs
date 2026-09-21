@@ -15,7 +15,7 @@ const evidence = {
   },
 };
 const offer = {
-  scheme: "exact", network: "layerx:testnet", asset: batch.asset_hex,
+  scheme: "exact", network: "layerx:beta", asset: batch.asset_hex,
   amount: fixture.expected.amount, payTo: fixture.expected.to_hex, maxTimeoutSeconds: 30,
 };
 

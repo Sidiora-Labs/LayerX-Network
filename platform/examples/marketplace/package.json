@@ -6,11 +6,11 @@
   "scripts": {
     "start": "node index.mjs --environment emulator --action deploy",
     "start:emulator": "node index.mjs --environment emulator --action deploy",
-    "start:testnet": "node index.mjs --environment testnet --action deploy",
+    "start:beta": "node index.mjs --environment beta --action deploy",
     "list:emulator": "node index.mjs --environment emulator --action list",
-    "list:testnet": "node index.mjs --environment testnet --action list",
+    "list:beta": "node index.mjs --environment beta --action list",
     "buy:emulator": "node index.mjs --environment emulator --action buy",
-    "buy:testnet": "node index.mjs --environment testnet --action buy",
+    "buy:beta": "node index.mjs --environment beta --action buy",
     "test": "node --check index.mjs && node test/deploy-payload.test.mjs"
   },
   "dependencies": {

@@ -51,7 +51,7 @@ and event discriminators stay byte-identical. Constructs the account model
 assumes and LayerX does not provide - a program-held lamport balance, a
 program-derived signing authority over somebody else's funds, an account
 another program may mutate - are refused by name at translation time. The
-[`reference`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/programs/porting/solana/src/reference.rs) port emits a
+[`reference`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/programs/porting/solana/src/reference.rs) port emits a
 deterministic module, deploys through the real lifecycle, rebuilds from
 published source, and executes under the real metered executor.
 

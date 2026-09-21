@@ -8,10 +8,10 @@ and [`docs/wiki/CommitmentLevels.md`](../../docs/wiki/CommitmentLevels.md).
 
 | Application | Emulator | Beta |
 |---|---|---|
-| Buyer agent | `npm run start:emulator --workspace @sidiora/layerx-example-buyer-agent` | `npm run start:testnet --workspace @sidiora/layerx-example-buyer-agent` |
-| Paid API | `npm run start:emulator --workspace @sidiora/layerx-example-paid-api` | `npm run start:testnet --workspace @sidiora/layerx-example-paid-api` |
-| Merchant shop | `npm run start:emulator --workspace @sidiora/layerx-example-merchant-shop` | `npm run start:testnet --workspace @sidiora/layerx-example-merchant-shop` |
-| Programs marketplace | `npm run start:emulator --workspace @sidiora/layerx-example-marketplace` | `npm run start:testnet --workspace @sidiora/layerx-example-marketplace` |
+| Buyer agent | `npm run start:emulator --workspace @sidiora/layerx-example-buyer-agent` | `npm run start:beta --workspace @sidiora/layerx-example-buyer-agent` |
+| Paid API | `npm run start:emulator --workspace @sidiora/layerx-example-paid-api` | `npm run start:beta --workspace @sidiora/layerx-example-paid-api` |
+| Merchant shop | `npm run start:emulator --workspace @sidiora/layerx-example-merchant-shop` | `npm run start:beta --workspace @sidiora/layerx-example-merchant-shop` |
+| Programs marketplace | `npm run start:emulator --workspace @sidiora/layerx-example-marketplace` | `npm run start:beta --workspace @sidiora/layerx-example-marketplace` |
 
 Each `layerx.example.json` contains public endpoints, network names, and the names of environment variables that supply account-specific values. Tokens and signing material are never stored in these files and every application runs on Node.js, not in a browser. The buyer, seller, and merchant applications resolve batch authority from the selected environment and independently verify canonical receipts. Pending, Unknown, and Refused remain distinct responses.
 
@@ -42,4 +42,4 @@ Every `LAYERX_EMULATOR_*` input is then derived from that run instead of being h
 
 Any of those variables that is already set in the environment is used verbatim, so an owner can override any single input. `LAYERX_EMULATOR_SEED_FILE` skips provisioning and starts the emulator from an existing seed, reading the trust anchor published beside it. `LAYERX_CREDENTIAL_STORE` defaults to `file` with a per-run passphrase so the run needs no operating-system keyring; set `LAYERX_CREDENTIAL_STORE` and `LAYERX_CREDENTIAL_PASSPHRASE` to use your own credential storage.
 
-`--scenario testnet` is unchanged and still expects the `LAYERX_TESTNET_*` inputs. `LAYERX_EXAMPLE_ENDPOINT` overrides the hosted endpoint every profile carries, so the same runner can be pointed at a beta cluster gateway URL.
+`--scenario beta` is unchanged and still expects the `LAYERX_TESTNET_*` inputs. `LAYERX_EXAMPLE_ENDPOINT` overrides the hosted endpoint every profile carries, so the same runner can be pointed at a beta cluster gateway URL.

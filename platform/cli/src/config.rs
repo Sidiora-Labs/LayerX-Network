@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 
 const CONFIG_VERSION: u16 = 1;
 
+const LEGACY_BETA_ENVIRONMENT: &str = "testnet";
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Environment {
     pub endpoint: String,
@@ -60,7 +62,7 @@ impl Configuration {
             }
             Err(error) => return Err(format!("could not read {}: {error}", path.display())),
         };
-        let parsed: Self = serde_json::from_str(&source)
+        let mut parsed: Self = serde_json::from_str(&source)
             .map_err(|error| format!("could not parse {}: {error}", path.display()))?;
         if parsed.version != CONFIG_VERSION {
             return Err(format!(
@@ -68,6 +70,7 @@ impl Configuration {
                 parsed.version
             ));
         }
+        parsed.adopt_environment_aliases();
         parsed.active_environment()?;
         Ok(parsed)
     }
@@ -118,10 +121,26 @@ impl Configuration {
             })
     }
 
-    pub fn validate_environment_name(name: &str) -> Result<(), String> {
+    pub fn canonical_environment_name(name: &str) -> Result<String, String> {
         match name {
-            "emulator" | "testnet" | "production" => Ok(()),
-            _ => Err("environment must be emulator, testnet, or production".into()),
+            "emulator" | "beta" | "production" => Ok(name.to_owned()),
+            LEGACY_BETA_ENVIRONMENT => Ok("beta".to_owned()),
+            _ => Err("environment must be emulator, beta, or production".into()),
+        }
+    }
+
+    pub fn validate_environment_name(name: &str) -> Result<(), String> {
+        Self::canonical_environment_name(name).map(|_| ())
+    }
+
+    fn adopt_environment_aliases(&mut self) {
+        if let Some(environment) = self.environments.remove(LEGACY_BETA_ENVIRONMENT) {
+            self.environments
+                .entry("beta".to_owned())
+                .or_insert(environment);
+        }
+        if self.current_environment == LEGACY_BETA_ENVIRONMENT {
+            self.current_environment = "beta".to_owned();
         }
     }
 }

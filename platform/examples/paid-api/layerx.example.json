@@ -18,11 +18,11 @@
       "fulfillmentDirectory": "state/fulfillments",
       "port": 8081
     },
-    "testnet": {
-      "receiptAuthorityUrl": "https://api.testnet.layerx.network",
+    "beta": {
+      "receiptAuthorityUrl": "https://api.layerx.network",
       "resourceUrl": "http://127.0.0.1:8081/paid",
       "scheme": "exact",
-      "network": "layerx:testnet",
+      "network": "layerx:beta",
       "protocolVersion": 3,
       "tokenEnvironment": "LAYERX_TESTNET_TOKEN",
       "assetEnvironment": "LAYERX_TESTNET_ASSET",

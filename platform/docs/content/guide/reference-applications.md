@@ -2,7 +2,7 @@
 
 Four cloneable applications live under `platform/examples`: a buyer agent that pays a metered API through buyer middleware, the paid API protected by seller middleware, a merchant shop with durable receipt-backed orders and signed settlement webhooks, and a marketplace implemented as a LayerX Network program.
 
-The checked-in `platform/examples/reference-apps.json` is the launch manifest. It names the exact emulator and testnet command for every application. Public endpoints, the receipt protocol version (`protocolVersion`, `3` for both profiles) and the names of required environment variables are declared in each application's `layerx.example.json`; selecting a profile is the only way to select a network. A profile without a selectable `protocolVersion` is refused by name, and `run-reference-apps.mjs --check` refuses a profile whose declared version differs from the version the emulator scenario runs. Tokens remain server-side environment values and are never compiled into browser code.
+The checked-in `platform/examples/reference-apps.json` is the launch manifest. It names the exact emulator and beta command for every application. Public endpoints, the receipt protocol version (`protocolVersion`, `3` for both profiles) and the names of required environment variables are declared in each application's `layerx.example.json`; selecting a profile is the only way to select a network. A profile without a selectable `protocolVersion` is refused by name, and `run-reference-apps.mjs --check` refuses a profile whose declared version differs from the version the emulator scenario runs. Tokens remain server-side environment values and are never compiled into browser code.
 
 ```
 npm ci
@@ -15,7 +15,7 @@ npm run start:emulator --workspace @sidiora/layerx-example-marketplace
 
 `npm run build` is the one build command for every JavaScript workspace in this repository. It orders the workspaces by their declared dependencies, so the middleware an application imports is compiled before the application that imports it, and it needs no environment variable: the samples read their declared configuration on the first request, not at build time.
 
-Replace `start:emulator` with `start:testnet` to use the testnet profile. `merchant-checkout` remains an alias package for existing consumers; `merchant-shop` is the reference manifest name.
+Replace `start:emulator` with `start:beta` to use the beta profile. `merchant-checkout` remains an alias package for existing consumers; `merchant-shop` is the reference manifest name.
 
 All successful payment paths resolve live receipt authority and run independent receipt verification. A response declared Pending remains Pending, an indeterminate transport, omitted receipt, or authority response remains Unknown, and an explicit refusal remains Refused. The applications do not use a static `AuthorizedBatch` as their payment path.
 

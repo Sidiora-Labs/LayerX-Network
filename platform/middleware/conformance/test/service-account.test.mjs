@@ -15,7 +15,7 @@ const buyer = new BuyerMiddleware({
   })),
   source: "acct:conformance-buyer",
   protocolVersion: CONFORMANCE_PROTOCOL_VERSION,
-  supported: [{ scheme: "exact", network: "layerx:testnet" }],
+  supported: [{ scheme: "exact", network: "layerx:beta" }],
   authorizedBatches: { resolve: () => Promise.reject(new Error("no receipt is resolved in this test")) },
 });
 
@@ -27,7 +27,7 @@ const servedOffer = (account, payTo) => ({
   },
   accepts: [{
     scheme: "exact",
-    network: "layerx:testnet",
+    network: "layerx:beta",
     amount: "250000",
     asset: "bb".repeat(32),
     payTo,

@@ -2,12 +2,12 @@
 
 LayerX Network ist ein deterministisches Ausführungs- und Buchungsnetzwerk für autonome Agenten.
 
-[English](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/README.md) · [Español](es.md) · [日本語](ja.md) · [Русский](ru.md) · [简体中文](zh-cn.md) · [Português](pt-br.md) · Deutsch · [Français](fr.md)
+[English](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/README.md) · [Español](es.md) · [日本語](ja.md) · [Русский](ru.md) · [简体中文](zh-cn.md) · [Português](pt-br.md) · Deutsch · [Français](fr.md)
 
 *Weicht diese Fassung von der englischen README ab, gilt die englische Fassung als Referenz.*
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/LICENSE)
-[![CI](https://github.com/Sidiora-Labs/LayerX-Network/actions/workflows/ci.yml/badge.svg)](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/.github/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/LICENSE)
+[![CI](https://github.com/Sidiora-Labs/Paxeer-X-Network/actions/workflows/ci.yml/badge.svg)](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/.github/workflows/ci.yml)
 
 ## Was LayerX Network ist
 
@@ -17,7 +17,7 @@ Das nur anfügende Aktivitätsprotokoll ist die Autorität. Datenbankindizes sin
 
 Gewöhnliche Agentenaktivität wird innerhalb von LayerX ausgeführt und geordnet. Periodische Checkpoints werden auf Paxeer abgewickelt, das Verwahrung, Checkpoint-Registrierung, Garantenbonds, Challenges, Auszahlungen, Streitfälle und Notausstiege hält. Eine gewöhnliche LayerX-Aktion erfordert keine Paxeer-Transaktion.
 
-Dieses Repository ist das Monorepo von Sidiora Labs für LayerX Network und das Paxeer Network. Die gemeinsame Ablage hält Protokoll, Settlement-Netzwerk, Contracts und Entwickleroberflächen an einem Ort prüfbar. Jedes Subsystem behält seine eigene Build-, Release-, Deployment- und Vertrauensgrenze. Siehe [`spec/layerx-protocol/design.md`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/spec/layerx-protocol/design.md).
+Dieses Repository ist das Monorepo von Sidiora Labs für LayerX Network und das Paxeer Network. Die gemeinsame Ablage hält Protokoll, Settlement-Netzwerk, Contracts und Entwickleroberflächen an einem Ort prüfbar. Jedes Subsystem behält seine eigene Build-, Release-, Deployment- und Vertrauensgrenze. Siehe [`spec/layerx-protocol/design.md`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/spec/layerx-protocol/design.md).
 
 ## Schnellstart
 
@@ -113,7 +113,7 @@ make paxeer-ci
 - Wiki-Index: [`docs/wiki/Home.md`](../../index.md)
 - Monorepo-Aufbau und Release-Tags: [`docs/MONOREPO.md`](../monorepo.md)
 - Qualifikationsgates: [`docs/QUALIFICATION.md`](../../operators/qualification.md)
-- Spezifikationen: [`spec/`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/spec/)
+- Spezifikationen: [`spec/`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/spec/)
 
 ## SDKs und Integrationen
 
@@ -131,14 +131,14 @@ make paxeer-ci
 
 ## Mitwirken
 
-Vor dem Öffnen eines Pull Requests [`CONTRIBUTING.md`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/CONTRIBUTING.md) lesen. Protokolländerungen beginnen in `spec/`. Eine vermutete Schwachstelle nicht in einem öffentlichen Issue offenlegen; [`SECURITY.md`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/SECURITY.md) folgen.
+Vor dem Öffnen eines Pull Requests [`CONTRIBUTING.md`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/CONTRIBUTING.md) lesen. Protokolländerungen beginnen in `spec/`. Eine vermutete Schwachstelle nicht in einem öffentlichen Issue offenlegen; [`SECURITY.md`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/SECURITY.md) folgen.
 
 ## Sicherheit
 
-Schwachstellen über GitHub Private Reporting melden, wie in [`SECURITY.md`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/SECURITY.md) beschrieben.
+Schwachstellen über GitHub Private Reporting melden, wie in [`SECURITY.md`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/SECURITY.md) beschrieben.
 
 ## Lizenz
 
-Lizenziert unter der Apache License, Version 2.0. Siehe [`LICENSE`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/LICENSE) und [`NOTICE`](https://github.com/Sidiora-Labs/LayerX-Network/blob/main/NOTICE).
+Lizenziert unter der Apache License, Version 2.0. Siehe [`LICENSE`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/LICENSE) und [`NOTICE`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/NOTICE).
 
 LayerX Network wird von Sidiora Labs entwickelt.

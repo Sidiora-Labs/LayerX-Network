@@ -28,7 +28,7 @@ spec:
             - name: LAYERX_EXPLORER_API_ORIGIN
               value: https://layerx-human.layerx-testnet.svc:9443
             - name: LAYERX_HUMAN_WEB_ORIGIN
-              value: https://human.testnet.layerx.network
+              value: https://human.layerx.network
             - name: LAYERX_EXPLORER_PROGRAM_API_ORIGIN
               value: http://127.0.0.1:9458
             - name: LAYERX_EXPLORER_PROGRAM_BEARER_TOKEN

@@ -34,7 +34,7 @@ The same rule governs the release qualification report: every guarantee in it is
 
 Layer labelling is only half of it. When a component is degraded, saying so vaguely destroys the same information the labels exist to preserve: a single red indicator tells you something is wrong and hides whose problem it is.
 
-The status page therefore reports the gateway, the testnet, the core and the Paxeer settlement side separately. A degraded gateway with a healthy core means your queued payments are still going to settle; a degraded core means something quite different. Collapsing the two into one dot would be tidier and would tell you less.
+The status page therefore reports the gateway, the network, the core and the Paxeer settlement side separately. A degraded gateway with a healthy core means your queued payments are still going to settle; a degraded core means something quite different. Collapsing the two into one dot would be tidier and would tell you less.
 
 ## Enforced by
 

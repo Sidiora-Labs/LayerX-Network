@@ -47,7 +47,7 @@ fn production_installation_never_falls_back_to_emulator_routes() {
             &asset,
         ],
     );
-    assert!(error(&output).contains("hosted testnet or production gateway"));
+    assert!(error(&output).contains("hosted beta or production gateway"));
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn mcp_installation_refuses_without_the_daemon_binding_document() {
 fn payment_installation_requires_a_fixed_real_source_and_asset() {
     let output = run(
         "binding",
-        &["--json", "install", "a2a", "--environment", "testnet"],
+        &["--json", "install", "a2a", "--environment", "beta"],
     );
     assert!(error(&output).contains("--source-account"));
 }

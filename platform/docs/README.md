@@ -23,7 +23,7 @@ use immutable source URLs so they resolve when the site is hosted alone.
 
 Every other page under `content/` is written by hand and must carry an `Enforced by` table naming, for each capability it documents, the layer that enforces it: `protocol`, `agent-layer`, `service` or `hosted-surface`. A page without one fails the build.
 
-`testnet.md` sits outside `content/` and is never rewritten.
+`beta-environment.md` sits outside `content/` and is never rewritten.
 
 Public wiki pages for payments (wallet, faucet, send, token, 402), the
 OpenRPC method list, Asset encodings, and commitment levels live under

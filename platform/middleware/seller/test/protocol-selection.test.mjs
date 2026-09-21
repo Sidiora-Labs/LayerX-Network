@@ -29,7 +29,7 @@ async function loadFixture(name) {
     },
     requirements: {
       scheme: "exact",
-      network: "layerx:testnet",
+      network: "layerx:beta",
       amount: fixture.expected.amount,
       asset: batch.asset_hex,
       payTo: fixture.expected.to_hex,

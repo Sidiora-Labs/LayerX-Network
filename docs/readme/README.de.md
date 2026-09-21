@@ -9,7 +9,7 @@ Paxeer X Network — ein Netzwerk: die Paxeer-EVM-Kette und das LayerX-Agenten-N
 *Weicht diese Fassung von der englischen README ab, gilt die englische Fassung als Referenz.*
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](../../LICENSE)
-[![CI](https://github.com/Sidiora-Labs/LayerX-Network/actions/workflows/ci.yml/badge.svg)](../../.github/workflows/ci.yml)
+[![CI](https://github.com/Sidiora-Labs/Paxeer-X-Network/actions/workflows/ci.yml/badge.svg)](../../.github/workflows/ci.yml)
 
 ## Was Paxeer X Network ist
 
