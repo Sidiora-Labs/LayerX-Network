@@ -30,9 +30,13 @@ def run(*args, **kwargs):
 with tempfile.TemporaryDirectory(prefix='layerx-paxeer-real-') as work:
     work = Path(work)
     env = os.environ.copy()
+    # The guarantor pays for every submitCheckpoint from its own account, so genesis funds it.
+    submitter = '0x2b5ad5c4795c026514f8317c7a215e218dccd6cf'
+    submitter_wei = 10 ** 12 * 10 ** 12
     env.update(PAXD=PAXD, LAYERX_PAXEER_HOME=str(work / 'chain'),
                LAYERX_PAXEER_CHAIN_ID='125',
-               LAYERX_PAXEER_DEPLOYER_ADDRESS='0x7e5f4552091a69125d5dfcb7b8c2659029395bdf')
+               LAYERX_PAXEER_DEPLOYER_ADDRESS='0x7e5f4552091a69125d5dfcb7b8c2659029395bdf',
+               LAYERX_PAXEER_CHECKPOINT_SUBMITTER_ADDRESS=submitter)
     for name in ['EVM', 'EVM_WS', 'RPC', 'P2P', 'GRPC', 'GRPC_WEB']:
         env['LAYERX_PAXEER_' + name + '_PORT'] = str(port())
     deployment_inputs = os.environ.get('LAYERX_PAXEER_TEST_DEPLOY_DIR')
@@ -127,6 +131,9 @@ with tempfile.TemporaryDirectory(prefix='layerx-paxeer-real-') as work:
             status, data = request('POST', '/', json.dumps({'jsonrpc': '2.0', 'id': 'token', 'method': 'eth_call',
                 'params': [{'to': '0x85FcD13735F4309833A503EE804ea32395851479', 'data': selector}, 'latest']}))
             assert status == 200 and int(data['result'], 16) == expected_word, data
+        status, data = request('POST', '/', json.dumps({'jsonrpc': '2.0', 'id': 'submitter', 'method': 'eth_getBalance',
+            'params': [submitter, 'latest']}))
+        assert status == 200 and int(data['result'], 16) == submitter_wei, data
         assert request('GET', '/other')[0] == 404
         assert request('PUT', '/')[0] == 404
         assert request('GET', '/livez')[0] == 200
