@@ -10,6 +10,18 @@ import tempfile
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+PROFILE_KEY = b'custody-credit-profile/v1'.ljust(32, b'\0')
+PROFILE_BYTES = 223
+CREDIT_BYTES = 363
+CUSTODY_EVM_CHAIN_ID = 125
+CUSTODY_PROTOCOL_VERSION = 3
+CUSTODY_PROOF_KIND = 2
+CUSTODY_MODULE_DOMAIN = b'LX:CUSTODY:MODULE:v1'
+CUSTODY_STORE = b'layerxcustody'
+CUSTODY_RESERVE_ACCOUNT = b'system:paxeer-reserve'
+DEPOSIT_DOMAIN = b'LXP/Paxeer/custody-deposit/v1'
+MAX_TIMESTAMP_SECONDS = 253402300799
+
 
 def require(value, message):
     if not value:
@@ -148,6 +160,72 @@ def read_authorizations(path):
     return json.loads(data)
 
 
+def account_id(name):
+    return sha(b'LX:ACCOUNT:v1' + len(name).to_bytes(4, 'big') + name)
+
+
+def word(value):
+    require(len(value) <= 32, 'custody word width')
+    return value.rjust(32, b'\0')
+
+
+def custody_profile(encoded, root, network, protocol):
+    module, key, profile, _ = witness(encoded, root)
+    require(module == 8 and key == PROFILE_KEY and len(profile) == PROFILE_BYTES and
+            profile[:5] == b'LXBC3', 'native custody profile')
+    chain = profile[169:201]
+    length = chain.find(b'\0')
+    length = len(chain) if length < 0 else length
+    require(0 < length <= 32 and chain[length:] == bytes(32 - length) and
+            all(0x21 <= character <= 0x7e for character in chain[:length]),
+            'native custody Comet chain identifier')
+    require(int.from_bytes(profile[5:13], 'big') == CUSTODY_EVM_CHAIN_ID and
+            profile[33:65] == sha(CUSTODY_MODULE_DOMAIN + CUSTODY_STORE + profile[13:33]) and
+            profile[129:161] == account_id(CUSTODY_RESERVE_ACCOUNT) and
+            any(profile[13:33]) and any(profile[65:97]) and any(profile[97:129]),
+            'native custody profile identity')
+    require(protocol == CUSTODY_PROTOCOL_VERSION and
+            profile[201:205] == network.to_bytes(4, 'big') and
+            profile[205:207] == protocol.to_bytes(2, 'big'), 'native custody profile domain')
+    require(0 < int.from_bytes(profile[161:169], 'big') < 2 ** 63 and
+            0 < int.from_bytes(profile[207:215], 'big') <= 2 ** 32 - 1 and
+            0 < int.from_bytes(profile[215:223], 'big') <= MAX_TIMESTAMP_SECONDS,
+            'native custody profile trust state')
+    return profile
+
+
+def deposit_identifier(profile, credit):
+    return sha((256).to_bytes(32, 'big') + word(profile[5:13]) + word(profile[13:33]) +
+               word(credit[171:191]) + credit[75:107] + credit[107:139] +
+               word(credit[191:207]) + word(credit[207:215]) +
+               len(DEPOSIT_DOMAIN).to_bytes(32, 'big') + DEPOSIT_DOMAIN.ljust(32, b'\0'))
+
+
+def custody_credit(encoded, root, profile):
+    module, key, credit, _ = witness(encoded, root)
+    require(module == 8 and len(key) == 50 and key[:18] == b'deposit-nullifier:' and
+            len(credit) == CREDIT_BYTES and credit[:5] == b'LXDC3', 'native custody credit')
+    require(credit[5:37] == sha(profile) and credit[37:43] == profile[201:207],
+            'native custody domain')
+    require(key[18:] == sha(b'LX:DEPOSIT:NULLIFIER:v1' + credit[43:75]), 'native deposit nullifier')
+    require(credit[75:107] == profile[97:129] and any(credit[107:139]) and
+            any(credit[171:191]) and any(credit[191:207]) and
+            int.from_bytes(credit[207:215], 'big') != 0, 'native custody credit fields')
+    try:
+        Ed25519PublicKey.from_public_bytes(credit[139:171])
+    except ValueError:
+        raise ValueError('native custody credit owner key') from None
+    state_height = int.from_bytes(credit[215:223], 'big')
+    require(0 < state_height < 2 ** 63 - 1 and
+            int.from_bytes(credit[287:295], 'big') == state_height + 1 and
+            any(credit[223:255]) and any(credit[255:287]) and any(credit[295:327]) and
+            any(credit[327:359]) and
+            credit[359:363] == CUSTODY_PROOF_KIND.to_bytes(4, 'big'),
+            'native custody light-client evidence')
+    require(deposit_identifier(profile, credit) == credit[43:75], 'native deposit identifier')
+    return credit
+
+
 def native_request(api, request, header, checkpoint):
     facts = request['native_facts']
     require(set(facts) == {'balances', 'withdrawals', 'deposits', 'profile'}, 'native facts fields')
@@ -159,25 +237,10 @@ def native_request(api, request, header, checkpoint):
     require(len({v['identity'] for v in withdrawals}) == len(withdrawals), 'duplicate withdrawal leaf')
     deposits, profile = [], None
     if facts['profile'] is not None:
-        module, profile_key, profile, _ = witness(facts['profile'], header[7])
-        require(module == 8 and profile_key == b'custody-credit-profile/v1'.ljust(32, b'\0') and len(profile) == 207 and profile[:5] in (b'LXBC1', b'LXBC2'), 'native custody profile')
-        require(int.from_bytes(profile[5:13], 'big') == request['chain_id'], 'native custody chain')
-        if profile[:5] == b'LXBC2':
-            require(request['chain_id'] == 125 and 0 < int.from_bytes(profile[161:169], 'big') < 8192,
-                    'native Comet custody profile')
+        profile = custody_profile(facts['profile'], header[7], header[1], header[0])
     for encoded in facts['deposits']:
         require(profile is not None, 'native custody profile absent')
-        module, key, credit, _ = witness(encoded, header[7])
-        comet = profile[:5] == b'LXBC2'
-        require(module == 8 and len(key) == 50 and key[:18] == b'deposit-nullifier:' and len(credit) == 427 and credit[:5] == (b'LXDC2' if comet else b'LXDC1'), 'native custody credit')
-        require(credit[5:37] == sha(profile) and credit[37:43] == header[1].to_bytes(4, 'big') + header[0].to_bytes(2, 'big'), 'native custody domain')
-        require(key[18:] == sha(b'LX:DEPOSIT:NULLIFIER:v1' + credit[43:75]), 'native deposit nullifier')
-        if comet:
-            height, finalized = int.from_bytes(credit[215:223], 'big'), int.from_bytes(credit[287:295], 'big')
-            require(2 <= height <= finalized < 2**63-1 and finalized-height < 8192 and finalized-height+1 >= int.from_bytes(profile[161:169], 'big')
-                    and credit[359:363] == b'\0\0\0\1' and
-                    all(credit[start:start+32] != bytes(32) for start in (223, 255, 295, 327)), 'native Comet custody evidence')
-        signature(profile[65:97], (b'LX:CUSTODY:CREDIT:v2' if comet else b'LX:CUSTODY:CREDIT:v1') + credit[:363], credit[363:])
+        credit = custody_credit(encoded, header[7], profile)
         deposits.append(dict(identity=credit[43:75], asset=credit[75:107], amount=credit[191:207], beneficiary=credit[107:139], payer=credit[171:191], nonce=int.from_bytes(credit[207:215], 'big')))
     deposits.sort(key=lambda v: v['identity'])
     require(len({v['identity'] for v in deposits}) == len(deposits), 'duplicate deposit leaf')

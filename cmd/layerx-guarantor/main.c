@@ -620,6 +620,10 @@ int main(int argc, char **argv)
         }
         serving = true;
     }
+    bool refusal_reported = false;
+    uint64_t reported_batch = 0U;
+    lxp_result reported_status = LXP_OK;
+    const char *reported_field = NULL;
     while (!stopped) {
         lxp_batch_header header;
         uint8_t signature[64], encoded[GP_ATTESTATION_BYTES];
@@ -827,8 +831,15 @@ int main(int argc, char **argv)
             if (recorded != LXP_OK) status = recorded;
         }
         lxp_guarantor_lni_close(&client);
-        fprintf(stderr, "refused batch=%llu field=%s result=%d\n", (unsigned long long)batch, field,
-                (int)status);
+        if (!refusal_reported || reported_batch != batch || reported_status != status ||
+            reported_field == NULL || strcmp(reported_field, field) != 0) {
+            fprintf(stderr, "refused batch=%llu field=%s result=%d\n", (unsigned long long)batch,
+                    field, (int)status);
+            refusal_reported = true;
+            reported_batch = batch;
+            reported_status = status;
+            reported_field = field;
+        }
         if (once || fetch_only || runtime_prepared ||
             (ctx.last_completed_duty >= LXP_GUARANTOR_DUTY_SIGNATURES && status != LXP_OK))
             break;

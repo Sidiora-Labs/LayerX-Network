@@ -11,6 +11,8 @@ fi
 : "${LAYERX_GUARANTOR_SUBMITTER_KEY_FILE:?submitter key is required}"
 state_root=$LAYERX_GUARANTOR_STATE_DIR
 submitter_source=$LAYERX_GUARANTOR_SUBMITTER_KEY_FILE
+guarantor_binary=${LAYERX_GUARANTOR_BINARY:-/usr/local/bin/layerx-guarantor}
+[ -x "$guarantor_binary" ] || { echo "guarantor binary is not executable: $guarantor_binary" >&2; exit 2; }
 child=""
 stop_child() {
     if [ -n "$child" ]; then
@@ -23,6 +25,8 @@ trap 'stop_child; exit 0' TERM INT
 trap stop_child EXIT
 while :; do
     while [ ! -r "$LAYERX_GUARANTOR_IDENTITY_DIR/producer.env" ] || \
+          [ ! -r "$LAYERX_GUARANTOR_IDENTITY_DIR/genesis.manifest" ] || \
+          [ ! -r "$LAYERX_GUARANTOR_IDENTITY_DIR/genesis.registration" ] || \
           [ ! -r "$LAYERX_GUARANTOR_SETTLEMENT_ENV" ] || \
           { [ -n "${LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_SOURCE:-}" ] && \
             [ ! -r "$LAYERX_GUARANTOR_PUBLICATION_AUTHORIZATION_SOURCE" ]; } || \
@@ -57,7 +61,7 @@ while :; do
         chmod 0700 "$LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR"
         export PYTHONPATH=/opt/layerx:/opt/layerx/human
     fi
-    /usr/local/bin/layerx-guarantor &
+    "$guarantor_binary" &
     child=$!
     current=$generation
     while kill -0 "$child" 2>/dev/null; do
