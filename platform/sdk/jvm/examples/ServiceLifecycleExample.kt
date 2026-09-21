@@ -16,8 +16,8 @@ fun main() {
     val credential = HttpProductionTransport.BearerCredential(
         SecretBytes(apiKey.toByteArray()))
     val transport = HttpProductionTransport.create(
-        URI.create("https://api.layerx.network"),
-        URI.create("https://agent.layerx.network/rpc"),
+        URI.create("https://api.paxeer.network"),
+        URI.create("https://agent.paxeer.network/rpc"),
         credential)
     val client = ProductionClient(transport)
 

@@ -19,7 +19,7 @@
       "port": 8081
     },
     "beta": {
-      "receiptAuthorityUrl": "https://api.layerx.network",
+      "receiptAuthorityUrl": "https://api.paxeer.network",
       "resourceUrl": "http://127.0.0.1:8081/paid",
       "scheme": "exact",
       "network": "layerx:beta",

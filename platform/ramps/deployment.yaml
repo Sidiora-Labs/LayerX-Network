@@ -112,9 +112,9 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "15"
 spec:
   ingressClassName: nginx
-  tls: [{hosts: [ramp.layerx.network], secretName: layerx-reference-ramp-ingress-tls}]
+  tls: [{hosts: [ramp.paxeer.network], secretName: layerx-reference-ramp-ingress-tls}]
   rules:
-    - host: ramp.layerx.network
+    - host: ramp.paxeer.network
       http:
         paths:
           - {path: /v1/orders, pathType: Prefix, backend: {service: {name: layerx-reference-ramp, port: {name: https}}}}

@@ -27,16 +27,16 @@ test("local production requires the real HTTPS origin and explicit trust materia
   const environment = {
     HUMAN_E2E_REAL_STACK: "1",
     HUMAN_E2E_LOCAL_PRODUCTION: "1",
-    HUMAN_E2E_BASE_URL: "https://human.layerx.network",
+    HUMAN_E2E_BASE_URL: "https://app.paxeer.network",
     HUMAN_E2E_TLS_CONFIG: "/qualification/tls.json",
     HUMAN_E2E_BROWSER_HOME: "/qualification/browser-home",
   };
   const harness = human_test_harness(environment);
-  assert.equal(harness.baseUrl, "https://human.layerx.network/");
+  assert.equal(harness.baseUrl, "https://app.paxeer.network/");
   assert.equal(harness.browserHome, environment.HUMAN_E2E_BROWSER_HOME);
-  for (const url of ["http://127.0.0.1:3105", "https://human.layerx.network:3105",
-    "https://human.layerx.network/path", "https://human.layerx.network?query",
-    "https://human.layerx.network#fragment"]) {
+  for (const url of ["http://127.0.0.1:3105", "https://app.paxeer.network:3105",
+    "https://app.paxeer.network/path", "https://app.paxeer.network?query",
+    "https://app.paxeer.network#fragment"]) {
     assert.throws(() => human_test_harness({ ...environment, HUMAN_E2E_BASE_URL: url }), /HTTPS application origin/);
   }
   assert.throws(() => human_test_harness({ ...environment, HUMAN_E2E_TLS_CONFIG: undefined }), /HUMAN_E2E_TLS_CONFIG/);

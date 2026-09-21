@@ -37,7 +37,7 @@ The relationship between the layers is worth stating plainly: x402 is the transp
 Two more edges exist for the case where the counterparty is a model rather than a service. Both are served by the CLI and expose the same receipt and canonical-payment tools. Installation targets the hosted beta or production gateway; it does not silently fall back to the emulator, whose route set does not include hosted key provisioning.
 
 ```
-layerx environment use beta --endpoint https://api.layerx.network --network-id <network-id>
+layerx environment use beta --endpoint https://api.paxeer.network --network-id <network-id>
 layerx key create agent-runtime
 
 layerx install mcp --environment beta --key agent-runtime \

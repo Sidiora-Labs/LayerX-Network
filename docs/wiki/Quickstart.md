@@ -210,9 +210,9 @@ current identity sequence through `lx_getSequence`. The examples read
 [402LXP transport](X402Transport.md) for the offer, grant and commitment
 contracts.
 
-The public hosted equivalents are `https://api.layerx.network/rpc` and
-`wss://api.layerx.network/rpc/ws`; the faucet origin is
-`https://faucet.layerx.network`. See
+The public hosted equivalents are `https://api.paxeer.network/rpc` and
+`wss://api.paxeer.network/rpc/ws`; the faucet origin is
+`https://faucet.paxeer.network`. See
 [Getting started](Getting-Started-Beta.md) for the public
 checklist and [Public JSON-RPC](PublicRpc.md) for every method and typed error.
 

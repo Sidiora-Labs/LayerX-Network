@@ -15,9 +15,9 @@ See [Commitment levels](../protocol/commitment-levels.md), [Assets](../concepts/
 
 | Transport | Endpoint | Use |
 | --- | --- | --- |
-| HTTPS | `https://api.layerx.network/rpc` | JSON-RPC 2.0 request or batch |
-| HTTPS | `https://api.layerx.network/rpc/schema` | Embedded OpenRPC document |
-| WebSocket | `wss://api.layerx.network/rpc/ws` | `lx_subscribe` |
+| HTTPS | `https://api.paxeer.network/rpc` | JSON-RPC 2.0 request or batch |
+| HTTPS | `https://api.paxeer.network/rpc/schema` | Embedded OpenRPC document |
+| WebSocket | `wss://api.paxeer.network/rpc/ws` | `lx_subscribe` |
 
 `POST /rpc` requires `Content-Type: application/json`. It accepts a single
 request or a batch of 1–32 requests. A request that carries no `id`, alone or

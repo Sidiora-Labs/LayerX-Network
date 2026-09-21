@@ -130,7 +130,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends authbind libnss3-tools openssl jq python3-yaml
           sudo install -o "$(id -un)" -g "$(id -gn)" -m 0500 /dev/null /etc/authbind/byport/443
-          printf '127.0.0.1 human.layerx.network\n' | sudo tee -a /etc/hosts >/dev/null
+          printf '127.0.0.1 app.paxeer.network\n' | sudo tee -a /etc/hosts >/dev/null
       - name: Build the pinned Programs builder environment
         run: bash platform/hosted/registry/builder-environment/build-env.sh build/browser-builder
       - name: Start the actual beta services from this revision

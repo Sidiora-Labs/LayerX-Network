@@ -71,7 +71,7 @@ def assemble_policy(evidence, deployment, registry_path, output, network, chain)
 
 def passkey_relying_party(web_origin):
     if not web_origin:
-        return 'human.layerx.network', 'https://human.layerx.network'
+        return 'app.paxeer.network', 'https://app.paxeer.network'
     parts = urlsplit(web_origin)
     host = parts.hostname or ''
     if (parts.scheme != 'https' or parts.port is not None or parts.path or parts.query
