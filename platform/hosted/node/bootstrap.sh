@@ -66,8 +66,8 @@
 #   --replica-id HEX64      Receipt-authority replica id. Default: derived from
 #                           the sequencer public key.
 #   --genesis-timestamp-ms T  Genesis timestamp in milliseconds. Default: now.
-#   --enable-module NAME    Enable escrow, budget, stream, service or perps in
-#                           the signed genesis parameters. All five are enabled
+#   --enable-module NAME    Enable escrow, budget, stream, service, perps or spot in
+#                           the signed genesis parameters. All six are enabled
 #                           by default; explicit names select the enabled rows.
 #   --migrations FILE       History migration SQL. Default: repository
 #                           migrations/0007_history_index.sql or
@@ -200,8 +200,8 @@ FORCE=0
 enable_genesis_module() {
     local module
     case "$1" in
-        escrow|budget|stream|service|perps) ;;
-        *) fail "--enable-module requires escrow, budget, stream, service or perps" ;;
+        escrow|budget|stream|service|perps|spot) ;;
+        *) fail "--enable-module requires escrow, budget, stream, service, perps or spot" ;;
     esac
     for module in "${GENESIS_MODULES[@]}"; do
         [ "$module" != "$1" ] || fail "--enable-module repeats $1"
@@ -255,7 +255,7 @@ if [ "${#GENESIS_MODULES[@]}" -eq 0 ]; then
     while IFS= read -r module || [ -n "$module" ]; do
         enable_genesis_module "$module"
     done < "$SCRIPT_DIR/genesis-modules.conf"
-    [ "${#GENESIS_MODULES[@]}" -eq 5 ] || fail "public testnet genesis requires five configured modules"
+    [ "${#GENESIS_MODULES[@]}" -eq 6 ] || fail "public testnet genesis requires six configured modules"
 fi
 
 [ -n "$GENESIS_METADATA" ] && [ -f "$GENESIS_METADATA" ] && [ ! -L "$GENESIS_METADATA" ] && [ -r "$GENESIS_METADATA" ] || fail "--genesis-metadata requires an authoritative LXGB v2 metadata file"

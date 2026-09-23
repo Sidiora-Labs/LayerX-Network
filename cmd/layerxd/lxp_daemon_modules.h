@@ -21,8 +21,8 @@
  * runtime, and a module it enabled never runs without one. The escrow
  * runtime resolves accounts and assets through the process registries, the
  * budget runtime owns the process budget store, the stream runtime sees the
- * transfer state of every process asset; service and perps declare no host
- * runtime, so their kernel registration is their complete binding. */
+ * transfer state of every process asset; service, perps and spot declare no
+ * host runtime, so their kernel registration is their complete binding. */
 typedef struct lxp_daemon_module_runtimes {
     lx_escrow_runtime escrow;
     lx_budget_store budget_store;
@@ -35,7 +35,7 @@ static inline bool lxp_daemon_gated_module(uint16_t module_id)
 {
     return module_id == LXP_MODULE_ESCROW || module_id == LXP_MODULE_BUDGET ||
            module_id == LXP_MODULE_STREAM || module_id == LXP_MODULE_SERVICE ||
-           module_id == LXP_MODULE_PERPS;
+           module_id == LXP_MODULE_PERPS || module_id == LXP_MODULE_SPOT;
 }
 
 static inline bool lxp_daemon_gated_activity_supported(
@@ -87,7 +87,7 @@ static inline lxp_result lxp_daemon_module_runtimes_bind(
 {
     static const uint16_t gated[] = {
         LXP_MODULE_ESCROW, LXP_MODULE_BUDGET, LXP_MODULE_STREAM,
-        LXP_MODULE_SERVICE, LXP_MODULE_PERPS
+        LXP_MODULE_SERVICE, LXP_MODULE_PERPS, LXP_MODULE_SPOT
     };
     size_t i;
     if (kernel == NULL || runtimes == NULL || accounts == NULL ||
@@ -123,8 +123,9 @@ static inline lxp_result lxp_daemon_module_runtimes_bind(
                                                     &runtimes->stream);
             break;
         default:
-            /* LXP_MODULE_SERVICE and LXP_MODULE_PERPS define no host
-             * runtime type; their hooks and dispatch read none. */
+            /* LXP_MODULE_SERVICE, LXP_MODULE_PERPS and LXP_MODULE_SPOT
+             * define no host runtime type; their hooks and dispatch read
+             * none. */
             break;
         }
         if (status != LXP_OK) return status;

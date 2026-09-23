@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include "layerx/lxp_module.h"
 #include "layerx/lxp_protocol.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -136,14 +137,14 @@ int registry_read_node(const char *path, const char *actor, uint32_t network)
     if (!nonzero) goto done;
     cursor += 68U;
     count = (size_t)load(response + cursor, 2U); cursor += 2U;
-    if (count == 0U || count > 9U) goto done;
-    uint16_t ids[9], ordinals[9][64];
-    size_t counts[9];
+    if (count == 0U || count > LXP_MODULE_RESERVED_COUNT) goto done;
+    uint16_t ids[LXP_MODULE_RESERVED_COUNT], ordinals[LXP_MODULE_RESERVED_COUNT][64];
+    size_t counts[LXP_MODULE_RESERVED_COUNT];
     for (size_t i = 0U; i < count; ++i) {
         if (size - cursor < 4U) goto done;
         ids[i] = (uint16_t)load(response + cursor, 2U);
         counts[i] = (size_t)load(response + cursor + 2U, 2U); cursor += 4U;
-        if (ids[i] == 0U || ids[i] > 9U || (i && ids[i - 1U] >= ids[i]) ||
+        if (ids[i] == 0U || ids[i] > LXP_MODULE_RESERVED_COUNT || (i && ids[i - 1U] >= ids[i]) ||
             counts[i] == 0U || counts[i] > 64U || counts[i] > (size - cursor) / 4U) goto done;
         for (size_t j = 0U; j < counts[i]; ++j) {
             uint32_t type = (uint32_t)load(response + cursor, 4U); cursor += 4U;
