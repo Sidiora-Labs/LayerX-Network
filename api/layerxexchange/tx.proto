@@ -1,0 +1,33 @@
+syntax = "proto3";
+package paxprotocol.paxchain.layerxexchange;
+
+import "gogoproto/gogo.proto";
+import "layerxexchange/params.proto";
+
+option go_package = "github.com/sidiora-labs/paxeer-network/modules/layerxexchange/types";
+
+// Msg defines the layerxexchange module's gRPC message service. Intents are
+// deliberately absent: they enter only through the precompile so that every
+// intent carries its EVM log.
+service Msg {
+  rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
+  rpc SetMarket(MsgSetMarket) returns (MsgSetMarketResponse);
+}
+
+// MsgUpdateParams replaces the module params. Authority only.
+message MsgUpdateParams {
+  string authority = 1;
+  Params params = 2 [(gogoproto.nullable) = false];
+}
+
+// MsgUpdateParamsResponse is the MsgUpdateParams response.
+message MsgUpdateParamsResponse {}
+
+// MsgSetMarket creates or replaces one market. Authority only.
+message MsgSetMarket {
+  string authority = 1;
+  Market market = 2 [(gogoproto.nullable) = false];
+}
+
+// MsgSetMarketResponse is the MsgSetMarket response.
+message MsgSetMarketResponse {}

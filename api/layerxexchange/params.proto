@@ -1,0 +1,26 @@
+syntax = "proto3";
+package paxprotocol.paxchain.layerxexchange;
+
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/sidiora-labs/paxeer-network/modules/layerxexchange/types";
+
+// Market is one LayerX perps market Paxeer accepts order intents for.
+// Identifiers are 64 lowercase hex characters.
+message Market {
+  option (gogoproto.equal) = true;
+
+  string market_id = 1;
+  // margin_asset_id is the custody asset margin for this market is held in.
+  string margin_asset_id = 2;
+  bool enabled = 3;
+}
+
+// Params defines the parameters of the layerxexchange module.
+message Params {
+  // authority is the bech32 account allowed to change params. Empty selects
+  // the governance module account.
+  string authority = 1;
+  // markets are the markets placeOrder accepts. Matching happens on LayerX.
+  repeated Market markets = 2 [(gogoproto.nullable) = false];
+}
