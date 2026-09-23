@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/layerx-ap2",
+    "crates/layerx-bridge-relayer",
     "crates/layerx-interop-gateway",
     "crates/layerx-interop-service",
     "crates/layerx-fiat",

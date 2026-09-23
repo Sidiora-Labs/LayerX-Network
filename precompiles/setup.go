@@ -12,8 +12,11 @@ import (
 	"github.com/sidiora-labs/paxeer-network/precompiles/gov"
 	"github.com/sidiora-labs/paxeer-network/precompiles/ibc"
 	"github.com/sidiora-labs/paxeer-network/precompiles/json"
+	"github.com/sidiora-labs/paxeer-network/precompiles/launchpad"
 	"github.com/sidiora-labs/paxeer-network/precompiles/layerxanchor"
+	"github.com/sidiora-labs/paxeer-network/precompiles/layerxbridge"
 	"github.com/sidiora-labs/paxeer-network/precompiles/layerxcustody"
+	"github.com/sidiora-labs/paxeer-network/precompiles/layerxexchange"
 	"github.com/sidiora-labs/paxeer-network/precompiles/layerxverify"
 	"github.com/sidiora-labs/paxeer-network/precompiles/oracle"
 	"github.com/sidiora-labs/paxeer-network/precompiles/p256"
@@ -64,6 +67,9 @@ func GetCustomPrecompiles(
 		ecommon.HexToAddress(layerxverify.LayerXVerifyAddress):   layerxverify.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(layerxcustody.LayerXCustodyAddress): layerxcustody.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(layerxanchor.LayerXAnchorAddress):   layerxanchor.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(layerxexchange.ExchangeAddress):     layerxexchange.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(layerxbridge.BridgeAddress):         layerxbridge.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(launchpad.LaunchpadAddress):         launchpad.GetVersioned(latestUpgrade, keepers),
 	}
 }
 
@@ -141,6 +147,31 @@ func InitializePrecompiles(
 		return err
 	}
 
+	layerxexchangep, err := layerxexchange.NewPrecompile(keepers)
+	if err != nil {
+		return err
+	}
+
+	// A dry run only records names and ABIs, so it builds the bridge and
+	// launchpad precompiles without their keepers; a live run requires them.
+	layerxbridgep, err := layerxbridge.NewPrecompile(keepers)
+	if err != nil {
+		if !dryRun {
+			return err
+		}
+		layerxbridgep = layerxbridge.NewPrecompileWithKeeper(nil)
+	}
+
+	launchpadp, err := launchpad.NewPrecompile(keepers)
+	if err != nil {
+		if !dryRun {
+			return err
+		}
+		if launchpadp, err = launchpad.NewPrecompileWithKeeper(nil, keepers.EVMK()); err != nil {
+			return err
+		}
+	}
+
 	PrecompileNamesToInfo[bankp.GetName()] = PrecompileInfo{ABI: bankp.GetABI(), Address: bankp.Address()}
 	PrecompileNamesToInfo[wasmdp.GetName()] = PrecompileInfo{ABI: wasmdp.GetABI(), Address: wasmdp.Address()}
 	PrecompileNamesToInfo[jsonp.GetName()] = PrecompileInfo{ABI: jsonp.GetABI(), Address: jsonp.Address()}
@@ -156,6 +187,9 @@ func InitializePrecompiles(
 	PrecompileNamesToInfo[layerxverifyp.GetName()] = PrecompileInfo{ABI: layerxverifyp.GetABI(), Address: layerxverifyp.Address()}
 	PrecompileNamesToInfo[layerxcustodyp.GetName()] = PrecompileInfo{ABI: layerxcustodyp.GetABI(), Address: layerxcustodyp.Address()}
 	PrecompileNamesToInfo[layerxanchorp.GetName()] = PrecompileInfo{ABI: layerxanchorp.GetABI(), Address: layerxanchorp.Address()}
+	PrecompileNamesToInfo[layerxexchangep.GetName()] = PrecompileInfo{ABI: layerxexchangep.GetABI(), Address: layerxexchangep.Address()}
+	PrecompileNamesToInfo[layerxbridgep.GetName()] = PrecompileInfo{ABI: layerxbridgep.GetABI(), Address: layerxbridgep.Address()}
+	PrecompileNamesToInfo[launchpadp.GetName()] = PrecompileInfo{ABI: launchpadp.GetABI(), Address: launchpadp.Address()}
 
 	if !dryRun {
 		addPrecompileToVM(bankp)
@@ -173,6 +207,9 @@ func InitializePrecompiles(
 		addPrecompileToVM(layerxverifyp)
 		addPrecompileToVM(layerxcustodyp)
 		addPrecompileToVM(layerxanchorp)
+		addPrecompileToVM(layerxexchangep)
+		addPrecompileToVM(layerxbridgep)
+		addPrecompileToVM(launchpadp)
 		Initialized = true
 	}
 	return nil

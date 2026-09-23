@@ -203,9 +203,9 @@ func TestRequiredGasIsPinned(t *testing.T) {
 }
 
 func TestNewPrecompileNeedsTheLaunchpadKeeper(t *testing.T) {
-	_, err := launchpad.NewPrecompile(testkeeper.EVMTestApp.GetPrecompileKeepers())
+	_, err := launchpad.NewPrecompile(&utils.EmptyKeepers{})
 	require.Error(t, err)
-	_, err = launchpad.NewPrecompile(keepers{Keepers: testkeeper.EVMTestApp.GetPrecompileKeepers()})
+	_, err = launchpad.NewPrecompile(keepers{Keepers: testkeeper.EVMTestApp.GetPrecompileKeepers(), launchpad: nil})
 	require.Error(t, err)
 }
 
