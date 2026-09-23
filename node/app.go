@@ -276,17 +276,15 @@ var (
 		tokenfactorytypes.ModuleName:   {authtypes.Minter, authtypes.Burner},
 		layerxcustodytypes.ModuleName:  nil,
 		layerxanchortypes.ModuleName:   {authtypes.Burner},
-		launchpadtypes.ModuleName:      nil,
-		launchpadtypes.TreasuryName:    nil,
+		// launchpad, launchpad_treasury and layerxbridge are deliberately absent:
+		// the bank keeper blocks every maccPerms address as a receiver, and each
+		// of them receives tokenfactory mints or fees by plain sends while
+		// needing no mint or burn permission of its own.
 		// this line is used by starport scaffolding # stargate/app/maccPerms
 	}
 
-	// The launchpad escrow receives tokenfactory mints and trader quote, and
-	// its treasury receives creation and protocol fees, both by plain sends.
 	allowedReceivingModAcc = map[string]bool{
-		oracletypes.ModuleName:      true,
-		launchpadtypes.ModuleName:   true,
-		launchpadtypes.TreasuryName: true,
+		oracletypes.ModuleName: true,
 	}
 
 	// kvStoreKeyNames is the canonical, in-order list of module KV store
@@ -763,9 +761,6 @@ func New(
 	app.LayerXCustodyKeeper.SetAnchorReader(layerxanchorkeeper.NewCustodyAnchor(app.LayerXAnchorKeeper))
 	app.LayerXExchangeKeeper = layerxexchangekeeper.NewKeeper(appCodec, keys[layerxexchangetypes.StoreKey],
 		app.LayerXCustodyKeeper, &app.EvmKeeper)
-	// The bridge module account is the tokenfactory admin of bridged denoms and
-	// holds a minted amount only inside one bridgeIn; it needs no maccPerms
-	// entry and so is never a blocked receiver.
 	app.LayerXBridgeKeeper = layerxbridgekeeper.NewKeeper(keys[layerxbridgetypes.StoreKey], app.BankKeeper,
 		&app.EvmKeeper, app.TokenFactoryKeeper)
 	app.LaunchpadKeeper = launchpadkeeper.NewKeeper(keys[launchpadtypes.StoreKey], app.BankKeeper,
