@@ -1,0 +1,53 @@
+syntax = "proto3";
+package paxprotocol.paxchain.layerxexchange;
+
+option go_package = "github.com/sidiora-labs/paxeer-network/modules/layerxexchange/types";
+
+// IntentKind names the exchange action an intent asks LayerX to apply.
+enum IntentKind {
+  INTENT_KIND_UNSPECIFIED = 0;
+  INTENT_KIND_DEPOSIT = 1;
+  INTENT_KIND_WITHDRAW = 2;
+  INTENT_KIND_PLACE = 3;
+  INTENT_KIND_CANCEL = 4;
+  INTENT_KIND_SETTLE = 5;
+}
+
+// IntentStatus is the Paxeer-side lifecycle of an intent.
+enum IntentStatus {
+  INTENT_STATUS_NONE = 0;
+  INTENT_STATUS_PENDING = 1;
+}
+
+// Intent is one pending exchange intent recorded for the LayerX intent
+// router. Identifiers are 64 lowercase hex characters, addresses are
+// 0x-prefixed EVM addresses and amounts are decimal base units.
+message Intent {
+  string intent_id = 1;
+  IntentKind kind = 2;
+  IntentStatus status = 3;
+  // owner is the EVM address that submitted the intent.
+  string owner = 4;
+  uint64 nonce = 5;
+  int64 height = 6;
+  // account is the 32-byte LayerX account for deposit and withdraw intents.
+  string account = 7;
+  string asset_id = 8;
+  string denom = 9;
+  string amount = 10;
+  // deposit_id is the layerxcustody deposit that moved the margin.
+  string deposit_id = 11;
+  string market_id = 12;
+  uint32 side = 13;
+  string price = 14;
+  string quantity = 15;
+  uint32 time_in_force = 16;
+  string order_id = 17;
+  string position_id = 18;
+}
+
+// OwnerNonce is the intent nonce of one owner.
+message OwnerNonce {
+  string owner = 1;
+  uint64 nonce = 2;
+}
