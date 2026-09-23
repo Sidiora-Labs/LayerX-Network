@@ -286,7 +286,7 @@ func TestGasIsTheDocumentedFormula(t *testing.T) {
 }
 
 func TestNewPrecompileNeedsTheBridgeKeeper(t *testing.T) {
-	_, err := layerxbridge.NewPrecompile(testkeeper.EVMTestApp.GetPrecompileKeepers())
+	_, err := layerxbridge.NewPrecompile(keepers{Keepers: testkeeper.EVMTestApp.GetPrecompileKeepers(), bridge: nil})
 	require.Error(t, err)
 	p := layerxbridge.NewPrecompileWithKeeper(bridgekeeper.Keeper{})
 	require.Equal(t, bridge, p.Address())
