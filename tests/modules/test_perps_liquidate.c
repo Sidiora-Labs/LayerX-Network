@@ -276,50 +276,62 @@ static void identifier(uint8_t value, uint8_t out[32])
     out[0] = value;
 }
 
-static lxp_result position_open(uint8_t position_id,
-                                const lx_account *margin_account,
+static lxp_result position_open(const lx_account *margin_account,
                                 lx_perps_side side, uint64_t size,
-                                uint64_t notional, uint64_t margin_amount,
-                                const char *did)
+                                uint64_t price, uint64_t margin_amount,
+                                uint8_t order_id, const char *did)
 {
     lx_perps_open_command command;
+    lx_perps_order_command order;
     uint8_t payload[LX_PERPS_OPEN_PAYLOAD_BYTES];
+    uint8_t order_payload[LX_PERPS_ORDER_PAYLOAD_BYTES];
+    lxp_result status;
     (void)memset(&command, 0, sizeof(command));
     command.market_id[0] = 1U;
-    command.position_id[0] = position_id;
+    (void)memcpy(command.position_id, margin_account->id, 32U);
     (void)memcpy(command.margin_account_id, margin_account->id, 32U);
     command.side = side;
     command.size = (lxp_u128){ 0U, size };
-    command.entry_notional = (lxp_u128){ 0U, notional };
     command.margin_amount = (lxp_u128){ 0U, margin_amount };
     if (lx_perps_open_command_encode(&command, payload) != LXP_OK)
         return LXP_FATAL_INVARIANT;
-    return run(LX_PERPS_POSITION_OPEN, did, payload, sizeof(payload), NULL,
-               NULL);
+    status = run(LX_PERPS_POSITION_OPEN, did, payload, sizeof(payload), NULL,
+                 NULL);
+    if (status != LXP_OK) return status;
+    (void)memset(&order, 0, sizeof(order));
+    order.market_id[0] = 1U;
+    order.order_id[0] = order_id;
+    (void)memcpy(order.owner_account_id, margin_account->id, 32U);
+    order.side = side;
+    order.price = (lxp_u128){ 0U, price };
+    order.quantity = (lxp_u128){ 0U, size };
+    if (lx_perps_order_command_encode(&order, order_payload) != LXP_OK)
+        return LXP_FATAL_INVARIANT;
+    return run(LX_PERPS_ORDER_PLACE, did, order_payload,
+               sizeof(order_payload), NULL, NULL);
 }
 
-static lxp_result liquidate(uint8_t position_id, const lx_account *liquidator,
-                            const char *did)
+static lxp_result liquidate(const lx_account *position_account,
+                            const lx_account *liquidator, const char *did)
 {
     lx_perps_liquidate_command command;
     uint8_t payload[LX_PERPS_LIQUIDATE_PAYLOAD_BYTES];
     (void)memset(&command, 0, sizeof(command));
     command.market_id[0] = 1U;
-    command.position_id[0] = position_id;
+    (void)memcpy(command.position_id, position_account->id, 32U);
     (void)memcpy(command.liquidator_account_id, liquidator->id, 32U);
     if (lx_perps_liquidate_command_encode(&command, payload) != LXP_OK)
         return LXP_FATAL_INVARIANT;
     return run(LX_PERPS_LIQUIDATE, did, payload, sizeof(payload), NULL, NULL);
 }
 
-static lxp_result position_state(uint8_t position_id,
+static lxp_result position_state(const lx_account *position_account,
                                  lx_perps_position *position)
 {
     uint8_t market_id[32];
-    uint8_t id[32];
     identifier(1U, market_id);
-    identifier(position_id, id);
-    return lx_perps_position_get(&ctx, market_id, id, position);
+    return lx_perps_position_get(&ctx, market_id, position_account->id,
+                                 position);
 }
 
 int main(void)
@@ -349,12 +361,12 @@ int main(void)
     market_defaults(1U, &market);
     if (market_create(&market, admin_did) != LXP_OK ||
         oracle_push(oracle_seed, 1U, 1U, 100U, 1000U) != LXP_OK ||
-        position_open(1U, alice_margin_a, LX_PERPS_SIDE_SELL, 10U, 1000U,
-                      100U, "did:key:alice") != LXP_OK ||
-        position_open(2U, alice_margin_b, LX_PERPS_SIDE_BUY, 10U, 1000U,
-                      300U, "did:key:alice") != LXP_OK)
+        position_open(alice_margin_a, LX_PERPS_SIDE_SELL, 10U, 100U, 100U,
+                      1U, "did:key:alice") != LXP_OK ||
+        position_open(alice_margin_b, LX_PERPS_SIDE_BUY, 10U, 100U, 300U,
+                      2U, "did:key:alice") != LXP_OK)
         return 1;
-    if (ctx_open() != 0 || position_state(1U, &position) != LXP_OK ||
+    if (ctx_open() != 0 || position_state(alice_margin_a, &position) != LXP_OK ||
         lx_perps_maintenance_check(&market, &position,
                                    (lxp_u128){ 0U, 100U },
                                    market.price_scale, alice_margin_a->balance,
@@ -368,17 +380,17 @@ int main(void)
                                        &insurance_fee) != LXP_OK ||
         liquidator_fee.lo != 60U || insurance_fee.lo != 40U)
         return 1;
-    if (liquidate(1U, keeper_main, "did:key:keeper") !=
+    if (liquidate(alice_margin_a, keeper_main, "did:key:keeper") !=
             LXP_ERR_MARGIN_INSUFFICIENT ||
         oracle_push(oracle_seed, 1U, 2U, 200U, 1000U) != LXP_OK ||
         oracle_push(oracle_seed, 1U, 3U, 400U, 1000U) != LXP_OK)
         return 1;
-    if (liquidate(1U, keeper_main, "did:key:alice") !=
+    if (liquidate(alice_margin_a, keeper_main, "did:key:alice") !=
             LXP_ERR_UNAUTHORIZED_DEBIT ||
-        liquidate(2U, keeper_main, "did:key:keeper") !=
+        liquidate(alice_margin_b, keeper_main, "did:key:keeper") !=
             LXP_ERR_MARGIN_INSUFFICIENT ||
-        liquidate(1U, keeper_main, "did:key:keeper") != LXP_OK ||
-        liquidate(1U, keeper_main, "did:key:keeper") !=
+        liquidate(alice_margin_a, keeper_main, "did:key:keeper") != LXP_OK ||
+        liquidate(alice_margin_a, keeper_main, "did:key:keeper") !=
             LXP_ERR_AGREEMENT_STATE)
         return 1;
     if (ctx_open() != 0 || !balance_is(alice_margin_a, 0U) ||
@@ -386,8 +398,8 @@ int main(void)
         !balance_is(insurance_account, 0U) ||
         !balance_is(keeper_main, 0U) || !balance_is(alice_main, 600U) ||
         alice_margin_a->has_open_reference ||
-        position_state(1U, &position) != LXP_OK || position.open ||
-        position_state(2U, &position) != LXP_OK || !position.open ||
+        position_state(alice_margin_a, &position) != LXP_OK || position.open ||
+        position_state(alice_margin_b, &position) != LXP_OK || !position.open ||
         lx_perps_funding_state_lookup(&ctx, market_id, &funding) != LXP_OK ||
         !lxp_u128_is_zero(funding.short_open_notional) ||
         funding.long_open_notional.lo != 1000U ||

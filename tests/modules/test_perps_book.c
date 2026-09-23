@@ -329,6 +329,202 @@ static lxp_result order_state(uint8_t order_id, lx_perps_order *order)
     return lx_perps_order_lookup(&ctx, market_id, id, order);
 }
 
+static lxp_result position_state(const lx_account *margin_account,
+                                 lx_perps_position *position)
+{
+    uint8_t market_id[32];
+    identifier(1U, market_id);
+    return lx_perps_position_get(&ctx, market_id, margin_account->id,
+                                 position);
+}
+
+static int position_is(const lx_account *margin_account,
+                       const lx_account *owner_main, lx_perps_side side,
+                       uint64_t size, uint64_t notional, bool open)
+{
+    lx_perps_position position;
+    if (position_state(margin_account, &position) != LXP_OK) return 0;
+    return position.open == open && position.side == side &&
+           position.size.hi == 0U && position.size.lo == size &&
+           position.entry_notional.hi == 0U &&
+           position.entry_notional.lo == notional &&
+           memcmp(position.position_id, margin_account->id, 32U) == 0 &&
+           memcmp(position.margin_account_id, margin_account->id, 32U) ==
+               0 &&
+           memcmp(position.owner_main_account_id, owner_main->id, 32U) ==
+               0 &&
+           memcmp(position.asset_id, quote_asset_id, 32U) == 0 &&
+           position.market_id[0] == 1U &&
+           lxp_u128_is_zero(position.funding_index_at_entry.magnitude);
+}
+
+static int open_interest_is(uint64_t long_notional, uint64_t short_notional)
+{
+    lx_perps_funding_state funding;
+    uint8_t market_id[32];
+    identifier(1U, market_id);
+    return lx_perps_funding_state_lookup(&ctx, market_id, &funding) ==
+               LXP_OK &&
+           funding.long_open_notional.hi == 0U &&
+           funding.long_open_notional.lo == long_notional &&
+           funding.short_open_notional.hi == 0U &&
+           funding.short_open_notional.lo == short_notional;
+}
+
+static lx_account *alice_main;
+static lx_account *bob_main;
+static lx_account *carol_main;
+static lx_account *carol_margin;
+static lx_account *dave_main;
+static lx_account *dave_margin;
+static lx_account *erin_main;
+static lx_account *erin_margin;
+static lx_account *maker_main;
+static lx_account *maker_margin;
+static lx_account *filler_main;
+static lx_account *gina_margin;
+
+static int fill_to_position_cases(void)
+{
+    lx_perps_order order;
+    lx_perps_position position;
+    if (account_add("agent:did:key:carol:main", LX_ACCOUNT_OPEN_CREDIT, 0U,
+                    &carol_main) != 0 ||
+        account_add("agent:did:key:carol:margin:a", LX_ACCOUNT_OPEN_CREDIT,
+                    1000U, &carol_margin) != 0 ||
+        account_add("agent:did:key:dave:main", LX_ACCOUNT_OPEN_CREDIT, 0U,
+                    &dave_main) != 0 ||
+        account_add("agent:did:key:dave:margin:a", LX_ACCOUNT_OPEN_CREDIT,
+                    1000U, &dave_margin) != 0 ||
+        account_add("agent:did:key:erin:main", LX_ACCOUNT_OPEN_CREDIT, 0U,
+                    &erin_main) != 0 ||
+        account_add("agent:did:key:erin:margin:a", LX_ACCOUNT_OPEN_CREDIT,
+                    1000U, &erin_margin) != 0)
+        return 1;
+    if (order_place(20U, dave_margin, LX_PERPS_SIDE_SELL, 100U, 2U,
+                    "did:key:dave") != LXP_OK ||
+        order_place(21U, carol_margin, LX_PERPS_SIDE_BUY, 100U, 2U,
+                    "did:key:carol") != LXP_OK)
+        return 1;
+    if (ctx_open() != 0 ||
+        !position_is(carol_margin, carol_main, LX_PERPS_SIDE_BUY, 2U, 200U,
+                     true) ||
+        !position_is(dave_margin, dave_main, LX_PERPS_SIDE_SELL, 2U, 200U,
+                     true) ||
+        !open_interest_is(803U, 803U) ||
+        order_state(20U, &order) != LXP_ERR_UNKNOWN_FIELD ||
+        order_state(21U, &order) != LXP_ERR_UNKNOWN_FIELD ||
+        !carol_margin->has_open_reference ||
+        !dave_margin->has_open_reference ||
+        !balance_is(carol_margin, 1000U) || !balance_is(dave_margin, 1000U))
+        return 1;
+    if (order_place(22U, erin_margin, LX_PERPS_SIDE_SELL, 100U, 5U,
+                    "did:key:erin") != LXP_OK ||
+        order_place(23U, carol_margin, LX_PERPS_SIDE_BUY, 100U, 2U,
+                    "did:key:carol") != LXP_OK)
+        return 1;
+    if (ctx_open() != 0 ||
+        !position_is(carol_margin, carol_main, LX_PERPS_SIDE_BUY, 4U, 400U,
+                     true) ||
+        !position_is(erin_margin, erin_main, LX_PERPS_SIDE_SELL, 2U, 200U,
+                     true) ||
+        !open_interest_is(1003U, 1003U) ||
+        order_state(22U, &order) != LXP_OK || !order.active ||
+        order.remaining.lo != 3U || order.quantity.lo != 5U)
+        return 1;
+    if (order_cancel(22U, "did:key:erin") != LXP_OK ||
+        order_place(24U, dave_margin, LX_PERPS_SIDE_BUY, 100U, 2U,
+                    "did:key:dave") != LXP_OK ||
+        order_place(25U, carol_margin, LX_PERPS_SIDE_SELL, 100U, 1U,
+                    "did:key:carol") != LXP_OK)
+        return 1;
+    if (ctx_open() != 0 ||
+        !position_is(carol_margin, carol_main, LX_PERPS_SIDE_BUY, 3U, 300U,
+                     true) ||
+        !position_is(dave_margin, dave_main, LX_PERPS_SIDE_SELL, 1U, 100U,
+                     true) ||
+        !open_interest_is(903U, 903U) ||
+        !balance_is(dave_margin, 1000U) || !balance_is(dave_main, 0U) ||
+        order_state(24U, &order) != LXP_OK || order.remaining.lo != 1U)
+        return 1;
+    if (order_place(26U, carol_margin, LX_PERPS_SIDE_SELL, 100U, 1U,
+                    "did:key:carol") != LXP_OK)
+        return 1;
+    if (ctx_open() != 0 ||
+        !position_is(carol_margin, carol_main, LX_PERPS_SIDE_BUY, 2U, 200U,
+                     true) ||
+        !position_is(dave_margin, dave_main, LX_PERPS_SIDE_SELL, 1U, 100U,
+                     false) ||
+        !open_interest_is(803U, 803U) ||
+        !balance_is(dave_margin, 0U) || !balance_is(dave_main, 1000U) ||
+        dave_margin->has_open_reference ||
+        !balance_is(carol_margin, 1000U) || !balance_is(carol_main, 0U) ||
+        order_state(24U, &order) != LXP_ERR_UNKNOWN_FIELD ||
+        position_state(dave_margin, &position) != LXP_OK || position.open)
+        return 1;
+    return 0;
+}
+
+static int positions_full_case(void)
+{
+    char name[64];
+    lx_account *filler;
+    lx_perps_order order;
+    lx_perps_position position;
+    lx_perps_book book;
+    uint8_t market_id[32];
+    size_t i;
+    identifier(1U, market_id);
+    if (account_add("agent:did:key:maker:main", LX_ACCOUNT_OPEN_CREDIT, 0U,
+                    &maker_main) != 0 ||
+        account_add("agent:did:key:maker:margin:a", LX_ACCOUNT_OPEN_CREDIT,
+                    5000U, &maker_margin) != 0 ||
+        account_add("agent:did:key:filler:main", LX_ACCOUNT_OPEN_CREDIT, 0U,
+                    &filler_main) != 0 ||
+        account_add("agent:did:key:gina:main", LX_ACCOUNT_OPEN_CREDIT, 0U,
+                    NULL) != 0 ||
+        account_add("agent:did:key:gina:margin:a", LX_ACCOUNT_OPEN_CREDIT,
+                    1000U, &gina_margin) != 0 ||
+        order_place(30U, maker_margin, LX_PERPS_SIDE_SELL, 100U, 200U,
+                    "did:key:maker") != LXP_OK)
+        return 1;
+    for (i = 0U; i < 121U; ++i) {
+        size_t length = strlen("agent:did:key:filler:margin:");
+        (void)memcpy(name, "agent:did:key:filler:margin:", length);
+        name[length] = (char)('a' + (char)(i / 26U));
+        name[length + 1U] = (char)('a' + (char)(i % 26U));
+        name[length + 2U] = '\0';
+        if (account_add(name, LX_ACCOUNT_OPEN_CREDIT, 100U, &filler) != 0 ||
+            order_place((uint8_t)(100U + i), filler, LX_PERPS_SIDE_BUY, 100U,
+                        1U, "did:key:filler") != LXP_OK)
+            return 1;
+    }
+    if (ctx_open() != 0 ||
+        !position_is(maker_margin, maker_main, LX_PERPS_SIDE_SELL, 121U,
+                     12100U, true) ||
+        !position_is(filler, filler_main, LX_PERPS_SIDE_BUY, 1U, 100U,
+                     true) ||
+        !open_interest_is(12903U, 12903U))
+        return 1;
+    if (order_place(31U, gina_margin, LX_PERPS_SIDE_BUY, 100U, 1U,
+                    "did:key:gina") != LXP_ERR_ARENA_EXHAUSTED)
+        return 1;
+    if (ctx_open() != 0 ||
+        order_state(31U, &order) != LXP_ERR_UNKNOWN_FIELD ||
+        order_state(30U, &order) != LXP_OK || !order.active ||
+        order.remaining.lo != 79U ||
+        position_state(gina_margin, &position) != LXP_ERR_UNKNOWN_FIELD ||
+        !position_is(maker_margin, maker_main, LX_PERPS_SIDE_SELL, 121U,
+                     12100U, true) ||
+        !open_interest_is(12903U, 12903U) ||
+        !balance_is(gina_margin, 1000U) || !balance_is(maker_margin, 5000U) ||
+        gina_margin->has_open_reference ||
+        lx_perps_order_book_load(&ctx, market_id, &book) != LXP_OK ||
+        book.count != 1U)
+        return 1;
+    return 0;
+}
+
 int main(void)
 {
     lx_perps_market market;
@@ -341,13 +537,13 @@ int main(void)
     (void)memset(&visits, 0, sizeof(visits));
     if (fixture_init() != 0 || kernel_start() != 0 ||
         account_add("agent:did:key:alice:main", LX_ACCOUNT_OPEN_CREDIT, 0U,
-                    NULL) != 0 ||
+                    &alice_main) != 0 ||
         account_add("agent:did:key:alice:margin:a", LX_ACCOUNT_OPEN_CREDIT,
                     1000U, &alice_margin_a) != 0 ||
         account_add("agent:did:key:alice:margin:b", LX_ACCOUNT_OPEN_CREDIT,
                     1000U, &alice_margin_b) != 0 ||
         account_add("agent:did:key:bob:main", LX_ACCOUNT_OPEN_CREDIT, 0U,
-                    NULL) != 0 ||
+                    &bob_main) != 0 ||
         account_add("agent:did:key:bob:margin:a", LX_ACCOUNT_OPEN_CREDIT,
                     1000U, &bob_margin_a) != 0)
         return 1;
@@ -379,6 +575,14 @@ int main(void)
         memcmp(order.owner_account_id, alice_margin_a->id, 32U) != 0 ||
         order.initial_margin_required.lo != 41U)
         return 1;
+    if (!position_is(bob_margin_a, bob_main, LX_PERPS_SIDE_BUY, 6U, 603U,
+                     true) ||
+        !position_is(alice_margin_b, alice_main, LX_PERPS_SIDE_SELL, 3U,
+                     300U, true) ||
+        !position_is(alice_margin_a, alice_main, LX_PERPS_SIDE_SELL, 3U,
+                     303U, true) ||
+        !open_interest_is(603U, 603U))
+        return 1;
     if (lx_perps_book_init(&book) != LXP_OK || book.count != 0U ||
         lx_perps_order_book_load(&ctx, market_id, &book) != LXP_OK ||
         book.count != 1U ||
@@ -396,7 +600,9 @@ int main(void)
         book.count != 0U ||
         !balance_is(alice_margin_a, 1000U) ||
         !balance_is(alice_margin_b, 1000U) ||
-        !balance_is(bob_margin_a, 1000U) ||
+        !balance_is(bob_margin_a, 1000U))
+        return 1;
+    if (fill_to_position_cases() != 0 || positions_full_case() != 0 ||
         lxp_state_store_destroy(&store) != LXP_OK)
         return 1;
     return 0;

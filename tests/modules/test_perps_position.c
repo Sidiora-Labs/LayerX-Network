@@ -268,6 +268,7 @@ static int balance_is(const lx_account *account, uint64_t value)
 static lx_account *alice_main;
 static lx_account *alice_margin;
 static lx_account *bob_main;
+static lx_account *bob_margin;
 
 static void identifier(uint8_t value, uint8_t out[32])
 {
@@ -275,37 +276,99 @@ static void identifier(uint8_t value, uint8_t out[32])
     out[0] = value;
 }
 
-static lxp_result position_open(uint8_t position_id,
+static void open_command(const uint8_t position_id[32],
+                         const lx_account *margin_account, lx_perps_side side,
+                         uint64_t size, uint64_t margin_amount,
+                         lx_perps_open_command *command)
+{
+    (void)memset(command, 0, sizeof(*command));
+    command->market_id[0] = 1U;
+    (void)memcpy(command->position_id, position_id, 32U);
+    (void)memcpy(command->margin_account_id, margin_account->id, 32U);
+    command->side = side;
+    command->size = (lxp_u128){ 0U, size };
+    command->margin_amount = (lxp_u128){ 0U, margin_amount };
+}
+
+static lxp_result position_open(const uint8_t position_id[32],
                                 const lx_account *margin_account,
                                 lx_perps_side side, uint64_t size,
-                                uint64_t notional, uint64_t margin_amount,
-                                const char *did)
+                                uint64_t margin_amount, const char *did)
 {
     lx_perps_open_command command;
     uint8_t payload[LX_PERPS_OPEN_PAYLOAD_BYTES];
-    (void)memset(&command, 0, sizeof(command));
-    command.market_id[0] = 1U;
-    command.position_id[0] = position_id;
-    (void)memcpy(command.margin_account_id, margin_account->id, 32U);
-    command.side = side;
-    command.size = (lxp_u128){ 0U, size };
-    command.entry_notional = (lxp_u128){ 0U, notional };
-    command.margin_amount = (lxp_u128){ 0U, margin_amount };
+    open_command(position_id, margin_account, side, size, margin_amount,
+                 &command);
     if (lx_perps_open_command_encode(&command, payload) != LXP_OK)
         return LXP_FATAL_INVARIANT;
     return run(LX_PERPS_POSITION_OPEN, did, payload, sizeof(payload), NULL,
                NULL);
 }
 
-static lxp_result position_increase(uint8_t position_id, uint64_t size,
-                                    uint64_t notional, uint64_t margin_amount,
-                                    const char *did)
+static lxp_result position_open_with_notional(
+    const lx_account *margin_account, uint64_t notional, const char *did)
+{
+    lx_perps_open_command command;
+    lx_perps_open_command decoded;
+    uint8_t payload[LX_PERPS_OPEN_PAYLOAD_BYTES];
+    open_command(margin_account->id, margin_account, LX_PERPS_SIDE_BUY, 10U,
+                 100U, &command);
+    if (lx_perps_open_command_encode(&command, payload) != LXP_OK ||
+        payload[128] != 0U)
+        return LXP_FATAL_INVARIANT;
+    command.entry_notional = (lxp_u128){ 0U, notional };
+    if (lx_perps_open_command_encode(&command, payload) !=
+            LXP_ERR_NON_CANONICAL)
+        return LXP_FATAL_INVARIANT;
+    command.entry_notional = (lxp_u128){ 0U, 0U };
+    if (lx_perps_open_command_encode(&command, payload) != LXP_OK)
+        return LXP_FATAL_INVARIANT;
+    payload[128] = (uint8_t)notional;
+    payload[127] = (uint8_t)(notional >> 8U);
+    if (lx_perps_open_command_decode(payload, sizeof(payload), &decoded) !=
+            LXP_ERR_NON_CANONICAL)
+        return LXP_FATAL_INVARIANT;
+    return run(LX_PERPS_POSITION_OPEN, did, payload, sizeof(payload), NULL,
+               NULL);
+}
+
+static lxp_result order_place(uint8_t order_id, const lx_account *owner,
+                              lx_perps_side side, uint64_t price,
+                              uint64_t quantity, const char *did)
+{
+    lx_perps_order_command command;
+    uint8_t payload[LX_PERPS_ORDER_PAYLOAD_BYTES];
+    (void)memset(&command, 0, sizeof(command));
+    command.market_id[0] = 1U;
+    command.order_id[0] = order_id;
+    (void)memcpy(command.owner_account_id, owner->id, 32U);
+    command.side = side;
+    command.price = (lxp_u128){ 0U, price };
+    command.quantity = (lxp_u128){ 0U, quantity };
+    if (lx_perps_order_command_encode(&command, payload) != LXP_OK)
+        return LXP_FATAL_INVARIANT;
+    return run(LX_PERPS_ORDER_PLACE, did, payload, sizeof(payload), NULL,
+               NULL);
+}
+
+static lxp_result order_state(uint8_t order_id, lx_perps_order *order)
+{
+    uint8_t market_id[32];
+    uint8_t id[32];
+    identifier(1U, market_id);
+    identifier(order_id, id);
+    return lx_perps_order_lookup(&ctx, market_id, id, order);
+}
+
+static lxp_result position_increase(const lx_account *margin_account,
+                                    uint64_t size, uint64_t notional,
+                                    uint64_t margin_amount, const char *did)
 {
     lx_perps_increase_command command;
     uint8_t payload[LX_PERPS_INCREASE_PAYLOAD_BYTES];
     (void)memset(&command, 0, sizeof(command));
     command.market_id[0] = 1U;
-    command.position_id[0] = position_id;
+    (void)memcpy(command.position_id, margin_account->id, 32U);
     command.size_delta = (lxp_u128){ 0U, size };
     command.notional_delta = (lxp_u128){ 0U, notional };
     command.margin_amount = (lxp_u128){ 0U, margin_amount };
@@ -315,27 +378,27 @@ static lxp_result position_increase(uint8_t position_id, uint64_t size,
                NULL, NULL);
 }
 
-static lxp_result position_close(uint8_t position_id, const char *did)
+static lxp_result position_close(const lx_account *margin_account,
+                                 const char *did)
 {
     lx_perps_close_command command;
     uint8_t payload[LX_PERPS_CLOSE_PAYLOAD_BYTES];
     (void)memset(&command, 0, sizeof(command));
     command.market_id[0] = 1U;
-    command.position_id[0] = position_id;
+    (void)memcpy(command.position_id, margin_account->id, 32U);
     if (lx_perps_close_command_encode(&command, payload) != LXP_OK)
         return LXP_FATAL_INVARIANT;
     return run(LX_PERPS_POSITION_CLOSE, did, payload, sizeof(payload), NULL,
                NULL);
 }
 
-static lxp_result position_state(uint8_t position_id,
+static lxp_result position_state(const lx_account *margin_account,
                                  lx_perps_position *position)
 {
     uint8_t market_id[32];
-    uint8_t id[32];
     identifier(1U, market_id);
-    identifier(position_id, id);
-    return lx_perps_position_get(&ctx, market_id, id, position);
+    return lx_perps_position_get(&ctx, market_id, margin_account->id,
+                                 position);
 }
 
 int main(void)
@@ -345,6 +408,7 @@ int main(void)
     lx_perps_position_store positions;
     lx_perps_position *found = NULL;
     lx_perps_funding_state funding;
+    lx_perps_order order;
     uint8_t market_id[32];
     uint8_t absent_id[32];
 
@@ -355,47 +419,79 @@ int main(void)
                     &alice_main) != 0 ||
         account_add("agent:did:key:alice:margin:a", LX_ACCOUNT_OPEN_CREDIT,
                     0U, &alice_margin) != 0 ||
-        account_add("agent:did:key:bob:main", LX_ACCOUNT_OPEN_CREDIT, 0U,
-                    &bob_main) != 0)
+        account_add("agent:did:key:bob:main", LX_ACCOUNT_OPEN_CREDIT, 1000U,
+                    &bob_main) != 0 ||
+        account_add("agent:did:key:bob:margin:a", LX_ACCOUNT_OPEN_CREDIT, 0U,
+                    &bob_margin) != 0)
         return 1;
     market_defaults(1U, &market);
+    market.maximum_deviation_basis_points = 1000U;
     if (market_create(&market, admin_did) != LXP_OK ||
         oracle_push(oracle_seed, 1U, 1U, 100U, 1000U) != LXP_OK)
         return 1;
-    if (position_open(1U, alice_margin, LX_PERPS_SIDE_BUY, 10U, 1001U, 100U,
-                      "did:key:alice") != LXP_ERR_PARAMETER_BOUNDS ||
-        position_open(1U, alice_margin, LX_PERPS_SIDE_BUY, 10U, 1000U, 50U,
-                      "did:key:alice") != LXP_ERR_MARGIN_INSUFFICIENT ||
-        position_open(2U, alice_margin, LX_PERPS_SIDE_BUY, 10U, 1000U, 100U,
-                      "did:key:bob") != LXP_ERR_UNAUTHORIZED_DEBIT ||
-        position_open(1U, alice_margin, LX_PERPS_SIDE_BUY, 10U, 1000U, 100U,
-                      "did:key:alice") != LXP_OK ||
-        position_open(1U, alice_margin, LX_PERPS_SIDE_BUY, 10U, 1000U, 100U,
-                      "did:key:alice") != LXP_ERR_SEQUENCE_REUSED)
+    if (position_open_with_notional(alice_margin, 1000U, "did:key:alice") !=
+            LXP_ERR_NON_CANONICAL ||
+        position_open_with_notional(alice_margin, 1U, "did:key:alice") !=
+            LXP_ERR_NON_CANONICAL ||
+        position_open(absent_id, alice_margin, LX_PERPS_SIDE_BUY, 10U, 100U,
+                      "did:key:alice") != LXP_ERR_NON_CANONICAL ||
+        position_open(alice_margin->id, alice_margin, LX_PERPS_SIDE_BUY, 10U,
+                      50U, "did:key:alice") != LXP_ERR_MARGIN_INSUFFICIENT ||
+        position_open(alice_margin->id, alice_margin, LX_PERPS_SIDE_BUY, 10U,
+                      100U, "did:key:bob") != LXP_ERR_UNAUTHORIZED_DEBIT ||
+        position_open(alice_margin->id, alice_margin, LX_PERPS_SIDE_BUY, 10U,
+                      100U, "did:key:alice") != LXP_OK ||
+        position_open(bob_margin->id, bob_margin, LX_PERPS_SIDE_SELL, 10U,
+                      100U, "did:key:bob") != LXP_OK)
         return 1;
     if (ctx_open() != 0 || !balance_is(alice_main, 900U) ||
         !balance_is(alice_margin, 100U) || !alice_margin->has_open_reference ||
-        position_state(1U, &position) != LXP_OK || !position.open ||
-        position.size.lo != 10U || position.entry_notional.lo != 1000U ||
-        position.side != LX_PERPS_SIDE_BUY ||
+        !balance_is(bob_main, 900U) || !balance_is(bob_margin, 100U) ||
+        position_state(alice_margin, &position) != LXP_ERR_UNKNOWN_FIELD ||
+        position_state(bob_margin, &position) != LXP_ERR_UNKNOWN_FIELD ||
+        lx_perps_funding_state_lookup(&ctx, market_id, &funding) != LXP_OK ||
+        !lxp_u128_is_zero(funding.long_open_notional) ||
+        !lxp_u128_is_zero(funding.short_open_notional))
+        return 1;
+    if (order_place(1U, alice_margin, LX_PERPS_SIDE_BUY, 111U, 1U,
+                    "did:key:alice") != LXP_ERR_ORACLE_DEVIATION ||
+        order_place(1U, alice_margin, LX_PERPS_SIDE_SELL, 89U, 1U,
+                    "did:key:alice") != LXP_ERR_ORACLE_DEVIATION ||
+        order_place(2U, bob_margin, LX_PERPS_SIDE_SELL, 100U, 10U,
+                    "did:key:bob") != LXP_OK ||
+        order_place(3U, alice_margin, LX_PERPS_SIDE_BUY, 100U, 10U,
+                    "did:key:alice") != LXP_OK)
+        return 1;
+    if (ctx_open() != 0 ||
+        order_state(1U, &order) != LXP_ERR_UNKNOWN_FIELD ||
+        order_state(2U, &order) != LXP_ERR_UNKNOWN_FIELD ||
+        order_state(3U, &order) != LXP_ERR_UNKNOWN_FIELD ||
+        position_state(alice_margin, &position) != LXP_OK || !position.open ||
+        position.side != LX_PERPS_SIDE_BUY || position.size.lo != 10U ||
+        position.entry_notional.lo != 1000U ||
         memcmp(position.owner_main_account_id, alice_main->id, 32U) != 0 ||
         memcmp(position.margin_account_id, alice_margin->id, 32U) != 0 ||
         memcmp(position.asset_id, quote_asset_id, 32U) != 0 ||
+        position_state(bob_margin, &position) != LXP_OK || !position.open ||
+        position.side != LX_PERPS_SIDE_SELL || position.size.lo != 10U ||
+        position.entry_notional.lo != 1000U ||
+        !balance_is(alice_margin, 100U) || !balance_is(bob_margin, 100U) ||
         lx_perps_funding_state_lookup(&ctx, market_id, &funding) != LXP_OK ||
         funding.long_open_notional.lo != 1000U ||
-        !lxp_u128_is_zero(funding.short_open_notional))
+        funding.short_open_notional.lo != 1000U)
         return 1;
-    if (position_increase(1U, 10U, 1000U, 100U, "did:key:bob") !=
+    if (position_increase(alice_margin, 10U, 1000U, 100U, "did:key:bob") !=
             LXP_ERR_UNAUTHORIZED_DEBIT ||
-        position_increase(2U, 10U, 1000U, 100U, "did:key:alice") !=
+        position_increase(bob_main, 10U, 1000U, 100U, "did:key:alice") !=
             LXP_ERR_UNKNOWN_FIELD ||
-        position_increase(1U, 10U, 1000U, 10U, "did:key:alice") !=
+        position_increase(alice_margin, 10U, 1000U, 10U, "did:key:alice") !=
             LXP_ERR_MARGIN_INSUFFICIENT ||
-        position_increase(1U, 10U, 1000U, 100U, "did:key:alice") != LXP_OK)
+        position_increase(alice_margin, 10U, 1000U, 100U, "did:key:alice") !=
+            LXP_OK)
         return 1;
     if (ctx_open() != 0 || !balance_is(alice_main, 800U) ||
         !balance_is(alice_margin, 200U) ||
-        position_state(1U, &position) != LXP_OK ||
+        position_state(alice_margin, &position) != LXP_OK ||
         position.size.lo != 20U || position.entry_notional.lo != 2000U ||
         lx_perps_funding_state_lookup(&ctx, market_id, &funding) != LXP_OK ||
         funding.long_open_notional.lo != 2000U)
@@ -409,16 +505,42 @@ int main(void)
         lx_perps_position_lookup(&positions, absent_id, &found) !=
             LXP_ERR_UNKNOWN_FIELD)
         return 1;
-    if (position_close(1U, "did:key:bob") != LXP_ERR_UNAUTHORIZED_DEBIT ||
-        position_close(1U, "did:key:alice") != LXP_OK ||
-        position_close(1U, "did:key:alice") != LXP_ERR_AGREEMENT_STATE)
+    if (position_close(alice_margin, "did:key:bob") !=
+            LXP_ERR_UNAUTHORIZED_DEBIT ||
+        position_close(alice_margin, "did:key:alice") != LXP_OK ||
+        position_close(alice_margin, "did:key:alice") !=
+            LXP_ERR_AGREEMENT_STATE)
         return 1;
     if (ctx_open() != 0 || !balance_is(alice_main, 1000U) ||
-        !balance_is(alice_margin, 0U) || !balance_is(bob_main, 0U) ||
+        !balance_is(alice_margin, 0U) || !balance_is(bob_main, 900U) ||
         alice_margin->has_open_reference ||
-        position_state(1U, &position) != LXP_OK || position.open ||
+        position_state(alice_margin, &position) != LXP_OK || position.open ||
         lx_perps_funding_state_lookup(&ctx, market_id, &funding) != LXP_OK ||
         !lxp_u128_is_zero(funding.long_open_notional) ||
+        funding.short_open_notional.lo != 1000U)
+        return 1;
+    if (position_open(alice_margin->id, alice_margin, LX_PERPS_SIDE_SELL, 1U,
+                      100U, "did:key:alice") != LXP_OK ||
+        order_place(4U, alice_margin, LX_PERPS_SIDE_SELL, 100U, 1U,
+                    "did:key:alice") != LXP_OK ||
+        oracle_push(oracle_seed, 1U, 2U, 109U, 1000U) != LXP_OK ||
+        oracle_push(oracle_seed, 1U, 3U, 118U, 1000U) != LXP_OK ||
+        oracle_push(oracle_seed, 1U, 4U, 125U, 1000U) != LXP_OK ||
+        order_place(5U, bob_margin, LX_PERPS_SIDE_BUY, 125U, 1U,
+                    "did:key:bob") != LXP_ERR_ORACLE_DEVIATION)
+        return 1;
+    if (ctx_open() != 0 ||
+        order_state(4U, &order) != LXP_OK || !order.active ||
+        order.remaining.lo != 1U ||
+        order_state(5U, &order) != LXP_ERR_UNKNOWN_FIELD ||
+        position_state(alice_margin, &position) != LXP_OK || position.open ||
+        position_state(bob_margin, &position) != LXP_OK || !position.open ||
+        position.size.lo != 10U || position.entry_notional.lo != 1000U ||
+        !balance_is(alice_margin, 100U) || !balance_is(alice_main, 900U) ||
+        !balance_is(bob_margin, 100U) || !balance_is(bob_main, 900U) ||
+        lx_perps_funding_state_lookup(&ctx, market_id, &funding) != LXP_OK ||
+        !lxp_u128_is_zero(funding.long_open_notional) ||
+        funding.short_open_notional.lo != 1000U ||
         lxp_state_store_destroy(&store) != LXP_OK)
         return 1;
     return 0;
