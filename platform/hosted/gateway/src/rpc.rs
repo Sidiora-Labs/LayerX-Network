@@ -227,6 +227,9 @@ pub(super) fn dispatch(config: &Config, request: &IncomingRequest, value: &Value
     {
         return value.get("id").map(|_| result);
     }
+    if let Some(result) = crate::history::dispatch(config, method, &id, value.get("params")) {
+        return value.get("id").map(|_| result);
+    }
     if let Some(result) = crate::paxeer::dispatch(config, method, &id, value.get("params")) {
         return value.get("id").map(|_| result);
     }
@@ -735,6 +738,9 @@ mod tests {
             "px_getBalances",
             "px_listAssets",
             "px_getNetwork",
+            "lx_getHistory",
+            "px_getHistory",
+            "px_getUnifiedHistory",
         ];
         for name in published {
             assert_eq!(

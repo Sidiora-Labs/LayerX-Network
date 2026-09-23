@@ -23,14 +23,25 @@ _DID = re.compile(r"^did:layerx:[0-9a-f]{64}$")
 _DECIMAL = re.compile(r"^(?:0|[1-9][0-9]*)$")
 _HEX_QUANTITY = re.compile(r"^0x[0-9a-f]{1,32}$")
 
+_MAX_U256 = (1 << 256) - 1
+_ROW_ID = re.compile(r"^[1-9][0-9]*$")
+_CURSOR = re.compile(r"^[0-9A-Za-z]{1,32}$")
+_KIND = re.compile(r"^[a-z0-9_]{1,64}$")
+
 PX_MAXIMUM_JOINED_ASSETS = 1024
+HISTORY_DEFAULT_LIMIT = 50
+HISTORY_MAXIMUM_LIMIT = 100
+HISTORY_MAXIMUM_ACCOUNTS = 16
 
 PxMethod = Literal[
     "px_resolveAccount", "px_getAccount", "px_getBalances", "px_listAssets", "px_getNetwork",
+    "px_getHistory", "px_getUnifiedHistory",
 ]
 PX_METHODS: tuple[PxMethod, ...] = (
     "px_resolveAccount", "px_getAccount", "px_getBalances", "px_listAssets", "px_getNetwork",
+    "px_getHistory", "px_getUnifiedHistory",
 )
+_GATEWAY_METHODS = (*PX_METHODS, "lx_getHistory")
 
 
 @dataclass(frozen=True)
@@ -127,6 +138,60 @@ class PxNetworkHead:
     anchor: PxAnchorHead | None
 
 
+@dataclass(frozen=True)
+class HistoryAssetMetadata:
+    asset: str
+    chain: str
+    kind: str
+    address: str | None
+    denom: str | None
+    symbol: str | None
+    decimals: int | None
+    native_id: str | None
+    pointer: str | None
+    metadata: object
+
+
+@dataclass(frozen=True)
+class HistoryRow:
+    id: int
+    height_or_seq: int
+    chain: str
+    kind: str
+    direction: str
+    account: str
+    counterparty: str | None
+    asset: str
+    amount: int
+    tx_id: str
+    ordinal: int
+    final: bool
+    decoded: object
+    asset_metadata: HistoryAssetMetadata | None
+    side: str | None
+
+
+@dataclass(frozen=True)
+class HistoryPage:
+    account: str
+    items: tuple[HistoryRow, ...]
+    next_cursor: str | None
+
+
+@dataclass(frozen=True)
+class HistorySide:
+    side: str
+    account: str
+
+
+@dataclass(frozen=True)
+class UnifiedHistoryPage:
+    account: Mapping[str, object]
+    accounts: tuple[HistorySide, ...]
+    items: tuple[HistoryRow, ...]
+    next_cursor: str | None
+
+
 class PxRpcError(Exception):
     __slots__ = ("code", "data", "message")
 
@@ -194,8 +259,26 @@ class PxClient:
     def get_network(self) -> PxNetworkHead:
         return decode_px_network_head(self.call("px_getNetwork", []))
 
+    def get_history(
+        self, account: str, *, cursor: str | None = None, limit: int | None = None, kind: str | None = None,
+    ) -> HistoryPage:
+        params = history_params(paxeer_history_account(account), cursor=cursor, limit=limit, kind=kind)
+        return decode_paxeer_history_page(self.call("px_getHistory", params), limit or HISTORY_DEFAULT_LIMIT)
+
+    def get_unified_history(
+        self, account: str, *, cursor: str | None = None, limit: int | None = None, kind: str | None = None,
+    ) -> UnifiedHistoryPage:
+        params = history_params(px_account_key(account), cursor=cursor, limit=limit, kind=kind)
+        return decode_unified_history_page(self.call("px_getUnifiedHistory", params), limit or HISTORY_DEFAULT_LIMIT)
+
+    def get_layerx_history(
+        self, account: str, *, cursor: str | None = None, limit: int | None = None, kind: str | None = None,
+    ) -> HistoryPage:
+        params = history_params(layerx_history_account(account), cursor=cursor, limit=limit, kind=kind)
+        return decode_layerx_history_page(self.call("lx_getHistory", params), limit or HISTORY_DEFAULT_LIMIT)
+
     def call(self, method: str, params: list[object]) -> Mapping[str, object]:
-        if method not in PX_METHODS or not isinstance(params, list):
+        if method not in _GATEWAY_METHODS or not isinstance(params, list):
             raise ValueError("invalid-px-method")
         self._id += 1
         request_id = self._id
@@ -425,6 +508,182 @@ def decode_px_anchor_head(value: object) -> PxAnchorHead:
         _optional_text(anchor["status_name"], 64),
         status_ladder,
     )
+
+
+def history_params(
+    account: str, *, cursor: str | None = None, limit: int | None = None, kind: str | None = None,
+) -> list[object]:
+    if cursor is not None and (not isinstance(cursor, str) or _CURSOR.fullmatch(cursor) is None):
+        raise ValueError("invalid-history-cursor")
+    if limit is not None and (type(limit) is not int or not 1 <= limit <= HISTORY_MAXIMUM_LIMIT):
+        raise ValueError("invalid-history-limit")
+    if kind is not None and (not isinstance(kind, str) or _KIND.fullmatch(kind) is None):
+        raise ValueError("invalid-history-kind")
+    return [account, cursor, limit, kind]
+
+
+def layerx_history_account(account: str) -> str:
+    lowered = account.strip().lower() if isinstance(account, str) else ""
+    if _HEX32.fullmatch(lowered) is None or lowered == "00" * 32:
+        raise ValueError("invalid-layerx-account")
+    return lowered
+
+
+def paxeer_history_account(account: str) -> str:
+    lowered = account.strip().lower() if isinstance(account, str) else ""
+    if _EVM_ADDRESS.fullmatch(lowered) is None:
+        raise ValueError("invalid-paxeer-address")
+    return lowered
+
+
+def decode_layerx_history_page(value: object, limit: int = HISTORY_MAXIMUM_LIMIT) -> HistoryPage:
+    return _decode_history_page(value, _HEX32, limit)
+
+
+def decode_paxeer_history_page(value: object, limit: int = HISTORY_MAXIMUM_LIMIT) -> HistoryPage:
+    return _decode_history_page(value, _EVM_ADDRESS, limit)
+
+
+def decode_unified_history_page(value: object, limit: int = HISTORY_MAXIMUM_LIMIT) -> UnifiedHistoryPage:
+    document = _document(value)
+    _present(document, ("account", "accounts", "items", "next_cursor"))
+    sides = document["accounts"]
+    if not isinstance(sides, list) or len(sides) > HISTORY_MAXIMUM_ACCOUNTS:
+        raise ValueError("invalid-history-accounts")
+    accounts: list[HistorySide] = []
+    for entry in sides:
+        side = _document(entry)
+        _present(side, ("side", "account"))
+        name = _history_chain(side["side"])
+        account = side["account"]
+        expected = _HEX32 if name == "layerx" else _EVM_ADDRESS
+        if not isinstance(account, str) or expected.fullmatch(account) is None:
+            raise ValueError("invalid-history-account")
+        accounts.append(HistorySide(name, account))
+    items = _history_rows(document["items"], True, limit)
+    for newer, older in zip(items, items[1:]):
+        if newer.id <= older.id:
+            raise ValueError("unordered-unified-history")
+    return UnifiedHistoryPage(
+        MappingProxyType(dict(_document(document["account"]))),
+        tuple(accounts),
+        items,
+        _history_cursor(document["next_cursor"], items),
+    )
+
+
+def decode_history_row(value: object, unified: bool = False) -> HistoryRow:
+    row = _document(value)
+    _present(row, (
+        "id", "height_or_seq", "chain", "kind", "direction", "account", "counterparty",
+        "asset", "amount", "tx_id", "ordinal", "final", "decoded", "asset_metadata",
+    ))
+    direction = row["direction"]
+    if direction not in ("in", "out"):
+        raise ValueError("invalid-history-direction")
+    final = row["final"]
+    if type(final) is not bool:
+        raise ValueError("invalid-history-finality")
+    kind = row["kind"]
+    if not isinstance(kind, str) or _KIND.fullmatch(kind) is None:
+        raise ValueError("invalid-history-kind")
+    if not isinstance(row["id"], str) or _ROW_ID.fullmatch(row["id"]) is None:
+        raise ValueError("invalid-history-row-id")
+    if unified:
+        _present(row, ("side",))
+    asset = _text(row["asset"], 256)
+    counterparty = row["counterparty"]
+    return HistoryRow(
+        _history_decimal(row["id"], _MAX_U64),
+        _history_decimal(row["height_or_seq"], _MAX_U64),
+        _history_chain(row["chain"]),
+        kind,
+        str(direction),
+        _text(row["account"], 256),
+        None if counterparty is None else _text(counterparty, 256),
+        asset,
+        _history_decimal(row["amount"], _MAX_U256),
+        _text(row["tx_id"], 256),
+        _history_decimal(row["ordinal"], _MAX_U64),
+        final,
+        row["decoded"],
+        decode_history_asset_metadata(row["asset_metadata"], asset),
+        _history_chain(row["side"]) if unified else None,
+    )
+
+
+def decode_history_asset_metadata(value: object, asset: str | None = None) -> HistoryAssetMetadata | None:
+    if value is None:
+        return None
+    document = _document(value)
+    _present(document, (
+        "asset", "chain", "kind", "address", "denom", "symbol", "decimals", "native_id", "pointer", "metadata",
+    ))
+    label = _text(document["asset"], 256)
+    if asset is not None and label != asset:
+        raise ValueError("mismatched-history-asset")
+    decimals = document["decimals"]
+    if decimals is not None and (type(decimals) is not int or not 0 <= decimals <= 255):
+        raise ValueError("invalid-history-decimals")
+    return HistoryAssetMetadata(
+        label,
+        _history_chain(document["chain"]),
+        _text(document["kind"], 64),
+        _exact_optional(document["address"], _EVM_ADDRESS),
+        _optional_text(document["denom"], 128),
+        _optional_text(document["symbol"], 64),
+        decimals,
+        _exact_optional(document["native_id"], _HEX32),
+        _exact_optional(document["pointer"], _EVM_ADDRESS),
+        document["metadata"],
+    )
+
+
+def _decode_history_page(value: object, expected: re.Pattern[str], limit: int) -> HistoryPage:
+    document = _document(value)
+    _present(document, ("account", "items", "next_cursor"))
+    account = document["account"]
+    if not isinstance(account, str) or expected.fullmatch(account) is None:
+        raise ValueError("invalid-history-account")
+    items = _history_rows(document["items"], False, limit)
+    return HistoryPage(account, items, _history_cursor(document["next_cursor"], items))
+
+
+def _history_rows(value: object, unified: bool, limit: int) -> tuple[HistoryRow, ...]:
+    if not isinstance(value, list) or len(value) > limit:
+        raise ValueError("invalid-history-page")
+    return tuple(decode_history_row(row, unified) for row in value)
+
+
+def _history_cursor(value: object, items: tuple[HistoryRow, ...]) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or _CURSOR.fullmatch(value) is None or not items:
+        raise ValueError("invalid-history-cursor")
+    return value
+
+
+def _history_chain(value: object) -> str:
+    if value not in ("layerx", "paxeer"):
+        raise ValueError("invalid-history-chain")
+    return str(value)
+
+
+def _history_decimal(value: object, maximum: int) -> int:
+    if not isinstance(value, str) or _DECIMAL.fullmatch(value) is None:
+        raise ValueError("invalid-history-decimal")
+    parsed = int(value, 10)
+    if parsed > maximum:
+        raise ValueError("invalid-history-decimal")
+    return parsed
+
+
+def _exact_optional(value: object, expected: re.Pattern[str]) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or expected.fullmatch(value) is None:
+        raise ValueError("invalid-history-field")
+    return value
 
 
 def _decode_paxeer_account(value: object) -> PxPaxeerAccount:

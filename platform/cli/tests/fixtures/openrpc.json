@@ -3,7 +3,7 @@
   "info": {
     "title": "LayerX public JSON-RPC",
     "version": "0.1.0",
-    "description": "Public JSON-RPC reads, authenticated activity submission and scoped WebSocket subscriptions. Native DID enumeration, asset listing/detail and canonical fee estimation forward to authenticated core reads; unavailable evidence is returned explicitly and balances, metadata or fees are never fabricated."
+    "description": "Public JSON-RPC reads, authenticated activity submission and scoped WebSocket subscriptions. Native DID enumeration, asset listing/detail and canonical fee estimation forward to authenticated core reads; unavailable evidence is returned explicitly and balances, metadata or fees are never fabricated. The same endpoint relays the Paxeer EVM JSON-RPC namespaces eth_, net_ and web3_ to the chain's node byte for byte, including eth_sendRawTransaction and batches that mix EVM and LayerX calls; node-side signing methods (eth_accounts, eth_coinbase, eth_sendTransaction, eth_sign, eth_signTransaction, eth_signTypedData, eth_signTypedData_v4, eth_mining) and eth_subscribe/eth_unsubscribe are refused here rather than at the node. The px_ namespace joins both domains through the native precompiles addr (0x0000000000000000000000000000000000001004), layerxCustody (0x0000000000000000000000000000000000001013) and layerxAnchor (0x0000000000000000000000000000000000001014)."
   },
   "methods": [
     {
@@ -707,6 +707,990 @@
         {
           "code": -32001,
           "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "px_resolveAccount",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "account",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Resolves one account across both domains. The argument is either a 0x-prefixed 20-byte EVM address or a LayerX DID (did:layerx:<64 hex> or the bare 64 hex characters of the DID public key). The result is {evm_address, pax_address, layerx_did, layerx_account, bound}: every field comes from the addr precompile's getUnifiedAccount/getEvmAddrByLayerX, the halves that are not bound are null, and bound is false when the EVM address carries no LayerX DID. A LayerX account identifier has no reverse index on chain, so only the DID public key resolves from the LayerX side. An unconfigured Paxeer endpoint is -32001 with data.code=paxeer_rpc_not_configured.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Paxeer read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "px_getAccount",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "account",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Resolves the account and joins both halves: paxeer is {address, balance, nonce} read with eth_getBalance and eth_getTransactionCount at latest, layerx is the public core account read for the DID's main account. Either half is null when the account is not bound or the domain has no record. Balances and sequences are never fabricated: an unavailable domain is an explicit -32001 rather than a zero.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Paxeer read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "px_getBalances",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "account",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Per-asset balances on both domains for one account. Assets come from the public core asset registry ordered by asset_id and are joined with the custody precompile's getAsset; the Paxeer amount is the bank precompile's balance(address,denom) and the LayerX amount is the DID's account for that asset. At most the first 16 assets are joined per answer, reported as joined_limit. Amounts are exact decimal strings of the on-chain 256-bit values.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Paxeer read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "px_listAssets",
+      "paramStructure": "by-position",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "The joined asset map: for each LayerX asset (asset_id, denom and its public core record) the custody precompile's record on Paxeer (pointer, enabled, paused, minimum_deposit, custody_cap, custodied, released, pending), or null when the asset is not registered with custody. At most 16 assets are joined per answer, reported as joined_limit. Takes no arguments.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Paxeer read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "px_getNetwork",
+      "paramStructure": "by-position",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "One head for the whole network: network_id, paxeer {chain_id, latest_block} from eth_chainId and eth_blockNumber, layerx {node_info} from the public core node information, and anchor {latest_finalized_batch, status, status_name, status_ladder} from the anchor precompile's latestFinalized and statusOf. The status ladder is the anchor's own: 0 unknown, 1 submitted, 2 final. Takes no arguments.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Paxeer read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getHistory",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "account",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f]{64}$"
+          },
+          "description": "A LayerX account id."
+        },
+        {
+          "name": "cursor",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9A-Za-z]{1,32}$"
+          },
+          "description": "The opaque next_cursor of the previous page, passed to the indexer unchanged; null or absent for the newest page."
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50
+          },
+          "description": "Rows per page."
+        },
+        {
+          "name": "kind",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[a-z0-9_]{1,64}$"
+          },
+          "description": "Only rows of this indexer kind, for example lxp_transfer, native_transfer, erc20_transfer or custody_deposit."
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object",
+          "required": [
+            "account",
+            "items",
+            "next_cursor"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "account": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "height_or_seq",
+                  "chain",
+                  "kind",
+                  "direction",
+                  "account",
+                  "counterparty",
+                  "asset",
+                  "amount",
+                  "tx_id",
+                  "ordinal",
+                  "final",
+                  "decoded",
+                  "asset_metadata"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]*$",
+                    "description": "The indexer row id; rows are ordered newest first by it."
+                  },
+                  "height_or_seq": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "description": "The LayerX sequence or Paxeer block height of the row."
+                  },
+                  "chain": {
+                    "type": "string",
+                    "enum": [
+                      "layerx",
+                      "paxeer"
+                    ],
+                    "description": "The chain that recorded the row."
+                  },
+                  "kind": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9_]{1,64}$"
+                  },
+                  "direction": {
+                    "type": "string",
+                    "enum": [
+                      "in",
+                      "out"
+                    ]
+                  },
+                  "account": {
+                    "type": "string"
+                  },
+                  "counterparty": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "asset": {
+                    "type": "string"
+                  },
+                  "amount": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "description": "Exact decimal amount in the asset's base units."
+                  },
+                  "tx_id": {
+                    "type": "string"
+                  },
+                  "ordinal": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$"
+                  },
+                  "final": {
+                    "type": "boolean",
+                    "description": "True once the row is below its chain's finalized boundary."
+                  },
+                  "decoded": {
+                    "description": "The indexer's decoded payload for the row."
+                  },
+                  "asset_metadata": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "description": "The row's asset joined from the indexer's /v1/assets record and the LayerX asset registry, or null when the indexer has no record of the asset.",
+                    "required": [
+                      "asset",
+                      "chain",
+                      "kind",
+                      "address",
+                      "denom",
+                      "symbol",
+                      "decimals",
+                      "native_id",
+                      "pointer",
+                      "metadata"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "asset": {
+                        "type": "string",
+                        "description": "The indexer asset label: 64-hex LayerX asset id, evm:native, evm:<address> or denom:<denom>."
+                      },
+                      "chain": {
+                        "type": "string",
+                        "enum": [
+                          "layerx",
+                          "paxeer"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "description": "The indexer asset kind: layerx, native, erc20, pointer, bank or tokenfactory."
+                      },
+                      "address": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "The EVM contract address for erc20 and pointer assets."
+                      },
+                      "denom": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "The Cosmos denom for bank, tokenfactory and pointer assets."
+                      },
+                      "symbol": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "The indexer metadata symbol, else the LayerX registry symbol of the asset (by asset id) or of its denom; null when neither declares one."
+                      },
+                      "decimals": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "minimum": 0,
+                        "description": "The indexer metadata decimals, else the LayerX registry decimals, else 18 for the EVM native coin; null when nothing declares them."
+                      },
+                      "native_id": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "pattern": "^[0-9a-f]{64}$",
+                        "description": "The LayerX asset id this asset is, or that the registry maps its denom to."
+                      },
+                      "pointer": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "pattern": "^0x[0-9a-f]{40}$",
+                        "description": "The EVM pointer contract address when the asset is a pointer."
+                      },
+                      "metadata": {
+                        "description": "The indexer's own metadata document for the asset."
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "next_cursor": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The opaque cursor of the next older page, or null when this page is the last."
+            }
+          }
+        }
+      },
+      "description": "The indexed transfer history of one LayerX account, newest first, from the layerx-indexer read API. Rows are the indexer's own (including Paxeer custody rows credited to the account), each joined with asset_metadata. Cursors are the indexer's, passed through unchanged. An account the indexer has never seen answers an empty page.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "History unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "px_getHistory",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "account",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^0x[0-9A-Fa-f]{40}$"
+          },
+          "description": "A Paxeer EVM address."
+        },
+        {
+          "name": "cursor",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9A-Za-z]{1,32}$"
+          },
+          "description": "The opaque next_cursor of the previous page, passed to the indexer unchanged; null or absent for the newest page."
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50
+          },
+          "description": "Rows per page."
+        },
+        {
+          "name": "kind",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[a-z0-9_]{1,64}$"
+          },
+          "description": "Only rows of this indexer kind, for example lxp_transfer, native_transfer, erc20_transfer or custody_deposit."
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object",
+          "required": [
+            "account",
+            "items",
+            "next_cursor"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "account": {
+              "type": "string",
+              "pattern": "^0x[0-9a-f]{40}$"
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "height_or_seq",
+                  "chain",
+                  "kind",
+                  "direction",
+                  "account",
+                  "counterparty",
+                  "asset",
+                  "amount",
+                  "tx_id",
+                  "ordinal",
+                  "final",
+                  "decoded",
+                  "asset_metadata"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]*$",
+                    "description": "The indexer row id; rows are ordered newest first by it."
+                  },
+                  "height_or_seq": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "description": "The LayerX sequence or Paxeer block height of the row."
+                  },
+                  "chain": {
+                    "type": "string",
+                    "enum": [
+                      "layerx",
+                      "paxeer"
+                    ],
+                    "description": "The chain that recorded the row."
+                  },
+                  "kind": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9_]{1,64}$"
+                  },
+                  "direction": {
+                    "type": "string",
+                    "enum": [
+                      "in",
+                      "out"
+                    ]
+                  },
+                  "account": {
+                    "type": "string"
+                  },
+                  "counterparty": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "asset": {
+                    "type": "string"
+                  },
+                  "amount": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "description": "Exact decimal amount in the asset's base units."
+                  },
+                  "tx_id": {
+                    "type": "string"
+                  },
+                  "ordinal": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$"
+                  },
+                  "final": {
+                    "type": "boolean",
+                    "description": "True once the row is below its chain's finalized boundary."
+                  },
+                  "decoded": {
+                    "description": "The indexer's decoded payload for the row."
+                  },
+                  "asset_metadata": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "description": "The row's asset joined from the indexer's /v1/assets record and the LayerX asset registry, or null when the indexer has no record of the asset.",
+                    "required": [
+                      "asset",
+                      "chain",
+                      "kind",
+                      "address",
+                      "denom",
+                      "symbol",
+                      "decimals",
+                      "native_id",
+                      "pointer",
+                      "metadata"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "asset": {
+                        "type": "string",
+                        "description": "The indexer asset label: 64-hex LayerX asset id, evm:native, evm:<address> or denom:<denom>."
+                      },
+                      "chain": {
+                        "type": "string",
+                        "enum": [
+                          "layerx",
+                          "paxeer"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "description": "The indexer asset kind: layerx, native, erc20, pointer, bank or tokenfactory."
+                      },
+                      "address": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "The EVM contract address for erc20 and pointer assets."
+                      },
+                      "denom": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "The Cosmos denom for bank, tokenfactory and pointer assets."
+                      },
+                      "symbol": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "The indexer metadata symbol, else the LayerX registry symbol of the asset (by asset id) or of its denom; null when neither declares one."
+                      },
+                      "decimals": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "minimum": 0,
+                        "description": "The indexer metadata decimals, else the LayerX registry decimals, else 18 for the EVM native coin; null when nothing declares them."
+                      },
+                      "native_id": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "pattern": "^[0-9a-f]{64}$",
+                        "description": "The LayerX asset id this asset is, or that the registry maps its denom to."
+                      },
+                      "pointer": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "pattern": "^0x[0-9a-f]{40}$",
+                        "description": "The EVM pointer contract address when the asset is a pointer."
+                      },
+                      "metadata": {
+                        "description": "The indexer's own metadata document for the asset."
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "next_cursor": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The opaque cursor of the next older page, or null when this page is the last."
+            }
+          }
+        }
+      },
+      "description": "The indexed transfer history of one Paxeer EVM address, newest first, from the layerx-indexer read API: native, ERC-20, pointer, bank, tokenfactory and custody rows, each joined with asset_metadata. Cursors are the indexer's, passed through unchanged. An address the indexer has never seen answers an empty page.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "History unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "px_getUnifiedHistory",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "account",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "An EVM address, a did:layerx:<hex> DID or a bare 64-hex DID public key, resolved as px_resolveAccount does."
+        },
+        {
+          "name": "cursor",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9A-Za-z]{1,32}$"
+          },
+          "description": "The opaque next_cursor of the previous page, passed to the indexer unchanged; null or absent for the newest page."
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50
+          },
+          "description": "Rows per page."
+        },
+        {
+          "name": "kind",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[a-z0-9_]{1,64}$"
+          },
+          "description": "Only rows of this indexer kind, for example lxp_transfer, native_transfer, erc20_transfer or custody_deposit."
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object",
+          "required": [
+            "account",
+            "accounts",
+            "items",
+            "next_cursor"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "account": {
+              "type": "object",
+              "description": "The px_resolveAccount document of the account."
+            },
+            "accounts": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "required": [
+                  "side",
+                  "account"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "side": {
+                    "type": "string",
+                    "enum": [
+                      "layerx",
+                      "paxeer"
+                    ]
+                  },
+                  "account": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "The indexer account keys merged: the EVM address and every LayerX account of the bound DID (main account and the public core's per-asset accounts), at most 16."
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "height_or_seq",
+                  "chain",
+                  "kind",
+                  "direction",
+                  "account",
+                  "counterparty",
+                  "asset",
+                  "amount",
+                  "tx_id",
+                  "ordinal",
+                  "final",
+                  "decoded",
+                  "asset_metadata",
+                  "side"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]*$",
+                    "description": "The indexer row id; rows are ordered newest first by it."
+                  },
+                  "height_or_seq": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "description": "The LayerX sequence or Paxeer block height of the row."
+                  },
+                  "chain": {
+                    "type": "string",
+                    "enum": [
+                      "layerx",
+                      "paxeer"
+                    ],
+                    "description": "The chain that recorded the row."
+                  },
+                  "kind": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9_]{1,64}$"
+                  },
+                  "direction": {
+                    "type": "string",
+                    "enum": [
+                      "in",
+                      "out"
+                    ]
+                  },
+                  "account": {
+                    "type": "string"
+                  },
+                  "counterparty": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "asset": {
+                    "type": "string"
+                  },
+                  "amount": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "description": "Exact decimal amount in the asset's base units."
+                  },
+                  "tx_id": {
+                    "type": "string"
+                  },
+                  "ordinal": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$"
+                  },
+                  "final": {
+                    "type": "boolean",
+                    "description": "True once the row is below its chain's finalized boundary."
+                  },
+                  "decoded": {
+                    "description": "The indexer's decoded payload for the row."
+                  },
+                  "asset_metadata": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "description": "The row's asset joined from the indexer's /v1/assets record and the LayerX asset registry, or null when the indexer has no record of the asset.",
+                    "required": [
+                      "asset",
+                      "chain",
+                      "kind",
+                      "address",
+                      "denom",
+                      "symbol",
+                      "decimals",
+                      "native_id",
+                      "pointer",
+                      "metadata"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "asset": {
+                        "type": "string",
+                        "description": "The indexer asset label: 64-hex LayerX asset id, evm:native, evm:<address> or denom:<denom>."
+                      },
+                      "chain": {
+                        "type": "string",
+                        "enum": [
+                          "layerx",
+                          "paxeer"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "description": "The indexer asset kind: layerx, native, erc20, pointer, bank or tokenfactory."
+                      },
+                      "address": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "The EVM contract address for erc20 and pointer assets."
+                      },
+                      "denom": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "The Cosmos denom for bank, tokenfactory and pointer assets."
+                      },
+                      "symbol": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "The indexer metadata symbol, else the LayerX registry symbol of the asset (by asset id) or of its denom; null when neither declares one."
+                      },
+                      "decimals": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "minimum": 0,
+                        "description": "The indexer metadata decimals, else the LayerX registry decimals, else 18 for the EVM native coin; null when nothing declares them."
+                      },
+                      "native_id": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "pattern": "^[0-9a-f]{64}$",
+                        "description": "The LayerX asset id this asset is, or that the registry maps its denom to."
+                      },
+                      "pointer": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "pattern": "^0x[0-9a-f]{40}$",
+                        "description": "The EVM pointer contract address when the asset is a pointer."
+                      },
+                      "metadata": {
+                        "description": "The indexer's own metadata document for the asset."
+                      }
+                    }
+                  },
+                  "side": {
+                    "type": "string",
+                    "enum": [
+                      "layerx",
+                      "paxeer"
+                    ],
+                    "description": "Which half of the unified account the row belongs to."
+                  }
+                }
+              }
+            },
+            "next_cursor": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The opaque cursor of the next older page, or null when this page is the last."
+            }
+          }
+        }
+      },
+      "description": "One history for the whole unified account: the account is resolved as px_resolveAccount does and the indexer pages of its EVM address and of each of its LayerX accounts are merged newest first in the indexer's row order, each row tagged with side and carrying its chain and asset_metadata. Every side is read at the same cursor, so next_cursor is the indexer row cursor of the last row returned and pages chain without gaps or repeats.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Paxeer read unavailable"
+        },
+        {
+          "code": -32001,
+          "message": "History unavailable"
         },
         {
           "code": -32005,

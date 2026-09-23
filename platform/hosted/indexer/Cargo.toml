@@ -1,0 +1,27 @@
+[package]
+name = "layerx-indexer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "layerx-indexer"
+path = "src/main.rs"
+
+[dependencies]
+layerx-platform-internal.workspace = true
+layerx-types.workspace = true
+layerx-wire.workspace = true
+rusqlite = { version = "=0.37.0", default-features = false, features = ["bundled"] }
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sha3 = "=0.10.8"
+
+[lints]
+workspace = true

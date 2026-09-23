@@ -209,7 +209,7 @@ impl Client {
         request: &OutboundRequest<'_>,
         trace: Option<&str>,
     ) -> Result<UpstreamResponse, String> {
-        self.request_with_freshness(endpoint, authorization, request, trace, None, None)
+        self.request_with_freshness(endpoint, authorization, request, trace, None, None, None)
     }
 
     /// Forwards one bounded request together with the caller's publication key,
@@ -233,6 +233,7 @@ impl Client {
             trace,
             None,
             Some(publication_key),
+            None,
         )
     }
 
@@ -251,6 +252,39 @@ impl Client {
             None,
             Some((minimum_sequence, expected_state_root)),
             None,
+            None,
+        )
+    }
+
+    /// Sends one unauthenticated `GET` whose query the caller composed from
+    /// percent-encoded pairs, such as a paged read from the history indexer.
+    ///
+    /// # Errors
+    /// Refuses a query outside the percent-encoded pair alphabet, requests
+    /// outside the configured bounds and TLS or HTTP failures.
+    pub fn get_with_query(
+        &self,
+        endpoint: &Endpoint,
+        path: &str,
+        query: &str,
+    ) -> Result<UpstreamResponse, String> {
+        if !query_is_canonical(query) {
+            return Err("outbound query exceeds its boundary".to_owned());
+        }
+        self.request_with_freshness(
+            endpoint,
+            "",
+            &OutboundRequest {
+                method: "GET",
+                path,
+                idempotency: None,
+                content_type: "application/json",
+                body: &[],
+            },
+            None,
+            None,
+            None,
+            (!query.is_empty()).then_some(query),
         )
     }
 
@@ -262,6 +296,7 @@ impl Client {
         trace: Option<&str>,
         freshness: Option<(u64, Option<[u8; 32]>)>,
         publication_key: Option<&str>,
+        query: Option<&str>,
     ) -> Result<UpstreamResponse, String> {
         let total_started = Instant::now();
         let path = request.path;
@@ -307,6 +342,7 @@ impl Client {
                 trace,
                 freshness,
                 publication_key,
+                query,
             );
             pay_timing("gateway.http.exchange", exchange_started);
             if result
@@ -348,6 +384,7 @@ impl Client {
                         trace,
                         freshness,
                         publication_key,
+                        query,
                     );
                     pay_timing("gateway.http.exchange", exchange_started);
                     if result
@@ -370,6 +407,82 @@ impl Client {
             |error| error.to_string(),
         ))
     }
+}
+
+const MAX_QUERY: usize = 2048;
+
+/// True for an empty query or `name=value` pairs joined by `&` whose bytes are
+/// unreserved characters or complete `%XX` escapes.
+#[must_use]
+pub fn query_is_canonical(query: &str) -> bool {
+    let bytes = query.as_bytes();
+    if bytes.len() > MAX_QUERY {
+        return false;
+    }
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' => {
+                if !bytes
+                    .get(index + 1..index + 3)
+                    .is_some_and(|pair| pair.iter().all(u8::is_ascii_hexdigit))
+                {
+                    return false;
+                }
+                index += 3;
+            }
+            byte if byte.is_ascii_alphanumeric() || b"-._~=&".contains(&byte) => index += 1,
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// One plaintext `GET` to a component on a loopback address, the only place
+/// the gateway speaks plain HTTP (a co-located history indexer, for example).
+/// The connection is closed after the answer.
+///
+/// # Errors
+/// Refuses non-loopback addresses, a path or query outside its boundary and
+/// connection or HTTP failures.
+pub fn loopback_get(
+    address: std::net::SocketAddr,
+    host: &str,
+    path: &str,
+    query: &str,
+) -> Result<UpstreamResponse, String> {
+    if !address.ip().is_loopback() {
+        return Err("plain HTTP is only admitted to loopback components".to_owned());
+    }
+    if !path.starts_with('/')
+        || path.len() > MAX_QUERY
+        || !path
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && !b"?#\\".contains(&byte))
+        || !query_is_canonical(query)
+        || host.is_empty()
+        || !host.bytes().all(|byte| byte.is_ascii_graphic())
+    {
+        return Err("outbound request exceeds its boundary".to_owned());
+    }
+    let mut tcp =
+        TcpStream::connect_timeout(&address, CONNECT_TIMEOUT).map_err(|error| error.to_string())?;
+    tcp.set_read_timeout(Some(IO_TIMEOUT))
+        .map_err(|error| error.to_string())?;
+    tcp.set_write_timeout(Some(IO_TIMEOUT))
+        .map_err(|error| error.to_string())?;
+    let query = if query.is_empty() {
+        String::new()
+    } else {
+        format!("?{query}")
+    };
+    write!(
+        tcp,
+        "GET {path}{query} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+    )
+    .map_err(|error| error.to_string())?;
+    tcp.flush().map_err(|error| error.to_string())?;
+    read_response(&mut tcp)
 }
 
 pub struct IncomingRequest {
@@ -409,6 +522,7 @@ fn exchange(
     trace: Option<&str>,
     freshness: Option<(u64, Option<[u8; 32]>)>,
     publication_key: Option<&str>,
+    query: Option<&str>,
 ) -> Result<UpstreamResponse, String> {
     let idempotency = request
         .idempotency
@@ -436,10 +550,11 @@ fn exchange(
     let mut outbound = zeroize::Zeroizing::new(Vec::new());
     write!(
         outbound,
-        "{} {}{} HTTP/1.1\r\nHost: {}\r\n{}Accept: application/json\r\nContent-Type: {}\r\n{idempotency}{trace}{freshness}{}Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+        "{} {}{}{} HTTP/1.1\r\nHost: {}\r\n{}Accept: application/json\r\nContent-Type: {}\r\n{idempotency}{trace}{freshness}{}Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
         request.method,
         endpoint.base_path,
         request.path,
+        query.map_or_else(String::new, |query| format!("?{query}")),
         endpoint.authority(),
         authorization.as_str(),
         request.content_type,

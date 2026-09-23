@@ -413,6 +413,14 @@ mod tests {
                 "lx_listAssets",
                 "lx_getAsset",
                 "lx_estimateFee",
+                "px_resolveAccount",
+                "px_getAccount",
+                "px_getBalances",
+                "px_listAssets",
+                "px_getNetwork",
+                "lx_getHistory",
+                "px_getHistory",
+                "px_getUnifiedHistory",
             ]
         );
         let description = |method: &str| -> Result<&str, String> {
