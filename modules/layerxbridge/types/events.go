@@ -1,0 +1,29 @@
+package types
+
+const (
+	EventChainRegistered = "layerx_bridge_chain_registered"
+	EventAttestorsSet    = "layerx_bridge_attestors_set"
+	EventCapSet          = "layerx_bridge_cap_set"
+	EventPaused          = "layerx_bridge_paused"
+	EventUnpaused        = "layerx_bridge_unpaused"
+	EventBridgeIn        = "layerx_bridge_in"
+	EventBridgeOut       = "layerx_bridge_out"
+
+	AttributeChainID       = "chain_id"
+	AttributeVault         = "vault"
+	AttributeFinalityDepth = "finality_depth"
+	AttributeEnabled       = "enabled"
+	AttributeThreshold     = "threshold"
+	AttributeAttestors     = "attestors"
+	AttributeAsset         = "asset"
+	AttributeDenom         = "denom"
+	AttributeMaxInFlight   = "max_in_flight"
+	AttributeMaxPerTx      = "max_per_tx"
+	AttributeTxHash        = "tx_hash"
+	AttributeLogIndex      = "log_index"
+	AttributeRecipient     = "recipient"
+	AttributeSender        = "sender"
+	AttributeAmount        = "amount"
+	AttributeNonce         = "nonce"
+	AttributeSigners       = "signers"
+)
