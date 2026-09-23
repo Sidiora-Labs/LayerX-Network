@@ -22,13 +22,13 @@ pub(super) fn configured_endpoint() -> Result<Option<super::Endpoint>, String> {
         .transpose()
 }
 
-fn unconfigured(id: &Value) -> Value {
+pub(super) fn unconfigured(id: &Value) -> Value {
     let mut refusal = super::rpc::error(id, -32001, "Paxeer endpoint not configured");
     refusal["error"]["data"] = json!({"code": "paxeer_rpc_not_configured"});
     refusal
 }
 
-fn unavailable(id: &Value, code: &str) -> Value {
+pub(super) fn unavailable(id: &Value, code: &str) -> Value {
     let mut refusal = super::rpc::error(id, -32001, "Paxeer read unavailable");
     refusal["error"]["data"] = json!({"code": code});
     refusal
@@ -36,7 +36,7 @@ fn unavailable(id: &Value, code: &str) -> Value {
 
 /// Sends one JSON-RPC request to the Paxeer node and returns its answer
 /// document unchanged.
-fn node(config: &Config, request: &Value) -> Result<Value, &'static str> {
+pub(super) fn node(config: &Config, request: &Value) -> Result<Value, &'static str> {
     let Some(endpoint) = &config.paxeer else {
         return Err("paxeer_rpc_not_configured");
     };
@@ -159,7 +159,7 @@ impl Resolution {
     }
 }
 
-fn no_params(params: Option<&Value>) -> bool {
+pub(super) fn no_params(params: Option<&Value>) -> bool {
     match params {
         None | Some(Value::Null) => true,
         Some(Value::Array(args)) => args.is_empty(),
@@ -563,7 +563,13 @@ pub(super) fn dispatch(
         "px_getBalances" => get_balances(config, id, params),
         "px_listAssets" => list_assets(config, id, params),
         "px_getNetwork" => get_network(config, id, params),
-        _ if evm::is_evm_namespace(method) => relay(config, id, method, params),
+        "px_getCapabilities" => super::capabilities::get(config, id, params),
+        _ if evm::is_evm_namespace(method) => {
+            match super::capabilities::gate(config, id, method, params) {
+                Some(refusal) => refusal,
+                None => relay(config, id, method, params),
+            }
+        }
         _ => return None,
     })
 }

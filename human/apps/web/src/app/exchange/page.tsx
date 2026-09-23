@@ -1,11 +1,18 @@
 import { Badge } from "@layerx/ui/components/badge";
 
-import { GatewayRpcError, GatewayUnavailableError, pxResolveAccount, type ResolvedAccount } from "../../api/gateway";
+import {
+  GatewayRpcError,
+  GatewayUnavailableError,
+  pxResolveAccount,
+  surfaceCapability,
+  type ResolvedAccount,
+} from "../../api/gateway";
 import { PRECOMPILE_LOG_WINDOW, exchangeState, type ExchangeState } from "../../api/precompiles";
 import { PrecompileAbiError } from "../../api/sdk";
 import { ExplorerPanel, ExplorerTable } from "../../kit/explorer";
 import { StateEmpty } from "../../kit/surface";
 import { ActivityFeed, activitySide } from "../_markets/activity-feed";
+import { SurfaceCapabilityGate } from "../_markets/capability";
 import { WEI_DECIMALS, firstParam, formatUnits, isEvmAddress, shortId, type MarketSearchParams } from "../_markets/format";
 import { MarketFrame, MarketUnavailable } from "../_markets/frame";
 import { ExchangeActions } from "./exchange-client";
@@ -26,6 +33,28 @@ export default async function ExchangePage({ searchParams }: Readonly<{ searchPa
   const parameters = await searchParams;
   const candidate = firstParam(parameters.account)?.toLowerCase();
   const account = isEvmAddress(candidate) ? candidate : undefined;
+  const capability = await surfaceCapability("exchange");
+  const feed = (
+    <ActivityFeed
+      route="/exchange"
+      account={account}
+      side={activitySide(firstParam(parameters.side))}
+      cursor={firstParam(parameters.cursor)}
+      kind={firstParam(parameters.kind)}
+    />
+  );
+  if (!capability.live) {
+    return (
+      <MarketFrame
+        title="Exchange"
+        description="Perps orders and margin through the LayerXExchange precompile. Every write is an intent the LayerX exchange settles."
+        account={account}
+      >
+        <SurfaceCapabilityGate surface="exchange" live={false} detail={capability.detail} />
+        {feed}
+      </MarketFrame>
+    );
+  }
   let resolved: ResolvedAccount | undefined;
   let state: ExchangeState | undefined;
   let problem: string | undefined;
@@ -51,6 +80,7 @@ export default async function ExchangePage({ searchParams }: Readonly<{ searchPa
       description="Perps orders and margin through the LayerXExchange precompile. Every write is an intent the LayerX exchange settles."
       account={account}
     >
+      <SurfaceCapabilityGate surface="exchange" live detail={null} />
       {problem === undefined ? null : <MarketUnavailable detail={problem} />}
       {account !== undefined && resolved !== undefined && resolved.layerxAccount === null ? (
         <MarketUnavailable detail="This wallet has no bound LayerX account yet, so margin has nowhere to land. Bind the wallet in Settings first." />
@@ -133,13 +163,7 @@ export default async function ExchangePage({ searchParams }: Readonly<{ searchPa
         )}
         timeInForce={TIME_IN_FORCE}
       />
-      <ActivityFeed
-        route="/exchange"
-        account={account}
-        side={activitySide(firstParam(parameters.side))}
-        cursor={firstParam(parameters.cursor)}
-        kind={firstParam(parameters.kind)}
-      />
+      {feed}
     </MarketFrame>
   );
 }

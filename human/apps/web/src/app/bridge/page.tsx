@@ -1,6 +1,6 @@
 import { Badge } from "@layerx/ui/components/badge";
 
-import { GatewayRpcError, GatewayUnavailableError } from "../../api/gateway";
+import { GatewayRpcError, GatewayUnavailableError, surfaceCapability } from "../../api/gateway";
 import {
   PRECOMPILE_LOG_WINDOW,
   bridgeActivity,
@@ -19,6 +19,7 @@ import { ExplorerPanel, ExplorerTable } from "../../kit/explorer";
 import { LabelValue } from "../../kit/money";
 import { InlineNotice, StateEmpty } from "../../kit/surface";
 import { ActivityFeed, activitySide } from "../_markets/activity-feed";
+import { SurfaceCapabilityGate } from "../_markets/capability";
 import { firstParam, isBytes32, isEvmAddress, shortId, type MarketSearchParams } from "../_markets/format";
 import { MarketFrame, MarketUnavailable } from "../_markets/frame";
 import { BridgeOutForm, BridgeStatusPolling, BridgeTrackForm } from "./bridge-client";
@@ -56,6 +57,29 @@ export default async function BridgePage({ searchParams }: Readonly<{ searchPara
     isBytes32(trackedTx) && trackedLogText !== undefined && LOG_INDEX.test(trackedLogText)
       ? { txHash: trackedTx, logIndex: BigInt(trackedLogText) }
       : undefined;
+
+  const capability = await surfaceCapability("bridge");
+  const feed = (
+    <ActivityFeed
+      route="/bridge"
+      account={account}
+      side={activitySide(firstParam(parameters.side))}
+      cursor={firstParam(parameters.cursor)}
+      kind={firstParam(parameters.kind)}
+    />
+  );
+  if (!capability.live) {
+    return (
+      <MarketFrame
+        title="Bridge"
+        description="Move assets between Ethereum and Paxeer through the attested LayerXBridge precompile."
+        account={account}
+      >
+        <SurfaceCapabilityGate surface="bridge" live={false} detail={capability.detail} />
+        {feed}
+      </MarketFrame>
+    );
+  }
 
   let paused: boolean | undefined;
   let attestors: BridgeAttestors | undefined;
@@ -97,6 +121,7 @@ export default async function BridgePage({ searchParams }: Readonly<{ searchPara
       description="Move assets between Ethereum and Paxeer through the attested LayerXBridge precompile."
       account={account}
     >
+      <SurfaceCapabilityGate surface="bridge" live detail={null} />
       {problem === undefined ? null : <MarketUnavailable detail={problem} />}
       <ExplorerPanel title="Bridge status">
         <form method="get" action="/bridge" className="flex flex-wrap items-end gap-3">
@@ -227,13 +252,7 @@ export default async function BridgePage({ searchParams }: Readonly<{ searchPara
           />
         )}
       </ExplorerPanel>
-      <ActivityFeed
-        route="/bridge"
-        account={account}
-        side={activitySide(firstParam(parameters.side))}
-        cursor={firstParam(parameters.cursor)}
-        kind={firstParam(parameters.kind)}
-      />
+      {feed}
     </MarketFrame>
   );
 }

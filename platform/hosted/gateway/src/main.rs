@@ -1,3 +1,4 @@
+mod capabilities;
 mod history;
 mod native_call;
 mod paxeer;
@@ -59,6 +60,7 @@ struct Config {
     component: Endpoint,
     public_core: Option<Endpoint>,
     paxeer: Option<Endpoint>,
+    capabilities: capabilities::Cache,
     indexer: Option<history::Indexer>,
     component_token: Zeroizing<String>,
     authority: Endpoint,
@@ -725,6 +727,7 @@ fn config() -> Result<Config, String> {
         )?,
         public_core: public_reads::configured_endpoint()?,
         paxeer: paxeer::configured_endpoint()?,
+        capabilities: capabilities::configured()?,
         indexer: history::configured_endpoint()?,
         component_token: read_secret("LAYERX_GATEWAY_COMPONENT_TOKEN_FILE")?,
         authority: Endpoint::parse(

@@ -3,7 +3,7 @@
   "info": {
     "title": "LayerX public JSON-RPC",
     "version": "0.1.0",
-    "description": "Public JSON-RPC reads, authenticated activity submission and scoped WebSocket subscriptions. Native DID enumeration, asset listing/detail and canonical fee estimation forward to authenticated core reads; unavailable evidence is returned explicitly and balances, metadata or fees are never fabricated. The same endpoint relays the Paxeer EVM JSON-RPC namespaces eth_, net_ and web3_ to the chain's node byte for byte, including eth_sendRawTransaction and batches that mix EVM and LayerX calls; node-side signing methods (eth_accounts, eth_coinbase, eth_sendTransaction, eth_sign, eth_signTransaction, eth_signTypedData, eth_signTypedData_v4, eth_mining) and eth_subscribe/eth_unsubscribe are refused here rather than at the node. The px_ namespace joins both domains through the native precompiles addr (0x0000000000000000000000000000000000001004), layerxCustody (0x0000000000000000000000000000000000001013) and layerxAnchor (0x0000000000000000000000000000000000001014)."
+    "description": "Public JSON-RPC reads, authenticated activity submission and scoped WebSocket subscriptions. Native DID enumeration, asset listing/detail and canonical fee estimation forward to authenticated core reads; unavailable evidence is returned explicitly and balances, metadata or fees are never fabricated. The same endpoint relays the Paxeer EVM JSON-RPC namespaces eth_, net_ and web3_ to the chain's node byte for byte, including eth_sendRawTransaction and batches that mix EVM and LayerX calls; node-side signing methods (eth_accounts, eth_coinbase, eth_sendTransaction, eth_sign, eth_signTransaction, eth_signTypedData, eth_signTypedData_v4, eth_mining) and eth_subscribe/eth_unsubscribe are refused here rather than at the node. The px_ namespace joins both domains through the native precompiles addr (0x0000000000000000000000000000000000001004), layerxCustody (0x0000000000000000000000000000000000001013) and layerxAnchor (0x0000000000000000000000000000000000001014). eth_sendRawTransaction and eth_sendRawTransactionSync whose transaction is addressed to the exchange (0x0000000000000000000000000000000000001015), bridge (0x0000000000000000000000000000000000001016) or launchpad (0x0000000000000000000000000000000000001017) precompile are refused with -32003 surface_unavailable while px_getCapabilities reports that surface false."
   },
   "methods": [
     {
@@ -1695,6 +1695,63 @@
         {
           "code": -32005,
           "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "px_getCapabilities",
+      "paramStructure": "by-position",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object",
+          "required": [
+            "exchange",
+            "bridge",
+            "launchpad",
+            "probed_at",
+            "rpc_height"
+          ],
+          "properties": {
+            "exchange": {
+              "type": "boolean",
+              "description": "True when eth_getCode at the exchange precompile 0x0000000000000000000000000000000000001015 answers code."
+            },
+            "bridge": {
+              "type": "boolean",
+              "description": "True when eth_getCode at the bridge precompile 0x0000000000000000000000000000000000001016 answers code."
+            },
+            "launchpad": {
+              "type": "boolean",
+              "description": "True when eth_getCode at the launchpad precompile 0x0000000000000000000000000000000000001017 answers code."
+            },
+            "probed_at": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Unix seconds at which the gateway took the probe."
+            },
+            "rpc_height": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$",
+              "description": "The Paxeer block height, as a decimal string, at which every eth_getCode was read."
+            }
+          }
+        }
+      },
+      "description": "Which Paxeer X fork surfaces the chain answers for. The gateway reads eth_blockNumber and then eth_getCode at that height for the exchange (0x0000000000000000000000000000000000001015), bridge (0x0000000000000000000000000000000000001016) and launchpad (0x0000000000000000000000000000000000001017) precompiles: 0x is false, any code is true. The answer is cached for LAYERX_GATEWAY_CAPABILITIES_TTL_SECONDS (default 15). While a surface is false, eth_sendRawTransaction and eth_sendRawTransactionSync addressed to its precompile are refused with -32003 Surface unavailable and data {code: surface_unavailable, surface, address}; reads and history are never gated. Takes no arguments.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Paxeer read unavailable"
+        },
+        {
+          "code": -32001,
+          "message": "Paxeer endpoint not configured"
         }
       ]
     }

@@ -1,6 +1,6 @@
 import { Badge } from "@layerx/ui/components/badge";
 
-import { GatewayRpcError, GatewayUnavailableError } from "../../api/gateway";
+import { GatewayRpcError, GatewayUnavailableError, surfaceCapability } from "../../api/gateway";
 import {
   launchpadConfig,
   launchpadMarketCount,
@@ -12,6 +12,7 @@ import { ExplorerPanel, ExplorerTable } from "../../kit/explorer";
 import { LabelValue } from "../../kit/money";
 import { StateEmpty } from "../../kit/surface";
 import { ActivityFeed, activitySide } from "../_markets/activity-feed";
+import { SurfaceCapabilityGate } from "../_markets/capability";
 import {
   LAUNCHPAD_DECIMALS,
   firstParam,
@@ -32,6 +33,28 @@ export default async function LaunchpadPage({ searchParams }: Readonly<{ searchP
   const parameters = await searchParams;
   const candidate = firstParam(parameters.account)?.toLowerCase();
   const account = isEvmAddress(candidate) ? candidate : undefined;
+  const capability = await surfaceCapability("launchpad");
+  const feed = (
+    <ActivityFeed
+      route="/launchpad"
+      account={account}
+      side={activitySide(firstParam(parameters.side))}
+      cursor={firstParam(parameters.cursor)}
+      kind={firstParam(parameters.kind)}
+    />
+  );
+  if (!capability.live) {
+    return (
+      <MarketFrame
+        title="Launchpad"
+        description="Bonding-curve markets on the Launchpad precompile. Quotes come from the curve before your wallet opens."
+        account={account}
+      >
+        <SurfaceCapabilityGate surface="launchpad" live={false} detail={capability.detail} />
+        {feed}
+      </MarketFrame>
+    );
+  }
   let config: LaunchpadConfig | undefined;
   let count = 0n;
   let markets: readonly LaunchpadMarket[] = [];
@@ -54,6 +77,7 @@ export default async function LaunchpadPage({ searchParams }: Readonly<{ searchP
       description="Bonding-curve markets on the Launchpad precompile. Quotes come from the curve before your wallet opens."
       account={account}
     >
+      <SurfaceCapabilityGate surface="launchpad" live detail={null} />
       {problem === undefined ? null : <MarketUnavailable detail={problem} />}
       {config === undefined ? null : (
         <div className="flex flex-wrap gap-6">
@@ -101,13 +125,7 @@ export default async function LaunchpadPage({ searchParams }: Readonly<{ searchP
         }))}
         feeStrategies={FEE_STRATEGIES}
       />
-      <ActivityFeed
-        route="/launchpad"
-        account={account}
-        side={activitySide(firstParam(parameters.side))}
-        cursor={firstParam(parameters.cursor)}
-        kind={firstParam(parameters.kind)}
-      />
+      {feed}
     </MarketFrame>
   );
 }
