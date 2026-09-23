@@ -1,0 +1,35 @@
+{
+  "node_info": {
+    "network": "hyperpax_125-1",
+    "version": "0.35.0-unreleased",
+    "id": "<node-id>",
+    "listen_addr": "<node-p2p>",
+    "moniker": "<full-node>"
+  },
+  "sync_info": {
+    "latest_block_hash": "23FF11B5F7A9764D4DA79F4CED7321A1E0CEC59447063AFEECBC34FA9FFCFBB3",
+    "latest_app_hash": "61DF0B3C1835B345B36485A587A72A4948AEE376264E67F826237B8786539BBD",
+    "latest_block_height": "23869863",
+    "latest_block_time": "2026-09-23T16:10:34.772748938Z",
+    "last_committed_block_height": "23869863",
+    "earliest_block_hash": "13B1B843166F8601DC60008F3CA318165959DAC2A94D917F1AAD621526FC59D6",
+    "earliest_app_hash": "EF91FFE332EBB1EDEA1B6F0A5E201AF247C60A6AA468388EB7A9542C588996FF",
+    "earliest_block_height": "23769863",
+    "earliest_block_time": "2026-09-23T05:13:38.941272639Z",
+    "max_peer_block_height": "23869851",
+    "catching_up": false,
+    "total_synced_time": "0",
+    "remaining_time": "0",
+    "total_snapshots": "0",
+    "chunk_process_avg_time": "0",
+    "snapshot_height": "0",
+    "snapshot_chunks_count": "0",
+    "snapshot_chunks_total": "0",
+    "backfilled_blocks": "0",
+    "backfill_blocks_total": "0"
+  },
+  "validator_info": {
+    "address": "<none>",
+    "voting_power": "0"
+  }
+}

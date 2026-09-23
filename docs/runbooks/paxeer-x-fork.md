@@ -118,27 +118,99 @@ never edit the height on nodes.
 
 ## 2. Proposal
 
-Read the live governance parameters; the voting period decides how early the proposal must go in
-(submit no later than `T_halt - voting_period - 12h`):
+Both governance steps are scripted; every mutating step needs `--execute`, otherwise the scripts
+print the exact `paxd` commands. `<rpc>` is a synced node's CometBFT RPC, `<operator>` the key
+name of a validator operator in the local keyring (never written down here).
 
 ```sh
-paxd q gov params -o json | jq '{voting_params, deposit_params, tally_params}'
-```
-
-Submit from a funded operator account. Every validator operator votes yes; from the tally
-parameters above and the voting powers read in section 0, confirm that the pledged yes votes meet
-quorum and threshold with margin (one validator missing must not sink the vote):
-
-```sh
-paxd tx gov submit-proposal software-upgrade "$UPGRADE_NAME" \
-  --upgrade-height "$HALT_HEIGHT" \
+platform/hosted/paxeer/gov-upgrade.sh --rpc <rpc> --key <operator> --target-utc "$T_HALT_UTC" \
   --upgrade-info '{"binaries":{"linux/amd64":"<release URL>?checksum=sha256:<SHA256>"}}' \
-  --title "Paxeer X $UPGRADE_NAME" --description "Adds the LayerX custody, anchor, exchange, bridge and launchpad modules" \
-  --deposit <min_deposit>uhpx --from <operator> --chain-id "$COSMOS_CHAIN_ID" --fees <fees>uhpx -b sync -y
-paxd q gov proposals -o json | jq '.proposals[-1] | {proposal_id, status, plan: .content.plan}'
-paxd tx gov vote <proposal_id> yes --from <operator> --chain-id "$COSMOS_CHAIN_ID" --fees <fees>uhpx -y
-paxd q upgrade plan            # after it passes: name $UPGRADE_NAME, height $HALT_HEIGHT
+  --voter <operator-1> --voter <operator-2> --voter <operator-n>          # dry run
+platform/hosted/paxeer/gov-upgrade.sh ... --execute                        # submit, vote, wait, confirm
+platform/hosted/paxeer/gov-upgrade.sh ... --proposal-id <id> --execute     # resume after a disconnect
 ```
+
+The script measures the block rate against wall clock (`--measure-seconds`, default 120 s, or
+`--seconds-per-block` from the section 1 measurement), prints the timestamp-based and the
+wall-clock-based halt height, submits the `$UPGRADE_NAME` software-upgrade proposal at the
+wall-clock height with the chain's minimum deposit, prints one `tx gov vote` per bonded validator,
+polls the proposal until `PROPOSAL_STATUS_PASSED` and then polls `paxd q upgrade plan` (the
+`current_plan` query) until it shows `$UPGRADE_NAME` at H. The plan name is `v6.6`; `v6.5` is
+already applied by the running binary and the script refuses it.
+
+### Timeline (live parameters, read with `paxd q gov params`)
+
+| Parameter | Mainnet value | Effect |
+|---|---|---|
+| `max_deposit_period` | 172800 s (48 h) | not consumed: the script submits with the full min deposit, so voting starts in the submission block |
+| `min_deposit` / `min_expedited_deposit` | 10000000 uhpx / 20000000 uhpx | initial deposit of the standard / expedited proposal |
+| `voting_period` | 172800 s (48 h) | standard path; voting ends 48 h after submission |
+| `expedited_voting_period` | 86400 s (24 h) | expedited path (`--expedited`) |
+| `quorum` / `threshold` / `veto_threshold` | 0.334 / 0.5 / 0.334 | standard tally: 33.4 % of bonded power must vote, more than 50 % of the non-abstain votes yes, under 33.4 % veto |
+| `expedited_quorum` / `expedited_threshold` | 0.667 / 0.667 | expedited tally |
+
+Votes must be counted before H, otherwise the plan is never scheduled and the old binary runs
+through the target. With a margin `m` (`--margin-seconds`, default 1800 s) the latest submission
+times are
+
+```
+standard:  T_submit <= T_halt - 172800 s - m     (T_halt - 48 h 30 min)
+expedited: T_submit <= T_halt - 86400 s - m      (T_halt - 24 h 30 min)
+```
+
+The script prints both and exits 2 without submitting when the chosen path no longer fits; when
+the standard window is missed but the expedited one is open it says so. With four validators of
+equal power (section 0) every operator must vote yes: three of four give 75 % turnout and 100 %
+yes, which passes both tallies; two of four (50 %) pass the standard tally but miss the expedited
+quorum. Do not rely on the fourth vote arriving late; submit within the standard window whenever
+the calendar allows. Confirm after the tally:
+
+```sh
+paxd q gov proposal <proposal_id> --node <rpc> -o json | jq '{status, voting_end_time, final_tally_result}'
+paxd q upgrade plan --node <rpc> -o json        # name $UPGRADE_NAME, height H
+curl -s <rest>/cosmos/upgrade/v1beta1/current_plan
+```
+
+### Consensus timeouts
+
+Consensus timeouts are on-chain consensus params (`paxd`'s params module, subspace `baseapp`, key
+`TimeoutParams`), so they change by a `param-change` proposal with the same vote and confirm flow.
+Pass the values the latency benchmark proved; the other timeout fields are copied from the live
+`/consensus_params` (today: propose 1 s, propose_delta 500 ms, vote 50 ms, vote_delta 500 ms,
+commit 50 ms, bypass off):
+
+```sh
+platform/hosted/paxeer/gov-consensus-params.sh --rpc <rpc> --key <operator> \
+  --timeout-commit <benchmarked commit> --bypass-commit-timeout true --timeout-vote <benchmarked vote> \
+  --target-utc "$T_HALT_UTC" --seconds-per-block <seconds_per_block>   # dry run: writes the proposal JSON
+platform/hosted/paxeer/gov-consensus-params.sh ... --execute
+curl -s <rpc>/consensus_params | jq '(.result // .).consensus_params.timeout'   # confirm
+```
+
+A param change applies in the block that ends its voting period, so it must not be pending across
+H: with `--target-utc` the script applies the same submission deadlines as the upgrade proposal and
+refuses when voting would end after H. Submit it in the same window as the upgrade proposal, or
+after the new binary has produced blocks past H (then without `--target-utc`).
+
+### Abort
+
+If a validator is not staged (section 3 checks fail on any host, or an operator is unreachable at
+T−2 h) the plan must be removed before H; a validator that reaches H without the new binary stops
+with the rest of the network and the upgrade cannot be undone by height alone.
+
+```sh
+paxd tx gov submit-proposal cancel-software-upgrade --title "Cancel $UPGRADE_NAME" \
+  --description "<reason>" --deposit 20000000uhpx --is-expedited \
+  --from <operator> --chain-id "$COSMOS_CHAIN_ID" --node <rpc> --fees <fees>uhpx -b sync -y
+paxd tx gov vote <cancel_proposal_id> yes --from <operator> ...     # every operator, within 24 h
+paxd q upgrade plan --node <rpc>                                    # "no upgrade scheduled" once it passes
+```
+
+The cancellation needs its own voting period: expedited (24 h, two-thirds quorum) is the only path
+that fits once H is under 48 h away, so the abort decision is due no later than `T_halt - 24 h -
+m`. Past that point the network can only go through H with every validator staged, or every
+validator must skip the plan together with `--unsafe-skip-upgrades H` (section 7). After a
+cancellation, re-run section 1 and section 2 for a new target; never reuse H.
 
 ## 3. Binary
 

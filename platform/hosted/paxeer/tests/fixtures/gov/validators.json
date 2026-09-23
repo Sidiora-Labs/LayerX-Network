@@ -1,0 +1,27 @@
+{
+  "block_height": "23869939",
+  "count": "4",
+  "total": "4",
+  "validators": [
+    {
+      "address": "<validator-consensus-address>",
+      "voting_power": "20000008",
+      "proposer_priority": "0"
+    },
+    {
+      "address": "<validator-consensus-address>",
+      "voting_power": "20000008",
+      "proposer_priority": "0"
+    },
+    {
+      "address": "<validator-consensus-address>",
+      "voting_power": "20000008",
+      "proposer_priority": "0"
+    },
+    {
+      "address": "<validator-consensus-address>",
+      "voting_power": "20000008",
+      "proposer_priority": "0"
+    }
+  ]
+}
