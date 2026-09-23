@@ -114,6 +114,7 @@ TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 	test-oracle-failclosed \
 	test-perps-market \
 	test-perps-book \
+	test-spot-book \
 	test-perps-margin \
 	test-perps-funding \
 	test-perps-liquidation \
@@ -164,6 +165,7 @@ TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 	test-tools \
 	test-genesis \
 	test-genesis-bootstrap \
+	test-genesis-module-table \
 	test-genesis-import \
 	test-genesis-reconcile \
 	test-legacy-readonly \
@@ -864,6 +866,17 @@ test-perps-book: $(BUILD_DIR)/tests/test_perps_book
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_perps_book
 	tools/lxp_check_sole_writer.sh
 
+$(BUILD_DIR)/tests/test_spot_book: tests/modules/test_spot_book.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+test-spot-book: $(BUILD_DIR)/tests/test_spot_book
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_spot_book
+	tools/lxp_check_sole_writer.sh
+
 $(BUILD_DIR)/tests/test_perps_position: tests/modules/test_perps_position.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
@@ -1522,6 +1535,9 @@ test-genesis-bootstrap: $(BUILD_DIR)/tests/test_genesis_manifest \
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_genesis_module_table
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_genesis_builder_cli
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_daemon_bootstrap_artifact
+
+test-genesis-module-table: $(BUILD_DIR)/tests/test_genesis_module_table
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_genesis_module_table
 
 test-genesis: test-genesis-bootstrap
 

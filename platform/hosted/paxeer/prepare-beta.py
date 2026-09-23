@@ -39,7 +39,7 @@ def keypair(directory, name):
 
 def genesis_modules():
     modules = (ROOT.parent / 'node/genesis-modules.conf').read_text().splitlines()
-    if len(modules) != 5 or set(modules) != {'budget', 'escrow', 'perps', 'service', 'stream'}:
+    if len(modules) != 6 or set(modules) != {'budget', 'escrow', 'perps', 'service', 'spot', 'stream'}:
         raise ValueError('invalid public testnet genesis module configuration')
     return tuple(sorted(modules))
 

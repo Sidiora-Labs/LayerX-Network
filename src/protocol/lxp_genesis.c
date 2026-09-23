@@ -7,6 +7,7 @@
 #include "layerx/lx_escrow.h"
 #include "layerx/lx_perps.h"
 #include "layerx/lx_service.h"
+#include "layerx/lx_spot.h"
 #include "layerx/lx_stream.h"
 #include "layerx/lxp_bridge_credit.h"
 
@@ -60,7 +61,9 @@ static const lxp_genesis_module_entry module_table[] = {
     {LXP_MODULE_SERVICE, LXP_GENESIS_MODULE_GATE_ENABLE_FLAG, false,
      lx_service_module_iface},
     {LXP_MODULE_PERPS, LXP_GENESIS_MODULE_GATE_ENABLE_FLAG, false,
-     lx_perps_module_iface}
+     lx_perps_module_iface},
+    {LXP_MODULE_SPOT, LXP_GENESIS_MODULE_GATE_ENABLE_FLAG, false,
+     lx_spot_module_iface}
 };
 
 const lxp_genesis_module_entry *lxp_genesis_module_table(size_t *count)
