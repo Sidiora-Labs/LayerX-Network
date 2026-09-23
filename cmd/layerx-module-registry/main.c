@@ -73,7 +73,7 @@ static int profile_read(const char *path, lxp_bridge_profile *profile)
 
 static int module_valid(const lxp_module_iface *module)
 {
-    if (module == NULL || module->module_id == 0U || module->module_id > 9U ||
+    if (module == NULL || module->module_id == 0U || module->module_id > LXP_MODULE_RESERVED_COUNT ||
         module->activity_types == NULL || module->activity_type_count == 0U ||
         module->activity_type_count > 64U) return 1;
     uint32_t previous = 0U;

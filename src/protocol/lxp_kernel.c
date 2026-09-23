@@ -1133,7 +1133,7 @@ static lxp_result kernel_snapshot_payer_balance(
 
 static const char *const module_names[LXP_MODULE_RESERVED_COUNT] = {
     "asset", "escrow", "budget", "stream", "service", "perps",
-    "governance", "bridge", "programs"
+    "governance", "bridge", "programs", "spot"
 };
 
 static bool registration_active(const lxp_module_registration *registration,

@@ -28,11 +28,11 @@ assert json.loads(run(base)) == expected
 assert run(base) == run(base)
 configuration = Path(__file__).resolve().parents[2] / 'platform/hosted/node/genesis-modules.conf'
 modules = configuration.read_text().splitlines()
-assert modules == ['budget', 'escrow', 'perps', 'service', 'stream']
+assert modules == ['budget', 'escrow', 'perps', 'service', 'spot', 'stream']
 enabled_args = [argument for module in modules for argument in ('--enable-module', module)]
 enabled = json.loads(run(base + enabled_args))
 assert enabled['assets'] == expected['assets']
-assert [module['module'] for module in enabled['modules']] == [1, 2, 3, 4, 5, 6, 7, 9]
+assert [module['module'] for module in enabled['modules']] == [1, 2, 3, 4, 5, 6, 7, 9, 10]
 assert [module for module in enabled['modules'] if module['module'] in (1, 7, 9)] == expected['modules']
 assert run(base + enabled_args) == run(base + [argument for module in reversed(modules)
                                             for argument in ('--enable-module', module)])
