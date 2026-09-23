@@ -148,6 +148,38 @@ static bool margin_owned_by_actor(const lx_account *account,
            memcmp(account->name + prefix, segment, sizeof(segment) - 1U) == 0;
 }
 
+static lxp_result margin_owner_main(lxp_module_ctx *ctx,
+                                    const lx_account *margin_account,
+                                    lx_account **owner_main)
+{
+    static const uint8_t segment[] = ":margin:";
+    uint8_t name[LX_ACCOUNT_NAME_MAX];
+    uint8_t account_id[32];
+    size_t marker = 0U;
+    size_t offset;
+    lxp_result status;
+    if (margin_account == NULL || owner_main == NULL ||
+        margin_account->kind != LX_ACCOUNT_AGENT_MARGIN ||
+        (size_t)margin_account->name_length <= 6U + sizeof(segment) ||
+        memcmp(margin_account->name, "agent:", 6U) != 0)
+        return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+    for (offset = 7U; offset + sizeof(segment) - 1U <
+                          (size_t)margin_account->name_length; ++offset)
+        if (memcmp(margin_account->name + offset, segment,
+                   sizeof(segment) - 1U) == 0)
+            marker = offset;
+    if (marker == 0U || marker + 5U > sizeof(name))
+        return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+    (void)memcpy(name, margin_account->name, marker);
+    (void)memcpy(name + marker, ":main", 5U);
+    status = lx_account_id_from_string(name, marker + 5U, account_id);
+    if (status != LXP_OK) return status;
+    status = lxp_ctx_account_find(ctx, account_id, owner_main);
+    if (status != LXP_OK) return status;
+    return (*owner_main)->kind == LX_ACCOUNT_AGENT_MAIN ?
+        LXP_OK : LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+}
+
 static lxp_result system_account(lxp_module_ctx *ctx,
                                  const uint8_t account_id[32],
                                  lx_account_kind expected,
@@ -291,17 +323,13 @@ static lxp_result multiple_check(lxp_u128 value, lxp_u128 unit)
     return lxp_u128_is_zero(remainder) ? LXP_OK : LXP_ERR_PARAMETER_BOUNDS;
 }
 
-static lxp_result price_check(const lx_perps_market *market, lxp_u128 price)
-{
-    if (lxp_u128_cmp(price, market->minimum_price) < 0 ||
-        lxp_u128_cmp(price, market->maximum_price) > 0)
-        return LXP_ERR_ORACLE_BOUNDS;
-    return multiple_check(price, market->tick_size);
-}
-
+/* Fills at different prices leave an entry notional that the size need not
+ * divide. The average entry price is rounded against the holder (up for a
+ * long, down for a short) so a loss is never understated and a profit never
+ * overstated, the same direction lx_perps_pnl_compute rounds. */
 static lxp_result entry_price_of(const lx_perps_market *market,
-                                 lxp_u128 size, lxp_u128 notional,
-                                 lxp_u128 *price)
+                                 lx_perps_side side, lxp_u128 size,
+                                 lxp_u128 notional, lxp_u128 *price)
 {
     lxp_u128 quotient;
     lxp_u128 remainder;
@@ -310,20 +338,11 @@ static lxp_result entry_price_of(const lx_perps_market *market,
     status = lxp_u128_mul_div_floor(notional, market->price_scale, size,
                                     &quotient, &remainder);
     if (status != LXP_OK) return LXP_ERR_OVERFLOW;
-    if (!lxp_u128_is_zero(remainder)) return LXP_ERR_PARAMETER_BOUNDS;
+    if (side == LX_PERPS_SIDE_BUY && !lxp_u128_is_zero(remainder) &&
+        lxp_u128_add(quotient, u128_one, &quotient) != LXP_OK)
+        return LXP_ERR_OVERFLOW;
     *price = quotient;
     return LXP_OK;
-}
-
-static lxp_result notional_check(const lx_perps_market *market,
-                                 lxp_u128 size, lxp_u128 notional)
-{
-    lxp_u128 price;
-    lxp_result status = multiple_check(size, market->lot_size);
-    if (status != LXP_OK) return status;
-    status = entry_price_of(market, size, notional, &price);
-    if (status != LXP_OK) return status;
-    return price_check(market, price);
 }
 
 static lxp_result margin_requirement(const lx_perps_market *market,
@@ -332,16 +351,6 @@ static lxp_result margin_requirement(const lx_perps_market *market,
     lxp_result status = lxp_u128_mul_bps_ceil(
         notional, market->initial_margin_ratio_bps, required);
     return status == LXP_OK ? LXP_OK : LXP_ERR_OVERFLOW;
-}
-
-static lxp_result funding_open_interest_add(lx_perps_funding_state *funding,
-                                            lx_perps_side side,
-                                            lxp_u128 notional)
-{
-    lxp_u128 *target = side == LX_PERPS_SIDE_BUY ?
-        &funding->long_open_notional : &funding->short_open_notional;
-    return lxp_u128_add(*target, notional, target) == LXP_OK ?
-        LXP_OK : LXP_ERR_OVERFLOW;
 }
 
 static lxp_result funding_open_interest_remove(
@@ -621,6 +630,8 @@ static lxp_result validate_order_place(lxp_module_ctx *ctx,
     if (status != LXP_OK) return status;
     status = oracle_price_current(ctx, &market, &price);
     if (status != LXP_OK) return status;
+    status = lx_perps_price_deviation_check(&market, price, command->price);
+    if (status != LXP_OK) return status;
     status = lxp_ctx_account_find(ctx, command->owner_account_id, &owner);
     if (status != LXP_OK) return status;
     if (!margin_owned_by_actor(owner, activity))
@@ -649,20 +660,46 @@ static lxp_result validate_order_cancel(lxp_module_ctx *ctx,
         LXP_OK : LXP_ERR_UNAUTHORIZED_DEBIT;
 }
 
+static lxp_result open_reservation_check(const lx_perps_market *market,
+                                         const lx_perps_open_command *command,
+                                         const lx_account *margin_account,
+                                         lxp_u128 oracle_price)
+{
+    lxp_u128 notional;
+    lxp_u128 remainder;
+    lxp_u128 required;
+    lxp_result status;
+    if (!lxp_u128_is_zero(command->entry_notional) ||
+        memcmp(command->position_id, margin_account->id, 32U) != 0 ||
+        lxp_u128_is_zero(command->margin_amount))
+        return LXP_ERR_NON_CANONICAL;
+    status = multiple_check(command->size, market->lot_size);
+    if (status != LXP_OK) return status;
+    if (lxp_u128_is_zero(market->price_scale)) return LXP_ERR_PARAMETER_BOUNDS;
+    status = lxp_u128_mul_div_floor(oracle_price, command->size,
+                                    market->price_scale, &notional,
+                                    &remainder);
+    if (status != LXP_OK) return LXP_ERR_OVERFLOW;
+    status = margin_requirement(market, notional, &required);
+    if (status != LXP_OK) return status;
+    return lxp_u128_cmp(command->margin_amount, required) < 0 ?
+        LXP_ERR_MARGIN_INSUFFICIENT : LXP_OK;
+}
+
 static lxp_result validate_position_open(lxp_module_ctx *ctx,
                                          const lxp_activity *activity,
                                          const lx_perps_open_command *command)
 {
     lx_perps_market market;
-    lx_perps_position existing;
     lx_account *owner_main;
     lx_account *margin_account;
     lxp_u128 price;
-    lxp_u128 required;
     lxp_result status = market_loaded(ctx, command->market_id, true, &market);
     if (status != LXP_OK) return status;
     status = oracle_price_current(ctx, &market, &price);
     if (status != LXP_OK) return status;
+    if (!lxp_u128_is_zero(command->entry_notional))
+        return LXP_ERR_NON_CANONICAL;
     status = actor_account(ctx, activity, &owner_main);
     if (status != LXP_OK) return status;
     status = lxp_ctx_account_find(ctx, command->margin_account_id,
@@ -670,16 +707,44 @@ static lxp_result validate_position_open(lxp_module_ctx *ctx,
     if (status != LXP_OK) return status;
     if (!margin_owned_by_actor(margin_account, activity))
         return LXP_ERR_UNAUTHORIZED_DEBIT;
-    status = notional_check(&market, command->size, command->entry_notional);
+    return open_reservation_check(&market, command, margin_account, price);
+}
+
+/* POSITION_INCREASE only adds margin toward a larger position; the size
+ * itself grows only through fills. The margin held afterwards must cover the
+ * current entry notional plus the requested size at the oracle price. */
+static lxp_result increase_reservation_check(
+    const lx_perps_market *market, const lx_perps_increase_command *command,
+    const lx_perps_position *position, const lx_account *margin_account,
+    lxp_u128 oracle_price)
+{
+    lxp_u128 notional;
+    lxp_u128 remainder;
+    lxp_u128 total_notional;
+    lxp_u128 required;
+    lxp_u128 held;
+    lxp_result status;
+    if (!lxp_u128_is_zero(command->notional_delta) ||
+        lxp_u128_is_zero(command->size_delta) ||
+        lxp_u128_is_zero(command->margin_amount))
+        return LXP_ERR_NON_CANONICAL;
+    if (!position->open) return LXP_ERR_AGREEMENT_STATE;
+    status = multiple_check(command->size_delta, market->lot_size);
     if (status != LXP_OK) return status;
-    status = margin_requirement(&market, command->entry_notional, &required);
+    if (lxp_u128_is_zero(market->price_scale)) return LXP_ERR_PARAMETER_BOUNDS;
+    status = lxp_u128_mul_div_floor(oracle_price, command->size_delta,
+                                    market->price_scale, &notional,
+                                    &remainder);
+    if (status != LXP_OK) return LXP_ERR_OVERFLOW;
+    if (lxp_u128_add(position->entry_notional, notional, &total_notional) !=
+            LXP_OK ||
+        lxp_u128_add(margin_account->balance, command->margin_amount,
+                     &held) != LXP_OK)
+        return LXP_ERR_OVERFLOW;
+    status = margin_requirement(market, total_notional, &required);
     if (status != LXP_OK) return status;
-    if (lxp_u128_cmp(command->margin_amount, required) < 0)
-        return LXP_ERR_MARGIN_INSUFFICIENT;
-    status = lx_perps_position_get(ctx, command->market_id,
-                                   command->position_id, &existing);
-    if (status == LXP_OK) return LXP_ERR_SEQUENCE_REUSED;
-    return status == LXP_ERR_UNKNOWN_FIELD ? LXP_OK : status;
+    return lxp_u128_cmp(held, required) < 0 ? LXP_ERR_MARGIN_INSUFFICIENT :
+                                              LXP_OK;
 }
 
 static lxp_result validate_position_increase(
@@ -691,33 +756,18 @@ static lxp_result validate_position_increase(
     lx_account *owner_main;
     lx_account *margin_account;
     lxp_u128 price;
-    lxp_u128 total_notional;
-    lxp_u128 total_size;
-    lxp_u128 required;
-    lxp_u128 held;
     lxp_result status = market_loaded(ctx, command->market_id, true, &market);
     if (status != LXP_OK) return status;
     status = oracle_price_current(ctx, &market, &price);
     if (status != LXP_OK) return status;
+    if (!lxp_u128_is_zero(command->notional_delta))
+        return LXP_ERR_NON_CANONICAL;
     status = position_loaded(ctx, activity, command->market_id,
                              command->position_id, &position, &owner_main,
                              &margin_account);
     if (status != LXP_OK) return status;
-    status = notional_check(&market, command->size_delta,
-                            command->notional_delta);
-    if (status != LXP_OK) return status;
-    status = lxp_u128_add(position.size, command->size_delta, &total_size);
-    if (status == LXP_OK)
-        status = lxp_u128_add(position.entry_notional,
-                              command->notional_delta, &total_notional);
-    if (status != LXP_OK) return LXP_ERR_OVERFLOW;
-    status = margin_requirement(&market, total_notional, &required);
-    if (status != LXP_OK) return status;
-    status = lxp_u128_add(margin_account->balance, command->margin_amount,
-                          &held);
-    if (status != LXP_OK) return LXP_ERR_OVERFLOW;
-    return lxp_u128_cmp(held, required) < 0 ? LXP_ERR_MARGIN_INSUFFICIENT :
-                                              LXP_OK;
+    return increase_reservation_check(&market, command, &position,
+                                      margin_account, price);
 }
 
 static lxp_result validate_position_close(lxp_module_ctx *ctx,
@@ -887,32 +937,229 @@ static lxp_result execute_oracle_push(lxp_module_ctx *ctx,
                                  tail, sizeof(tail));
 }
 
+static lxp_result position_store_visit(const lx_perps_position *position,
+                                      void *user)
+{
+    lx_perps_position_store *store = (lx_perps_position_store *)user;
+    if (store->count == LX_PERPS_POSITION_CAPACITY)
+        return LXP_ERR_ARENA_EXHAUSTED;
+    store->positions[store->count++] = *position;
+    return LXP_OK;
+}
+
+typedef struct fill_work {
+    lx_perps_funding_state funding;
+    lx_perps_position_store *positions;
+    lx_perps_fill_settlement *settlement;
+    lxp_transfer_asset_state asset;
+    lx_account *long_account;
+    lx_account *short_account;
+} fill_work;
+
+static lxp_result fill_work_prepare(lxp_module_ctx *ctx,
+                                    const lx_perps_market *market,
+                                    fill_work *work)
+{
+    void *memory = NULL;
+    lxp_result status;
+    (void)memset(work, 0, sizeof(*work));
+    status = quote_asset_state(ctx, market->quote_asset, &work->asset);
+    if (status != LXP_OK) return status;
+    status = system_account(ctx, market->long_funding_account_id,
+                            LX_ACCOUNT_SYSTEM_FUNDING_LONG,
+                            &work->long_account);
+    if (status == LXP_OK)
+        status = system_account(ctx, market->short_funding_account_id,
+                                LX_ACCOUNT_SYSTEM_FUNDING_SHORT,
+                                &work->short_account);
+    if (status == LXP_OK) status = store_alloc(ctx, &work->positions);
+    if (status == LXP_OK)
+        status = work_alloc(ctx, sizeof(lx_perps_fill_settlement),
+                            _Alignof(lx_perps_fill_settlement), &memory);
+    if (status != LXP_OK) return status;
+    work->settlement = (lx_perps_fill_settlement *)memory;
+    return LXP_OK;
+}
+
+static bool maker_refusal(lxp_result status)
+{
+    return status == LXP_ERR_MARGIN_INSUFFICIENT ||
+           status == LXP_ERR_UNAUTHORIZED_DEBIT;
+}
+
+/* Applies one matching round to freshly loaded positions and funding. A
+ * maker whose position cannot take its fill (margin it does not hold, or
+ * funding it owes and did not authorize) is reported through refused so the
+ * caller can cancel that order and match again; any other failure, and every
+ * taker failure, fails the whole order closed. */
+static lxp_result fills_stage(lxp_module_ctx *ctx,
+                              const lx_perps_market *market,
+                              const lx_perps_book *before,
+                              const lx_perps_order_command *command,
+                              lx_account *taker_margin,
+                              lx_account *taker_main,
+                              const lx_perps_fill *fills, size_t fill_count,
+                              fill_work *work,
+                              const lx_perps_order **refused)
+{
+    lx_perps_fill_request request;
+    size_t i;
+    lxp_result status;
+    *refused = NULL;
+    work->positions->count = 0U;
+    (void)memset(work->settlement, 0, sizeof(*work->settlement));
+    status = lx_perps_funding_state_lookup(ctx, market->market_id,
+                                           &work->funding);
+    if (status != LXP_OK) return status;
+    status = lx_perps_position_iter(ctx, market->market_id,
+                                    position_store_visit, work->positions);
+    if (status != LXP_OK) return status;
+    (void)memset(&request, 0, sizeof(request));
+    request.store = work->positions;
+    request.market = market;
+    request.funding = &work->funding;
+    request.settlement = work->settlement;
+    request.long_funding_account = work->long_account;
+    request.short_funding_account = work->short_account;
+    request.asset = &work->asset;
+    for (i = 0U; i < fill_count; ++i) {
+        const lx_perps_order *maker = book_find(before,
+                                                fills[i].maker_order_id);
+        lx_account *maker_margin;
+        lx_account *maker_main;
+        if (maker == NULL || maker->side == command->side)
+            return LXP_FATAL_INVARIANT;
+        status = lxp_ctx_account_find(ctx, maker->owner_account_id,
+                                      &maker_margin);
+        if (status == LXP_OK)
+            status = margin_owner_main(ctx, maker_margin, &maker_main);
+        if (status != LXP_OK) return status;
+        request.price = fills[i].price;
+        request.quantity = fills[i].quantity;
+        request.owner_main = taker_main;
+        request.margin_account = taker_margin;
+        request.side = command->side;
+        request.owner_authorized = true;
+        status = lx_perps_position_apply_fill(&request);
+        if (status != LXP_OK) return status;
+        request.owner_main = maker_main;
+        request.margin_account = maker_margin;
+        request.side = maker->side;
+        request.owner_authorized = maker_main == taker_main;
+        status = lx_perps_position_apply_fill(&request);
+        if (maker_refusal(status)) {
+            *refused = maker;
+            return LXP_OK;
+        }
+        if (status != LXP_OK) return status;
+    }
+    return LXP_OK;
+}
+
+static lxp_result fills_commit(lxp_module_ctx *ctx,
+                               const lxp_activity *activity,
+                               const lx_perps_market *market,
+                               lx_account *taker_main, fill_work *work)
+{
+    lxp_transfer_context context;
+    lxp_receipt *receipt = NULL;
+    size_t i;
+    lxp_result status = receipt_alloc(ctx, &receipt);
+    if (status != LXP_OK) return status;
+    owner_context(ctx, activity, taker_main, &context);
+    status = lx_perps_fill_settle(ctx, work->positions, market->market_id,
+                                  work->settlement, &work->asset, context,
+                                  receipt);
+    if (status != LXP_OK) return status;
+    for (i = 0U; i < work->settlement->party_count; ++i) {
+        lx_perps_position *position = NULL;
+        status = lx_perps_position_lookup(
+            work->positions, work->settlement->parties[i].margin_account->id,
+            &position);
+        if (status == LXP_OK) status = lx_perps_position_put(ctx, position);
+        if (status != LXP_OK) return status;
+    }
+    return lx_perps_funding_state_put(ctx, &work->funding);
+}
+
+static lxp_result book_remove(lx_perps_book *book,
+                              const uint8_t order_id[32])
+{
+    size_t i;
+    for (i = 0U; i < book->count; ++i) {
+        if (memcmp(book->orders[i].order_id, order_id, 32U) != 0) continue;
+        if (i + 1U < book->count)
+            (void)memmove(&book->orders[i], &book->orders[i + 1U],
+                          (book->count - i - 1U) * sizeof(book->orders[0]));
+        --book->count;
+        (void)memset(&book->orders[book->count], 0,
+                     sizeof(book->orders[0]));
+        return LXP_OK;
+    }
+    return LXP_FATAL_INVARIANT;
+}
+
+static lxp_result refused_makers_emit(lxp_module_ctx *ctx,
+                                      const lx_perps_book *before,
+                                      const lx_perps_book *remaining)
+{
+    size_t i;
+    for (i = 0U; i < before->count; ++i) {
+        lxp_result status;
+        if (book_find(remaining, before->orders[i].order_id) != NULL)
+            continue;
+        status = emit_identifier_event(ctx, LX_PERPS_EVENT_ORDER_CANCELLED,
+                                       before->orders[i].order_id,
+                                       before->orders[i].market_id,
+                                       NULL, 0U);
+        if (status != LXP_OK) return status;
+    }
+    return LXP_OK;
+}
+
 static lxp_result execute_order_place(lxp_module_ctx *ctx,
                                       const lxp_activity *activity,
                                       const lx_perps_order_command *command)
 {
     lx_perps_market market;
     lx_perps_book *before = NULL;
+    lx_perps_book *remaining = NULL;
     lx_perps_book *after = NULL;
     lx_perps_fill fills[LX_PERPS_DISPATCH_MAX_FILLS];
     lx_perps_order order;
+    fill_work work;
     lx_account *owner;
+    lx_account *owner_main;
+    lx_account *actor_main;
+    lxp_u128 oracle_price;
     size_t fill_count = 0U;
     size_t leg_count = 0U;
+    size_t i;
+    bool prepared = false;
     uint8_t tail[17];
     lxp_result status = market_loaded(ctx, command->market_id, true, &market);
+    if (status != LXP_OK) return status;
+    status = oracle_price_current(ctx, &market, &oracle_price);
+    if (status != LXP_OK) return status;
+    status = lx_perps_price_deviation_check(&market, oracle_price,
+                                            command->price);
     if (status != LXP_OK) return status;
     status = lxp_ctx_account_find(ctx, command->owner_account_id, &owner);
     if (status != LXP_OK) return status;
     if (!margin_owned_by_actor(owner, activity))
         return LXP_ERR_UNAUTHORIZED_DEBIT;
+    status = actor_account(ctx, activity, &actor_main);
+    if (status == LXP_OK) status = margin_owner_main(ctx, owner, &owner_main);
+    if (status != LXP_OK) return status;
+    if (owner_main != actor_main) return LXP_ERR_UNAUTHORIZED_DEBIT;
     status = book_alloc(ctx, &before);
+    if (status == LXP_OK) status = book_alloc(ctx, &remaining);
     if (status == LXP_OK) status = book_alloc(ctx, &after);
     if (status != LXP_OK) return status;
     status = lx_perps_order_book_load(ctx, command->market_id, before);
     if (status != LXP_OK) return status;
-    *after = *before;
-    (void)memset(fills, 0, sizeof(fills));
+    *remaining = *before;
+    (void)memset(&work, 0, sizeof(work));
     (void)memset(&order, 0, sizeof(order));
     (void)memcpy(order.order_id, command->order_id, 32U);
     (void)memcpy(order.market_id, command->market_id, 32U);
@@ -920,12 +1167,40 @@ static lxp_result execute_order_place(lxp_module_ctx *ctx,
     order.side = command->side;
     order.price = command->price;
     order.quantity = command->quantity;
-    status = lx_perps_order_place_execute(ctx, after, &market, &order,
-                                          owner->balance, fills,
-                                          LX_PERPS_DISPATCH_MAX_FILLS,
-                                          &fill_count, &leg_count);
-    if (status != LXP_OK) return status;
+    for (;;) {
+        const lx_perps_order *refused = NULL;
+        *after = *remaining;
+        (void)memset(fills, 0, sizeof(fills));
+        status = lx_perps_order_place_execute(ctx, after, &market, &order,
+                                              owner->balance, fills,
+                                              LX_PERPS_DISPATCH_MAX_FILLS,
+                                              &fill_count, &leg_count);
+        if (status != LXP_OK) return status;
+        for (i = 0U; i < fill_count; ++i) {
+            status = lx_perps_price_deviation_check(&market, oracle_price,
+                                                    fills[i].price);
+            if (status != LXP_OK) return status;
+        }
+        if (fill_count == 0U) break;
+        if (!prepared) {
+            status = fill_work_prepare(ctx, &market, &work);
+            if (status != LXP_OK) return status;
+            prepared = true;
+        }
+        status = fills_stage(ctx, &market, before, command, owner,
+                             owner_main, fills, fill_count, &work, &refused);
+        if (status != LXP_OK) return status;
+        if (refused == NULL) break;
+        status = book_remove(remaining, refused->order_id);
+        if (status != LXP_OK) return status;
+    }
+    if (fill_count != 0U) {
+        status = fills_commit(ctx, activity, &market, owner_main, &work);
+        if (status != LXP_OK) return status;
+    }
     status = book_persist(ctx, before, after);
+    if (status == LXP_OK)
+        status = refused_makers_emit(ctx, before, remaining);
     if (status != LXP_OK) return status;
     tail[0] = (uint8_t)fill_count;
     status = lxp_u128_to_be(order.quantity, tail + 1U);
@@ -965,15 +1240,16 @@ static lxp_result execute_position_open(lxp_module_ctx *ctx,
                                         const lx_perps_open_command *command)
 {
     lx_perps_market market;
-    lx_perps_funding_state funding;
-    lx_perps_position_store *store = NULL;
-    lx_perps_position_request request;
     lxp_transfer_asset_state asset;
+    lxp_transfer_context context;
     lxp_receipt *receipt = NULL;
     lx_account *owner_main;
     lx_account *margin_account;
+    lxp_u128 price;
     uint8_t side_byte;
     lxp_result status = market_loaded(ctx, command->market_id, true, &market);
+    if (status != LXP_OK) return status;
+    status = oracle_price_current(ctx, &market, &price);
     if (status != LXP_OK) return status;
     status = actor_account(ctx, activity, &owner_main);
     if (status != LXP_OK) return status;
@@ -982,38 +1258,17 @@ static lxp_result execute_position_open(lxp_module_ctx *ctx,
     if (status != LXP_OK) return status;
     if (!margin_owned_by_actor(margin_account, activity))
         return LXP_ERR_UNAUTHORIZED_DEBIT;
+    status = open_reservation_check(&market, command, margin_account, price);
+    if (status != LXP_OK) return status;
     status = quote_asset_state(ctx, market.quote_asset, &asset);
     if (status != LXP_OK) return status;
-    status = lx_perps_funding_state_lookup(ctx, command->market_id, &funding);
+    status = receipt_alloc(ctx, &receipt);
     if (status != LXP_OK) return status;
-    status = store_alloc(ctx, &store);
-    if (status == LXP_OK) status = receipt_alloc(ctx, &receipt);
+    owner_context(ctx, activity, owner_main, &context);
+    status = lx_perps_margin_post(ctx, owner_main, margin_account, &asset,
+                                  command->margin_amount, context, receipt);
     if (status != LXP_OK) return status;
-    (void)memset(&request, 0, sizeof(request));
-    request.store = store;
-    request.owner_main = owner_main;
-    request.margin_account = margin_account;
-    request.asset = &asset;
-    (void)memcpy(request.position.position_id, command->position_id, 32U);
-    (void)memcpy(request.position.market_id, command->market_id, 32U);
-    (void)memcpy(request.position.owner_main_account_id, owner_main->id, 32U);
-    (void)memcpy(request.position.margin_account_id, margin_account->id, 32U);
-    (void)memcpy(request.position.asset_id, asset.asset_id, 32U);
-    request.position.side = command->side;
-    request.position.size = command->size;
-    request.position.entry_notional = command->entry_notional;
-    request.position.funding_index_at_entry = funding.funding_index;
-    request.margin_amount = command->margin_amount;
-    owner_context(ctx, activity, owner_main, &request.context);
-    status = lx_perps_position_open_execute(ctx, &request, receipt);
-    if (status != LXP_OK) return status;
-    status = lx_perps_position_put(ctx, &store->positions[0]);
-    if (status != LXP_OK) return status;
-    status = funding_open_interest_add(&funding, command->side,
-                                       command->entry_notional);
-    if (status != LXP_OK) return status;
-    status = lx_perps_funding_state_put(ctx, &funding);
-    if (status != LXP_OK) return status;
+    margin_account->has_open_reference = true;
     status = lx_perps_put_side(&side_byte, (int)command->side);
     if (status != LXP_OK) return status;
     return emit_identifier_event(ctx, LX_PERPS_EVENT_POSITION_OPENED,
@@ -1026,7 +1281,6 @@ static lxp_result execute_position_increase(
     const lx_perps_increase_command *command)
 {
     lx_perps_market market;
-    lx_perps_funding_state funding;
     lx_perps_position position;
     lx_perps_position_store *store = NULL;
     lx_perps_position_request request;
@@ -1034,16 +1288,20 @@ static lxp_result execute_position_increase(
     lxp_receipt *receipt = NULL;
     lx_account *owner_main;
     lx_account *margin_account;
+    lxp_u128 price;
     uint8_t side_byte;
     lxp_result status = market_loaded(ctx, command->market_id, true, &market);
+    if (status != LXP_OK) return status;
+    status = oracle_price_current(ctx, &market, &price);
     if (status != LXP_OK) return status;
     status = position_loaded(ctx, activity, command->market_id,
                              command->position_id, &position, &owner_main,
                              &margin_account);
     if (status != LXP_OK) return status;
-    status = quote_asset_state(ctx, market.quote_asset, &asset);
+    status = increase_reservation_check(&market, command, &position,
+                                        margin_account, price);
     if (status != LXP_OK) return status;
-    status = lx_perps_funding_state_lookup(ctx, command->market_id, &funding);
+    status = quote_asset_state(ctx, market.quote_asset, &asset);
     if (status != LXP_OK) return status;
     status = store_alloc(ctx, &store);
     if (status == LXP_OK) status = receipt_alloc(ctx, &receipt);
@@ -1061,13 +1319,6 @@ static lxp_result execute_position_increase(
     request.notional_delta = command->notional_delta;
     owner_context(ctx, activity, owner_main, &request.context);
     status = lx_perps_position_increase_execute(ctx, &request, receipt);
-    if (status != LXP_OK) return status;
-    status = lx_perps_position_put(ctx, &store->positions[0]);
-    if (status != LXP_OK) return status;
-    status = funding_open_interest_add(&funding, position.side,
-                                       command->notional_delta);
-    if (status != LXP_OK) return status;
-    status = lx_perps_funding_state_put(ctx, &funding);
     if (status != LXP_OK) return status;
     status = lx_perps_put_side(&side_byte, (int)position.side);
     if (status != LXP_OK) return status;
@@ -1277,7 +1528,8 @@ static lxp_result liquidation_loss(const lx_perps_market *market,
 {
     lxp_u128 entry_price;
     lxp_i128 pnl;
-    lxp_result status = entry_price_of(market, position->size,
+    lxp_result status = entry_price_of(market, position->side,
+                                       position->size,
                                        position->entry_notional,
                                        &entry_price);
     if (status != LXP_OK) return status;
@@ -1457,7 +1709,8 @@ static lxp_result execute_adl(lxp_module_ctx *ctx,
         status = lxp_ctx_account_find(ctx, positions[i].margin_account_id,
                                       &margin_account);
         if (status != LXP_OK) return status;
-        status = entry_price_of(&market, positions[i].size,
+        status = entry_price_of(&market, positions[i].side,
+                                positions[i].size,
                                 positions[i].entry_notional, &entry_price);
         if (status != LXP_OK) return status;
         status = lx_perps_pnl_compute(positions[i].side, entry_price,

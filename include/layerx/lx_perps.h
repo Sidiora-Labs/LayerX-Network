@@ -33,6 +33,8 @@ enum {
     LX_PERPS_LIQUIDATION_SOURCES = 2,
     LX_PERPS_DISPATCH_MAX_FILLS = 8,
     LX_PERPS_DISPATCH_MAX_ADL = 16,
+    LX_PERPS_FILL_PARTIES = 2 * LX_PERPS_DISPATCH_MAX_FILLS,
+    LX_PERPS_FILL_SOURCES = 2 * LX_PERPS_FILL_PARTIES + 3,
     LX_PERPS_ORACLE_KEY_BYTES = 39,
     LX_PERPS_ORACLE_BYTES = 72,
     LX_PERPS_FUNDING_KEY_BYTES = 40,
@@ -132,6 +134,19 @@ typedef struct lx_perps_position_request {
     lxp_transfer_context context;
 } lx_perps_position_request;
 
+typedef struct lx_perps_fill_party {
+    lx_account *owner_main;
+    lx_account *margin_account;
+    bool closed;
+} lx_perps_fill_party;
+
+typedef struct lx_perps_fill_settlement {
+    lxp_transfer_leg funding_legs[LX_PERPS_FILL_PARTIES];
+    size_t funding_leg_count;
+    lx_perps_fill_party parties[LX_PERPS_FILL_PARTIES];
+    size_t party_count;
+} lx_perps_fill_settlement;
+
 typedef struct lx_perps_market {
     uint8_t market_id[32];
     uint8_t quote_asset[32];
@@ -176,6 +191,22 @@ typedef struct lx_perps_funding_state {
     lxp_u128 long_open_notional;
     lxp_u128 short_open_notional;
 } lx_perps_funding_state;
+
+typedef struct lx_perps_fill_request {
+    lx_perps_position_store *store;
+    const lx_perps_market *market;
+    lx_perps_funding_state *funding;
+    lx_perps_fill_settlement *settlement;
+    lx_account *owner_main;
+    lx_account *margin_account;
+    lx_account *long_funding_account;
+    lx_account *short_funding_account;
+    const lxp_transfer_asset_state *asset;
+    lx_perps_side side;
+    lxp_u128 price;
+    lxp_u128 quantity;
+    bool owner_authorized;
+} lx_perps_fill_request;
 
 typedef struct lx_perps_funding_tick_request {
     const lx_perps_market *market;
@@ -441,6 +472,20 @@ lxp_result lx_perps_position_open_execute(
 lxp_result lx_perps_position_increase_execute(
     lxp_module_ctx *ctx, const lx_perps_position_request *request,
     lxp_receipt *receipt);
+lxp_result lx_perps_fill_notional(const lx_perps_market *market,
+                                  lxp_u128 price, lxp_u128 quantity,
+                                  lxp_u128 *notional);
+lxp_result lx_perps_price_deviation_check(const lx_perps_market *market,
+                                          lxp_u128 oracle_price,
+                                          lxp_u128 price);
+lxp_result lx_perps_position_apply_fill(const lx_perps_fill_request *request);
+lxp_result lx_perps_fill_settle(lxp_module_ctx *ctx,
+                                lx_perps_position_store *store,
+                                const uint8_t market_id[32],
+                                lx_perps_fill_settlement *settlement,
+                                const lxp_transfer_asset_state *asset,
+                                lxp_transfer_context context,
+                                lxp_receipt *receipt);
 lxp_result lx_perps_position_close_execute(
     lxp_module_ctx *ctx, lx_perps_position_store *store,
     const uint8_t position_id[32], lx_account *margin_account,
