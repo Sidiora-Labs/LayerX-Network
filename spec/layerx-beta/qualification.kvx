@@ -14489,3 +14489,51 @@ observed = "At revision 3556c13c4672d21a57c5b447fa13b44e99cbf486 cg spec start 8
 assumption = "lx_oracle_store is a C struct typedef at include/layerx/lx_oracle.h:75 and Codify indexes only functions, so the entry can never trace; the owner's ruling for 8.2 and 8.6 named only those two tasks, so no replacement was made here and the task stays in_progress with its verify_cmd passing."
 resolution = "The extractor gap was fixed in Codify on branch feat/c-enumerators at revision ac736fbe9, which indexes C enumerators, header struct typedefs and closing-line typedef names; after a full re-index lx_oracle_store resolves as a class at include/layerx/lx_oracle.h:75, and cg spec done 8.4 rerun at revision 5b642d5d1 exited 0 with make test-programs-oracle-read && make programs-abi-drift passing and every graph check green, so the task is done; log /root/lx-target/wave8/spec-done-8.4.log."
 severity = "note"
+
+[observation.9.8.1]
+task = "9.8"
+file = "human/crates/layerx-intents/tests/native_custody.rs"
+symbol = "layerx_crypto::disclosure::bind"
+observed = "At revision ef5d66174 (main, untouched worktree) cargo test --locked --manifest-path human/Cargo.toml -p layerx-intents exits 101 because both tests in native_custody.rs fail with MalformedPayload from disclosure::bind; log /root/lx-lanes/fx/9-8/.qual/baseline-native-custody.log. The 9.8 verify_cmd therefore cannot exit 0 while the task's own tests (precompile_router 10/10, layerx-types payload) pass; logs /root/lx-lanes/fx/9-8/.qual/verify-r1-precompile-router.log and verify-nofailfast.log."
+assumption = "Pre-existing failure unrelated to 9.8, left for a separate fix; 9.8 is published as implemented, verify_cmd not passing as written."
+severity = "blocker"
+
+[observation.9.8.2]
+task = "9.8"
+file = "agent/crates/layerx-types/tests/activity.rs"
+symbol = "ModuleId"
+observed = "Task 9.7 registered spot as kernel module 10 (LXP_MODULE_SPOT, reserved count 10), but activity.rs:161 and the gateway registry test assert module 10 is unknown, so SpotPayload is shipped as a standalone codec keyed by activity number and is not wrapped in Payload."
+assumption = "Cross-task contradiction between 9.7 and the Rust module table; resolving it means adding Spot to ModuleId and updating those two assertions in a follow-up, not weakening them here."
+severity = "note"
+
+[observation.9.13.1]
+task = "9.13"
+file = "human/apps/web/src/app/explorer/accounts/[accountId]/page.tsx"
+symbol = "exactOptionalPropertyTypes"
+observed = "At revision 9d0131247 (explorer files identical to origin/main) cd human/apps/web && npm run typecheck exits 2 with five TS2375 errors at lines 235-238 and 282 of the explorer account page, none in files touched by 9.13; log /root/lx-lanes/fx/9-13/.qual/typecheck-1.log; npm run lint exits 1 on the same errors before eslint runs (.qual/lint-1.log)."
+assumption = "Pre-existing failure unrelated to 9.13, left for a separate fix; 9.13 is published as implemented, verify_cmd not passing as written."
+severity = "blocker"
+
+[observation.9.14.1]
+task = "9.14"
+file = "agent/sdk/typescript"
+symbol = "typecheck"
+observed = "At revision 2f6ec830f the gateway capabilities tests pass (exit 0) but cd human/apps/web && npm run typecheck exits 2 with the five known TS2375 errors of observation.9.13.1 plus ten TS2307 missing-module errors under agent/sdk/typescript, whose node_modules is absent in the worktree and in the main checkout; log /root/lx-lanes/fx/9-14/.qual/verify1.log."
+assumption = "Both failures are outside the files 9.14 touched; the web half is published as implemented, verify_cmd not passing as written until the explorer page is fixed and the SDK dependencies are installed."
+severity = "blocker"
+
+[observation.9.14.2]
+task = "9.14"
+file = "platform/hosted/gateway/src"
+symbol = "eth_sendRawTransaction"
+observed = "The task text assumed px_* write methods for exchange, bridge and launchpad; the gateway has none, writes arrive only as relayed eth_sendRawTransaction and eth_sendRawTransactionSync, so the gate decodes the signed transaction target and refuses 0x1015, 0x1016 and 0x1017 with error -32003 surface_unavailable while the precompile has no code."
+assumption = "The implemented gate satisfies ac_12 as written; the planning text, not the code, was wrong."
+severity = "note"
+
+[observation.9.13.2]
+task = "9.13"
+file = "human/apps/web"
+symbol = "lint"
+observed = "At revision edce42394 (PR 466) npm run typecheck exits 0 after the explorer page fix plus a root npm ci, but npm run lint exits 1 on four pre-existing eslint errors in src/api/abi-read.ts:65 and :105, src/app/launchpad/actions.ts:15 and src/app/launchpad/launchpad-client.tsx:74; log /root/lx-lanes/fx/web-typecheck/.qual/lint1.log; .github/workflows/human.yml never installs the root npm workspace so CI typecheck sees the same SDK TS2307 errors."
+assumption = "Lint errors and the CI install gap are outside 9.13 and 9.14 and need their own small fix; observations 9.13.1 and 9.14.1 are cleared once PR 466 merges."
+severity = "note"

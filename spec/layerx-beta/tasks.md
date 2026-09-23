@@ -264,6 +264,57 @@ Two points need owner confirmation before the corresponding task starts, and one
     - Add POST /v1/security/key-export/begin and /finish to human/schema/human-api/identity.kvx in the secret-reveal class, implement the ceremony in human/crates/layerx-human-service with the KMS returning the primary key once and flipping the identity to self-custodied so later signing refuses, add onboarding copy and route that offers export first and custody as opt-in, rewrite the no-key-export suite to assert the ceremony is the only route, and update spec/layerx-platform/spec.kvx [decision] custody and v1_scope.
     - _Requirements: 16.7_
 
+- [ ] 9. Paxeer X fork surface: fork-gated Paxeer work
+  - _Requirements: 17.1_
+  - [x] 9.1 Implement the layerxexchange module and the 0x1015 precompile
+    - Create modules/layerxexchange (types, keeper, msg server, typed events, genesis, params) whose keeper moves margin only through the layerxcustody module account and records pending intents keyed by an intent id; create precompiles/layerxexchange (LayerXExchange.sol, abi.json, layerxexchange.go, versions, generated setup.go) modelled on precompiles/layerxcustody with depositMargin, withdrawMargin, placeOrder, cancelOrder, requestSettlement and the getMarket, getOrder, getPosition, getMargin views that verify a state proof against the AnchorReader's finalizedStateRoot; the keeper accessor is added in task 9.4; write keeper and precompile tests with real testutil keepers and layerxproof testvectors.
+    - _Requirements: 17.1_
+  - [x] 9.2 Implement the layerxbridge module and the 0x1016 precompile, dormant at genesis
+    - Create modules/layerxbridge (chain registry, attestor set with bonds and threshold, per-asset caps, global pause, nullifiers, gov-only MsgRegisterChain, MsgSetAttestors, MsgSetCap, MsgPause) that mints and burns through the tokenfactory keeper under the module admin; create precompiles/layerxbridge (LayerXBridge.sol, abi.json, layerxbridge.go, versions, generated setup.go) with bridgeIn(chain, vault, txHash, logIndex, recipient, asset, amount, signatures[]), bridgeOut(chain, asset, amount, recipient), and getChain, getAttestors, getCap, isPaused, isNullified views; genesis SHALL be empty with every cap zero; the keeper accessor is added in task 9.4; write tests proving mint refuses below threshold, over cap, when paused and on a reused nullifier.
+    - _Requirements: 17.2_
+  - [x] 9.3 Implement the native launchpad module and the 0x1017 precompile
+    - Create modules/launchpad porting KindleLaunch core semantics from /tmp/claude-0/-root-Layerx-protocol/d11d150b-1e70-463a-aaed-eded013be220/scratchpad/kindle/contracts/contracts (SidioraFactory.createMarket, SidioraPool.swap with ReserveLib and FeeLib, FeeAccumulator strategies, ProtocolConfig params) as a Cosmos module: markets keyed by denom, virtual and real reserves, 8-slot snapshot ring, cumulative volume, accumulated fees, fee-rights holder and strategy, guardian pause; createMarket creates a fixed-supply tokenfactory denom and registers an ERC20 pointer through the evm keeper; create precompiles/launchpad (Launchpad.sol, abi.json, launchpad.go, versions, generated setup.go) with createMarket, buy, sell, setFeeStrategy, claimFees, executeBurn, executeAirdrop, claimAirdrop, executeLpRewards, pause, unpause and the views quoteBuy, quoteSell, getReserves, getPrice, getPriceSnapshots, getFeeBps, getMarket, getMarkets, getMarketsByCreator, getMarketCount, getAccumulatedFees, getConfig; the keeper accessor is added in task 9.4; write tests that reproduce the KindleLaunch Hardhat swap and fee vectors.
+    - _Requirements: 17.3_
+  - [x] 9.4 Wire the three modules and precompiles into the v6.5 upgrade and the app
+    - Add the layerxexchange, layerxbridge and launchpad store keys to the v6.5 StoreUpgrades block in node/app.go, instantiate the three keepers and module basics and register their msg and query services, add the accessors to precompiles/utils/expected_keepers.go and node/precompiles.go, add the three entries to precompiles/setup.go, run go generate for the setup.go files, extend node/upgrade_test.go with a v6.4.0-to-v6.5 store-upgrade case that calls one view on each of 0x1015, 0x1016 and 0x1017, and update the genesis defaults in platform/hosted/paxeer/prepare-beta.py.
+    - _Requirements: 17.4_
+  - [x] 9.5 Ship the PaxeerXVault Ethereum contract
+    - Create interop/contracts/ethereum-bridge with PaxeerXVault.sol (deposit(asset, amount, paxeerRecipient) emitting BridgeDeposit, release(asset, amount, recipient, paxeerTxHash, signatures[]) under an attestor set with threshold, per-asset caps, pause, a nullifier set, and owner-only attestor and cap setters), a foundry.toml, and forge tests covering deposit, release under threshold, refusal below threshold, over cap, paused and replayed nullifier; the attestor signature domain SHALL match the layerxbridge module's attestation digest byte for byte and be documented in interop/contracts/ethereum-bridge/ATTESTATION.md.
+    - _Requirements: 17.8_
+  - [x] 9.6 Make perps fills the only source of positions with oracle-bounded fill prices
+    - In src/modules/perps change execute_order_place so each fill from lx_perps_book_match opens, increases or reduces the taker's and every maker's position at the fill price through the existing position and margin subaccount code, refuse any fill whose price deviates from the latest committed oracle observation by more than the market's deviation limit with a typed result, remove the caller-supplied entry_notional from POSITION_OPEN so it only reserves margin, keep every receipt and event encoding 0x0601 to 0x060b byte-identical, update include/layerx/lx_perps.h, and extend tests/modules/test_perps_book.c and test_perps_position.c with fill-to-position and deviation-refusal cases.
+    - _Requirements: 17.5_
+  - [x] 9.7 Add the spot kernel module
+    - Create src/modules/spot with lx_spot_dispatch.c, lx_spot_market.c, lx_spot_book.c reusing the perps book matching, and lx_spot_codec.h; module id 7 LXP_MODULE_SPOT, ordinals 0x00070001 to 0x00070005; each fill settles both legs immediately through the asset module and writes a transfer set into the receipt; register the module in cmd/layerxd/lxp_daemon_modules.h, platform/hosted/node/genesis-modules.conf and the genesis module table; add tests/modules/test_spot_book.c with a conservation check and a Makefile target test-spot-book.
+    - _Requirements: 17.6_
+  - [ ] 9.8 Route precompile events through the intent router and add typed SDK helpers
+    - Extend human/crates/layerx-intents with intent kinds for the layerxexchange, layerxbridge and launchpad ABI events and their LayerX activity encodings (perps ordinals 0x0006xxxx, spot 0x0007xxxx, custody credit), extend agent/crates/layerx-types/src/payload.rs with typed Perps and Spot payload structs replacing the opaque bytes, and add typed helpers to agent/sdk/typescript and agent/sdk/python for every write on the three precompiles and for perps and spot activities, with round-trip tests against the C codec vectors.
+    - _Requirements: 17.7_
+  - [x] 9.9 Ship the layerx-bridge-relayer service
+    - Create interop/crates/layerx-bridge-relayer that follows registered chains through layerx-migrate's RPC quorum verifiers, builds attestations over the digest documented in interop/contracts/ethereum-bridge/ATTESTATION.md, signs them through layerx-mirror-signer over its socket protocol, submits bridgeIn to 0x1016 through layerx-paxeer-client, watches BridgeOut on Paxeer and calls PaxeerXVault.release; with a journal for exactly-once submission and tests against recorded RPC fixtures.
+    - _Requirements: 17.8_
+  - [x] 9.10 Ship the layerx-indexer service with a durable decoded store
+    - Create platform/hosted/indexer (crate layerx-indexer) with a SQLite store (rusqlite, bundled) of accounts, assets, transfers and events rows; a LayerX ingester over the relay_archive /v1/sync protocol decoding ACTIVITY_RECEIPT_FIELDS and LXP_RECEIPT_FIELDS from layerx-types; a Paxeer ingester over EVM JSON-RPC blocks, receipts and logs plus CometBFT tx_search decoding ERC20 and pointer transfers, bank and tokenfactory events, and every ABI in precompiles/*/abi.json including the three new precompiles; checkpointed cursors and reorg handling to the anchor's finality depth; an HTTP API /v1/history/{account}, /v1/assets, /v1/assets/{id} with cursors; and tests over recorded fixtures for both chains.
+    - _Requirements: 17.9_
+  - [x] 9.11 Expose unified history on the gateway and the SDKs
+    - Add lx_getHistory, px_getHistory and px_getUnifiedHistory to platform/hosted/gateway backed by the indexer HTTP API with cursors, kind filters and asset metadata joins, add them to openrpc.json, and add typed bindings to agent/sdk/typescript and agent/sdk/python with tests.
+    - _Requirements: 17.9_
+  - [x] 9.12 Write the fork rehearsal script and the validator runbook
+    - Create platform/hosted/paxeer/fork-rehearsal.sh that exports state from a synced full node's data dir, starts a disposable single-validator hyperpax_125-1 chain from that export on the current binary, submits a software-upgrade plan named v6.5 at a height a few blocks ahead, waits for the halt, swaps the binary to the v6.5 build, restarts and asserts the three new stores exist and one view on each of 0x1013 through 0x1017 answers; and docs/runbooks/paxeer-x-fork.md with the halt height formula from the measured block rate, the UTC time, the binary sha256 slot, the per-validator steps for the four validators and the resync steps for lagging full nodes; the script SHALL support --check for a syntax and dependency dry run.
+    - _Requirements: 17.10_
+  - [ ] 9.13 Add human web surfaces for launchpad, exchange and bridge
+    - Add launchpad, exchange and bridge routes to human/apps/web/src/app using the generated client and the new gateway history methods: market list and create, buy and sell with quotes, order placement and positions, bridge in and out with attestation status, each showing the same state an agent reaches through the SDK.
+    - _Requirements: 17.7_
+  - [-] 9.14 Gate the fork surfaces on live precompile capabilities in the gateway and web app
+    - Add a capabilities probe to platform/hosted/gateway that calls eth_getCode for the exchange, bridge and launchpad precompile addresses against the configured Paxeer RPC, caches it with a short TTL, exposes it as a px_getCapabilities method in openrpc.json (sync the CLI fixture), and makes every exchange, bridge and launchpad write method return a typed surface_unavailable error while its precompile has no code.
+    - In human/apps/web read px_getCapabilities through the generated client and render the launchpad, exchange and bridge routes in read-only mode with an explicit not-yet-live state until the capability is true, keeping history and explorer pages fully functional against the current mainnet.
+    - _Requirements: 17.12_
+  - [-] 9.15 Backfill Paxeer history from the paxscan Blockscout Postgres with a height cutover
+    - Add a backfill mode to platform/hosted/indexer that reads the Blockscout schema (blocks, transactions, logs, token_transfers, internal_transactions, tokens) read-only from PAXSCAN_DATABASE_PUBLIC_URL in height ranges, reuses decode_block and the existing store writers so backfilled rows are byte-for-byte the shape the live PaxeerIngester writes, and records a resumable backfill cursor.
+    - Fill every height absent from paxscan (about 2.85 million of 23.86 million) from the node EVM JSON-RPC, verify each block hash against the node before commit, stop at a fixed finalized cutover height passed on the command line, and write the live ingester's cursor at that height so the two never overlap.
+    - Make the Paxeer cosmos path tolerate a node with tx_index off (CometBFT answers transaction searching is disabled): log once, index EVM only, never fail the step; add tests with a recorded Blockscout fixture and a gap-fill case.
+    - _Requirements: 17.11_
+
 ## Engineering ground rules for this feature
 
 - **The bar is production-functional.** Every surface of the system must work on beta infrastructure the way it would in production. The only things the beta does not need are polish (UI polish, visual regression, accessibility, usability, performance budgets and soak), an external security audit, and production infrastructure and certification. Nothing functional is deferred, excluded or marked unsupported.
@@ -335,7 +386,10 @@ The raw finding behind each requirement, with its lane result path, is listed in
     { "id": 5,  "tasks": ["5.1", "5.2", "5.3", "5.4"] },
     { "id": 6,  "tasks": ["6.1", "6.2", "6.3", "6.4", "6.5", "6.6", "6.10", "6.11"] },
     { "id": 7,  "tasks": ["6.7", "6.8", "6.9"] },
-    { "id": 8,  "tasks": ["8.1", "8.2", "8.3", "8.4", "8.5", "8.6", "8.7"] }
+    { "id": 8,  "tasks": ["8.1", "8.2", "8.3", "8.4", "8.5", "8.6", "8.7"] },
+    { "id": 9,  "tasks": ["9", "9.1", "9.2", "9.3", "9.4", "9.5", "9.6", "9.10", "9.12"] },
+    { "id": 10, "tasks": ["9.7", "9.8", "9.9", "9.11", "9.13"] },
+    { "id": 11, "tasks": ["9.14", "9.15"] }
   ]
 }
 ```

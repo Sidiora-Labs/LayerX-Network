@@ -11,7 +11,7 @@ const databasePath = join(repositoryRoot, ".codegraph/graph.db");
 const specPath = join(repositoryRoot, "spec/layerx-platform/spec.kvx");
 const outputPath = join(toolRoot, "data/codebase-map.json");
 
-const GRAPH_SCHEMA_VERSION = "10";
+const GRAPH_SCHEMA_VERSION = "14";
 const GENERATED_SCHEMA_VERSION = 1;
 
 function git(args, options = {}) {
