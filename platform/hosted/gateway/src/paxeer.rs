@@ -249,6 +249,49 @@ fn resolved(config: &Config, id: &Value, params: Option<&Value>) -> Result<Resol
     resolve(config, &selector).map_err(|code| unavailable(id, code))
 }
 
+/// The indexer account keys one unified account answers to: its EVM
+/// address on the Paxeer side and every `LayerX` account its DID holds (the
+/// bound main account plus the public core's per-asset accounts), with the
+/// resolution document naming both halves.
+pub(super) fn history_accounts(
+    config: &Config,
+    id: &Value,
+    account: &str,
+) -> Result<(Value, Vec<(&'static str, String)>), Value> {
+    let resolution = resolved(config, id, Some(&json!([account])))?;
+    let mut accounts: Vec<(&'static str, String)> = Vec::new();
+    if let Some(address) = &resolution.evm {
+        accounts.push(("paxeer", evm::address_hex(address)));
+    }
+    if let Some(main) = &resolution.layerx_account {
+        accounts.push(("layerx", hex32(main)));
+    }
+    if let Some(listing) = resolution
+        .did()
+        .and_then(|did| super::rpc::read_result(config, &format!("/v1/dids/{did}/accounts")))
+    {
+        for held in listing
+            .get("accounts")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        {
+            if let Some(key) = held
+                .get("account_id")
+                .and_then(Value::as_str)
+                .and_then(|key| super::parse_hex32(key).ok())
+                .filter(|key| !is_zero(key))
+            {
+                accounts.push(("layerx", hex32(&key)));
+            }
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    accounts.retain(|(_, key)| seen.insert(key.clone()));
+    accounts.truncate(MAX_JOINED_ASSETS);
+    Ok((resolution.document(), accounts))
+}
+
 fn resolve_account(config: &Config, id: &Value, params: Option<&Value>) -> Value {
     match resolved(config, id, params) {
         Ok(resolution) => json!({"jsonrpc":"2.0","id":id,"result":resolution.document()}),

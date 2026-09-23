@@ -3,8 +3,15 @@ import { once } from "node:events";
 import * as http from "node:http";
 
 import {
+  HISTORY_DEFAULT_LIMIT,
+  JsonRpcClient,
   JsonRpcError,
   PxClient,
+  decodeHistoryAssetMetadata,
+  decodeLayerxHistoryPage,
+  decodePaxeerHistoryPage,
+  decodeUnifiedHistoryPage,
+  historyParams,
   PX_MAXIMUM_JOINED_ASSETS,
   decodePxAccountBalances,
   decodePxAccountJoin,
@@ -222,3 +229,116 @@ assert.throws(() => new PxClient({ endpoint: "wss://example.com/rpc" }));
 assert.throws(() => new PxClient({ endpoint: "https://example.com/rpc#head" }));
 await assert.rejects(new PxClient({ endpoint: "http://127.0.0.1:1/rpc" }).getNetwork());
 await assert.rejects(new PxClient({ endpoint: "https://example.com/rpc" }).getBalances("not-an-account"));
+
+// Recorded gateway answers for the three history reads, as the gateway joins
+// the indexer's rows with its /v1/assets records and the LayerX registry.
+const LXP = "11".repeat(32);
+const ALICE = "aa".repeat(32);
+const EVE = `0x${"ee".repeat(20)}`;
+const FRANK = `0x${"ff".repeat(20)}`;
+const POINTER = `0x${"cc".repeat(20)}`;
+const lxpMetadata = { asset: LXP, chain: "layerx", kind: "layerx", address: null, denom: null, symbol: "LXP", decimals: 6, native_id: LXP, pointer: null, metadata: { supply: "100" } };
+const pointerMetadata = { asset: `evm:${POINTER}`, chain: "paxeer", kind: "pointer", address: POINTER, denom: "ulxp", symbol: "LXP", decimals: 6, native_id: LXP, pointer: POINTER, metadata: {} };
+const nativeMetadata = { asset: "evm:native", chain: "paxeer", kind: "native", address: null, denom: null, symbol: null, decimals: 18, native_id: null, pointer: null, metadata: {} };
+const custodyRow = { id: "8", height_or_seq: "11", chain: "paxeer", kind: "custody_deposit", direction: "in", account: ALICE, counterparty: EVE, asset: LXP, amount: "9", tx_id: "custody_deposit-11", ordinal: "0", final: false, decoded: { position: "11" }, asset_metadata: lxpMetadata };
+const pointerRow = { id: "6", height_or_seq: "11", chain: "paxeer", kind: "pointer_transfer", direction: "in", account: EVE, counterparty: FRANK, asset: `evm:${POINTER}`, amount: "3", tx_id: "pointer_transfer-11", ordinal: "0", final: false, decoded: { position: "11" }, asset_metadata: pointerMetadata };
+const creditRow = { id: "5", height_or_seq: "2", chain: "layerx", kind: "lxp_credit", direction: "in", account: ALICE, counterparty: null, asset: LXP, amount: "7", tx_id: "lxp_credit-2", ordinal: "0", final: true, decoded: { position: "2" }, asset_metadata: lxpMetadata };
+const nativeRow = { id: "3", height_or_seq: "10", chain: "paxeer", kind: "native_transfer", direction: "out", account: EVE, counterparty: FRANK, asset: "evm:native", amount: "1000000000000000000", tx_id: "native_transfer-10", ordinal: "0", final: false, decoded: { position: "10" }, asset_metadata: nativeMetadata };
+const unknownAssetRow = { id: "11", height_or_seq: "12", chain: "paxeer", kind: "erc20_transfer", direction: "in", account: EVE, counterparty: FRANK, asset: `evm:0x${"00".repeat(18)}0abc`, amount: "115792089237316195423570985008687907853269984665640564039457584007913129639935", tx_id: "erc20_transfer-12", ordinal: "0", final: false, decoded: {}, asset_metadata: null };
+const recordedLayerx = { items: [custodyRow, creditRow], next_cursor: "5", account: ALICE };
+const recordedPaxeer = { items: [unknownAssetRow, pointerRow, nativeRow], next_cursor: null, account: EVE };
+const recordedUnified = {
+  items: [{ ...custodyRow, side: "layerx" }, { ...pointerRow, side: "paxeer" }, { ...creditRow, side: "layerx" }],
+  next_cursor: "5",
+  account: identities,
+  accounts: [{ side: "paxeer", account: EVE }, { side: "layerx", account: ALICE }],
+};
+
+assert.deepEqual(historyParams(ALICE), [ALICE, null, null, null]);
+assert.deepEqual(historyParams(EVE, { cursor: "42", limit: 7, kind: "erc20_transfer" }), [EVE, "42", 7, "erc20_transfer"]);
+for (const refused of [{ cursor: "" }, { cursor: "1&limit=500" }, { cursor: "x".repeat(33) }, { limit: 0 }, { limit: 101 }, { limit: 1.5 }, { kind: "Transfer" }, { kind: "" }]) {
+  assert.throws(() => historyParams(EVE, refused));
+}
+assert.equal(HISTORY_DEFAULT_LIMIT, 50);
+
+const layerxPage = decodeLayerxHistoryPage(recordedLayerx);
+assert.equal(layerxPage.account, ALICE);
+assert.equal(layerxPage.nextCursor, "5");
+assert.deepEqual(layerxPage.items.map((row) => row.id), [8n, 5n]);
+assert.equal(layerxPage.items[0]!.chain, "paxeer");
+assert.equal(layerxPage.items[0]!.side, null);
+assert.equal(layerxPage.items[1]!.counterparty, null);
+assert.equal(layerxPage.items[1]!.amount, 7n);
+assert.equal(layerxPage.items[1]!.final, true);
+assert.equal(layerxPage.items[1]!.assetMetadata?.symbol, "LXP");
+assert.equal(layerxPage.items[1]!.assetMetadata?.decimals, 6);
+assert.equal(layerxPage.items[1]!.assetMetadata?.nativeId, LXP);
+assert.deepEqual(layerxPage.items[1]!.assetMetadata?.metadata, { supply: "100" });
+
+const paxeerPage = decodePaxeerHistoryPage(recordedPaxeer);
+assert.equal(paxeerPage.nextCursor, null);
+assert.equal(paxeerPage.items[0]!.assetMetadata, null);
+assert.equal(paxeerPage.items[0]!.amount, (1n << 256n) - 1n);
+assert.equal(paxeerPage.items[1]!.assetMetadata?.pointer, POINTER);
+assert.equal(paxeerPage.items[1]!.assetMetadata?.denom, "ulxp");
+assert.equal(paxeerPage.items[2]!.assetMetadata?.decimals, 18);
+assert.equal(paxeerPage.items[2]!.assetMetadata?.symbol, null);
+assert.equal(paxeerPage.items[2]!.direction, "out");
+
+const unifiedPage = decodeUnifiedHistoryPage(recordedUnified);
+assert.deepEqual(unifiedPage.items.map((row) => [row.id, row.side, row.chain]), [[8n, "layerx", "paxeer"], [6n, "paxeer", "paxeer"], [5n, "layerx", "layerx"]]);
+assert.deepEqual(unifiedPage.accounts, [{ side: "paxeer", account: EVE }, { side: "layerx", account: ALICE }]);
+assert.equal(unifiedPage.nextCursor, "5");
+assert.equal(unifiedPage.account.evm_address, EVM);
+
+assert.throws(() => decodeUnifiedHistoryPage({ ...recordedUnified, items: [recordedUnified.items[2], recordedUnified.items[0]] }));
+assert.throws(() => decodeUnifiedHistoryPage({ ...recordedUnified, items: [custodyRow] }));
+assert.throws(() => decodeLayerxHistoryPage({ ...recordedLayerx, account: EVE }));
+assert.throws(() => decodePaxeerHistoryPage({ ...recordedPaxeer, next_cursor: "1&x" }));
+assert.throws(() => decodeLayerxHistoryPage({ items: [], next_cursor: "5", account: ALICE }));
+assert.throws(() => decodeLayerxHistoryPage({ ...recordedLayerx, items: [{ ...creditRow, amount: "-7" }] }));
+assert.throws(() => decodeLayerxHistoryPage({ ...recordedLayerx, items: [{ ...creditRow, direction: "sideways" }] }));
+assert.throws(() => decodeLayerxHistoryPage({ ...recordedLayerx, items: [{ ...creditRow, asset_metadata: { ...lxpMetadata, asset: "evm:native" } }] }));
+assert.throws(() => decodeLayerxHistoryPage(recordedLayerx, 1));
+assert.throws(() => decodeHistoryAssetMetadata({ ...nativeMetadata, decimals: 256 }));
+assert.deepEqual(decodeLayerxHistoryPage({ items: [], next_cursor: null, account: ALICE }).items, []);
+
+const historyRequests: { readonly method: unknown; readonly params: unknown }[] = [];
+const historyGateway = http.createServer((request, response) => {
+  const chunks: Buffer[] = [];
+  request.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+  request.on("end", () => {
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { id: string; method: string; params: unknown };
+    historyRequests.push({ method: body.method, params: body.params });
+    const result = body.method === "lx_getHistory" ? recordedLayerx : body.method === "px_getHistory" ? recordedPaxeer : recordedUnified;
+    const encoded = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }), "utf8");
+    response.writeHead(200, { "Content-Type": "application/json", "Content-Length": encoded.length });
+    response.end(encoded);
+  });
+});
+historyGateway.listen(0, "127.0.0.1");
+await once(historyGateway, "listening");
+const historyAddress = historyGateway.address();
+assert(historyAddress !== null && typeof historyAddress === "object", "history gateway listener missing");
+try {
+  const px = new PxClient({ endpoint: `http://127.0.0.1:${historyAddress.port}/rpc` });
+  const lx = new JsonRpcClient(`http://127.0.0.1:${historyAddress.port}`);
+  const unified = await px.getUnifiedHistory(DID.toUpperCase(), { limit: 3 });
+  assert.deepEqual(unified.items.map((row) => row.id), [8n, 6n, 5n]);
+  const paxeer = await px.getHistory(EVE.toUpperCase().replace("0X", "0x"), { kind: "erc20_transfer" });
+  assert.equal(paxeer.items.length, 3);
+  const layerx = await lx.getHistory(ALICE, { cursor: "9", limit: 2 });
+  assert.equal(layerx.nextCursor, "5");
+  await assert.rejects(px.getUnifiedHistory(EVE, { limit: 2 }));
+  await assert.rejects(px.getHistory(ALICE));
+  assert.throws(() => lx.getHistory(EVE));
+  assert.deepEqual(historyRequests, [
+    { method: "px_getUnifiedHistory", params: [DID, null, 3, null] },
+    { method: "px_getHistory", params: [EVE, null, null, "erc20_transfer"] },
+    { method: "lx_getHistory", params: [ALICE, "9", 2, null] },
+    { method: "px_getUnifiedHistory", params: [EVE, null, 2, null] },
+  ]);
+} finally {
+  historyGateway.close();
+  await once(historyGateway, "close");
+}
