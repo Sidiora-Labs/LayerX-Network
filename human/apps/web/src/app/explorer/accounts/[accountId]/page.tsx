@@ -227,15 +227,17 @@ export default async function AccountPage({
   if (account === undefined && activity === undefined) {
     return <ExplorerUnavailable />;
   }
+  const freshness = activity?.freshness;
+  const accountProps = account === undefined ? {} : { account };
   return (
     <ExplorerFrame
       title={copyEntry("explorer.account.title").message}
       description={identifier.canonical}
     >
-      <FreshnessDisplay freshness={activity?.freshness} />
-      <IdentitiesPanel account={account} />
-      <BalancesPanel account={account} />
-      <SettlementPanel account={account} />
+      <FreshnessDisplay {...(freshness === undefined ? {} : { freshness })} />
+      <IdentitiesPanel {...accountProps} />
+      <BalancesPanel {...accountProps} />
+      <SettlementPanel {...accountProps} />
       <ExplorerPanel title={copyEntry("explorer.account.layerx_activity").message}>
         {activity === undefined
           ? (
@@ -279,7 +281,7 @@ export default async function AccountPage({
           </ExplorerLink>
         )}
       </ExplorerPanel>
-      <PaxeerActivityPanel account={account} />
+      <PaxeerActivityPanel {...accountProps} />
       {account?.paxeerActivity.nextBeforeBlock === undefined ? null : (
         <ExplorerLink
           href={`${accountIdentifierPath(identifier.canonical)}?beforeBlock=${account.paxeerActivity.nextBeforeBlock}`}
