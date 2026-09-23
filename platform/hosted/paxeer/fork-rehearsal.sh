@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rehearses the Paxeer X software upgrade ($UPGRADE_NAME, default v6.5) on a disposable
+# Rehearses the Paxeer X software upgrade ($UPGRADE_NAME, default v6.6) on a disposable
 # single-validator fork of mainnet.
 #
 # State comes from `paxd export` run by the OLD binary over a copy of a stopped, synced node's data
@@ -33,7 +33,7 @@
 # --check validates this file's syntax, the given flags and the required tools, and touches nothing.
 set -euo pipefail
 
-UPGRADE_NAME=v6.5
+UPGRADE_NAME=v6.6
 COSMOS_CHAIN_ID=hyperpax_125-1
 EVM_CHAIN_ID=125
 KEY_NAME=rehearsal
@@ -90,7 +90,7 @@ required (flag, or the env file key in brackets):
   --upgrade-height-offset N   upgrade height = height at proposal submission + N [UPGRADE_HEIGHT_OFFSET]
 options:
   --env-file FILE             untracked KEY=VALUE file supplying any bracketed key (default $PAXEER_FORK_ENV)
-  --upgrade-name NAME         upgrade plan name (default v6.5) [UPGRADE_NAME]
+  --upgrade-name NAME         upgrade plan name (default v6.6) [UPGRADE_NAME]
   --chain-id ID               cosmos chain id of the export (default hyperpax_125-1) [COSMOS_CHAIN_ID]
   --evm-chain-id N            EVM chain id the resumed node must report (default 125) [EVM_CHAIN_ID]
   --source-genesis FILE       mainnet genesis (default: DIR/../config/genesis.json) [SOURCE_GENESIS]

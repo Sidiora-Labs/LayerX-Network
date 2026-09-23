@@ -1,7 +1,7 @@
 # Paxeer X fork validator runbook
 
 Upgrades mainnet `hyperpax_125-1` (EVM chain id 125) to the Paxeer X binary through the
-`$UPGRADE_NAME` upgrade plan (`v6.5` in `node/upgrades.go`). At that height the store loader
+`$UPGRADE_NAME` upgrade plan (`v6.6` in `node/tags`, registered by `node/upgrades.go`). At that height the store loader
 (`node/app.go` `SetStoreUpgradeHandlers`) adds the LayerX stores (`layerxcustody`, `layerxanchor`,
 and the exchange, bridge and launchpad stores), the handler registered from `node/tags`
 (`node/upgrades.go`) runs module migrations, and the precompiles 0x1013 custody, 0x1014 anchor,
@@ -25,7 +25,7 @@ Expected keys:
 
 | Key | Meaning |
 |---|---|
-| `UPGRADE_NAME` | upgrade plan name (`v6.5`) |
+| `UPGRADE_NAME` | upgrade plan name (`v6.6`) |
 | `COSMOS_CHAIN_ID` | `hyperpax_125-1` |
 | `EVM_CHAIN_ID` | `125` |
 | `PAXD_BIN` | path of the running `paxd` on the host |

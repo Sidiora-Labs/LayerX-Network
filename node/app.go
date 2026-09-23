@@ -1275,16 +1275,34 @@ func (app *App) SetStoreUpgradeHandlers() {
 		app.SetStoreLoader(upgradetypes.UpgradeStoreLoader(upgradeInfo.Height, &storeUpgrades))
 	}
 
-	if (upgradeInfo.Name == "v6.5") && !app.UpgradeKeeper.IsSkipHeight(upgradeInfo.Height) {
-		storeUpgrades := v65StoreUpgrades()
-
+	if storeUpgrades, ok := layerxStoreUpgrades(upgradeInfo.Name); ok && !app.UpgradeKeeper.IsSkipHeight(upgradeInfo.Height) {
 		// configure store loader that checks if version == upgradeHeight and applies store upgrades
 		app.SetStoreLoader(upgradetypes.UpgradeStoreLoader(upgradeInfo.Height, &storeUpgrades))
 	}
 }
 
-// v65StoreUpgrades mounts the stores of every module the v6.5 upgrade adds.
+// layerxStoreUpgrades returns the store upgrades of the named LayerX upgrade plan.
+func layerxStoreUpgrades(name string) (storetypes.StoreUpgrades, bool) {
+	switch name {
+	case "v6.5":
+		return v65StoreUpgrades(), true
+	case "v6.6":
+		return v66StoreUpgrades(), true
+	}
+	return storetypes.StoreUpgrades{}, false
+}
+
+// v65StoreUpgrades mounts the custody store, as the v6.5 upgrade embedded in the
+// running mainnet binary does.
 func v65StoreUpgrades() storetypes.StoreUpgrades {
+	return storetypes.StoreUpgrades{
+		Added: []string{layerxcustodytypes.StoreKey},
+	}
+}
+
+// v66StoreUpgrades mounts the stores of every module the Paxeer X fork adds to a
+// v6.4.0 chain.
+func v66StoreUpgrades() storetypes.StoreUpgrades {
 	return storetypes.StoreUpgrades{
 		Added: []string{
 			layerxcustodytypes.StoreKey, layerxanchortypes.StoreKey,

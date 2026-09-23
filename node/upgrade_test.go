@@ -104,15 +104,39 @@ func TestSkipOptimisticProcessingOnUpgrade(t *testing.T) {
 	})
 }
 
-// v65Modules are the modules, and so the stores, a v6.4.0 chain gains at v6.5.
-var v65Modules = []string{
+// v66Modules are the modules, and so the stores, a v6.4.0 chain gains at the v6.6
+// Paxeer X fork.
+var v66Modules = []string{
 	layerxcustodytypes.StoreKey, layerxanchortypes.StoreKey,
 	layerxexchangetypes.StoreKey, layerxbridgetypes.StoreKey, launchpadtypes.StoreKey,
 }
 
-func TestV640ToV65StoreUpgradeMountsTheNewStores(t *testing.T) {
-	upgrades := app.V65StoreUpgrades()
-	require.ElementsMatch(t, v65Modules, upgrades.Added)
+func TestV66StoreUpgradesArePickedByPlanName(t *testing.T) {
+	forkStores := []string{layerxexchangetypes.StoreKey, layerxbridgetypes.StoreKey, launchpadtypes.StoreKey}
+
+	v66, ok := app.LayerXStoreUpgrades("v6.6")
+	require.True(t, ok)
+	require.Equal(t, app.V66StoreUpgrades(), v66)
+	require.ElementsMatch(t, v66Modules, v66.Added)
+	for _, name := range forkStores {
+		require.True(t, v66.IsAdded(name), name)
+	}
+
+	v65, ok := app.LayerXStoreUpgrades("v6.5")
+	require.True(t, ok)
+	require.Equal(t, app.V65StoreUpgrades(), v65)
+	require.Equal(t, []string{layerxcustodytypes.StoreKey}, v65.Added)
+	for _, name := range forkStores {
+		require.False(t, v65.IsAdded(name), name)
+	}
+
+	_, ok = app.LayerXStoreUpgrades("v6.4.0")
+	require.False(t, ok)
+}
+
+func TestV640ToV66StoreUpgradeMountsTheNewStores(t *testing.T) {
+	upgrades := app.V66StoreUpgrades()
+	require.ElementsMatch(t, v66Modules, upgrades.Added)
 	added := map[string]bool{}
 	for _, name := range upgrades.Added {
 		added[name] = true
@@ -136,27 +160,27 @@ func TestV640ToV65StoreUpgradeMountsTheNewStores(t *testing.T) {
 	v640.GetKVStore(bank).Set([]byte("balance"), []byte("kept"))
 	require.Equal(t, int64(1), v640.Commit(true).Version)
 
-	v65 := rootmulti.NewStore(db)
-	v65.SetPruning(storetypes.PruneNothing)
+	v66 := rootmulti.NewStore(db)
+	v66.SetPruning(storetypes.PruneNothing)
 	mounted := map[string]*sdk.KVStoreKey{}
 	for _, name := range keys.MemIAVLStoreKeys {
 		key := sdk.NewKVStoreKey(name)
 		mounted[name] = key
-		v65.MountStoreWithDB(key, storetypes.StoreTypeIAVL, nil)
+		v66.MountStoreWithDB(key, storetypes.StoreTypeIAVL, nil)
 	}
-	require.NoError(t, v65.LoadLatestVersionAndUpgrade(&upgrades))
-	require.Equal(t, []byte("kept"), v65.GetKVStore(mounted[keys.BankStoreKey]).Get([]byte("balance")))
-	for _, name := range v65Modules {
-		store := v65.GetKVStore(mounted[name])
+	require.NoError(t, v66.LoadLatestVersionAndUpgrade(&upgrades))
+	require.Equal(t, []byte("kept"), v66.GetKVStore(mounted[keys.BankStoreKey]).Get([]byte("balance")))
+	for _, name := range v66Modules {
+		store := v66.GetKVStore(mounted[name])
 		require.NotNil(t, store, name)
 		iter := store.Iterator(nil, nil)
 		require.False(t, iter.Valid(), name)
 		require.NoError(t, iter.Close())
 	}
-	require.Equal(t, int64(2), v65.Commit(true).Version)
+	require.Equal(t, int64(2), v66.Commit(true).Version)
 }
 
-func TestV640ToV65UpgradeServesTheExchangeBridgeAndLaunchpadPrecompiles(t *testing.T) {
+func TestV640ToV66UpgradeServesTheExchangeBridgeAndLaunchpadPrecompiles(t *testing.T) {
 	tm := time.Now().UTC()
 	valPub := secp256k1.GenPrivKey().PubKey()
 	testWrapper := app.NewTestWrapper(t, tm, valPub, true)
@@ -164,7 +188,7 @@ func TestV640ToV65UpgradeServesTheExchangeBridgeAndLaunchpadPrecompiles(t *testi
 
 	// Rewind the new modules to v6.4.0: no state and no consensus version.
 	versions := ctx.KVStore(a.GetKey(types.StoreKey))
-	for _, name := range v65Modules {
+	for _, name := range v66Modules {
 		store := ctx.KVStore(a.GetKey(name))
 		iter := store.Iterator(nil, nil)
 		var stale [][]byte
@@ -178,15 +202,16 @@ func TestV640ToV65UpgradeServesTheExchangeBridgeAndLaunchpadPrecompiles(t *testi
 		versions.Delete(append([]byte{types.VersionMapByte}, name...))
 	}
 	before := a.UpgradeKeeper.GetModuleVersionMap(ctx)
-	for _, name := range v65Modules {
+	for _, name := range v66Modules {
 		require.NotContains(t, before, name)
 	}
 
-	plan := types.Plan{Name: "v6.5", Height: ctx.BlockHeight()}
+	require.True(t, a.UpgradeKeeper.HasHandler("v6.5"))
+	plan := types.Plan{Name: "v6.6", Height: ctx.BlockHeight()}
 	require.True(t, a.UpgradeKeeper.HasHandler(plan.Name))
 	a.UpgradeKeeper.ApplyUpgrade(ctx, plan)
 	after := a.UpgradeKeeper.GetModuleVersionMap(ctx)
-	for _, name := range v65Modules {
+	for _, name := range v66Modules {
 		require.Equal(t, uint64(1), after[name], name)
 	}
 	require.Equal(t, layerxbridgetypes.DefaultAuthority(), a.LayerXBridgeKeeper.GetParams(ctx).Authority)
