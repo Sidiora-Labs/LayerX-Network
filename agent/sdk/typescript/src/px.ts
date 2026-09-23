@@ -2,6 +2,17 @@ import * as http from "node:http";
 import * as https from "node:https";
 
 import { LayerXKeyCredential } from "./agent-http.js";
+import {
+  HISTORY_DEFAULT_LIMIT,
+  decodePaxeerHistoryPage,
+  decodeUnifiedHistoryPage,
+  historyParams,
+  paxeerHistoryAccount,
+  unifiedHistoryAccount,
+  type HistoryOptions,
+  type HistoryPage,
+  type UnifiedHistoryPage,
+} from "./history.js";
 import { decodeJsonRpcResponse, type RpcParam } from "./rpc.js";
 
 const MAX_RESPONSE_BYTES = 9 * 1024 * 1024;
@@ -24,6 +35,8 @@ export const PX_METHODS = [
   "px_getBalances",
   "px_listAssets",
   "px_getNetwork",
+  "px_getHistory",
+  "px_getUnifiedHistory",
 ] as const;
 export type PxMethod = (typeof PX_METHODS)[number];
 
@@ -150,6 +163,18 @@ export class PxClient {
 
   public async getNetwork(): Promise<PxNetworkHead> {
     return decodePxNetworkHead(await this.call("px_getNetwork", []));
+  }
+
+  /** The indexed history of one Paxeer EVM address, newest first. */
+  public async getHistory(account: string, options: HistoryOptions = {}): Promise<HistoryPage> {
+    const params = historyParams(paxeerHistoryAccount(account), options);
+    return decodePaxeerHistoryPage(await this.call("px_getHistory", params), options.limit ?? HISTORY_DEFAULT_LIMIT);
+  }
+
+  /** Both halves of one unified account merged newest first, each row tagged with its side. */
+  public async getUnifiedHistory(account: string, options: HistoryOptions = {}): Promise<UnifiedHistoryPage> {
+    const params = historyParams(unifiedHistoryAccount(account), options);
+    return decodeUnifiedHistoryPage(await this.call("px_getUnifiedHistory", params), options.limit ?? HISTORY_DEFAULT_LIMIT);
   }
 
   private async call(method: PxMethod, params: readonly RpcParam[]): Promise<Record<string, unknown>> {
