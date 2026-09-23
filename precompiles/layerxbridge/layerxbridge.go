@@ -86,17 +86,7 @@ type PrecompileExecutor struct {
 // NewPrecompile builds the precompile from the application's precompile
 // keepers, which must also provide LayerXBridgeK.
 func NewPrecompile(keepers utils.Keepers) (*pcommon.Precompile, error) {
-	var bridge BridgeKeeper
-	switch provider := keepers.(type) {
-	case interface{ LayerXBridgeK() *bridgekeeper.Keeper }:
-		if k := provider.LayerXBridgeK(); k != nil {
-			bridge = k
-		}
-	case interface{ LayerXBridgeK() bridgekeeper.Keeper }:
-		bridge = provider.LayerXBridgeK()
-	case interface{ LayerXBridgeK() BridgeKeeper }:
-		bridge = provider.LayerXBridgeK()
-	}
+	bridge := keepers.LayerXBridgeK()
 	if bridge == nil {
 		return nil, errors.New("layerxbridge: the precompile keepers provide no LayerXBridgeK")
 	}

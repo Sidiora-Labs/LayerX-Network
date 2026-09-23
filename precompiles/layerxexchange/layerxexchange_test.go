@@ -456,7 +456,7 @@ func TestRequiredGasFollowsTheFormula(t *testing.T) {
 
 func TestMissingKeeperRefuses(t *testing.T) {
 	h := newHarness(t)
-	precompile, err := layerxexchange.NewPrecompile(testkeeper.EVMTestApp.GetPrecompileKeepers())
+	precompile, err := layerxexchange.NewPrecompile(keepers{Keepers: testkeeper.EVMTestApp.GetPrecompileKeepers(), exchange: nil})
 	require.NoError(t, err)
 	_, err = precompile.Run(h.evm, h.caller, h.caller, h.input(layerxexchange.CancelOrderMethod, orderID), nil, false, false, nil)
 	require.ErrorIs(t, err, vm.ErrExecutionReverted)
