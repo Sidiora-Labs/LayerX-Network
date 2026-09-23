@@ -39,6 +39,12 @@ pub const ADDR_PRECOMPILE: [u8; 20] = precompile(0x10, 0x04);
 pub const CUSTODY_PRECOMPILE: [u8; 20] = precompile(0x10, 0x13);
 /// `0x0000000000000000000000000000000000001014`.
 pub const ANCHOR_PRECOMPILE: [u8; 20] = precompile(0x10, 0x14);
+/// `0x0000000000000000000000000000000000001015`, live from the Paxeer X fork.
+pub const EXCHANGE_PRECOMPILE: [u8; 20] = precompile(0x10, 0x15);
+/// `0x0000000000000000000000000000000000001016`, live from the Paxeer X fork.
+pub const BRIDGE_PRECOMPILE: [u8; 20] = precompile(0x10, 0x16);
+/// `0x0000000000000000000000000000000000001017`, live from the Paxeer X fork.
+pub const LAUNCHPAD_PRECOMPILE: [u8; 20] = precompile(0x10, 0x17);
 
 const fn precompile(high: u8, low: u8) -> [u8; 20] {
     let mut address = [0_u8; 20];

@@ -741,6 +741,7 @@ mod tests {
             "lx_getHistory",
             "px_getHistory",
             "px_getUnifiedHistory",
+            "px_getCapabilities",
         ];
         for name in published {
             assert_eq!(

@@ -173,6 +173,60 @@ export async function ethGetLogs(
   });
 }
 
+/** The Paxeer X fork surfaces the gateway probes with `eth_getCode`. */
+export type ForkSurface = "exchange" | "bridge" | "launchpad";
+
+/** The gateway's typed refusal of a write to a surface whose precompile has no code yet. */
+export const SURFACE_UNAVAILABLE_CODE = -32003;
+
+export interface NetworkCapabilities {
+  readonly exchange: boolean;
+  readonly bridge: boolean;
+  readonly launchpad: boolean;
+  readonly probedAt: number;
+  readonly rpcHeight: bigint;
+}
+
+/** `px_getCapabilities`: which fork surfaces the chain answers for, at one Paxeer height. */
+export async function pxGetCapabilities(): Promise<NetworkCapabilities> {
+  const result = await rpc("px_getCapabilities", []);
+  if (
+    !isObject(result) ||
+    typeof result.exchange !== "boolean" ||
+    typeof result.bridge !== "boolean" ||
+    typeof result.launchpad !== "boolean" ||
+    typeof result.probed_at !== "number" ||
+    !Number.isSafeInteger(result.probed_at) ||
+    result.probed_at < 0 ||
+    typeof result.rpc_height !== "string" ||
+    !DECIMAL.test(result.rpc_height)
+  ) {
+    throw new GatewayUnavailableError("px_getCapabilities answered a malformed document");
+  }
+  return {
+    exchange: result.exchange,
+    bridge: result.bridge,
+    launchpad: result.launchpad,
+    probedAt: result.probed_at,
+    rpcHeight: BigInt(result.rpc_height),
+  };
+}
+
+export type SurfaceCapability = Readonly<{ live: boolean; detail: string | null }>;
+
+/** Whether one surface's writes are open; an unreadable answer keeps the surface read-only and says why. */
+export async function surfaceCapability(surface: ForkSurface): Promise<SurfaceCapability> {
+  try {
+    const capabilities = await pxGetCapabilities();
+    return { live: capabilities[surface], detail: null };
+  } catch (error) {
+    if (error instanceof GatewayUnavailableError || error instanceof GatewayRpcError) {
+      return { live: false, detail: error.message };
+    }
+    throw error;
+  }
+}
+
 export type PrecompileView = Readonly<Pick<PrecompileCall, "to" | "data">>;
 
 export interface ResolvedAccount {

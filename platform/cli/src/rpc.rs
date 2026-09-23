@@ -421,6 +421,7 @@ mod tests {
                 "lx_getHistory",
                 "px_getHistory",
                 "px_getUnifiedHistory",
+                "px_getCapabilities",
             ]
         );
         let description = |method: &str| -> Result<&str, String> {
