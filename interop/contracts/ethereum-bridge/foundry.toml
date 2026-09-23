@@ -1,0 +1,15 @@
+[profile.default]
+src = "src"
+test = "test"
+out = "../../../build/forge-artifacts/ethereum-bridge"
+cache_path = "../../../build/forge-cache/ethereum-bridge"
+solc_version = "0.8.30"
+optimizer = true
+optimizer_runs = 100000
+via_ir = true
+bytecode_hash = "none"
+cbor_metadata = false
+offline = true
+
+[fuzz]
+runs = 512

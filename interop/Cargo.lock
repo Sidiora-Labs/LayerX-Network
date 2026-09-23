@@ -703,6 +703,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-bridge-relayer"
+version = "0.1.0"
+dependencies = [
+ "k256",
+ "layerx-crypto",
+ "layerx-mirror",
+ "layerx-paxeer-verifier",
+ "serde",
+ "serde_json",
+ "sha3",
+]
+
+[[package]]
 name = "layerx-client"
 version = "0.1.0"
 dependencies = [

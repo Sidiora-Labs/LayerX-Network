@@ -1,3 +1,4 @@
+mod history;
 mod native_call;
 mod paxeer;
 mod program_lifecycle;
@@ -58,6 +59,7 @@ struct Config {
     component: Endpoint,
     public_core: Option<Endpoint>,
     paxeer: Option<Endpoint>,
+    indexer: Option<history::Indexer>,
     component_token: Zeroizing<String>,
     authority: Endpoint,
     authority_token: Zeroizing<String>,
@@ -723,6 +725,7 @@ fn config() -> Result<Config, String> {
         )?,
         public_core: public_reads::configured_endpoint()?,
         paxeer: paxeer::configured_endpoint()?,
+        indexer: history::configured_endpoint()?,
         component_token: read_secret("LAYERX_GATEWAY_COMPONENT_TOKEN_FILE")?,
         authority: Endpoint::parse(
             &env::var("LAYERX_GATEWAY_AUTHORITY_URL")
@@ -3401,7 +3404,8 @@ fn gateway_status(config: &Config) -> OutgoingResponse {
                 "hosted_gateway": if gateway { "degraded" } else { "unavailable" },
                 "testnet_core": if core { "available" } else { "unavailable" },
                 "receipt_authority": if authority { "available" } else { "unavailable" },
-                "paxeer": paxeer::status(config)
+                "paxeer": paxeer::status(config),
+                "indexer": history::status(config)
             },
             "lxp_wire_version": config.wire_version,
             "package_semver": env!("CARGO_PKG_VERSION")

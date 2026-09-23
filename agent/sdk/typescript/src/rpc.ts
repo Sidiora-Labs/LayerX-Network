@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import * as http from "node:http";
 import * as https from "node:https";
 import { LayerXKeyCredential } from "./agent-http.js";
+import { HISTORY_DEFAULT_LIMIT, decodeLayerxHistoryPage, historyParams, layerxHistoryAccount, type HistoryOptions, type HistoryPage } from "./history.js";
 
 export type Commitment = "executed" | "batched" | "finalised";
 export type RpcParam = string | number | null;
@@ -87,6 +88,10 @@ export class JsonRpcClient {
   public getBatchHeader(batch: string): Promise<Record<string, unknown>> { return this.call("lx_getBatchHeader", [batch]); }
   public getCheckpoint(checkpoint: string): Promise<Record<string, unknown>> { return this.call("lx_getCheckpoint", [checkpoint]); }
   public getNodeInfo(): Promise<Record<string, unknown>> { return this.call("lx_getNodeInfo", []); }
+  public getHistory(account: string, options: HistoryOptions = {}): Promise<HistoryPage> {
+    const params = historyParams(layerxHistoryAccount(account), options);
+    return this.call("lx_getHistory", params).then(value => decodeLayerxHistoryPage(value, options.limit ?? HISTORY_DEFAULT_LIMIT));
+  }
   public listAssets(): Promise<AssetListSnapshot> { return this.listAssetsPage(); }
   public listAssetsPage(cursor?: string, limit?: number): Promise<AssetListSnapshot> {
     const params = listAssetsParams(cursor, limit);
