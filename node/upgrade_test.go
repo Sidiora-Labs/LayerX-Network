@@ -1,16 +1,32 @@
 package app_test
 
 import (
+	"math/big"
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	abci "github.com/sidiora-labs/paxeer-network/consensus/abci/types"
 	tmproto "github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/types"
+	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
+	launchpadtypes "github.com/sidiora-labs/paxeer-network/modules/launchpad/types"
+	layerxanchortypes "github.com/sidiora-labs/paxeer-network/modules/layerxanchor/types"
+	layerxbridgetypes "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
+	layerxcustodytypes "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/types"
+	layerxexchangetypes "github.com/sidiora-labs/paxeer-network/modules/layerxexchange/types"
 	"github.com/sidiora-labs/paxeer-network/node"
+	"github.com/sidiora-labs/paxeer-network/precompiles"
+	"github.com/sidiora-labs/paxeer-network/precompiles/launchpad"
+	"github.com/sidiora-labs/paxeer-network/precompiles/layerxbridge"
+	"github.com/sidiora-labs/paxeer-network/precompiles/layerxexchange"
 	"github.com/sidiora-labs/paxeer-network/sdk/crypto/keys/secp256k1"
+	"github.com/sidiora-labs/paxeer-network/sdk/store/rootmulti"
+	storetypes "github.com/sidiora-labs/paxeer-network/sdk/store/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	"github.com/sidiora-labs/paxeer-network/sdk/x/upgrade/types"
+	"github.com/sidiora-labs/paxeer-network/storage/common/keys"
 	"github.com/stretchr/testify/require"
+	dbm "github.com/tendermint/tm-db"
 )
 
 func TestUpgradesListIsSorted(t *testing.T) {
@@ -86,4 +102,123 @@ func TestSkipOptimisticProcessingOnUpgrade(t *testing.T) {
 		// require.Equal(t, res.Status, abci.ResponseProcessProposal_ACCEPT)
 		require.False(t, testWrapper.App.GetOptimisticProcessingInfo().Aborted)
 	})
+}
+
+// v65Modules are the modules, and so the stores, a v6.4.0 chain gains at v6.5.
+var v65Modules = []string{
+	layerxcustodytypes.StoreKey, layerxanchortypes.StoreKey,
+	layerxexchangetypes.StoreKey, layerxbridgetypes.StoreKey, launchpadtypes.StoreKey,
+}
+
+func TestV640ToV65StoreUpgradeMountsTheNewStores(t *testing.T) {
+	upgrades := app.V65StoreUpgrades()
+	require.ElementsMatch(t, v65Modules, upgrades.Added)
+	added := map[string]bool{}
+	for _, name := range upgrades.Added {
+		added[name] = true
+	}
+
+	db := dbm.NewMemDB()
+	v640 := rootmulti.NewStore(db)
+	v640.SetPruning(storetypes.PruneNothing)
+	var bank *sdk.KVStoreKey
+	for _, name := range keys.MemIAVLStoreKeys {
+		if added[name] {
+			continue
+		}
+		key := sdk.NewKVStoreKey(name)
+		if name == keys.BankStoreKey {
+			bank = key
+		}
+		v640.MountStoreWithDB(key, storetypes.StoreTypeIAVL, nil)
+	}
+	require.NoError(t, v640.LoadLatestVersion())
+	v640.GetKVStore(bank).Set([]byte("balance"), []byte("kept"))
+	require.Equal(t, int64(1), v640.Commit(true).Version)
+
+	v65 := rootmulti.NewStore(db)
+	v65.SetPruning(storetypes.PruneNothing)
+	mounted := map[string]*sdk.KVStoreKey{}
+	for _, name := range keys.MemIAVLStoreKeys {
+		key := sdk.NewKVStoreKey(name)
+		mounted[name] = key
+		v65.MountStoreWithDB(key, storetypes.StoreTypeIAVL, nil)
+	}
+	require.NoError(t, v65.LoadLatestVersionAndUpgrade(&upgrades))
+	require.Equal(t, []byte("kept"), v65.GetKVStore(mounted[keys.BankStoreKey]).Get([]byte("balance")))
+	for _, name := range v65Modules {
+		store := v65.GetKVStore(mounted[name])
+		require.NotNil(t, store, name)
+		iter := store.Iterator(nil, nil)
+		require.False(t, iter.Valid(), name)
+		require.NoError(t, iter.Close())
+	}
+	require.Equal(t, int64(2), v65.Commit(true).Version)
+}
+
+func TestV640ToV65UpgradeServesTheExchangeBridgeAndLaunchpadPrecompiles(t *testing.T) {
+	tm := time.Now().UTC()
+	valPub := secp256k1.GenPrivKey().PubKey()
+	testWrapper := app.NewTestWrapper(t, tm, valPub, true)
+	a, ctx := testWrapper.App, testWrapper.Ctx
+
+	// Rewind the new modules to v6.4.0: no state and no consensus version.
+	versions := ctx.KVStore(a.GetKey(types.StoreKey))
+	for _, name := range v65Modules {
+		store := ctx.KVStore(a.GetKey(name))
+		iter := store.Iterator(nil, nil)
+		var stale [][]byte
+		for ; iter.Valid(); iter.Next() {
+			stale = append(stale, iter.Key())
+		}
+		require.NoError(t, iter.Close())
+		for _, key := range stale {
+			store.Delete(key)
+		}
+		versions.Delete(append([]byte{types.VersionMapByte}, name...))
+	}
+	before := a.UpgradeKeeper.GetModuleVersionMap(ctx)
+	for _, name := range v65Modules {
+		require.NotContains(t, before, name)
+	}
+
+	plan := types.Plan{Name: "v6.5", Height: ctx.BlockHeight()}
+	require.True(t, a.UpgradeKeeper.HasHandler(plan.Name))
+	a.UpgradeKeeper.ApplyUpgrade(ctx, plan)
+	after := a.UpgradeKeeper.GetModuleVersionMap(ctx)
+	for _, name := range v65Modules {
+		require.Equal(t, uint64(1), after[name], name)
+	}
+	require.Equal(t, layerxbridgetypes.DefaultAuthority(), a.LayerXBridgeKeeper.GetParams(ctx).Authority)
+	require.Empty(t, a.LayerXBridgeKeeper.GetAttestorSet(ctx).Attestors)
+	require.Empty(t, a.LayerXBridgeKeeper.GetCaps(ctx))
+	launchpadParams := a.LaunchpadKeeper.GetParams(ctx)
+	require.Equal(t, launchpadtypes.DefaultParams().QuoteDenom, launchpadParams.QuoteDenom)
+	require.True(t, launchpadtypes.DefaultParams().CreationFee.Equal(launchpadParams.CreationFee))
+
+	caller := a.AccountKeeper.GetModuleAddress(evmtypes.ModuleName)
+	view := func(name, address, method string, args ...interface{}) []interface{} {
+		info := precompiles.GetPrecompileInfo(name)
+		require.Equal(t, common.HexToAddress(address), info.Address)
+		input, err := info.ABI.Pack(method, args...)
+		require.NoError(t, err)
+		to := info.Address
+		output, err := a.EvmKeeper.StaticCallEVM(ctx, caller, &to, input)
+		require.NoError(t, err, "%s.%s", name, method)
+		values, err := info.ABI.Unpack(method, output)
+		require.NoError(t, err)
+		return values
+	}
+
+	nonce := view(layerxexchange.PrecompileName, "0x0000000000000000000000000000000000001015",
+		"intentNonce", common.HexToAddress("0x00000000000000000000000000000000000000a1"))
+	require.Equal(t, uint64(0), nonce[0])
+
+	attestors := view(layerxbridge.PrecompileName, "0x0000000000000000000000000000000000001016", "getAttestors")
+	require.Empty(t, attestors[0])
+	require.Empty(t, attestors[1])
+	require.Equal(t, uint32(0), attestors[2])
+
+	markets := view(launchpad.PrecompileName, "0x0000000000000000000000000000000000001017", "getMarketCount")
+	require.Equal(t, 0, markets[0].(*big.Int).Sign())
 }
