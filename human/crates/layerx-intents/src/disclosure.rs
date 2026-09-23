@@ -71,6 +71,7 @@ pub enum DisclosureCheckError {
         error: PayloadError,
     },
     UnsupportedAgentDisclosure,
+    SettledOnPaxeer,
 }
 
 /// Evidence that an independently decoded disclosure matched its intent and
@@ -95,17 +96,25 @@ impl DisclosureCheck {
         intent: &Intent,
         compiled: &CompiledIntent,
     ) -> Result<Self, DisclosureCheckError> {
-        if matches!(intent.kind(), IntentKind::BridgeWithdrawRequest(_))
-            && intent.version() != crate::IntentVersion::V2
+        if intent.kind().settled_on_paxeer() {
+            return Err(DisclosureCheckError::SettledOnPaxeer);
+        }
+        if matches!(
+            intent.kind(),
+            IntentKind::BridgeWithdrawRequest(_) | IntentKind::ExchangeMarginWithdraw(_)
+        ) && intent.version() != crate::IntentVersion::V2
         {
             return Err(DisclosureCheckError::FieldMismatch(
                 DisclosureField::Version,
             ));
         }
-        if matches!(
+        if (matches!(
             intent.kind(),
-            IntentKind::NativeCustodyCredit(_) | IntentKind::NativeReceive(_)
-        ) && intent.version() != crate::IntentVersion::V1
+            IntentKind::NativeCustodyCredit(_)
+                | IntentKind::NativeReceive(_)
+                | IntentKind::ExchangeMarginDeposit(_)
+        ) || intent.kind().perps_payload().is_some())
+            && intent.version() != crate::IntentVersion::V1
         {
             return Err(DisclosureCheckError::FieldMismatch(
                 DisclosureField::Version,
@@ -421,7 +430,11 @@ impl DisclosureCheck {
                     DisclosureField::IdempotencyKey,
                 )?;
             }
-            IntentKind::NativeCustodyCredit(value) => {
+            IntentKind::NativeCustodyCredit(value)
+            | IntentKind::ExchangeMarginDeposit(crate::precompile::ExchangeMarginDeposit {
+                credit: value,
+                ..
+            }) => {
                 round_trip.fixed(&value.payload()[..43], DisclosureField::Header)?;
                 round_trip.fixed(&value.deposit_id(), DisclosureField::DepositProof)?;
                 round_trip.fixed(&value.asset().bytes(), DisclosureField::Asset)?;
@@ -438,7 +451,11 @@ impl DisclosureCheck {
                 round_trip.u128(value.amount().value(), DisclosureField::Amount)?;
                 round_trip.fixed(&value.payload()[207..], DisclosureField::DepositProof)?;
             }
-            IntentKind::BridgeWithdrawRequest(value) => {
+            IntentKind::BridgeWithdrawRequest(value)
+            | IntentKind::ExchangeMarginWithdraw(crate::precompile::ExchangeMarginWithdraw {
+                request: value,
+                ..
+            }) => {
                 round_trip.fixed(&value.asset.bytes(), DisclosureField::Asset)?;
                 round_trip.u128(value.amount.value(), DisclosureField::Amount)?;
                 round_trip.fixed(
@@ -448,6 +465,28 @@ impl DisclosureCheck {
                 round_trip.fixed(&value.request_anchor.bytes(), DisclosureField::Checkpoint)?;
                 round_trip.u64(value.fee_limit, DisclosureField::FeeLimit)?;
             }
+            IntentKind::Perps(expected) => perps_round_trip(&mut round_trip, expected, compiled)?,
+            IntentKind::ExchangeOrder(value) => {
+                perps_round_trip(&mut round_trip, value.payload(), compiled)?;
+            }
+            IntentKind::ExchangeCancel(value) => {
+                perps_round_trip(&mut round_trip, value.payload(), compiled)?;
+            }
+            IntentKind::ExchangeSettle(value) => {
+                perps_round_trip(&mut round_trip, value.payload(), compiled)?;
+            }
+            IntentKind::BridgeIn(_)
+            | IntentKind::BridgeOut(_)
+            | IntentKind::LaunchpadCreate(_)
+            | IntentKind::LaunchpadSwap(_)
+            | IntentKind::LaunchpadAirdropClaim(_)
+            | IntentKind::LaunchpadAirdropExecute(_)
+            | IntentKind::LaunchpadFeeRecord(_)
+            | IntentKind::LaunchpadFeeStrategy(_)
+            | IntentKind::LaunchpadFeesBurn(_)
+            | IntentKind::LaunchpadFeesClaim(_)
+            | IntentKind::LaunchpadLpRewards(_)
+            | IntentKind::LaunchpadPause(_) => return Err(DisclosureCheckError::SettledOnPaxeer),
         }
 
         let canonical_payload = round_trip.finish()?;
@@ -499,7 +538,12 @@ impl DisclosureCheck {
                 DisclosureField::PayloadBytes,
             );
         }
-        if let IntentKind::NativeCustodyCredit(credit) = intent.kind() {
+        if let IntentKind::NativeCustodyCredit(credit)
+        | IntentKind::ExchangeMarginDeposit(crate::precompile::ExchangeMarginDeposit {
+            credit,
+            ..
+        }) = intent.kind()
+        {
             return verify_native_agent(credit, disclosure);
         }
         let IntentKind::LxpSend(send) = intent.kind() else {
@@ -740,15 +784,47 @@ fn expected_activity_type(intent: &Intent) -> Result<ActivityType, DisclosureChe
         IntentKind::BudgetCreate(_) | IntentKind::NativeBudgetCreate(_) => (ModuleId::Budget, 1),
         IntentKind::BudgetFund(_) => (ModuleId::Budget, 2),
         IntentKind::BudgetDefund(_) => (ModuleId::Budget, 7),
-        IntentKind::BridgeDepositCredit(_) | IntentKind::NativeCustodyCredit(_) => {
-            (ModuleId::Bridge, 1)
+        IntentKind::BridgeDepositCredit(_)
+        | IntentKind::NativeCustodyCredit(_)
+        | IntentKind::ExchangeMarginDeposit(_) => (ModuleId::Bridge, 1),
+        IntentKind::BridgeWithdrawRequest(_) | IntentKind::ExchangeMarginWithdraw(_) => {
+            (ModuleId::Asset, 9)
         }
-        IntentKind::BridgeWithdrawRequest(_) => (ModuleId::Asset, 9),
+        IntentKind::Perps(payload) => (ModuleId::Perps, payload.ordinal()),
+        IntentKind::ExchangeOrder(value) => (ModuleId::Perps, value.payload().ordinal()),
+        IntentKind::ExchangeCancel(value) => (ModuleId::Perps, value.payload().ordinal()),
+        IntentKind::ExchangeSettle(value) => (ModuleId::Perps, value.payload().ordinal()),
+        IntentKind::BridgeIn(_)
+        | IntentKind::BridgeOut(_)
+        | IntentKind::LaunchpadCreate(_)
+        | IntentKind::LaunchpadSwap(_)
+        | IntentKind::LaunchpadAirdropClaim(_)
+        | IntentKind::LaunchpadAirdropExecute(_)
+        | IntentKind::LaunchpadFeeRecord(_)
+        | IntentKind::LaunchpadFeeStrategy(_)
+        | IntentKind::LaunchpadFeesBurn(_)
+        | IntentKind::LaunchpadFeesClaim(_)
+        | IntentKind::LaunchpadLpRewards(_)
+        | IntentKind::LaunchpadPause(_) => return Err(DisclosureCheckError::SettledOnPaxeer),
     };
     ActivityType::new(module, ordinal).map_err(|error| DisclosureCheckError::Payload {
         field: DisclosureField::ActivityType,
         error,
     })
+}
+
+fn perps_round_trip(
+    round_trip: &mut RoundTrip<'_>,
+    expected: &layerx_types::payload::PerpsPayload,
+    compiled: &CompiledIntent,
+) -> Result<(), DisclosureCheckError> {
+    let decoded = layerx_types::payload::PerpsPayload::from_payload(compiled.payload())
+        .map_err(|_| DisclosureCheckError::FieldMismatch(DisclosureField::PayloadBytes))?;
+    require(decoded == *expected, DisclosureField::PayloadBytes)?;
+    let encoded = decoded
+        .encode()
+        .map_err(|_| DisclosureCheckError::FieldMismatch(DisclosureField::PayloadBytes))?;
+    round_trip.fixed(&encoded, DisclosureField::PayloadBytes)
 }
 
 fn require(condition: bool, field: DisclosureField) -> Result<(), DisclosureCheckError> {
