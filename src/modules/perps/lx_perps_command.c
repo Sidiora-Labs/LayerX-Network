@@ -260,7 +260,7 @@ lxp_result lx_perps_increase_command_encode(
         lxp_ct_is_zero(command->market_id, 32U) ||
         lxp_ct_is_zero(command->position_id, 32U) ||
         lxp_u128_is_zero(command->size_delta) ||
-        lxp_u128_is_zero(command->notional_delta) ||
+        !lxp_u128_is_zero(command->notional_delta) ||
         lxp_u128_is_zero(command->margin_amount))
         return LXP_ERR_NON_CANONICAL;
     (void)memcpy(bytes, command->market_id, 32U);
@@ -291,7 +291,7 @@ lxp_result lx_perps_increase_command_decode(
     return lxp_ct_is_zero(command->market_id, 32U) ||
            lxp_ct_is_zero(command->position_id, 32U) ||
            lxp_u128_is_zero(command->size_delta) ||
-           lxp_u128_is_zero(command->notional_delta) ||
+           !lxp_u128_is_zero(command->notional_delta) ||
            lxp_u128_is_zero(command->margin_amount) ?
         LXP_ERR_NON_CANONICAL : LXP_OK;
 }

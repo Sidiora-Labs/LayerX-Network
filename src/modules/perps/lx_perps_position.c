@@ -162,35 +162,30 @@ lxp_result lx_perps_position_open_execute(
     return LXP_OK;
 }
 
+/* Adds margin toward a larger position. The size and entry notional grow
+ * only through fills (lx_perps_position_apply_fill), so a caller-supplied
+ * notional is refused. */
 lxp_result lx_perps_position_increase_execute(
     lxp_module_ctx *ctx, const lx_perps_position_request *request,
     lxp_receipt *receipt)
 {
     lx_perps_position *position;
-    lxp_u128 next_size;
-    lxp_u128 next_notional;
     lxp_result status;
     if (ctx == NULL || request == NULL || request->store == NULL ||
         receipt == NULL || lxp_u128_is_zero(request->size_delta) ||
-        lxp_u128_is_zero(request->notional_delta))
+        !lxp_u128_is_zero(request->notional_delta))
         return LXP_ERR_NON_CANONICAL;
     status = lx_perps_position_lookup(request->store,
                                       request->position.position_id,
                                       &position);
     if (status != LXP_OK) return status;
     if (!position->open) return LXP_ERR_MARKET_HALTED;
-    status = lxp_u128_add(position->size, request->size_delta, &next_size);
-    if (status == LXP_OK)
-        status = lxp_u128_add(position->entry_notional,
-                              request->notional_delta, &next_notional);
-    if (status != LXP_OK) return status;
     status = lx_perps_margin_post(ctx, request->owner_main,
                                   request->margin_account, request->asset,
                                   request->margin_amount, request->context,
                                   receipt);
     if (status != LXP_OK) return status;
-    position->size = next_size;
-    position->entry_notional = next_notional;
+    request->margin_account->has_open_reference = true;
     return LXP_OK;
 }
 

@@ -269,6 +269,7 @@ static lx_account *alice_main;
 static lx_account *alice_margin;
 static lx_account *bob_main;
 static lx_account *bob_margin;
+static lx_account *carol_margin;
 
 static void identifier(uint8_t value, uint8_t out[32])
 {
@@ -378,6 +379,34 @@ static lxp_result position_increase(const lx_account *margin_account,
                NULL, NULL);
 }
 
+static lxp_result position_increase_with_notional(
+    const lx_account *margin_account, uint64_t notional, const char *did)
+{
+    lx_perps_increase_command command;
+    lx_perps_increase_command decoded;
+    uint8_t payload[LX_PERPS_INCREASE_PAYLOAD_BYTES];
+    (void)memset(&command, 0, sizeof(command));
+    command.market_id[0] = 1U;
+    (void)memcpy(command.position_id, margin_account->id, 32U);
+    command.size_delta = (lxp_u128){ 0U, 10U };
+    command.notional_delta = (lxp_u128){ 0U, notional };
+    command.margin_amount = (lxp_u128){ 0U, 100U };
+    if (lx_perps_increase_command_encode(&command, payload) !=
+            LXP_ERR_NON_CANONICAL)
+        return LXP_FATAL_INVARIANT;
+    command.notional_delta = (lxp_u128){ 0U, 0U };
+    if (lx_perps_increase_command_encode(&command, payload) != LXP_OK ||
+        payload[95] != 0U)
+        return LXP_FATAL_INVARIANT;
+    payload[95] = (uint8_t)notional;
+    payload[94] = (uint8_t)(notional >> 8U);
+    if (lx_perps_increase_command_decode(payload, sizeof(payload),
+                                         &decoded) != LXP_ERR_NON_CANONICAL)
+        return LXP_FATAL_INVARIANT;
+    return run(LX_PERPS_POSITION_INCREASE, did, payload, sizeof(payload),
+               NULL, NULL);
+}
+
 static lxp_result position_close(const lx_account *margin_account,
                                  const char *did)
 {
@@ -422,7 +451,11 @@ int main(void)
         account_add("agent:did:key:bob:main", LX_ACCOUNT_OPEN_CREDIT, 1000U,
                     &bob_main) != 0 ||
         account_add("agent:did:key:bob:margin:a", LX_ACCOUNT_OPEN_CREDIT, 0U,
-                    &bob_margin) != 0)
+                    &bob_margin) != 0 ||
+        account_add("agent:did:key:carol:main", LX_ACCOUNT_OPEN_CREDIT, 0U,
+                    NULL) != 0 ||
+        account_add("agent:did:key:carol:margin:a", LX_ACCOUNT_OPEN_CREDIT,
+                    1000U, &carol_margin) != 0)
         return 1;
     market_defaults(1U, &market);
     market.maximum_deviation_basis_points = 1000U;
@@ -480,21 +513,44 @@ int main(void)
         funding.long_open_notional.lo != 1000U ||
         funding.short_open_notional.lo != 1000U)
         return 1;
-    if (position_increase(alice_margin, 10U, 1000U, 100U, "did:key:bob") !=
+    if (position_increase_with_notional(alice_margin, 1000U,
+                                        "did:key:alice") !=
+            LXP_ERR_NON_CANONICAL ||
+        position_increase_with_notional(alice_margin, 1U, "did:key:alice") !=
+            LXP_ERR_NON_CANONICAL ||
+        position_increase(alice_margin, 10U, 0U, 100U, "did:key:bob") !=
             LXP_ERR_UNAUTHORIZED_DEBIT ||
-        position_increase(bob_main, 10U, 1000U, 100U, "did:key:alice") !=
+        position_increase(bob_main, 10U, 0U, 100U, "did:key:alice") !=
             LXP_ERR_UNKNOWN_FIELD ||
-        position_increase(alice_margin, 10U, 1000U, 10U, "did:key:alice") !=
+        position_increase(alice_margin, 10U, 0U, 10U, "did:key:alice") !=
             LXP_ERR_MARGIN_INSUFFICIENT ||
-        position_increase(alice_margin, 10U, 1000U, 100U, "did:key:alice") !=
+        position_increase(alice_margin, 10U, 0U, 100U, "did:key:alice") !=
             LXP_OK)
         return 1;
     if (ctx_open() != 0 || !balance_is(alice_main, 800U) ||
         !balance_is(alice_margin, 200U) ||
         position_state(alice_margin, &position) != LXP_OK ||
-        position.size.lo != 20U || position.entry_notional.lo != 2000U ||
+        position.size.lo != 10U || position.entry_notional.lo != 1000U ||
         lx_perps_funding_state_lookup(&ctx, market_id, &funding) != LXP_OK ||
-        funding.long_open_notional.lo != 2000U)
+        funding.long_open_notional.lo != 1000U ||
+        funding.short_open_notional.lo != 1000U)
+        return 1;
+    if (order_place(6U, carol_margin, LX_PERPS_SIDE_SELL, 100U, 10U,
+                    "did:key:carol") != LXP_OK ||
+        order_place(7U, alice_margin, LX_PERPS_SIDE_BUY, 100U, 10U,
+                    "did:key:alice") != LXP_OK)
+        return 1;
+    if (ctx_open() != 0 || !balance_is(alice_main, 800U) ||
+        !balance_is(alice_margin, 200U) ||
+        position_state(alice_margin, &position) != LXP_OK ||
+        position.size.lo != 20U || position.entry_notional.lo != 2000U ||
+        position_state(carol_margin, &position) != LXP_OK || !position.open ||
+        position.side != LX_PERPS_SIDE_SELL || position.size.lo != 10U ||
+        position.entry_notional.lo != 1000U ||
+        lx_perps_funding_state_lookup(&ctx, market_id, &funding) != LXP_OK ||
+        funding.long_open_notional.lo != 2000U ||
+        funding.short_open_notional.lo != 2000U ||
+        position_state(alice_margin, &position) != LXP_OK)
         return 1;
     (void)memset(&positions, 0, sizeof(positions));
     positions.positions[0] = position;
@@ -517,7 +573,7 @@ int main(void)
         position_state(alice_margin, &position) != LXP_OK || position.open ||
         lx_perps_funding_state_lookup(&ctx, market_id, &funding) != LXP_OK ||
         !lxp_u128_is_zero(funding.long_open_notional) ||
-        funding.short_open_notional.lo != 1000U)
+        funding.short_open_notional.lo != 2000U)
         return 1;
     if (position_open(alice_margin->id, alice_margin, LX_PERPS_SIDE_SELL, 1U,
                       100U, "did:key:alice") != LXP_OK ||
@@ -540,7 +596,7 @@ int main(void)
         !balance_is(bob_margin, 100U) || !balance_is(bob_main, 900U) ||
         lx_perps_funding_state_lookup(&ctx, market_id, &funding) != LXP_OK ||
         !lxp_u128_is_zero(funding.long_open_notional) ||
-        funding.short_open_notional.lo != 1000U ||
+        funding.short_open_notional.lo != 2000U ||
         lxp_state_store_destroy(&store) != LXP_OK)
         return 1;
     return 0;

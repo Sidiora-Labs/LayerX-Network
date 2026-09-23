@@ -383,6 +383,8 @@ static lx_account *maker_main;
 static lx_account *maker_margin;
 static lx_account *filler_main;
 static lx_account *gina_margin;
+static lx_account *last_filler;
+static lx_account *keeper_main;
 
 static int fill_to_position_cases(void)
 {
@@ -499,6 +501,7 @@ static int positions_full_case(void)
                         1U, "did:key:filler") != LXP_OK)
             return 1;
     }
+    last_filler = filler;
     if (ctx_open() != 0 ||
         !position_is(maker_margin, maker_main, LX_PERPS_SIDE_SELL, 121U,
                      12100U, true) ||
@@ -521,6 +524,95 @@ static int positions_full_case(void)
         gina_margin->has_open_reference ||
         lx_perps_order_book_load(&ctx, market_id, &book) != LXP_OK ||
         book.count != 1U)
+        return 1;
+    return 0;
+}
+
+static size_t cancelled_events(uint8_t order_id)
+{
+    size_t count = 0U;
+    size_t i;
+    for (i = 0U; i < effects.count; ++i) {
+        const lxp_effect *effect = &effects.effects[i];
+        if (effect->kind == LXP_EFFECT_EVENT &&
+            effect->event_type == LX_PERPS_EVENT_ORDER_CANCELLED &&
+            effect->body_length == 64U && effect->body[0] == order_id &&
+            effect->body[32] == 1U)
+            ++count;
+    }
+    return count;
+}
+
+static int maker_skip_case(void)
+{
+    lx_perps_order order;
+    lx_perps_book book;
+    uint8_t market_id[32];
+    identifier(1U, market_id);
+    if (order_place(40U, last_filler, LX_PERPS_SIDE_BUY, 99U, 5U,
+                    "did:key:filler") != LXP_OK ||
+        order_place(41U, last_filler, LX_PERPS_SIDE_BUY, 99U, 5U,
+                    "did:key:filler") != LXP_OK ||
+        order_place(42U, bob_margin_a, LX_PERPS_SIDE_BUY, 99U, 1U,
+                    "did:key:bob") != LXP_OK ||
+        order_place(43U, erin_margin, LX_PERPS_SIDE_SELL, 99U, 11U,
+                    "did:key:erin") != LXP_OK ||
+        cancelled_events(41U) != 1U || cancelled_events(40U) != 0U ||
+        cancelled_events(42U) != 0U)
+        return 1;
+    if (ctx_open() != 0 ||
+        order_state(40U, &order) != LXP_ERR_UNKNOWN_FIELD ||
+        order_state(41U, &order) != LXP_ERR_UNKNOWN_FIELD ||
+        order_state(42U, &order) != LXP_ERR_UNKNOWN_FIELD ||
+        order_state(43U, &order) != LXP_OK || !order.active ||
+        order.remaining.lo != 5U || order.quantity.lo != 11U ||
+        order_state(30U, &order) != LXP_OK || order.remaining.lo != 79U ||
+        lx_perps_order_book_load(&ctx, market_id, &book) != LXP_OK ||
+        book.count != 2U ||
+        !position_is(last_filler, filler_main, LX_PERPS_SIDE_BUY, 6U, 595U,
+                     true) ||
+        !position_is(bob_margin_a, bob_main, LX_PERPS_SIDE_BUY, 7U, 702U,
+                     true) ||
+        !position_is(erin_margin, erin_main, LX_PERPS_SIDE_SELL, 8U, 794U,
+                     true) ||
+        !open_interest_is(13497U, 13497U) ||
+        !balance_is(last_filler, 100U) || !balance_is(bob_margin_a, 1000U) ||
+        !balance_is(erin_margin, 1000U))
+        return 1;
+    return 0;
+}
+
+static lxp_result liquidate(const lx_account *margin_account, const char *did)
+{
+    lx_perps_liquidate_command command;
+    uint8_t payload[LX_PERPS_LIQUIDATE_PAYLOAD_BYTES];
+    (void)memset(&command, 0, sizeof(command));
+    command.market_id[0] = 1U;
+    (void)memcpy(command.position_id, margin_account->id, 32U);
+    (void)memcpy(command.liquidator_account_id, keeper_main->id, 32U);
+    if (lx_perps_liquidate_command_encode(&command, payload) != LXP_OK)
+        return LXP_FATAL_INVARIANT;
+    return run(LX_PERPS_LIQUIDATE, did, payload, sizeof(payload), NULL, NULL);
+}
+
+static int mixed_price_liquidation_case(void)
+{
+    lx_perps_position position;
+    if (account_add("agent:did:key:keeper:main", LX_ACCOUNT_OPEN_CREDIT, 0U,
+                    &keeper_main) != 0 ||
+        oracle_push(oracle_seed, 1U, 2U, 200U, 1000U) != LXP_OK ||
+        oracle_push(oracle_seed, 1U, 3U, 400U, 1000U) != LXP_OK ||
+        oracle_push(oracle_seed, 1U, 4U, 800U, 1000U) != LXP_OK ||
+        oracle_push(oracle_seed, 1U, 5U, 1600U, 1000U) != LXP_OK ||
+        oracle_push(oracle_seed, 1U, 6U, 3200U, 1000U) != LXP_OK ||
+        liquidate(bob_margin_a, "did:key:keeper") != LXP_OK)
+        return 1;
+    if (ctx_open() != 0 ||
+        position_state(bob_margin_a, &position) != LXP_OK || position.open ||
+        position.size.lo != 7U || position.entry_notional.lo != 702U ||
+        !balance_is(bob_margin_a, 0U) || !balance_is(bob_main, 977U) ||
+        !balance_is(keeper_main, 13U) ||
+        !open_interest_is(12795U, 13497U))
         return 1;
     return 0;
 }
@@ -603,6 +695,7 @@ int main(void)
         !balance_is(bob_margin_a, 1000U))
         return 1;
     if (fill_to_position_cases() != 0 || positions_full_case() != 0 ||
+        maker_skip_case() != 0 || mixed_price_liquidation_case() != 0 ||
         lxp_state_store_destroy(&store) != LXP_OK)
         return 1;
     return 0;
