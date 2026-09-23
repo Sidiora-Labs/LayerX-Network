@@ -662,10 +662,13 @@ fn decode_evm_payout_binding(
 
 fn semantics(activity: &Activity) -> Result<SendSemantics, DisclosureError> {
     let activity_type = activity.activity_type();
-    if activity.payload().len() > MAX_SEND_PAYLOAD_BYTES {
+    let kind = (activity_type.module(), activity_type.ordinal());
+    let native_credit = kind == (ModuleId::Bridge, BRIDGE_DEPOSIT_CREDIT_ORDINAL)
+        && activity.payload().starts_with(b"LXDC");
+    if !native_credit && activity.payload().len() > MAX_SEND_PAYLOAD_BYTES {
         return Err(DisclosureError::MalformedPayload);
     }
-    match (activity_type.module(), activity_type.ordinal()) {
+    match kind {
         (ModuleId::Asset, ASSET_SEND_ORDINAL) => decode_send(activity.payload(), activity),
         (ModuleId::Asset, ASSET_RECEIVE_ORDINAL) => decode_receive(activity.payload(), activity),
         (ModuleId::Budget, BUDGET_DEFUND_ORDINAL) => {
