@@ -1,0 +1,16 @@
+syntax = "proto3";
+package paxprotocol.paxchain.layerxexchange;
+
+import "gogoproto/gogo.proto";
+import "layerxexchange/params.proto";
+import "layerxexchange/state.proto";
+
+option go_package = "github.com/sidiora-labs/paxeer-network/modules/layerxexchange/types";
+
+// GenesisState defines the layerxexchange module's genesis state.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+  uint64 intent_count = 2;
+  repeated Intent intents = 3 [(gogoproto.nullable) = false];
+  repeated OwnerNonce owner_nonces = 4 [(gogoproto.nullable) = false];
+}
