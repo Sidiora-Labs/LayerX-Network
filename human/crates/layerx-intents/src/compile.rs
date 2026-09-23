@@ -4,7 +4,10 @@ use layerx_types::account::AccountId;
 use layerx_types::ids::Did;
 use layerx_types::intent::{GrantSchedule, RolloverPolicy};
 use layerx_types::limits::MAX_PAYLOAD_BYTES;
-use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistry, Payload, PayloadError};
+use layerx_types::payload::{
+    ActivityType, ModuleId, ModuleRegistry, Payload, PayloadError, PerpsPayload,
+    TradingPayloadError,
+};
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash;
 use layerx_wire::WireError;
@@ -94,6 +97,8 @@ pub enum CompileErrorReason {
     Wire(WireError),
     Payload(PayloadError),
     AuthorityGrant(layerx_crypto::authority_grant::GrantError),
+    Trading(TradingPayloadError),
+    SettledOnPaxeer,
 }
 
 /// Canonical compilation failure naming the exact intent field.
@@ -549,7 +554,11 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
             )?;
             finish(registry, ModuleId::Bridge, 1, encoder)
         }
-        IntentKind::NativeCustodyCredit(value) => {
+        IntentKind::NativeCustodyCredit(value)
+        | IntentKind::ExchangeMarginDeposit(crate::precompile::ExchangeMarginDeposit {
+            credit: value,
+            ..
+        }) => {
             if intent.version() != IntentVersion::V1 {
                 return Err(CompileError::wire(
                     CompileField::Version,
@@ -562,7 +571,11 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
             fixed(&mut encoder, value.payload(), CompileField::DepositProof)?;
             finish(registry, ModuleId::Bridge, 1, encoder)
         }
-        IntentKind::BridgeWithdrawRequest(value) => {
+        IntentKind::BridgeWithdrawRequest(value)
+        | IntentKind::ExchangeMarginWithdraw(crate::precompile::ExchangeMarginWithdraw {
+            request: value,
+            ..
+        }) => {
             if intent.version() != IntentVersion::V2 {
                 return Err(CompileError::wire(
                     CompileField::Version,
@@ -587,7 +600,49 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
             wire(CompileField::FeeLimit, encoder.u64(value.fee_limit))?;
             finish(registry, ModuleId::Asset, 9, encoder)
         }
+        IntentKind::Perps(payload) => perps(intent, registry, payload),
+        IntentKind::ExchangeOrder(value) => perps(intent, registry, value.payload()),
+        IntentKind::ExchangeCancel(value) => perps(intent, registry, value.payload()),
+        IntentKind::ExchangeSettle(value) => perps(intent, registry, value.payload()),
+        IntentKind::BridgeIn(_)
+        | IntentKind::BridgeOut(_)
+        | IntentKind::LaunchpadCreate(_)
+        | IntentKind::LaunchpadSwap(_)
+        | IntentKind::LaunchpadAirdropClaim(_)
+        | IntentKind::LaunchpadAirdropExecute(_)
+        | IntentKind::LaunchpadFeeRecord(_)
+        | IntentKind::LaunchpadFeeStrategy(_)
+        | IntentKind::LaunchpadFeesBurn(_)
+        | IntentKind::LaunchpadFeesClaim(_)
+        | IntentKind::LaunchpadLpRewards(_)
+        | IntentKind::LaunchpadPause(_) => Err(CompileError {
+            field: CompileField::ActivityType,
+            reason: CompileErrorReason::SettledOnPaxeer,
+        }),
     }
+}
+
+fn perps(
+    intent: &Intent,
+    registry: &ModuleRegistry,
+    payload: &PerpsPayload,
+) -> Result<CompiledIntent, CompileError> {
+    if intent.version() != IntentVersion::V1 {
+        return Err(CompileError::wire(
+            CompileField::Version,
+            WireError {
+                result: layerx_types::result::KnownResult::VersionUnsupported.into(),
+                offset: 0,
+            },
+        ));
+    }
+    let bytes = payload.encode().map_err(|error| CompileError {
+        field: CompileField::Payload,
+        reason: CompileErrorReason::Trading(error),
+    })?;
+    let mut encoder = Encoder::new(MAX_PAYLOAD_BYTES);
+    fixed(&mut encoder, &bytes, CompileField::Payload)?;
+    finish(registry, ModuleId::Perps, payload.ordinal(), encoder)
 }
 
 fn header(encoder: &mut Encoder, tag: u16, field_count: u16) -> Result<(), CompileError> {

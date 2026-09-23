@@ -123,6 +123,24 @@ pub enum IntentKind {
     NativeReceive(crate::NativeReceive),
     /// Paxeer withdrawal: request a bridge-module withdrawal.
     BridgeWithdrawRequest(BridgeWithdrawRequest),
+    Perps(layerx_types::payload::PerpsPayload),
+    ExchangeOrder(crate::precompile::ExchangeOrder),
+    ExchangeCancel(crate::precompile::ExchangeCancel),
+    ExchangeSettle(crate::precompile::ExchangeSettle),
+    ExchangeMarginDeposit(crate::precompile::ExchangeMarginDeposit),
+    ExchangeMarginWithdraw(crate::precompile::ExchangeMarginWithdraw),
+    BridgeIn(crate::precompile::BridgeIn),
+    BridgeOut(crate::precompile::BridgeOut),
+    LaunchpadCreate(crate::precompile::MarketCreated),
+    LaunchpadSwap(crate::precompile::Swap),
+    LaunchpadAirdropClaim(crate::precompile::AirdropClaimed),
+    LaunchpadAirdropExecute(crate::precompile::AirdropExecuted),
+    LaunchpadFeeRecord(crate::precompile::FeeRecorded),
+    LaunchpadFeeStrategy(crate::precompile::FeeStrategyChanged),
+    LaunchpadFeesBurn(crate::precompile::FeesBurned),
+    LaunchpadFeesClaim(crate::precompile::FeesClaimed),
+    LaunchpadLpRewards(crate::precompile::LpRewardsExecuted),
+    LaunchpadPause(crate::precompile::PauseToggled),
 }
 
 impl IntentKind {
@@ -143,14 +161,66 @@ impl IntentKind {
             | Self::NativeAssetAccountOpen(_)
             | Self::LxpReceive(_)
             | Self::NativeReceive(_)
-            | Self::BridgeWithdrawRequest(_) => ModuleId::Asset,
+            | Self::BridgeWithdrawRequest(_)
+            | Self::ExchangeMarginWithdraw(_) => ModuleId::Asset,
             Self::PayerGrantRegistration(_)
             | Self::NativeBudgetCreate(_)
             | Self::BudgetCreate(_)
             | Self::BudgetFund(_)
             | Self::BudgetDefund(_) => ModuleId::Budget,
-            Self::BridgeDepositCredit(_) | Self::NativeCustodyCredit(_) => ModuleId::Bridge,
+            Self::BridgeDepositCredit(_)
+            | Self::NativeCustodyCredit(_)
+            | Self::ExchangeMarginDeposit(_)
+            | Self::BridgeIn(_)
+            | Self::BridgeOut(_)
+            | Self::LaunchpadCreate(_)
+            | Self::LaunchpadSwap(_)
+            | Self::LaunchpadAirdropClaim(_)
+            | Self::LaunchpadAirdropExecute(_)
+            | Self::LaunchpadFeeRecord(_)
+            | Self::LaunchpadFeeStrategy(_)
+            | Self::LaunchpadFeesBurn(_)
+            | Self::LaunchpadFeesClaim(_)
+            | Self::LaunchpadLpRewards(_)
+            | Self::LaunchpadPause(_) => ModuleId::Bridge,
+            Self::Perps(_)
+            | Self::ExchangeOrder(_)
+            | Self::ExchangeCancel(_)
+            | Self::ExchangeSettle(_) => ModuleId::Perps,
         }
+    }
+
+    /// Returns the perps activity a perps or exchange-routed intent carries.
+    #[must_use]
+    pub const fn perps_payload(&self) -> Option<&layerx_types::payload::PerpsPayload> {
+        match self {
+            Self::Perps(payload) => Some(payload),
+            Self::ExchangeOrder(value) => Some(value.payload()),
+            Self::ExchangeCancel(value) => Some(value.payload()),
+            Self::ExchangeSettle(value) => Some(value.payload()),
+            _ => None,
+        }
+    }
+
+    /// Reports whether the intent records a Paxeer-settled precompile event
+    /// that has no `LayerX` activity.
+    #[must_use]
+    pub const fn settled_on_paxeer(&self) -> bool {
+        matches!(
+            self,
+            Self::BridgeIn(_)
+                | Self::BridgeOut(_)
+                | Self::LaunchpadCreate(_)
+                | Self::LaunchpadSwap(_)
+                | Self::LaunchpadAirdropClaim(_)
+                | Self::LaunchpadAirdropExecute(_)
+                | Self::LaunchpadFeeRecord(_)
+                | Self::LaunchpadFeeStrategy(_)
+                | Self::LaunchpadFeesBurn(_)
+                | Self::LaunchpadFeesClaim(_)
+                | Self::LaunchpadLpRewards(_)
+                | Self::LaunchpadPause(_)
+        )
     }
 }
 
@@ -956,6 +1026,14 @@ pub enum IntentField {
     AuthorityGrant,
     EffectiveSequence,
     Withdrawal,
+    Account,
+    Asset,
+    Market,
+    Order,
+    Position,
+    Side,
+    TimeInForce,
+    PrecompileEvent,
 }
 
 /// Typed reason an intent could not be constructed.
@@ -967,6 +1045,7 @@ pub enum IntentErrorReason {
     InvalidCanonicalEncoding,
     SameSourceAndDestination,
     WrongAccountNamespace,
+    EventMismatch,
 }
 
 /// Construction failure naming both the field and invariant.

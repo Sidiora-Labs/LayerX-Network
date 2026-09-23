@@ -5,10 +5,12 @@ pub mod canonical;
 mod compiler;
 mod disclosure;
 pub mod golden;
+mod keccak;
 mod native_budget;
 mod native_custody;
 mod native_receive;
 pub mod owner_activity;
+pub mod precompile;
 mod reject;
 #[cfg(feature = "test-vectors")]
 pub mod vectors;
