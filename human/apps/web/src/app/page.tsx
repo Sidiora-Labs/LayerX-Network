@@ -3,8 +3,10 @@ import { cookies, headers } from "next/headers";
 import { copyEntry } from "../../copy/runtime";
 import { verifiedWebSession } from "../auth/server-session";
 import { Onboarding } from "../journeys/onboarding/onboarding";
+import { ExplorerNavigation } from "../kit/explorer";
 import { PlaneRouteAction } from "../kit/plane-route-action";
 import { selectServerShell } from "../shell/server";
+import { MARKET_ROUTES } from "./_markets/navigation";
 
 export default async function RootPage({
   searchParams,
@@ -33,6 +35,7 @@ export default async function RootPage({
       <PlaneRouteAction destination="/explorer">
         {copyEntry("action.open_explorer").message}
       </PlaneRouteAction>
+      <ExplorerNavigation label="Markets" items={MARKET_ROUTES} />
     </div>
   );
 }
