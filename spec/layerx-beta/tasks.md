@@ -314,6 +314,11 @@ Two points need owner confirmation before the corresponding task starts, and one
     - Fill every height absent from paxscan (about 2.85 million of 23.86 million) from the node EVM JSON-RPC, verify each block hash against the node before commit, stop at a fixed finalized cutover height passed on the command line, and write the live ingester's cursor at that height so the two never overlap.
     - Make the Paxeer cosmos path tolerate a node with tx_index off (CometBFT answers transaction searching is disabled): log once, index EVM only, never fail the step; add tests with a recorded Blockscout fixture and a gap-fill case.
     - _Requirements: 17.11_
+  - [-] 9.16 Script the v6.6 software-upgrade and consensus-parameter governance for the fork
+    - Add platform/hosted/paxeer/gov-upgrade.sh that, given an RPC, a key name and a target UTC time, computes the halt height from the live block rate, submits a v6.6 software-upgrade proposal with the minimum deposit, prints the vote command for each validator, waits for the tally and confirms the scheduled plan through the upgrade current_plan query, refusing to proceed if the voting period would end after the halt.
+    - Add platform/hosted/paxeer/gov-consensus-params.sh that submits a consensus-parameter change for timeout commit, bypass commit timeout and timeout vote from values passed on the command line, with the same vote and confirm flow, and document in docs/runbooks/paxeer-x-fork.md the submission timeline against a 172800 s deposit window and the live voting period, the 33.4 percent quorum and 50 percent threshold, and the abort path (cancel plan) if a validator is not staged.
+    - Add tests that run both scripts against the disposable single-validator chain from fork-rehearsal.sh in dry-run mode and assert the generated transactions, the height math and the refusal on a late voting end.
+    - _Requirements: 17.13_
 
 ## Engineering ground rules for this feature
 
@@ -389,7 +394,7 @@ The raw finding behind each requirement, with its lane result path, is listed in
     { "id": 8,  "tasks": ["8.1", "8.2", "8.3", "8.4", "8.5", "8.6", "8.7"] },
     { "id": 9,  "tasks": ["9", "9.1", "9.2", "9.3", "9.4", "9.5", "9.6", "9.10", "9.12"] },
     { "id": 10, "tasks": ["9.7", "9.8", "9.9", "9.11", "9.13"] },
-    { "id": 11, "tasks": ["9.14", "9.15"] }
+    { "id": 11, "tasks": ["9.14", "9.15", "9.16"] }
   ]
 }
 ```
