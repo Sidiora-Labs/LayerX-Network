@@ -14537,3 +14537,11 @@ symbol = "lint"
 observed = "At revision edce42394 (PR 466) npm run typecheck exits 0 after the explorer page fix plus a root npm ci, but npm run lint exits 1 on four pre-existing eslint errors in src/api/abi-read.ts:65 and :105, src/app/launchpad/actions.ts:15 and src/app/launchpad/launchpad-client.tsx:74; log /root/lx-lanes/fx/web-typecheck/.qual/lint1.log; .github/workflows/human.yml never installs the root npm workspace so CI typecheck sees the same SDK TS2307 errors."
 assumption = "Lint errors and the CI install gap are outside 9.13 and 9.14 and need their own small fix; observations 9.13.1 and 9.14.1 are cleared once PR 466 merges."
 severity = "note"
+
+[observation.9.4.1]
+task = "9.4"
+file = "node/app.go"
+symbol = "v6.6"
+observed = "The binary running on every mainnet validator (sha256 prefix 18782604d20f) already embeds an upgrade handler named v6.5, while mainnet has applied no v6.x plan (applied_plan heights all 0) and has no custody or anchor module, so a v6.5 plan would be accepted by the old binary without a halt; PR 467 renames the fork upgrade to v6.6 adding all five stores (custody, anchor, exchange, bridge, launchpad) and restores v6.5 to its custody-only form."
+assumption = "Spec text updated from v6.5 to v6.6 wherever it names the fork upgrade; the rehearsal in 9.12 proves the v6.6 plan halts the old binary and resumes on the new one."
+severity = "note"
