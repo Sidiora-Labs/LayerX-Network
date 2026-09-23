@@ -176,11 +176,11 @@ type PrecompileExecutor struct {
 // NewPrecompile builds the precompile from a keepers set that provides
 // LaunchpadK.
 func NewPrecompile(keepers utils.Keepers) (*pcommon.Precompile, error) {
-	withLaunchpad, ok := keepers.(LaunchpadKeepers)
-	if !ok || withLaunchpad.LaunchpadK() == nil {
+	k := keepers.LaunchpadK()
+	if k == nil {
 		return nil, errors.New("launchpad: keepers do not provide the launchpad keeper")
 	}
-	return NewPrecompileWithKeeper(withLaunchpad.LaunchpadK(), keepers.EVMK())
+	return NewPrecompileWithKeeper(k, keepers.EVMK())
 }
 
 // NewPrecompileWithKeeper builds the precompile over k.

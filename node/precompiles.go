@@ -1,7 +1,10 @@
 package app
 
 import (
+	launchpadkeeper "github.com/sidiora-labs/paxeer-network/modules/launchpad/keeper"
+	layerxbridgekeeper "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/keeper"
 	layerxcustodykeeper "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/keeper"
+	layerxexchangekeeper "github.com/sidiora-labs/paxeer-network/modules/layerxexchange/keeper"
 	putils "github.com/sidiora-labs/paxeer-network/precompiles/utils"
 	"github.com/sidiora-labs/paxeer-network/sdk/client"
 	bankkeeper "github.com/sidiora-labs/paxeer-network/sdk/x/bank/keeper"
@@ -28,8 +31,11 @@ type PrecompileKeepers struct {
 	putils.ConnectionKeeper
 	putils.ChannelKeeper
 	putils.AnchorKeeper
-	txConf        client.TxConfig
-	layerxCustody *layerxcustodykeeper.Keeper
+	txConf         client.TxConfig
+	layerxCustody  *layerxcustodykeeper.Keeper
+	layerxExchange *layerxexchangekeeper.Keeper
+	layerxBridge   *layerxbridgekeeper.Keeper
+	launchpad      *launchpadkeeper.Keeper
 }
 
 func NewPrecompileKeepers(a *App) *PrecompileKeepers {
@@ -53,6 +59,9 @@ func NewPrecompileKeepers(a *App) *PrecompileKeepers {
 		AnchorKeeper:       a.LayerXAnchorKeeper,
 		txConf:             a.GetTxConfig(),
 		layerxCustody:      a.LayerXCustodyKeeper,
+		layerxExchange:     a.LayerXExchangeKeeper,
+		layerxBridge:       &a.LayerXBridgeKeeper,
+		launchpad:          a.LaunchpadKeeper,
 	}
 }
 
@@ -76,4 +85,13 @@ func (pk *PrecompileKeepers) AnchorK() putils.AnchorKeeper             { return 
 func (pk *PrecompileKeepers) TxConfig() client.TxConfig                { return pk.txConf }
 func (pk *PrecompileKeepers) LayerXCustodyK() *layerxcustodykeeper.Keeper {
 	return pk.layerxCustody
+}
+func (pk *PrecompileKeepers) LayerXExchangeK() *layerxexchangekeeper.Keeper {
+	return pk.layerxExchange
+}
+func (pk *PrecompileKeepers) LayerXBridgeK() *layerxbridgekeeper.Keeper {
+	return pk.layerxBridge
+}
+func (pk *PrecompileKeepers) LaunchpadK() *launchpadkeeper.Keeper {
+	return pk.launchpad
 }

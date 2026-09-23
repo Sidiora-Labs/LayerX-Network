@@ -150,12 +150,21 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/querier"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/replay"
 	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
+	launchpadmodule "github.com/sidiora-labs/paxeer-network/modules/launchpad"
+	launchpadkeeper "github.com/sidiora-labs/paxeer-network/modules/launchpad/keeper"
+	launchpadtypes "github.com/sidiora-labs/paxeer-network/modules/launchpad/types"
 	layerxanchormodule "github.com/sidiora-labs/paxeer-network/modules/layerxanchor"
 	layerxanchorkeeper "github.com/sidiora-labs/paxeer-network/modules/layerxanchor/keeper"
 	layerxanchortypes "github.com/sidiora-labs/paxeer-network/modules/layerxanchor/types"
+	layerxbridgemodule "github.com/sidiora-labs/paxeer-network/modules/layerxbridge"
+	layerxbridgekeeper "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/keeper"
+	layerxbridgetypes "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
 	layerxcustodymodule "github.com/sidiora-labs/paxeer-network/modules/layerxcustody"
 	layerxcustodykeeper "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/keeper"
 	layerxcustodytypes "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/types"
+	layerxexchangemodule "github.com/sidiora-labs/paxeer-network/modules/layerxexchange"
+	layerxexchangekeeper "github.com/sidiora-labs/paxeer-network/modules/layerxexchange/keeper"
+	layerxexchangetypes "github.com/sidiora-labs/paxeer-network/modules/layerxexchange/types"
 	"github.com/sidiora-labs/paxeer-network/modules/mint"
 	mintclient "github.com/sidiora-labs/paxeer-network/modules/mint/client/cli"
 	mintkeeper "github.com/sidiora-labs/paxeer-network/modules/mint/keeper"
@@ -246,6 +255,9 @@ var (
 		tokenfactorymodule.AppModuleBasic{},
 		layerxcustodymodule.AppModuleBasic{},
 		layerxanchormodule.AppModuleBasic{},
+		layerxexchangemodule.AppModuleBasic{},
+		layerxbridgemodule.AppModuleBasic{},
+		launchpadmodule.AppModuleBasic{},
 		// this line is used by starport scaffolding # stargate/app/moduleBasic
 	)
 
@@ -264,11 +276,17 @@ var (
 		tokenfactorytypes.ModuleName:   {authtypes.Minter, authtypes.Burner},
 		layerxcustodytypes.ModuleName:  nil,
 		layerxanchortypes.ModuleName:   {authtypes.Burner},
+		launchpadtypes.ModuleName:      nil,
+		launchpadtypes.TreasuryName:    nil,
 		// this line is used by starport scaffolding # stargate/app/maccPerms
 	}
 
+	// The launchpad escrow receives tokenfactory mints and trader quote, and
+	// its treasury receives creation and protocol fees, both by plain sends.
 	allowedReceivingModAcc = map[string]bool{
-		oracletypes.ModuleName: true,
+		oracletypes.ModuleName:      true,
+		launchpadtypes.ModuleName:   true,
+		launchpadtypes.TreasuryName: true,
 	}
 
 	// kvStoreKeyNames is the canonical, in-order list of module KV store
@@ -287,6 +305,9 @@ var (
 		tokenfactorytypes.StoreKey,
 		layerxcustodytypes.StoreKey,
 		layerxanchortypes.StoreKey,
+		layerxexchangetypes.StoreKey,
+		layerxbridgetypes.StoreKey,
+		launchpadtypes.StoreKey,
 		// this line is used by starport scaffolding # stargate/app/storeKey
 	}
 
@@ -435,6 +456,10 @@ type App struct {
 	LayerXAnchorKeeper layerxanchorkeeper.Keeper
 
 	LayerXCustodyKeeper *layerxcustodykeeper.Keeper
+
+	LayerXExchangeKeeper *layerxexchangekeeper.Keeper
+	LayerXBridgeKeeper   layerxbridgekeeper.Keeper
+	LaunchpadKeeper      *launchpadkeeper.Keeper
 
 	BeginBlockKeepers legacyabci.BeginBlockKeepers
 	EndBlockKeepers   legacyabci.EndBlockKeepers
@@ -736,6 +761,15 @@ func New(
 	// Custody trusts only anchor-finalized checkpoints and anchor sequencer
 	// authorizations; its own authority-registered checkpoints are unused.
 	app.LayerXCustodyKeeper.SetAnchorReader(layerxanchorkeeper.NewCustodyAnchor(app.LayerXAnchorKeeper))
+	app.LayerXExchangeKeeper = layerxexchangekeeper.NewKeeper(appCodec, keys[layerxexchangetypes.StoreKey],
+		app.LayerXCustodyKeeper, &app.EvmKeeper)
+	// The bridge module account is the tokenfactory admin of bridged denoms and
+	// holds a minted amount only inside one bridgeIn; it needs no maccPerms
+	// entry and so is never a blocked receiver.
+	app.LayerXBridgeKeeper = layerxbridgekeeper.NewKeeper(keys[layerxbridgetypes.StoreKey], app.BankKeeper,
+		&app.EvmKeeper, app.TokenFactoryKeeper)
+	app.LaunchpadKeeper = launchpadkeeper.NewKeeper(keys[launchpadtypes.StoreKey], app.BankKeeper,
+		tokenfactorykeeper.NewMsgServerImpl(app.TokenFactoryKeeper), &app.EvmKeeper)
 
 	bApp.SetPreCommitHandler(app.HandlePreCommit)
 	bApp.SetCloseHandler(app.HandleClose)
@@ -911,6 +945,9 @@ func New(
 		layerxanchormodule.NewAppModule(app.LayerXAnchorKeeper),
 		authzmodule.NewAppModule(appCodec, app.AuthzKeeper, app.AccountKeeper, app.BankKeeper, app.interfaceRegistry),
 		layerxcustodymodule.NewAppModule(app.LayerXCustodyKeeper),
+		layerxexchangemodule.NewAppModule(app.LayerXExchangeKeeper),
+		layerxbridgemodule.NewAppModule(app.LayerXBridgeKeeper),
+		launchpadmodule.NewAppModule(app.LaunchpadKeeper),
 		// this line is used by starport scaffolding # stargate/app/appModule
 	)
 
@@ -985,6 +1022,9 @@ func New(
 		evmtypes.ModuleName,
 		layerxcustodytypes.ModuleName,
 		layerxanchortypes.ModuleName,
+		layerxexchangetypes.ModuleName,
+		layerxbridgetypes.ModuleName,
+		launchpadtypes.ModuleName,
 		// this line is used by starport scaffolding # stargate/app/initGenesis
 	)
 
@@ -1241,12 +1281,20 @@ func (app *App) SetStoreUpgradeHandlers() {
 	}
 
 	if (upgradeInfo.Name == "v6.5") && !app.UpgradeKeeper.IsSkipHeight(upgradeInfo.Height) {
-		storeUpgrades := storetypes.StoreUpgrades{
-			Added: []string{layerxcustodytypes.StoreKey, layerxanchortypes.StoreKey},
-		}
+		storeUpgrades := v65StoreUpgrades()
 
 		// configure store loader that checks if version == upgradeHeight and applies store upgrades
 		app.SetStoreLoader(upgradetypes.UpgradeStoreLoader(upgradeInfo.Height, &storeUpgrades))
+	}
+}
+
+// v65StoreUpgrades mounts the stores of every module the v6.5 upgrade adds.
+func v65StoreUpgrades() storetypes.StoreUpgrades {
+	return storetypes.StoreUpgrades{
+		Added: []string{
+			layerxcustodytypes.StoreKey, layerxanchortypes.StoreKey,
+			layerxexchangetypes.StoreKey, layerxbridgetypes.StoreKey, launchpadtypes.StoreKey,
+		},
 	}
 }
 

@@ -31,8 +31,11 @@ const (
 	EpochStoreKey        = "epoch"        // modules/epoch/types.StoreKey
 	TokenfactoryStoreKey = "tokenfactory" // modules/tokenfactory/types.StoreKey
 
-	LayerXCustodyStoreKey = "layerxcustody" // modules/layerxcustody/types.StoreKey
-	LayerXAnchorStoreKey  = "layerxanchor"  // modules/layerxanchor/types.StoreKey
+	LayerXCustodyStoreKey  = "layerxcustody"  // modules/layerxcustody/types.StoreKey
+	LayerXAnchorStoreKey   = "layerxanchor"   // modules/layerxanchor/types.StoreKey
+	LayerXExchangeStoreKey = "layerxexchange" // modules/layerxexchange/types.StoreKey
+	LayerXBridgeStoreKey   = "layerxbridge"   // modules/layerxbridge/types.StoreKey
+	LaunchpadStoreKey      = "launchpad"      // modules/launchpad/types.StoreKey
 )
 
 // MemIAVLStoreKeys is the canonical list of module KV store keys that are
@@ -62,6 +65,9 @@ var MemIAVLStoreKeys = []string{
 	TokenfactoryStoreKey,
 	LayerXCustodyStoreKey,
 	LayerXAnchorStoreKey,
+	LayerXExchangeStoreKey,
+	LayerXBridgeStoreKey,
+	LaunchpadStoreKey,
 }
 
 // memIAVLStoreKeySet is MemIAVLStoreKeys materialized as a set for O(1)
