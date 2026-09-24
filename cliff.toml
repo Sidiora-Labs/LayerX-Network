@@ -1,0 +1,58 @@
+[changelog]
+header = """
+# Changelog
+
+All notable changes to Paxeer X Network are documented in this file.
+"""
+body = """
+{% if version %}\
+## {{ version }} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% set day_heading = "###" %}{% set group_heading = "####" %}\
+{% else %}\
+{% set day_heading = "##" %}{% set group_heading = "###" %}\
+{% endif %}\
+{% set_global days = [] %}\
+{% for commit in commits %}\
+{% set day = commit.committer.timestamp | date(format="%Y-%m-%d") %}\
+{% if day not in days %}{% set_global days = days | concat(with=day) %}{% endif %}\
+{% endfor %}\
+{% for day in days %}
+{{ day_heading }} {{ day }}
+{% for group, group_commits in commits | group_by(attribute="group") %}\
+{% set_global day_commits = [] %}\
+{% for commit in group_commits %}\
+{% if commit.committer.timestamp | date(format="%Y-%m-%d") == day %}{% set_global day_commits = day_commits | concat(with=commit) %}{% endif %}\
+{% endfor %}\
+{% if day_commits | length > 0 %}
+{{ group_heading }} {{ group | striptags | trim }}
+{% for commit in day_commits %}
+- {{ commit.message | split(pat="\n") | first | trim }}\
+{% endfor %}
+{% endif %}\
+{% endfor %}\
+{% endfor %}\n
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = false
+filter_unconventional = false
+split_commits = false
+filter_commits = false
+protect_breaking_commits = false
+tag_pattern = "^v[0-9]"
+skip_tags = "^(hpx-registry-|pre-rebase-)"
+topo_order = false
+sort_commits = "newest"
+commit_parsers = [
+  { message = "^Merge ", skip = true },
+  { message = "^(Add|Implement|Build|Serve|Integrate|Introduce|Create|Wire|Expose|Ship)", group = "<!-- 0 -->Added" },
+  { message = "^(Repair|Fix|Resolve|Restore|Correct|Handle|Prevent|Guard)", group = "<!-- 1 -->Fixed" },
+  { message = "^(Bind|Keep|Preserve|Enforce|Separate|Make|Use|Reconcile|Replace|Move|Rename|Refactor|Split|Let|Name|Script|Backfill)", group = "<!-- 2 -->Changed" },
+  { message = "^(Remove|Drop|Delete)", group = "<!-- 3 -->Removed" },
+  { message = "^(Document|Docs|Explain|State)", group = "<!-- 4 -->Documentation" },
+  { message = "^(Verify|Exercise|Qualify|Test|Prove|Cover)", group = "<!-- 5 -->Tests" },
+  { message = "^(Record|Checkpoint|Complete|Close|Format|Update|Bump|Sync|Regenerate)", group = "<!-- 6 -->Housekeeping" },
+  { message = ".*", group = "<!-- 7 -->Other" },
+]
