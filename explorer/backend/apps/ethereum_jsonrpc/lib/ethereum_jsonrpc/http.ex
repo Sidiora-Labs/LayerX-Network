@@ -4,6 +4,7 @@ defmodule EthereumJSONRPC.HTTP do
   """
 
   alias EthereumJSONRPC.{DecodeError, Transport}
+  alias EthereumJSONRPC.HTTP.Throttle
   alias EthereumJSONRPC.Utility.{CommonHelper, EndpointAvailabilityObserver}
 
   require Logger
@@ -15,7 +16,12 @@ defmodule EthereumJSONRPC.HTTP do
   @doc """
   Sends JSONRPC request encoded as `t:iodata/0` to `url` with `options`
   """
-  @callback json_rpc(url :: String.t(), json :: iodata(), headers :: [{String.t(), String.t()}], options :: term()) ::
+  @callback json_rpc(
+              url :: String.t(),
+              json :: iodata(),
+              headers :: [{String.t(), String.t()}],
+              options :: term()
+            ) ::
               {:ok, %{body: body :: String.t(), status_code: status_code :: pos_integer()}}
               | {:error, reason :: term}
 
@@ -27,9 +33,15 @@ defmodule EthereumJSONRPC.HTTP do
     {url_type, url} = url(options, method)
     http_options = Keyword.fetch!(options, :http_options)
 
-    with {:ok, %{body: body, status_code: code}} <- http.json_rpc(url, json, headers(), http_options),
+    with {:ok, %{body: body, status_code: code}} <-
+           Throttle.request(url, request, fn ->
+             http.json_rpc(url, json, headers(), http_options)
+           end),
          {:ok, json} <-
-           decode_json(request: [url: url, body: json, headers: headers()], response: [status_code: code, body: body]),
+           decode_json(
+             request: [url: url, body: json, headers: headers()],
+             response: [status_code: code, body: body]
+           ),
          {:ok, response} <- handle_response(json, code) do
       {:ok, response}
     else
@@ -47,7 +59,8 @@ defmodule EthereumJSONRPC.HTTP do
     chunked_json_rpc([batch_request], options, [])
   end
 
-  defp chunked_json_rpc([], _options, decoded_response_bodies) when is_list(decoded_response_bodies) do
+  defp chunked_json_rpc([], _options, decoded_response_bodies)
+       when is_list(decoded_response_bodies) do
     list =
       decoded_response_bodies
       |> Enum.reverse()
@@ -63,7 +76,11 @@ defmodule EthereumJSONRPC.HTTP do
     chunked_json_rpc(tail, options, decoded_response_bodies)
   end
 
-  defp chunked_json_rpc([[%{method: method} | _] = batch | tail] = chunks, options, decoded_response_bodies)
+  defp chunked_json_rpc(
+         [[%{method: method} | _] = batch | tail] = chunks,
+         options,
+         decoded_response_bodies
+       )
        when is_list(tail) and is_list(decoded_response_bodies) do
     http = Keyword.fetch!(options, :http)
     {url_type, url} = url(options, method)
@@ -71,7 +88,7 @@ defmodule EthereumJSONRPC.HTTP do
 
     json = encode_json(batch)
 
-    case http.json_rpc(url, json, headers(), http_options) do
+    case Throttle.request(url, batch, fn -> http.json_rpc(url, json, headers(), http_options) end) do
       {:ok, %{status_code: status_code} = response} when status_code in [413, 504] ->
         rechunk_json_rpc(chunks, options, response, decoded_response_bodies)
 
@@ -171,7 +188,11 @@ defmodule EthereumJSONRPC.HTTP do
   end
 
   defp increment_error_count(url, url_type, options) do
-    named_arguments = [transport: __MODULE__, transport_options: Keyword.delete(options, :method_to_url)]
+    named_arguments = [
+      transport: __MODULE__,
+      transport_options: Keyword.delete(options, :method_to_url)
+    ]
+
     EndpointAvailabilityObserver.inc_error_count(url, named_arguments, url_type)
   end
 
@@ -192,7 +213,11 @@ defmodule EthereumJSONRPC.HTTP do
   @spec standardize_response(map()) :: %{
           :id => nil | non_neg_integer(),
           optional(:jsonrpc) => binary(),
-          optional(:error) => %{:code => integer(), :message => binary(), optional(:data) => any()},
+          optional(:error) => %{
+            :code => integer(),
+            :message => binary(),
+            optional(:data) => any()
+          },
           optional(:result) => any()
         }
   def standardize_response(unstandardized) do
@@ -236,7 +261,11 @@ defmodule EthereumJSONRPC.HTTP do
     ## Returns
     - A standardized map with keys as atoms and fields aligned with the JSON-RPC 2.0 standard.
   """
-  @spec standardize_error(map()) :: %{:code => integer(), :message => binary(), optional(:data) => any()}
+  @spec standardize_error(map()) :: %{
+          :code => integer(),
+          :message => binary(),
+          optional(:data) => any()
+        }
   def standardize_error(%{"code" => code, "message" => message} = unstandardized)
       when is_integer(code) and is_binary(message) do
     standardized = %{code: code, message: message}
