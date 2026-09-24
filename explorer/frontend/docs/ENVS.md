@@ -80,6 +80,7 @@ All json-like values should be single-quoted. If it contains a hash (`#`) or a d
   - [Address 3rd party widgets](#address-3rd-party-widgets)
   - [ZetaChain](#zetachain-cross-chain-transactions)
   - [Multichain explorer](#multichain-explorer)
+  - [Paxeer X Network](#paxeer-x-network)
 - [3rd party services configuration](#external-services-configuration)
 
 &nbsp;
@@ -1091,6 +1092,16 @@ This feature enables cross-chain transaction tracking and visualization, allowin
 | Variable | Type| Description | Compulsoriness  | Default value | Example value | Version |
 | --- | --- | --- | --- | --- | --- | --- |
 | NEXT_PUBLIC_PUZZLE_GAME_BADGE_CLAIM_LINK | `string` | Provide to enable the easter egg puzzle badge feature | - | - | `https://example.com` | v2.2.0+ |
+
+&nbsp;
+
+### Paxeer X Network
+
+Unified Paxeer X Network surfaces (unified account view, status ladder, anchors and receipts). Only meaningful on a Paxeer X Network instance; the backend must expose the `/api/v2/paxeer-x` routes.
+
+| Variable | Type| Description | Compulsoriness  | Default value | Example value | Version |
+| --- | --- | --- | --- | --- | --- | --- |
+| NEXT_PUBLIC_PAXEER_X_ENABLED | `boolean` | Set to `true` to enable the Paxeer X Network surfaces | - | `false` | `true` | v2.7.2+ |
 
 &nbsp;
 
