@@ -871,6 +871,12 @@ defmodule Indexer.BufferedTask do
     {:reply, reply, shrunk_state, :hibernate}
   end
 
+  # Reports how many entries the bound queue currently holds.
+  # Called by the Memory Monitor to report how much queued work a shrink shed.
+  def handle_call(:queue_size, _from, %__MODULE__{bound_queue: bound_queue} = state) do
+    {:reply, Enum.count(bound_queue), state}
+  end
+
   # Checks if the bound queue has been previously shrunk.
   # Used by the Memory Monitor to track which processes have been shrunk and may be eligible for expansion.
   def handle_call(:shrunk?, _from, %__MODULE__{bound_queue: bound_queue} = state) do

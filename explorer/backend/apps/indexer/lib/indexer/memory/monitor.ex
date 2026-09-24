@@ -25,6 +25,8 @@ defmodule Indexer.Memory.Monitor do
 
   @expandable_memory_coefficient 0.4
 
+  @default_memory_limit 4 <<< 30
+
   @doc """
   Registers caller as `Indexer.Memory.Shrinkable`.
   """
@@ -102,7 +104,7 @@ defmodule Indexer.Memory.Monitor do
   end
 
   defp memory_limit_from_system do
-    default_limit = 1 <<< 30
+    default_limit = @default_memory_limit
 
     percentage =
       case Explorer.mode() do
@@ -190,6 +192,8 @@ defmodule Indexer.Memory.Monitor do
       ]
     end)
 
+    entry_count_before = Shrinkable.queued_entry_count(pid)
+
     case Shrinkable.shrink(pid) do
       :ok ->
         Logger.info(fn ->
@@ -207,6 +211,8 @@ defmodule Indexer.Memory.Monitor do
           ]
         end)
 
+        log_shed_entries(pid, entry_count_before, Shrinkable.queued_entry_count(pid))
+
         :ok
 
       {:error, :minimum_size} ->
@@ -215,6 +221,37 @@ defmodule Indexer.Memory.Monitor do
         end)
 
         shrink(tail)
+    end
+  end
+
+  # Shrinking a queue drops the entries that do not fit the new bound, so every shrink sheds
+  # already-scheduled work.  The drop itself happens inside the shrunk process, so the monitor
+  # reports it here with the fetcher it belongs to and how many entries disappeared.
+  defp log_shed_entries(pid, entry_count_before, entry_count_after) do
+    dropped_count = entry_count_before - entry_count_after
+
+    Logger.warning(
+      fn ->
+        [
+          "Memory limit surpassed: ",
+          fetcher_name(pid),
+          " shed ",
+          to_string(dropped_count),
+          " queued entries while shrinking (",
+          to_string(entry_count_before),
+          " entries before, ",
+          to_string(entry_count_after),
+          " entries after).  The shed entries are refetched once memory allows."
+        ]
+      end,
+      shed_entries_count: dropped_count
+    )
+  end
+
+  defp fetcher_name(pid) do
+    case name(pid) do
+      nil -> process(pid)
+      fetcher -> fetcher
     end
   end
 

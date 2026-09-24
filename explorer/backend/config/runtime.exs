@@ -1193,8 +1193,8 @@ config :indexer, Indexer.Block.Catchup.MissingRangesCollector,
   batch_size: ConfigHelper.parse_integer_env_var("INDEXER_CATCHUP_MISSING_RANGES_BATCH_SIZE", 100_000)
 
 config :indexer, Indexer.Block.Catchup.Fetcher,
-  batch_size: ConfigHelper.parse_integer_env_var("INDEXER_CATCHUP_BLOCKS_BATCH_SIZE", 10),
-  concurrency: ConfigHelper.parse_integer_env_var("INDEXER_CATCHUP_BLOCKS_CONCURRENCY", 10)
+  batch_size: ConfigHelper.parse_integer_env_var("INDEXER_CATCHUP_BLOCKS_BATCH_SIZE", 100),
+  concurrency: ConfigHelper.parse_integer_env_var("INDEXER_CATCHUP_BLOCKS_CONCURRENCY", 20)
 
 config :indexer, Indexer.Fetcher.BlockReward,
   batch_size: ConfigHelper.parse_integer_env_var("INDEXER_BLOCK_REWARD_BATCH_SIZE", 10),
@@ -1240,6 +1240,7 @@ config :indexer, Indexer.Fetcher.TokenInstance.SanitizeERC721,
 config :indexer, Indexer.Fetcher.InternalTransaction,
   batch_size: ConfigHelper.parse_integer_env_var("INDEXER_INTERNAL_TRANSACTIONS_BATCH_SIZE", 10),
   concurrency: ConfigHelper.parse_integer_env_var("INDEXER_INTERNAL_TRANSACTIONS_CONCURRENCY", 4),
+  lookback_blocks: ConfigHelper.parse_integer_env_var("INDEXER_INTERNAL_TRANSACTIONS_LOOKBACK_BLOCKS", 9_000),
   indexing_finished_threshold:
     ConfigHelper.parse_integer_env_var("API_INTERNAL_TRANSACTIONS_INDEXING_FINISHED_THRESHOLD", 1_000)
 

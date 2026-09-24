@@ -13,6 +13,8 @@ defmodule Indexer.Fetcher.InternalTransaction do
 
   require Logger
 
+  import Ecto.Query, only: [from: 2]
+
   import Indexer.Block.Fetcher,
     only: [
       async_import_coin_balances: 2,
@@ -23,8 +25,9 @@ defmodule Indexer.Fetcher.InternalTransaction do
   alias EthereumJSONRPC.Utility.RangesHelper
   alias Explorer.Chain
   alias Explorer.Chain.{Block, Hash, PendingBlockOperation, PendingTransactionOperation, Transaction}
-  alias Explorer.Chain.Cache.{Accounts, Blocks}
+  alias Explorer.Chain.Cache.{Accounts, BlockNumber, Blocks}
   alias Explorer.Chain.Zilliqa.Helper, as: ZilliqaHelper
+  alias Explorer.Repo
   alias Indexer.{BufferedTask, Tracer}
   alias Indexer.Fetcher.InternalTransaction.Supervisor, as: InternalTransactionSupervisor
   alias Indexer.Transform.{AddressCoinBalances, Addresses, AddressTokenBalances}
@@ -121,8 +124,14 @@ defmodule Indexer.Fetcher.InternalTransaction do
             )
   def run(block_numbers_or_transactions, json_rpc_named_arguments) do
     data_type = queue_data_type(json_rpc_named_arguments)
-    filtered_data = filter_block_numbers(block_numbers_or_transactions, data_type, json_rpc_named_arguments)
 
+    case filter_block_numbers(block_numbers_or_transactions, data_type, json_rpc_named_arguments) do
+      [] -> :ok
+      filtered_data -> run_filtered(filtered_data, json_rpc_named_arguments, data_type)
+    end
+  end
+
+  defp run_filtered(filtered_data, json_rpc_named_arguments, data_type) do
     case fetch_internal_transactions(filtered_data, json_rpc_named_arguments, data_type) do
       {:ok, internal_transactions_params} ->
         safe_import_internal_transaction(internal_transactions_params, filtered_data, data_type)
@@ -226,11 +235,106 @@ defmodule Indexer.Fetcher.InternalTransaction do
     |> Enum.uniq()
     |> Block.filter_non_refetch_needed_block_numbers()
     |> RangesHelper.filter_traceable_block_numbers()
+    |> drop_blocks_outside_lookback(:block_number)
     |> drop_genesis(json_rpc_named_arguments)
   end
 
   defp filter_block_numbers(transactions_params, :transaction_params, _json_rpc_named_arguments),
-    do: transactions_params
+    do: drop_blocks_outside_lookback(transactions_params, :transaction_params)
+
+  @doc """
+  The number of blocks below the chain head for which the node still keeps the state needed to
+  trace transactions.
+
+  `nil` or a non-positive value disables the lookback rule, in which case every pending operation is
+  retried for as long as it stays pending.
+  """
+  @spec lookback_blocks() :: integer() | nil
+  def lookback_blocks do
+    Application.get_env(:indexer, __MODULE__)[:lookback_blocks]
+  end
+
+  @doc """
+  The oldest block number the node is still expected to be able to trace, or `nil` when the
+  lookback rule is disabled.
+  """
+  @spec oldest_traceable_block_number() :: integer() | nil
+  def oldest_traceable_block_number do
+    case lookback_blocks() do
+      lookback when is_integer(lookback) and lookback > 0 -> BlockNumber.get_max() - lookback
+      _disabled -> nil
+    end
+  end
+
+  # Blocks that fell out of the node's trace window can never be traced again, so their pending
+  # operations are cleared instead of being retried on every pass of the fetcher.
+  defp drop_blocks_outside_lookback(data, data_type) do
+    case oldest_traceable_block_number() do
+      nil ->
+        data
+
+      oldest_traceable_block_number ->
+        {traceable, not_traceable} =
+          Enum.split_with(data, fn entry ->
+            case entry_block_number(entry, data_type) do
+              # entries without a block number are left to the existing validation
+              nil -> true
+              block_number -> block_number >= oldest_traceable_block_number
+            end
+          end)
+
+        mark_not_traceable(not_traceable, data_type, oldest_traceable_block_number)
+
+        traceable
+    end
+  end
+
+  defp entry_block_number(block_number, :block_number) when is_integer(block_number), do: block_number
+
+  defp entry_block_number(%{block_number: block_number}, :transaction_params) when is_integer(block_number),
+    do: block_number
+
+  defp entry_block_number(_entry, _data_type), do: nil
+
+  defp mark_not_traceable([], _data_type, _oldest_traceable_block_number), do: :ok
+
+  defp mark_not_traceable(block_numbers, :block_number, oldest_traceable_block_number) do
+    {cleared_count, _} =
+      Repo.delete_all(from(pending_ops in PendingBlockOperation, where: pending_ops.block_number in ^block_numbers))
+
+    log_not_traceable(length(block_numbers), cleared_count, oldest_traceable_block_number)
+  end
+
+  defp mark_not_traceable(transactions_params, :transaction_params, oldest_traceable_block_number) do
+    transaction_hashes = Enum.map(transactions_params, & &1.hash)
+
+    {cleared_count, _} =
+      Repo.delete_all(
+        from(pending_ops in PendingTransactionOperation, where: pending_ops.transaction_hash in ^transaction_hashes)
+      )
+
+    log_not_traceable(length(transactions_params), cleared_count, oldest_traceable_block_number)
+  end
+
+  defp log_not_traceable(not_traceable_count, cleared_count, oldest_traceable_block_number) do
+    Logger.warning(
+      fn ->
+        [
+          "Skipping ",
+          to_string(not_traceable_count),
+          " entries below the oldest traceable block number ",
+          to_string(oldest_traceable_block_number),
+          " (lookback of ",
+          to_string(lookback_blocks()),
+          " blocks); cleared ",
+          to_string(cleared_count),
+          " pending operations that the node can no longer trace."
+        ]
+      end,
+      not_traceable_count: not_traceable_count,
+      cleared_pending_operations_count: cleared_count
+    )
+  end
 
   defp check_and_filter_block_numbers(block_numbers) do
     Enum.reduce(block_numbers, [], fn number, acc ->

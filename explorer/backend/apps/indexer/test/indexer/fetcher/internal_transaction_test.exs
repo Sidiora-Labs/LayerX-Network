@@ -11,6 +11,7 @@ defmodule Indexer.Fetcher.InternalTransactionTest do
   alias Ecto.Multi
   alias Explorer.{Chain, Repo}
   alias Explorer.Chain.{Block, PendingBlockOperation, PendingTransactionOperation}
+  alias Explorer.Chain.Cache.BlockNumber
   alias Explorer.Chain.Import.Runner.Blocks
   alias Indexer.Fetcher.CoinBalance.Catchup, as: CoinBalanceCatchup
   alias Indexer.Fetcher.{InternalTransaction, PendingTransaction}
@@ -31,6 +32,8 @@ defmodule Indexer.Fetcher.InternalTransactionTest do
   end
 
   @moduletag [capture_log: true, no_geth: true]
+
+  @lookback_blocks 100
 
   test "does not try to fetch pending transactions from Indexer.Fetcher.PendingTransaction", %{
     json_rpc_named_arguments: json_rpc_named_arguments
@@ -522,6 +525,106 @@ defmodule Indexer.Fetcher.InternalTransactionTest do
     Process.sleep(4000)
 
     assert %{block_number: ^block_number, block_hash: ^block_hash} = Repo.one(PendingBlockOperation)
+  end
+
+  describe "lookback window" do
+    setup do
+      initial_configuration = Application.get_env(:indexer, InternalTransaction)
+
+      Application.put_env(
+        :indexer,
+        InternalTransaction,
+        Keyword.put(initial_configuration, :lookback_blocks, @lookback_blocks)
+      )
+
+      on_exit(fn -> Application.put_env(:indexer, InternalTransaction, initial_configuration) end)
+
+      head_block = insert(:block, number: 1_000_000)
+      BlockNumber.set_max(head_block.number)
+
+      %{head_block: head_block}
+    end
+
+    test "oldest_traceable_block_number/0 trails the chain head by the configured lookback", %{head_block: head_block} do
+      assert InternalTransaction.lookback_blocks() == @lookback_blocks
+      assert InternalTransaction.oldest_traceable_block_number() == head_block.number - @lookback_blocks
+    end
+
+    test "oldest_traceable_block_number/0 is nil when the lookback is disabled" do
+      Application.put_env(
+        :indexer,
+        InternalTransaction,
+        Keyword.put(Application.get_env(:indexer, InternalTransaction), :lookback_blocks, 0)
+      )
+
+      assert InternalTransaction.oldest_traceable_block_number() == nil
+    end
+
+    test "marks blocks below the lookback window as not traceable instead of retrying them", %{
+      head_block: head_block,
+      json_rpc_named_arguments: json_rpc_named_arguments
+    } do
+      block = insert(:block, number: head_block.number - @lookback_blocks - 1)
+      block_hash = block.hash
+
+      insert(:pending_block_operation, block_hash: block_hash, block_number: block.number)
+
+      assert %{block_hash: ^block_hash} = Repo.get(PendingBlockOperation, block_hash)
+
+      log =
+        capture_log(fn ->
+          assert :ok == InternalTransaction.run([block.number], json_rpc_named_arguments)
+        end)
+
+      assert log =~ "Skipping 1 entries below the oldest traceable block number #{head_block.number - @lookback_blocks}"
+      assert log =~ "cleared 1 pending operations that the node can no longer trace"
+
+      assert nil == Repo.get(PendingBlockOperation, block_hash)
+    end
+
+    test "still fetches blocks inside the lookback window", %{
+      head_block: head_block,
+      json_rpc_named_arguments: json_rpc_named_arguments
+    } do
+      if json_rpc_named_arguments[:transport] == EthereumJSONRPC.Mox do
+        case Keyword.fetch!(json_rpc_named_arguments, :variant) do
+          EthereumJSONRPC.Nethermind ->
+            EthereumJSONRPC.Mox
+            |> expect(:json_rpc, fn [%{id: id}], _options ->
+              {:ok,
+               [
+                 %{
+                   id: id,
+                   result: []
+                 }
+               ]}
+            end)
+
+          EthereumJSONRPC.Geth ->
+            # do nothing, this block has no transactions, so Geth shouldn't query
+            :ok
+
+          variant_name ->
+            raise ArgumentError, "Unsupported variant name (#{variant_name})"
+        end
+      end
+
+      block = insert(:block, number: head_block.number - @lookback_blocks + 1)
+      block_hash = block.hash
+
+      insert(:pending_block_operation, block_hash: block_hash, block_number: block.number)
+
+      start_token_balance_fetcher(json_rpc_named_arguments)
+
+      log =
+        capture_log(fn ->
+          assert :ok == InternalTransaction.run([block.number], json_rpc_named_arguments)
+        end)
+
+      refute log =~ "below the oldest traceable block number"
+
+      assert nil == Repo.get(PendingBlockOperation, block_hash)
+    end
   end
 
   describe "filter_non_traceable_transactions/1" do

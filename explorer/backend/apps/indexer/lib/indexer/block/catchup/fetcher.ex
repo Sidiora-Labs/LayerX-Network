@@ -85,8 +85,8 @@ defmodule Indexer.Block.Catchup.Fetcher do
 
   @doc """
   The number of blocks to request in one call to the JSONRPC.  Defaults to
-  10.  Block requests also include the transactions for those blocks.  *These transactions
-  are not paginated.
+  100, which keeps a sub-second block time from starving the catchup fetcher.  Block requests also
+  include the transactions for those blocks.  *These transactions are not paginated.
   """
   def blocks_batch_size do
     Application.get_env(:indexer, __MODULE__)[:batch_size]
@@ -94,10 +94,10 @@ defmodule Indexer.Block.Catchup.Fetcher do
 
   @doc """
   The number of concurrent requests of `blocks_batch_size` to allow against the JSONRPC.
-  Defaults to 10.  So, up to `blocks_concurrency * block_batch_size` (defaults to
-  `10 * 10`) blocks can be requested from the JSONRPC at once over all
+  Defaults to 20.  So, up to `blocks_concurrency * block_batch_size` (defaults to
+  `20 * 100`) blocks can be requested from the JSONRPC at once over all
   connections.  Up to `block_concurrency * receipts_batch_size * receipts_concurrency` (defaults to
-  `#{10 * Block.Fetcher.default_receipts_batch_size() * Block.Fetcher.default_receipts_concurrency()}`
+  `#{20 * Block.Fetcher.default_receipts_batch_size() * Block.Fetcher.default_receipts_concurrency()}`
   ) receipts can be requested from the JSONRPC at once over all connections.
   """
   def blocks_concurrency do
