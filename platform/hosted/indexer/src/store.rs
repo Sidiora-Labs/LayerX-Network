@@ -73,6 +73,12 @@ CREATE TABLE IF NOT EXISTS cursors(
     finalized_boundary INTEGER,
     updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS backfill_cursors(
+    chain TEXT PRIMARY KEY,
+    position INTEGER NOT NULL,
+    hash TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS chain_links(
     chain TEXT NOT NULL,
     position INTEGER NOT NULL,
@@ -160,6 +166,13 @@ pub struct Cursor {
     pub hash: String,
     pub finalized_position: Option<u64>,
     pub finalized_boundary: Option<u64>,
+}
+
+/// A chain's history backfill cursor, kept apart from its live cursor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BackfillCursor {
+    pub position: u64,
+    pub hash: String,
 }
 
 /// One page of API items.
@@ -308,8 +321,197 @@ impl Store {
     pub fn commit(&self, unit: &Unit, finality_depth: u64) -> Result<(), IndexError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction()?;
-        let position = signed(unit.position)?;
         let stamp = now();
+        let (finalized, finalized_boundary) =
+            Self::write_unit(&transaction, unit, finality_depth, stamp)?;
+        Self::write_cursor(
+            &transaction,
+            &unit.chain,
+            unit.position,
+            &unit.hash,
+            finalized,
+            finalized_boundary,
+            stamp,
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// The backfill cursor of `chain`, when a backfill has committed
+    /// anything.
+    ///
+    /// # Errors
+    /// Returns [`IndexError::Store`] on SQLite failure.
+    pub fn backfill_cursor(&self, chain: &str) -> Result<Option<BackfillCursor>, IndexError> {
+        let connection = self.lock()?;
+        let row = connection
+            .query_row(
+                "SELECT position, hash FROM backfill_cursors WHERE chain = ?1",
+                params![chain],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        row.map(|(position, hash)| {
+            Ok(BackfillCursor {
+                position: unsigned(position)?,
+                hash,
+            })
+        })
+        .transpose()
+    }
+
+    /// Commits one backfilled unit atomically with exactly the rows
+    /// [`Store::commit`] writes, advancing the backfill cursor instead of
+    /// the live one. Refuses a unit at or below the live cursor, which the
+    /// live ingester already owns.
+    ///
+    /// # Errors
+    /// Returns [`IndexError::Integrity`] on overlap with live history and
+    /// [`IndexError::Store`] on SQLite failure; nothing is written.
+    pub fn commit_backfill(&self, unit: &Unit, finality_depth: u64) -> Result<(), IndexError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction()?;
+        if let Some(live) = Self::live_position(&transaction, &unit.chain)? {
+            if live >= unit.position {
+                return Err(IndexError::Integrity(format!(
+                    "{} backfill at {} overlaps the live cursor at {live}",
+                    unit.chain, unit.position
+                )));
+            }
+        }
+        let stamp = now();
+        Self::write_unit(&transaction, unit, finality_depth, stamp)?;
+        transaction.execute(
+            "INSERT INTO backfill_cursors(chain, position, hash, updated_at) VALUES(?1, ?2, ?3, ?4)
+             ON CONFLICT(chain) DO UPDATE SET position = excluded.position, hash = excluded.hash,
+               updated_at = excluded.updated_at",
+            params![unit.chain, signed(unit.position)?, unit.hash, stamp],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Hands a completed backfill over to live ingestion: writes the live
+    /// cursor of `chain` at exactly `cutover`, with the finality the live
+    /// path would have recorded there, so live ingestion resumes at
+    /// `cutover + 1`. Idempotent once the live cursor sits at `cutover`.
+    ///
+    /// # Errors
+    /// Returns [`IndexError::Integrity`] when the live cursor is past the
+    /// cutover or the backfill has not reached it, and
+    /// [`IndexError::Store`] on SQLite failure.
+    pub fn finish_backfill(
+        &self,
+        chain: &str,
+        cutover: u64,
+        finality_depth: u64,
+    ) -> Result<(), IndexError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction()?;
+        match Self::live_position(&transaction, chain)? {
+            Some(live) if live > cutover => {
+                return Err(IndexError::Integrity(format!(
+                    "{chain} live cursor at {live} is already past the cutover {cutover}"
+                )))
+            }
+            Some(live) if live == cutover => return Ok(()),
+            _ => {}
+        }
+        let backfilled: Option<(i64, String)> = transaction
+            .query_row(
+                "SELECT position, hash FROM backfill_cursors WHERE chain = ?1",
+                params![chain],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((position, hash)) = backfilled else {
+            return Err(IndexError::Integrity(format!(
+                "{chain} backfill has not committed anything; cannot cut over at {cutover}"
+            )));
+        };
+        if unsigned(position)? != cutover {
+            return Err(IndexError::Integrity(format!(
+                "{chain} backfill stopped at {position}, not at the cutover {cutover}"
+            )));
+        }
+        let link = Self::link_in(&transaction, chain, cutover)?.ok_or_else(|| {
+            IndexError::Integrity(format!(
+                "{chain} has no stored link at the cutover {cutover}"
+            ))
+        })?;
+        if link.hash != hash {
+            return Err(IndexError::Integrity(format!(
+                "{chain} backfill cursor and link disagree at the cutover {cutover}"
+            )));
+        }
+        let finalized = cutover.checked_sub(finality_depth);
+        let finalized_boundary = match finalized {
+            Some(finalized) => Self::link_in(&transaction, chain, finalized)?
+                .map(|link| signed(link.boundary))
+                .transpose()?,
+            None => None,
+        };
+        Self::write_cursor(
+            &transaction,
+            chain,
+            cutover,
+            &hash,
+            finalized,
+            finalized_boundary,
+            now(),
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn live_position(connection: &Connection, chain: &str) -> Result<Option<u64>, IndexError> {
+        let position: Option<i64> = connection
+            .query_row(
+                "SELECT position FROM cursors WHERE chain = ?1",
+                params![chain],
+                |row| row.get(0),
+            )
+            .optional()?;
+        position.map(unsigned).transpose()
+    }
+
+    fn write_cursor(
+        connection: &Connection,
+        chain: &str,
+        position: u64,
+        hash: &str,
+        finalized: Option<u64>,
+        finalized_boundary: Option<i64>,
+        stamp: i64,
+    ) -> Result<(), IndexError> {
+        connection.execute(
+            "INSERT INTO cursors(chain, position, hash, finalized_position, finalized_boundary, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(chain) DO UPDATE SET position = excluded.position, hash = excluded.hash,
+               finalized_position = COALESCE(excluded.finalized_position, cursors.finalized_position),
+               finalized_boundary = COALESCE(excluded.finalized_boundary, cursors.finalized_boundary),
+               updated_at = excluded.updated_at",
+            params![
+                chain,
+                signed(position)?,
+                hash,
+                finalized.map(signed).transpose()?,
+                finalized_boundary,
+                stamp
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Writes a unit's rows and chain link, prunes links below the new
+    /// finalized position, and answers that position with its boundary.
+    fn write_unit(
+        transaction: &Connection,
+        unit: &Unit,
+        finality_depth: u64,
+        stamp: i64,
+    ) -> Result<(Option<u64>, Option<i64>), IndexError> {
+        let position = signed(unit.position)?;
         for asset in &unit.assets {
             transaction.execute(
                 "INSERT INTO assets(asset, chain, kind, address, denom, first_seen, metadata_json)
@@ -407,24 +609,7 @@ impl Store {
                 params![unit.chain, signed(finalized)?],
             )?;
         }
-        transaction.execute(
-            "INSERT INTO cursors(chain, position, hash, finalized_position, finalized_boundary, updated_at)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(chain) DO UPDATE SET position = excluded.position, hash = excluded.hash,
-               finalized_position = COALESCE(excluded.finalized_position, cursors.finalized_position),
-               finalized_boundary = COALESCE(excluded.finalized_boundary, cursors.finalized_boundary),
-               updated_at = excluded.updated_at",
-            params![
-                unit.chain,
-                position,
-                unit.hash,
-                finalized.map(signed).transpose()?,
-                finalized_boundary,
-                stamp
-            ],
-        )?;
-        transaction.commit()?;
-        Ok(())
+        Ok((finalized, finalized_boundary))
     }
 
     /// Rolls `chain` back so that `fork` is its newest unit, or to empty

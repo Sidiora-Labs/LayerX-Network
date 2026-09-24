@@ -12,11 +12,14 @@
 
 pub mod abi;
 pub mod api;
+pub mod backfill;
+pub mod blockscout;
 pub mod codec;
 pub mod config;
 pub mod follow;
 pub mod layerx;
 pub mod paxeer;
+pub mod paxscan;
 pub mod store;
 pub mod transport;
 

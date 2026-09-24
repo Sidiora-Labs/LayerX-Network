@@ -16,12 +16,14 @@ path = "src/main.rs"
 layerx-platform-internal.workspace = true
 layerx-types.workspace = true
 layerx-wire.workspace = true
+postgres = "=0.19.14"
 rusqlite = { version = "=0.37.0", default-features = false, features = ["bundled"] }
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sha3 = "=0.10.8"
+tokio-postgres-rustls = { version = "=0.14.0", features = ["ring"] }
 
 [lints]
 workspace = true
