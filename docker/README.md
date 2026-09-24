@@ -18,7 +18,7 @@ https://docs.docker.com/compose/install/other/
 
 ## Local Cluster
 
-Detailed instruction: see the `Makefile` in the root of [the repo](https://github.com/sidiora-labs/paxeer-network/blob/main/Makefile)
+Detailed instruction: see the [`Makefile`](../Makefile) in the repository root
 
 **To start a single local node (Not Recommended)**
 
@@ -103,11 +103,3 @@ The dependencies are part of this monorepo, so no sibling repositories or `go.mo
 # Edit sdk/, consensus/, storage/, wasm/, or wasm-runtime/, then rebuild.
 make build-docker-node
 ```
-****
-
-
-
-# Build with Us!
-If you are interested in building with Pax Network:
-Email us at team@paxnetwork.io
-DM us on Twitter https://twitter.com/PaxNetwork

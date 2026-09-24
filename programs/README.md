@@ -47,7 +47,7 @@ arithmetic are denied across the tree.
 | `crates/layerx-programs-runtime` | Deterministic WASM runtime: validation, metering, the ABI/capability boundary, cross-program calls, transfers, occupancy accounting, and the FFI bridge into the C kernel |
 | `crates/layerx-programs-registry` | Receipt-bound registry: deployment journal, program value-account bindings, real-balance proofs, and wind-down/deprecation |
 | `crates/layerx-programs-protocol-adapter` | Thin C↔Rust adapter exposing receipt-verified program state reads to the rest of the protocol |
-| `sdk/rust`, `sdk/c`, `sdk/assemblyscript` | Guest program SDKs; Rust ships `escrow`, `vault`, `token-lxt20`, and `payments-merchant`, while C and AssemblyScript ship `paid-counter` |
+| `sdk/rust`, `sdk/c`, `sdk/assemblyscript` | Guest program SDKs; Rust ships `escrow`, `naming`, `nft-lxt721`, `payments-merchant`, `swap-cpmm`, `token-lxt20`, and `vault`, while C and AssemblyScript ship `paid-counter` |
 | `porting/evm`, `porting/solana`, `porting/cosmwasm` | Migration crates and `MIGRATION.md` guides mapping Solidity / Anchor / CosmWasm vocabulary onto the programs ABI |
 | `fuzz` | Structure-aware fuzz target and corpus for the runtime |
 | `tools` | Boundary scripts: `dependency-policy.sh`, `runtime-module-boundaries.sh` |
@@ -205,8 +205,9 @@ Guest program SDKs include:
 - **`sdk/assemblyscript`** - an AssemblyScript SDK (`abi`, `capability`, `transfer`,
   `storage`, `event`, `call`, `receipt` bindings) with a determinism lint.
 
-The Rust SDK ships `escrow`, `vault`, `token-lxt20`, and `payments-merchant`
-examples; the C and AssemblyScript SDKs ship `paid-counter` examples.
+The Rust SDK ships `escrow`, `naming`, `nft-lxt721`, `payments-merchant`,
+`swap-cpmm`, `token-lxt20`, and `vault` examples; the C and AssemblyScript SDKs
+ship `paid-counter` examples.
 ProgramSpend (tag 9) and BalanceView (tag 10) are part of frozen ABI 2; the
 runtime crate defines their canonical encoding and amount-monotone narrowing
 rules. ABI 1 does not admit these grants.

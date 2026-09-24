@@ -10,5 +10,5 @@
 
 ## Updating Pointer contracts across codebase
  * Follow instructions above to compile and build the contracts
- * copy the binary under the corresponding `bytecode:object` into `modules/evm/contracts` `.bin` file
+ * copy the binary under the corresponding `bytecode:object` into the pointer's `.bin` file under `modules/evm/artifacts/` (for example `modules/evm/artifacts/cw20/CW20ERC20Pointer.bin`)
  * restart paxd
