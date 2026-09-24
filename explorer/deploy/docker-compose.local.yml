@@ -1,0 +1,181 @@
+name: paxeer-x-explorer
+
+# Local, self-contained stack for the Paxeer X Network explorer.
+#
+# Everything is built from the sources in this repository; no image is pulled
+# from a registry except the Postgres base image. The backend talks to a node
+# that you provide through RPC_HTTP_URL / RPC_WS_URL (see env/README notes in
+# railway/README.md and the two example env files under env/).
+#
+#   RPC_HTTP_URL=<your node http endpoint> \
+#   RPC_WS_URL=<your node websocket endpoint> \
+#     docker compose -f explorer/deploy/docker-compose.local.yml up --build
+#
+# The defaults below point at the Docker host gateway, so a node listening on
+# the machine that runs Docker is reachable without any extra configuration.
+#
+# Four values have no sensible default and are taken from the host environment
+# only; they are listed here rather than in env/*.example.env so that there is
+# a single place to set them:
+#
+#   RPC_HTTP_URL     JSON-RPC HTTP endpoint of the node to index
+#   RPC_WS_URL       JSON-RPC websocket endpoint of the same node
+#   CHAIN_ID         EIP-155 chain id of that network
+#   SECRET_KEY_BASE  Phoenix signing secret, at least 64 bytes;
+#                    generate one with `openssl rand -base64 48`
+#
+# Leaving CHAIN_ID or SECRET_KEY_BASE empty is a hard startup error in the
+# backend and the frontend; nothing here silently falls back to a stand-in.
+
+x-rpc-http: &rpc-http ${RPC_HTTP_URL:-http://host.docker.internal:8545/}
+x-rpc-ws: &rpc-ws ${RPC_WS_URL:-ws://host.docker.internal:8545/}
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    shm_size: 256m
+    command:
+      - postgres
+      - -c
+      - max_connections=300
+      - -c
+      - client_connection_check_interval=60000
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-blockscout}
+      POSTGRES_USER: ${POSTGRES_USER:-blockscout}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-blockscout}
+    volumes:
+      - explorer-db-data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PUBLISHED_PORT:-7432}:5432"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "${POSTGRES_USER:-blockscout}" -d "${POSTGRES_DB:-blockscout}"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  smart-contract-verifier:
+    build:
+      context: ../services/smart-contract-verifier
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      SMART_CONTRACT_VERIFIER__SERVER__HTTP__ENABLED: "true"
+      SMART_CONTRACT_VERIFIER__SERVER__HTTP__ADDR: 0.0.0.0:8050
+      SMART_CONTRACT_VERIFIER__SERVER__GRPC__ENABLED: "false"
+      SMART_CONTRACT_VERIFIER__SOLIDITY__ENABLED: "true"
+      SMART_CONTRACT_VERIFIER__SOLIDITY__COMPILERS_DIR: /tmp/solidity-compilers
+      SMART_CONTRACT_VERIFIER__VYPER__ENABLED: "true"
+      SMART_CONTRACT_VERIFIER__VYPER__COMPILERS_DIR: /tmp/vyper-compilers
+      SMART_CONTRACT_VERIFIER__SOURCIFY__ENABLED: "false"
+    volumes:
+      - explorer-solc-compilers:/tmp/solidity-compilers
+      - explorer-vyper-compilers:/tmp/vyper-compilers
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - bash -c 'exec 3<>/dev/tcp/localhost/8050'
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  sig-provider:
+    build:
+      context: ../services/sig-provider
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      SIG_PROVIDER__SERVER__HTTP__ENABLED: "true"
+      SIG_PROVIDER__SERVER__HTTP__ADDR: 0.0.0.0:8050
+      SIG_PROVIDER__SERVER__GRPC__ENABLED: "false"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - bash -c 'exec 3<>/dev/tcp/localhost/8050'
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: docker/Dockerfile
+      args:
+        RELEASE_VERSION: "10.2.6"
+    restart: unless-stopped
+    stop_grace_period: 5m
+    depends_on:
+      db:
+        condition: service_healthy
+      smart-contract-verifier:
+        condition: service_started
+      sig-provider:
+        condition: service_started
+    command:
+      - /bin/sh
+      - -c
+      - bin/blockscout eval 'Elixir.Explorer.ReleaseTasks.create_and_migrate()' && bin/blockscout start
+    env_file:
+      - ./env/backend.example.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-blockscout}:${POSTGRES_PASSWORD:-blockscout}@db:5432/${POSTGRES_DB:-blockscout}
+      ETHEREUM_JSONRPC_HTTP_URL: *rpc-http
+      ETHEREUM_JSONRPC_TRACE_URL: *rpc-http
+      ETHEREUM_JSONRPC_ETH_CALL_URL: *rpc-http
+      ETHEREUM_JSONRPC_WS_URL: *rpc-ws
+      MICROSERVICE_SC_VERIFIER_URL: http://smart-contract-verifier:8050/
+      MICROSERVICE_SIG_PROVIDER_URL: http://sig-provider:8050/
+      CHAIN_ID: ${CHAIN_ID:-}
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:-}
+      PORT: "4000"
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - "${BACKEND_PUBLISHED_PORT:-4000}:4000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://localhost:4000/api/health/liveness > /dev/null
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    env_file:
+      - ./env/frontend.example.env
+    environment:
+      NEXT_PUBLIC_NETWORK_ID: ${CHAIN_ID:-}
+      NEXT_PUBLIC_API_HOST: ${EXPLORER_PUBLIC_HOST:-localhost}
+      NEXT_PUBLIC_API_PORT: ${BACKEND_PUBLISHED_PORT:-4000}
+      NEXT_PUBLIC_APP_HOST: ${EXPLORER_PUBLIC_HOST:-localhost}
+      NEXT_PUBLIC_APP_PORT: ${FRONTEND_PUBLISHED_PORT:-3000}
+      PORT: "3000"
+    ports:
+      - "${FRONTEND_PUBLISHED_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null http://localhost:3000/api/healthz
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+volumes:
+  explorer-db-data:
+  explorer-solc-compilers:
+  explorer-vyper-compilers:

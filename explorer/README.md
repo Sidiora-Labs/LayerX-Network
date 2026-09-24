@@ -35,3 +35,53 @@ two licence domains never share a binary.
 `UPSTREAM.md` records the exact upstream revisions. Keep local changes to the
 imported trees small so the fork can still be rebased onto later upstream
 releases.
+
+## Running the whole stack locally
+
+`deploy/docker-compose.local.yml` brings up Postgres, the backend, the
+frontend, the smart contract verifier and the signature provider, each built
+from the sources in this directory. Four values have no sensible default and
+come from your shell:
+
+| Variable | What it is |
+| --- | --- |
+| `RPC_HTTP_URL` | JSON-RPC HTTP endpoint of the node to index |
+| `RPC_WS_URL` | JSON-RPC websocket endpoint of the same node |
+| `CHAIN_ID` | EIP-155 chain id of that network |
+| `SECRET_KEY_BASE` | Phoenix signing secret, at least 64 bytes; `openssl rand -base64 48` produces one |
+
+```
+RPC_HTTP_URL=... RPC_WS_URL=... CHAIN_ID=... SECRET_KEY_BASE=... \
+  docker compose -f explorer/deploy/docker-compose.local.yml up --build
+```
+
+The backend answers on port 4000 and the frontend on 3000; both are published
+to the host and both have a health check, so `docker compose ps` says whether
+the stack is actually serving. Leaving `CHAIN_ID` or `SECRET_KEY_BASE` empty
+stops the affected container rather than starting it with a stand-in value.
+Everything else the two applications read lives in
+`deploy/env/backend.example.env` and `deploy/env/frontend.example.env`, which
+the compose file loads directly.
+
+The first build compiles the Elixir release, the Next.js bundle and two Rust
+services from scratch and takes a long time; after that,
+`docker compose -f explorer/deploy/docker-compose.local.yml up` reuses the
+layers. To check the definition without building anything:
+
+```
+docker compose -f explorer/deploy/docker-compose.local.yml config
+```
+
+## Deploying
+
+`deploy/railway/` holds the per-service build and deploy configuration for a
+Railway project together with the variable names the backend and the frontend
+need. `deploy/railway/README.md` also records the root directory and config
+file path each service has to be given, because neither is expressible in
+`railway.json`.
+
+`deploy/tools/copy-blockscout-11-to-10.sh` copies the core chain tables out of
+a Blockscout 11.x database into a freshly migrated 10.2.6 one, intersecting the
+two schemas by column name instead of assuming they match. It takes both
+connection strings from the environment; run it with `DRY_RUN=1` first to see
+which columns each table would gain and lose.
