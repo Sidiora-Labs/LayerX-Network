@@ -9,6 +9,7 @@ import { rightLineArrow } from 'toolkit/utils/htmlEntities';
 
 const marketplaceFeature = config.features.marketplace;
 const beaconChainFeature = config.features.beaconChain;
+const paxeerXListsFeature = config.features.paxeerXLists;
 
 interface ReturnType {
   mainNavItems: Array<NavItem | NavGroupItem>;
@@ -340,6 +341,21 @@ export default function useNavItems(): ReturnType {
       ...config.UI.navigation.otherLinks,
     ].filter(Boolean);
 
+    const paxeerXNavItems: Array<NavItem> = paxeerXListsFeature.isEnabled ? [
+      {
+        text: 'Anchor checkpoints',
+        nextRoute: { pathname: '/paxeer-x/anchors' as const },
+        icon: 'navigation/output_roots',
+        isActive: pathname === '/paxeer-x/anchors',
+      },
+      {
+        text: 'Kernel receipts',
+        nextRoute: { pathname: '/paxeer-x/receipts' as const },
+        icon: 'navigation/txn_batches',
+        isActive: pathname === '/paxeer-x/receipts',
+      },
+    ] : [];
+
     const mainNavItems: ReturnType['mainNavItems'] = [
       {
         text: 'Blockchain',
@@ -347,6 +363,12 @@ export default function useNavItems(): ReturnType {
         isActive: blockchainNavItems.flat().some(item => isInternalItem(item) && item.isActive),
         subItems: blockchainNavItems,
       },
+      paxeerXNavItems.length > 0 ? {
+        text: 'Paxeer X',
+        icon: 'navigation/blockchain',
+        isActive: paxeerXNavItems.some(item => isInternalItem(item) && item.isActive),
+        subItems: paxeerXNavItems,
+      } : null,
       {
         text: 'Tokens',
         icon: 'navigation/tokens',
