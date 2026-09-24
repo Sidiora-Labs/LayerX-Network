@@ -20,9 +20,12 @@ defmodule Explorer.Chain.PaxeerX.Finality.Anchor do
 
   * `:source` - `:anchor_table` for a row of `lx_anchors`, `:anchor_call` for a
     live read of the anchor precompile.
-  * `:batch_number` - the anchor batch, known only on the live read.
+  * `:batch_number` - the batch of the latest checkpoint the anchor reports.
+  * `:checkpoint_id` - the identifier of that checkpoint.
   * `:checkpoint_height` - the chain height the checkpoint itself records.
   * `:sealed_height` - the highest chain height the checkpoint seals.
+  * `:finalized_batch_number` - the batch of the latest checkpoint the anchor
+    reports as finalized, `nil` when the anchor reports none.
   * `:finalized_height` - the highest chain height covered by a checkpoint the
     anchor reports as finalized, `nil` when the anchor reports none. Never a
     substituted zero.
@@ -33,8 +36,10 @@ defmodule Explorer.Chain.PaxeerX.Finality.Anchor do
   @type t :: %__MODULE__{
           source: :anchor_table | :anchor_call,
           batch_number: non_neg_integer() | nil,
+          checkpoint_id: String.t() | nil,
           checkpoint_height: non_neg_integer() | nil,
           sealed_height: non_neg_integer() | nil,
+          finalized_batch_number: non_neg_integer() | nil,
           finalized_height: non_neg_integer() | nil,
           block_number: non_neg_integer() | nil
         }
@@ -43,8 +48,10 @@ defmodule Explorer.Chain.PaxeerX.Finality.Anchor do
   defstruct [
     :source,
     :batch_number,
+    :checkpoint_id,
     :checkpoint_height,
     :sealed_height,
+    :finalized_batch_number,
     :finalized_height,
     :block_number
   ]
@@ -147,7 +154,10 @@ defmodule Explorer.Chain.PaxeerX.Finality do
   reach rather than being stood in for by a zero.
   """
 
+  import Ecto.Query, only: [from: 2]
+
   alias Explorer.Chain.Cache.BlockNumber
+  alias Explorer.Chain.PaxeerX.Anchor, as: AnchorRow
   alias Explorer.Chain.PaxeerX.Finality.{Anchor, Cache, Heights}
   alias Explorer.Repo
 
@@ -207,16 +217,10 @@ defmodule Explorer.Chain.PaxeerX.Finality do
   ]
 
   @checkpoint_fields 18
+  @checkpoint_id_index 1
   @checkpoint_submitted_height_index 16
 
-  @latest_anchor_sql """
-  SELECT block_number, checkpoint_height, sealed_height
-  FROM lx_anchors
-  ORDER BY sealed_height DESC, block_number DESC
-  LIMIT 1
-  """
-
-  @missing_relation_codes [:undefined_table, :undefined_column]
+  @sealing_statuses [:submitted, :final]
 
   @default_capability_source Explorer.Chain.PaxeerX.Capabilities
   @default_cache_ms 1_000
@@ -281,33 +285,45 @@ defmodule Explorer.Chain.PaxeerX.Finality do
   @doc """
   The latest anchor recorded in `lx_anchors`.
 
-  The table is created by the Paxeer X migration that owns the `lx_*` tables; on
-  a database where that migration has not run yet this returns `:no_anchor`
-  rather than raising, so the ladder answers `:instant` instead of failing.
+  The sealed rung is measured against the highest checkpoint a consensus block
+  reports as submitted or final; the final rung against the highest one a
+  consensus block reports as final, which
+  `Explorer.Chain.PaxeerX.Anchor.latest_finalized_query/0` selects. An empty
+  table answers `:no_anchor`, which leaves both rungs out of reach rather than
+  standing a zero in for them.
   """
-  @spec latest_anchor() :: {:ok, Anchor.t()} | :no_anchor | {:error, term()}
+  @spec latest_anchor() :: {:ok, Anchor.t()} | :no_anchor
   def latest_anchor do
-    case Repo.query(@latest_anchor_sql, []) do
-      {:ok, %Postgrex.Result{rows: [[block_number, checkpoint_height, sealed_height]]}} ->
-        {:ok,
-         %Anchor{
-           source: :anchor_table,
-           batch_number: nil,
-           checkpoint_height: to_height(checkpoint_height),
-           sealed_height: to_height(sealed_height),
-           finalized_height: nil,
-           block_number: to_height(block_number)
-         }}
-
-      {:ok, %Postgrex.Result{rows: []}} ->
-        :no_anchor
-
-      {:error, %Postgrex.Error{postgres: %{code: code}}} when code in @missing_relation_codes ->
-        :no_anchor
-
-      {:error, reason} ->
-        {:error, reason}
+    case Repo.one(latest_sealing_query()) do
+      nil -> :no_anchor
+      %AnchorRow{} = sealing -> {:ok, table_anchor(sealing, Repo.one(AnchorRow.latest_finalized_query()))}
     end
+  end
+
+  @doc """
+  Query for the highest checkpoint a consensus block reports as sealing, that is
+  as submitted or final.
+  """
+  @spec latest_sealing_query() :: Ecto.Query.t()
+  def latest_sealing_query do
+    from(anchor in AnchorRow.only_consensus_query(),
+      where: anchor.status in ^@sealing_statuses,
+      order_by: [desc: anchor.batch_number, desc: anchor.block_number, desc: anchor.log_index],
+      limit: 1
+    )
+  end
+
+  defp table_anchor(%AnchorRow{} = sealing, finalized) do
+    %Anchor{
+      source: :anchor_table,
+      batch_number: sealing.batch_number,
+      checkpoint_id: to_string(sealing.checkpoint_id),
+      checkpoint_height: sealing.kernel_height,
+      sealed_height: sealing.sealed_height,
+      finalized_batch_number: finalized && finalized.batch_number,
+      finalized_height: finalized && finalized.sealed_height,
+      block_number: sealing.block_number
+    }
   end
 
   @doc """
@@ -412,28 +428,31 @@ defmodule Explorer.Chain.PaxeerX.Finality do
   defp build_live_anchor(false, nil, _json_rpc_named_arguments), do: :no_anchor
 
   defp build_live_anchor(finalized_batch, sealed_batch, json_rpc_named_arguments) do
-    with {:ok, finalized_height} <- sealed_by(finalized_batch, json_rpc_named_arguments),
-         {:ok, sealed_height} <- sealed_by(sealed_batch, json_rpc_named_arguments) do
+    with {:ok, {finalized_height, finalized_id}} <- sealed_by(finalized_batch, json_rpc_named_arguments),
+         {:ok, {sealed_height, sealed_id}} <- sealed_by(sealed_batch, json_rpc_named_arguments) do
       sealed_height = sealed_height || finalized_height
 
       {:ok,
        %Anchor{
          source: :anchor_call,
          batch_number: sealed_batch || finalized_batch || nil,
+         checkpoint_id: sealed_id || finalized_id,
          checkpoint_height: sealed_height,
          sealed_height: sealed_height,
+         finalized_batch_number: finalized_batch || nil,
          finalized_height: finalized_height,
          block_number: nil
        }}
     end
   end
 
-  defp sealed_by(batch, _json_rpc_named_arguments) when batch in [nil, false], do: {:ok, nil}
+  defp sealed_by(batch, _json_rpc_named_arguments) when batch in [nil, false], do: {:ok, {nil, nil}}
 
   defp sealed_by(batch, json_rpc_named_arguments) do
     case call(:checkpoint, [batch], json_rpc_named_arguments) do
       {:ok, [checkpoint]} when is_tuple(checkpoint) and tuple_size(checkpoint) == @checkpoint_fields ->
-        {:ok, elem(checkpoint, @checkpoint_submitted_height_index)}
+        {:ok,
+         {elem(checkpoint, @checkpoint_submitted_height_index), hexadecimal(elem(checkpoint, @checkpoint_id_index))}}
 
       {:ok, _other} ->
         {:error, :malformed_checkpoint}
@@ -442,6 +461,10 @@ defmodule Explorer.Chain.PaxeerX.Finality do
         {:error, reason}
     end
   end
+
+  defp hexadecimal(value) when is_binary(value), do: "0x" <> Base.encode16(value, case: :lower)
+
+  defp hexadecimal(_value), do: nil
 
   defp probe_sealed_batch(finalized_batch, json_rpc_named_arguments) do
     first = if finalized_batch, do: finalized_batch + 1, else: 0
@@ -501,8 +524,4 @@ defmodule Explorer.Chain.PaxeerX.Finality do
     |> Application.get_env(__MODULE__, [])
     |> Keyword.get(key, default)
   end
-
-  defp to_height(nil), do: nil
-  defp to_height(%Decimal{} = value), do: Decimal.to_integer(value)
-  defp to_height(value) when is_integer(value), do: value
 end

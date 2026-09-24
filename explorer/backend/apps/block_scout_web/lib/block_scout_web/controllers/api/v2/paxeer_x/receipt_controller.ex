@@ -1,7 +1,11 @@
 defmodule BlockScoutWeb.API.V2.PaxeerX.ReceiptController do
+  @moduledoc """
+  Publishes the kernel receipts the LayerX receipt logs carry.
+  """
+
   use BlockScoutWeb, :controller
 
-  import BlockScoutWeb.Chain, only: [split_list_by_page: 1]
+  import BlockScoutWeb.Chain, only: [next_page_params: 5, split_list_by_page: 1]
   import Explorer.PagingOptions, only: [default_paging_options: 0]
 
   alias Explorer.Chain.PaxeerX.UnifiedAccount
@@ -13,7 +17,7 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.ReceiptController do
   @doc """
   Handles GET requests to `/api/v2/paxeer-x/receipts`.
 
-  Answers with a page of kernel receipts, ordered by id descending.
+  Answers with a page of kernel receipts, newest receipt id first.
   """
   @spec receipts(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def receipts(conn, params) do
@@ -25,7 +29,10 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.ReceiptController do
 
     conn
     |> put_status(200)
-    |> render(:receipts, %{receipts: receipts, next_page_params: receipts_next_page_params(next_page, receipts)})
+    |> render(:receipts, %{
+      receipts: receipts,
+      next_page_params: next_page_params(next_page, receipts, params, false, &paging_params/1)
+    })
   end
 
   @doc """
@@ -48,9 +55,5 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.ReceiptController do
 
   defp paging_key(_params), do: nil
 
-  defp receipts_next_page_params([], _receipts), do: nil
-
-  defp receipts_next_page_params(_next_page, receipts) do
-    %{"id" => receipts |> List.last() |> Map.get("id") |> to_string()}
-  end
+  defp paging_params(%{id: id}), do: %{id: to_string(id)}
 end

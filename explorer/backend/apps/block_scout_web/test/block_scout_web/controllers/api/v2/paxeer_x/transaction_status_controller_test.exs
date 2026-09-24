@@ -1,6 +1,9 @@
 defmodule BlockScoutWeb.API.V2.PaxeerX.TransactionStatusControllerTest do
   use BlockScoutWeb.ConnCase
 
+  alias Explorer.Chain.PaxeerX.Anchor
+  alias Explorer.Repo
+
   describe "GET /api/v2/transactions/:transaction_hash_param/status" do
     test "rejects a malformed hash", %{conn: conn} do
       request = get(conn, "/api/v2/transactions/0x01/status")
@@ -21,21 +24,81 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.TransactionStatusControllerTest do
 
       response = json_response(get(conn, "/api/v2/transactions/#{transaction.hash}/status"), 200)
 
-      assert response["transaction_hash"] == to_string(transaction.hash)
-      assert response["block_number"] == nil
-      assert response["status"] == "pending"
-      assert response["reason"] == "the transaction has no block yet"
+      assert response == %{
+               "rung" => "pending",
+               "block_number" => nil,
+               "sealed_batch_number" => nil,
+               "finalized_batch_number" => nil,
+               "checkpoint_id" => nil
+             }
     end
 
-    test "a transaction in a block is instant", %{conn: conn} do
+    test "a transaction in a block no checkpoint covers is instant", %{conn: conn} do
       block = insert(:block, number: 4_242)
       transaction = :transaction |> insert() |> with_block(block)
 
       response = json_response(get(conn, "/api/v2/transactions/#{transaction.hash}/status"), 200)
 
+      assert response["rung"] == "instant"
       assert response["block_number"] == 4_242
-      assert response["status"] == "instant"
-      assert response["reason"] == "included in block 4242"
+      assert response["sealed_batch_number"] == nil
+      assert response["finalized_batch_number"] == nil
+    end
+
+    test "a transaction a submitted checkpoint seals is sealed", %{conn: conn} do
+      block = insert(:block, number: 4_242)
+      transaction = :transaction |> insert() |> with_block(block)
+
+      insert_anchor(19, :submitted, 4_300)
+
+      response = json_response(get(conn, "/api/v2/transactions/#{transaction.hash}/status"), 200)
+
+      assert response["rung"] == "sealed"
+      assert response["sealed_batch_number"] == 19
+      assert response["finalized_batch_number"] == nil
+      assert response["checkpoint_id"] == checkpoint_id(19)
+    end
+
+    test "a transaction a finalized checkpoint covers is final", %{conn: conn} do
+      block = insert(:block, number: 4_242)
+      transaction = :transaction |> insert() |> with_block(block)
+
+      insert_anchor(18, :final, 4_250)
+      insert_anchor(19, :submitted, 4_300)
+
+      response = json_response(get(conn, "/api/v2/transactions/#{transaction.hash}/status"), 200)
+
+      assert response["rung"] == "final"
+      assert response["sealed_batch_number"] == 19
+      assert response["finalized_batch_number"] == 18
+      assert response["checkpoint_id"] == checkpoint_id(19)
     end
   end
+
+  defp insert_anchor(batch_number, status, sealed_height) do
+    block = insert(:block, number: 5_000 + batch_number)
+    transaction = :transaction |> insert() |> with_block(block)
+
+    attributes = %{
+      transaction_hash: transaction.hash,
+      log_index: 0,
+      block_hash: block.hash,
+      block_number: block.number,
+      block_consensus: true,
+      batch_number: batch_number,
+      checkpoint_id: checkpoint_id(batch_number),
+      state_root: to_string(block_hash()),
+      receipt_root: to_string(block_hash()),
+      signers: 5,
+      status: status,
+      kernel_height: sealed_height,
+      sealed_height: sealed_height
+    }
+
+    %Anchor{}
+    |> Anchor.changeset(attributes)
+    |> Repo.insert!()
+  end
+
+  defp checkpoint_id(batch_number), do: "0x" <> Base.encode16(<<batch_number::256>>, case: :lower)
 end

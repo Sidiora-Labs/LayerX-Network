@@ -1,12 +1,11 @@
 defmodule BlockScoutWeb.API.V2.PaxeerX.UnifiedAccountController do
+  @moduledoc """
+  Publishes the one-account view of the Paxeer X Network for one EVM address.
+  """
+
   use BlockScoutWeb, :controller
 
-  import BlockScoutWeb.Chain,
-    only: [
-      next_page_params: 5,
-      paging_options: 1,
-      split_list_by_page: 1
-    ]
+  import BlockScoutWeb.Chain, only: [paging_options: 1, split_list_by_page: 1]
 
   alias BlockScoutWeb.AccessHelper
   alias Explorer.Chain
@@ -33,20 +32,14 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.UnifiedAccountController do
 
       [paging_options: %PagingOptions{page_size: page_size, key: key}] = paging_options(params)
 
-      {activity, next_page} =
+      {activity, _next_page} =
         address_hash
         |> UnifiedAccount.activity(identities.kernel_account, activity_paging_key(key), page_size, @api_true)
         |> split_list_by_page()
 
       conn
       |> put_status(200)
-      |> render(:unified, %{
-        requested: address_hash_string,
-        identities: identities,
-        balances: balances,
-        activity: activity,
-        next_page_params: next_page_params(next_page, activity, params, false, &activity_paging_params/1)
-      })
+      |> render(:unified, %{identities: identities, balances: balances, activity: activity})
     end
   end
 
@@ -54,8 +47,4 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.UnifiedAccountController do
     do: {block_number, index}
 
   defp activity_paging_key(_key), do: nil
-
-  defp activity_paging_params(%{block_number: block_number, ordinal: ordinal}) do
-    %{block_number: block_number, index: ordinal}
-  end
 end

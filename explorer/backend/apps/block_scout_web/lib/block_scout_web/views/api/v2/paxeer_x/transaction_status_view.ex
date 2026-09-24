@@ -1,33 +1,30 @@
 defmodule BlockScoutWeb.API.V2.PaxeerX.TransactionStatusView do
+  @moduledoc """
+  Renders the rung a transaction has reached on the Paxeer X Network settlement ladder, with
+  the anchor batches the sealed and the final rungs were measured against.
+  """
+
   use BlockScoutWeb, :view
 
-  alias Explorer.Chain.Transaction
+  alias Explorer.Chain.PaxeerX.Finality.Anchor
+  alias Explorer.Chain.PaxeerX.Status
 
-  @doc """
-  Renders the rung a transaction has reached on the settlement ladder, and why it sits there.
-  """
-  def render("status.json", %{transaction: %Transaction{} = transaction, status: status}) do
-    {rung, reason} = rung_and_reason(status, transaction.block_number)
-
+  def render("status.json", %{status: %Status{} = status}) do
     %{
-      "transaction_hash" => to_string(transaction.hash),
-      "block_number" => transaction.block_number,
-      "status" => to_string(rung),
-      "reason" => reason
+      "rung" => to_string(status.rung),
+      "block_number" => status.block_number,
+      "sealed_batch_number" => sealed_batch_number(status.anchor),
+      "finalized_batch_number" => finalized_batch_number(status.anchor),
+      "checkpoint_id" => checkpoint_id(status.anchor)
     }
   end
 
-  defp rung_and_reason({rung, reason}, _block_number) when is_atom(rung) and is_binary(reason), do: {rung, reason}
+  defp sealed_batch_number(%Anchor{batch_number: batch_number}), do: batch_number
+  defp sealed_batch_number(nil), do: nil
 
-  defp rung_and_reason(rung, block_number) when is_atom(rung), do: {rung, reason(rung, block_number)}
+  defp finalized_batch_number(%Anchor{finalized_batch_number: batch_number}), do: batch_number
+  defp finalized_batch_number(nil), do: nil
 
-  defp reason(:pending, _block_number), do: "the transaction has no block yet"
-
-  defp reason(:instant, block_number), do: "included in block #{block_number}"
-
-  defp reason(:sealed, block_number),
-    do: "block #{block_number} is covered by a submitted anchor checkpoint"
-
-  defp reason(:final, block_number),
-    do: "block #{block_number} is covered by a finalized anchor checkpoint"
+  defp checkpoint_id(%Anchor{checkpoint_id: checkpoint_id}), do: checkpoint_id
+  defp checkpoint_id(nil), do: nil
 end

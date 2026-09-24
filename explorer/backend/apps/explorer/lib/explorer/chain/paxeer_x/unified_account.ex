@@ -6,19 +6,15 @@ defmodule Explorer.Chain.PaxeerX.UnifiedAccount do
   asset carries a single total beside the parts it is made of, and one activity feed that
   merges the chain's own transactions and token transfers with the LayerX kernel events.
 
-  The `lx_*` tables are written by the LayerX log fetcher and may be absent from a database
-  that has not migrated them yet, so every read first checks that the table and the columns it
-  needs exist. The columns this module relies on are:
+  Every read goes through the schemas that own the `lx_*` tables —
+  `Explorer.Chain.PaxeerX.{AccountBinding, CustodyEvent, Anchor, Receipt}` — and through their
+  `only_consensus_query/0`, so a reorged block's rows drop out of the account view the same way
+  token transfers do.
 
-    * `lx_account_bindings` - `evm_address` (bytea), `pax_address`, `did`, `kernel_account`
-    * `lx_custody_events` - `event_type`, `asset_id`, `amount`, `evm_address` (bytea),
-      `kernel_account`, `block_number`, `log_index`, `transaction_hash` (bytea)
-    * `lx_anchors` - `batch_number`
-    * `lx_receipts` - `id`
-
-  `lx_anchors` and `lx_receipts` are read whole, so every other column they carry is returned
-  as it stands. Amounts are raw units: the native coin in wei, a token in its own smallest
-  unit, and a custody asset in whatever unit its `asset_id` is denominated in.
+  Amounts are raw units: the native coin in wei, a token in its own smallest unit, and a
+  custody asset in whatever unit its `asset_id` is denominated in. The rung every item carries
+  is decided by `Explorer.Chain.PaxeerX.Status` from one read of
+  `Explorer.Chain.PaxeerX.Finality.heights/1`, so a whole page of items costs one anchor read.
   """
 
   import Ecto.Query
@@ -26,25 +22,14 @@ defmodule Explorer.Chain.PaxeerX.UnifiedAccount do
 
   alias Explorer.Chain
   alias Explorer.Chain.Address
-  alias Explorer.Chain.PaxeerX.Identity
+  alias Explorer.Chain.PaxeerX.{AccountBinding, Anchor, CustodyEvent, Finality, Identity, Receipt, Status}
+  alias Explorer.Chain.PaxeerX.Finality.Heights
   alias Explorer.Chain.{Hash, Token, TokenTransfer, Transaction, Wei}
-
-  @bindings_table "lx_account_bindings"
-  @bindings_columns ~w(evm_address pax_address did kernel_account)
-  @custody_table "lx_custody_events"
-  @custody_columns ~w(event_type asset_id amount evm_address kernel_account block_number log_index transaction_hash)
-  @anchors_table "lx_anchors"
-  @anchors_columns ~w(batch_number)
-  @receipts_table "lx_receipts"
-  @receipts_columns ~w(id)
-
-  @custody_signs %{"custody-deposit" => 1, "custody-release" => -1, "emergency-exit" => -1}
-  @kernel_signs %{"custody-deposit" => 1, "claim-finalised" => -1, "emergency-exit" => -1}
 
   @native_asset_id "native"
   @native_decimals 18
-  @status_module Explorer.Chain.PaxeerX.Status
-  @default_status :instant
+
+  @direction_signs %{deposit: 1, withdrawal: -1, balance_delta: 0}
 
   @type identities :: %{
           evm: String.t() | nil,
@@ -54,37 +39,56 @@ defmodule Explorer.Chain.PaxeerX.UnifiedAccount do
           bound: boolean()
         }
 
+  @type asset_ref :: %{
+          id: String.t(),
+          denom: String.t(),
+          symbol: String.t() | nil,
+          decimals: integer() | nil
+        }
+
   @type asset :: %{
-          asset_id: String.t(),
-          denom: String.t() | nil,
-          decimals: Decimal.t() | nil,
-          token: map() | nil,
+          asset: asset_ref(),
           total: Decimal.t(),
           parts: %{chain: Decimal.t(), custody: Decimal.t(), kernel: Decimal.t()}
+        }
+
+  @type activity_item :: %{
+          kind: String.t(),
+          hash: String.t(),
+          block_number: non_neg_integer(),
+          ordinal: non_neg_integer(),
+          timestamp: DateTime.t() | nil,
+          asset: asset_ref() | nil,
+          amount: Decimal.t() | nil,
+          counterparty: String.t() | nil,
+          side: :chain | :kernel,
+          status: Status.rung()
         }
 
   @doc """
   The four spellings of the account an EVM address belongs to.
 
-  Only the EVM spelling is known when `lx_account_bindings` is missing or the address has never
-  been bound, in which case `bound` is `false`.
+  The latest binding log of the address decides: only the EVM spelling is known while no
+  consensus block has bound it, or while the latest log unbound it, in which case `bound` is
+  `false`.
   """
   @spec identities(Hash.Address.t(), keyword()) :: identities()
   def identities(%Hash{} = address_hash, options \\ []) do
-    repo = select_repo(options)
     evm = Address.checksum(address_hash)
 
-    case binding_row(repo, "evm_address", [address_hash.bytes]) do
-      {:ok, row} ->
+    query = latest_binding_query(dynamic([binding], binding.evm_address_hash == ^address_hash))
+
+    case select_repo(options).one(query) do
+      %AccountBinding{bound: true} = binding ->
         %{
           evm: evm,
-          pax: row["pax_address"],
-          did: row["did"],
-          kernel_account: row["kernel_account"],
+          pax: binding.pax_address,
+          did: binding.layerx_did,
+          kernel_account: binding.layerx_account,
           bound: true
         }
 
-      :error ->
+      _unbound ->
         %{evm: evm, pax: nil, did: nil, kernel_account: nil, bound: false}
     end
   end
@@ -93,20 +97,16 @@ defmodule Explorer.Chain.PaxeerX.UnifiedAccount do
   The EVM address an identity resolves to.
 
   An EVM identity resolves to itself; every other spelling is looked up in
-  `lx_account_bindings` and fails when the table or the binding is absent.
+  `lx_account_bindings`, where the newest log of that identity decides: an identity no
+  consensus block has bound, or whose newest log unbound it, resolves to nothing.
   """
   @spec resolve(Identity.t(), keyword()) :: {:ok, Hash.Address.t()} | :error
   def resolve(%Identity{kind: :evm, evm: evm}, _options), do: {:ok, evm}
 
-  def resolve(%Identity{kind: kind} = identity, options) do
-    repo = select_repo(options)
-    {column, values} = binding_lookup(kind, identity)
-
-    with {:ok, row} <- binding_row(repo, column, [values]),
-         {:ok, address_hash} <- Hash.Address.cast(row["evm_address"]) do
-      {:ok, address_hash}
-    else
-      _ -> :error
+  def resolve(%Identity{} = identity, options) do
+    case identity |> binding_condition() |> latest_binding_query() |> select_repo(options).one() do
+      %AccountBinding{bound: true, evm_address_hash: %Hash{} = address_hash} -> {:ok, address_hash}
+      _unbound -> :error
     end
   end
 
@@ -114,21 +114,28 @@ defmodule Explorer.Chain.PaxeerX.UnifiedAccount do
   One asset list for an account, each asset carrying a single total and the parts it sums.
 
   The chain part comes from the coin balance and the current token balances, the custody and
-  kernel parts from the signed sums of `lx_custody_events`.
+  kernel parts from the signed sums of `lx_custody_events`: the custody part from the events
+  the EVM address acts in, the kernel part from the events its kernel account is credited or
+  debited in.
   """
   @spec balances(Hash.Address.t(), String.t() | nil, keyword()) :: [asset()]
   def balances(%Hash{} = address_hash, kernel_account, options \\ []) do
     repo = select_repo(options)
 
     chain_parts = chain_parts(address_hash, options)
-    custody_parts = custody_parts(repo, "evm_address", [address_hash.bytes], @custody_signs)
-    kernel_parts = custody_parts(repo, "kernel_account", [account_candidates(kernel_account)], @kernel_signs)
+    custody_parts = custody_parts(repo, dynamic([event], event.address_hash == ^address_hash))
+
+    kernel_parts =
+      case kernel_account_hash(kernel_account) do
+        nil -> %{}
+        account -> custody_parts(repo, dynamic([event], event.account == ^account))
+      end
 
     [chain_parts, custody_parts, kernel_parts]
     |> Enum.flat_map(&Map.keys/1)
     |> Enum.uniq()
     |> Enum.map(&asset(&1, chain_parts, custody_parts, kernel_parts))
-    |> Enum.sort_by(& &1.asset_id)
+    |> Enum.sort_by(& &1.asset.id)
   end
 
   @doc """
@@ -138,9 +145,12 @@ defmodule Explorer.Chain.PaxeerX.UnifiedAccount do
   appears in. `limit` items are returned at most, so a caller asking for one more than the page
   size can tell whether a next page exists.
   """
-  @spec activity(Hash.Address.t(), String.t() | nil, tuple() | nil, pos_integer(), keyword()) :: [map()]
+  @spec activity(Hash.Address.t(), String.t() | nil, {integer(), integer()} | nil, pos_integer(), keyword()) :: [
+          activity_item()
+        ]
   def activity(%Hash{} = address_hash, kernel_account, paging_key, limit, options \\ []) when is_integer(limit) do
     repo = select_repo(options)
+    heights = heights(options)
 
     transactions = transaction_activity(address_hash, paging_key, limit, options)
     token_transfers = token_transfer_activity(address_hash, paging_key, limit, options)
@@ -149,112 +159,128 @@ defmodule Explorer.Chain.PaxeerX.UnifiedAccount do
     (transactions ++ token_transfers ++ events)
     |> Enum.sort_by(&{&1.block_number, &1.ordinal, &1.kind}, :desc)
     |> Enum.take(limit)
-    |> Enum.map(&Map.put(&1, :status, ladder_status(&1.block_number, options)))
+    |> Enum.map(&Map.put(&1, :status, Status.of(&1.block_number, heights).rung))
   end
 
   @doc """
-  A page of anchors, newest batch first, and every column `lx_anchors` carries.
+  A page of anchor checkpoints, newest batch first, one row per batch.
+
+  A checkpoint is logged again every time it climbs a rung of the anchor ladder, so the newest
+  row of each batch is the one the page carries.
   """
   @spec anchors(integer() | nil, pos_integer(), keyword()) :: [map()]
   def anchors(paging_key, limit, options \\ []) when is_integer(limit) do
-    repo = select_repo(options)
-    types = column_types(repo, @anchors_table)
-
-    if readable?(types, @anchors_columns) do
-      {filter, params} =
-        case paging_key do
-          nil -> {"", []}
-          batch_number -> {"WHERE batch_number < $1", [batch_number]}
-        end
-
-      rows(
-        repo,
-        "SELECT * FROM #{@anchors_table} #{filter} ORDER BY batch_number DESC LIMIT #{limit}",
-        params,
-        types
-      )
-    else
-      []
-    end
+    Anchor.only_consensus_query()
+    |> page_anchors(paging_key)
+    |> distinct([anchor], desc: anchor.batch_number)
+    |> order_by([anchor], desc: anchor.batch_number, desc: anchor.block_number, desc: anchor.log_index)
+    |> limit(^limit)
+    |> select([anchor, block: block], %{
+      batch_number: anchor.batch_number,
+      checkpoint_id: anchor.checkpoint_id,
+      checkpoint_height: anchor.kernel_height,
+      sealed_height: anchor.sealed_height,
+      state_root: anchor.state_root,
+      block_number: anchor.block_number,
+      timestamp: block.timestamp
+    })
+    |> select_repo(options).all()
   end
 
   @doc """
-  A page of kernel receipts, ordered by id descending as text so that string ids page stably.
+  A page of kernel receipts, newest receipt id first, one row per receipt.
+
+  A receipt is logged again on every rung of its verification lattice, so the newest row of
+  each receipt id is the one the page carries. Each receipt also carries the settlement rung
+  of the block it was last seen in.
   """
   @spec receipts(String.t() | nil, pos_integer(), keyword()) :: [map()]
   def receipts(paging_key, limit, options \\ []) when is_integer(limit) do
-    repo = select_repo(options)
-    types = column_types(repo, @receipts_table)
+    heights = heights(options)
 
-    if readable?(types, @receipts_columns) do
-      {filter, params} =
-        case paging_key do
-          nil -> {"", []}
-          id -> {"WHERE CAST(id AS text) < $1", [id]}
-        end
-
-      rows(
-        repo,
-        "SELECT * FROM #{@receipts_table} #{filter} ORDER BY CAST(id AS text) DESC LIMIT #{limit}",
-        params,
-        types
-      )
-    else
-      []
-    end
+    Receipt.only_consensus_query()
+    |> page_receipts(paging_key)
+    |> distinct([receipt], desc: receipt.receipt_id)
+    |> order_by([receipt], desc: receipt.receipt_id, desc: receipt.block_number, desc: receipt.log_index)
+    |> limit(^limit)
+    |> select_receipt()
+    |> select_repo(options).all()
+    |> Enum.map(&put_receipt_rung(&1, heights))
   end
 
   @doc """
-  One kernel receipt by id.
+  One kernel receipt by id, as its newest row reports it.
   """
   @spec receipt(String.t(), keyword()) :: {:ok, map()} | :error
   def receipt(id, options \\ []) do
-    repo = select_repo(options)
-    types = column_types(repo, @receipts_table)
-
-    with true <- readable?(types, @receipts_columns),
-         [row] <-
-           rows(repo, "SELECT * FROM #{@receipts_table} WHERE CAST(id AS text) = $1 LIMIT 1", [id], types) do
-      {:ok, row}
+    with {:ok, receipt_id} <- Hash.Full.cast(id),
+         %{} = row <- select_repo(options).one(receipt_query(receipt_id)) do
+      {:ok, put_receipt_rung(row, heights(options))}
     else
-      _ -> :error
+      _missing -> :error
     end
   end
 
   @doc """
-  The status ladder rung of a block.
+  The settlement ladder rung of a block, with every height and source that decided it.
 
-  `Explorer.Chain.PaxeerX.Status` owns the rule. Until that module is compiled into the
-  release every block a transaction sits in is reported as `:instant`, which is the rung the
-  chain itself guarantees.
+  `Explorer.Chain.PaxeerX.Status` owns the rule and `Explorer.Chain.PaxeerX.Finality` owns the
+  heights it decides from.
   """
-  @spec ladder_status(non_neg_integer() | nil, keyword()) :: atom()
-  def ladder_status(nil, _options), do: :pending
+  @spec ladder_status(non_neg_integer() | nil, keyword()) :: Status.t()
+  def ladder_status(block_number, options \\ []), do: Status.of(block_number, heights(options))
 
-  def ladder_status(block_number, options) do
-    module = @status_module
+  @doc """
+  The settlement heights one page of items is decided against.
+  """
+  @spec heights(keyword()) :: Heights.t()
+  def heights(options \\ []), do: Finality.heights(options)
 
-    if Code.ensure_loaded?(module) and function_exported?(module, :of, 2) do
-      apply(module, :of, [block_number, options])
-    else
-      @default_status
-    end
+  defp receipt_query(receipt_id) do
+    Receipt.only_consensus_query()
+    |> where([receipt], receipt.receipt_id == ^receipt_id)
+    |> order_by([receipt], desc: receipt.block_number, desc: receipt.log_index)
+    |> limit(1)
+    |> select_receipt()
+  end
+
+  defp latest_binding_query(condition) do
+    from(binding in AccountBinding.only_consensus_query(),
+      where: ^condition,
+      order_by: [desc: binding.block_number, desc: binding.log_index],
+      limit: 1
+    )
+  end
+
+  defp binding_condition(%Identity{kind: :pax, pax: pax}), do: dynamic([binding], binding.pax_address == ^pax)
+
+  defp binding_condition(%Identity{kind: :did, did: did}), do: kernel_binding_condition(did)
+
+  defp binding_condition(%Identity{kind: :kernel_account, kernel_account: kernel_account}),
+    do: kernel_binding_condition(kernel_account)
+
+  defp kernel_binding_condition(account) do
+    candidates = account_candidates(account)
+
+    dynamic([binding], binding.layerx_did in ^candidates or binding.layerx_account in ^candidates)
   end
 
   defp asset(asset_id, chain_parts, custody_parts, kernel_parts) do
     chain = part(chain_parts, asset_id)
     custody = part(custody_parts, asset_id)
     kernel = part(kernel_parts, asset_id)
-    metadata = Map.get(chain_parts, asset_id, %{})
 
     %{
-      asset_id: asset_id,
-      denom: Map.get(metadata, :denom),
-      decimals: Map.get(metadata, :decimals),
-      token: Map.get(metadata, :token),
+      asset: asset_ref(asset_id, [chain_parts, custody_parts, kernel_parts]),
       total: chain |> Decimal.add(custody) |> Decimal.add(kernel),
       parts: %{chain: chain, custody: custody, kernel: kernel}
     }
+  end
+
+  defp asset_ref(asset_id, sources) do
+    Enum.find_value(sources, %{id: asset_id, denom: asset_id, symbol: nil, decimals: nil}, fn parts ->
+      parts |> Map.get(asset_id, %{}) |> Map.get(:asset)
+    end)
   end
 
   defp part(parts, asset_id) do
@@ -268,14 +294,7 @@ defmodule Explorer.Chain.PaxeerX.UnifiedAccount do
         _ -> %Wei{value: Decimal.new(0)}
       end
 
-    native = %{
-      @native_asset_id => %{
-        value: coin.value,
-        denom: Explorer.coin(),
-        decimals: Decimal.new(@native_decimals),
-        token: nil
-      }
-    }
+    native = %{@native_asset_id => %{value: coin.value, asset: native_asset_ref()}}
 
     address_hash
     |> Chain.fetch_last_token_balances(options)
@@ -284,52 +303,40 @@ defmodule Explorer.Chain.PaxeerX.UnifiedAccount do
     end)
   end
 
-  defp token_part(%{token: %Token{} = token} = token_balance) do
-    %{
-      value: token_balance.value || Decimal.new(0),
-      denom: token.symbol,
-      decimals: token.decimals,
-      token: %{
-        address_hash: Address.checksum(token_balance.token_contract_address_hash),
-        name: token.name,
-        symbol: token.symbol,
-        decimals: token.decimals,
-        type: token.type
-      }
-    }
-  end
-
   defp token_part(token_balance) do
-    %{value: token_balance.value || Decimal.new(0), denom: nil, decimals: nil, token: nil}
+    id = Address.checksum(token_balance.token_contract_address_hash)
+
+    %{value: token_balance.value || Decimal.new(0), asset: token_asset_ref(id, token_balance.token)}
   end
 
-  defp custody_parts(repo, column, params, signs) do
-    types = column_types(repo, @custody_table)
+  defp token_asset_ref(id, %Token{} = token) do
+    %{id: id, denom: token.symbol || id, symbol: token.symbol, decimals: decimals(token.decimals)}
+  end
 
-    if readable?(types, @custody_columns) do
-      repo
-      |> rows(
-        "SELECT event_type, asset_id, SUM(amount) AS amount FROM #{@custody_table} " <>
-          "WHERE #{condition(column)} GROUP BY event_type, asset_id",
-        params,
-        types
+  defp token_asset_ref(id, _token), do: %{id: id, denom: id, symbol: nil, decimals: nil}
+
+  defp custody_parts(repo, condition) do
+    query =
+      from(event in CustodyEvent.only_consensus_query(),
+        where: ^condition,
+        where: not is_nil(event.asset_id) and not is_nil(event.amount),
+        group_by: [event.asset_id, event.direction],
+        select: {event.asset_id, event.direction, sum(event.amount)}
       )
-      |> Enum.reduce(%{}, fn row, acc ->
-        sign = Map.get(signs, row["event_type"], 0)
-        amount = row["amount"] |> to_decimal() |> Decimal.mult(sign)
-        asset_id = to_string(row["asset_id"])
 
-        Map.update(acc, asset_id, %{value: amount}, fn %{value: value} ->
-          %{value: Decimal.add(value, amount)}
-        end)
+    query
+    |> repo.all()
+    |> Enum.reduce(%{}, fn {asset_id, direction, amount}, acc ->
+      id = to_string(asset_id)
+      signed = Decimal.mult(amount, Map.fetch!(@direction_signs, direction))
+
+      Map.update(acc, id, %{value: signed, asset: custody_asset_ref(id)}, fn part ->
+        %{part | value: Decimal.add(part.value, signed)}
       end)
-    else
-      %{}
-    end
+    end)
   end
 
-  defp condition("evm_address"), do: "evm_address = $1"
-  defp condition("kernel_account"), do: "kernel_account = ANY($1)"
+  defp custody_asset_ref(id), do: %{id: id, denom: id, symbol: nil, decimals: nil}
 
   defp transaction_activity(address_hash, paging_key, limit, options) do
     Transaction
@@ -338,36 +345,25 @@ defmodule Explorer.Chain.PaxeerX.UnifiedAccount do
       transaction.from_address_hash == ^address_hash or transaction.to_address_hash == ^address_hash
     )
     |> where([transaction], not is_nil(transaction.block_number))
-    |> page_transactions(paging_key)
+    |> page_by_index(paging_key)
     |> order_by([transaction], desc: transaction.block_number, desc: transaction.index)
     |> limit(^limit)
     |> select([transaction], %{
       block_number: transaction.block_number,
       ordinal: transaction.index,
       timestamp: transaction.block_timestamp,
-      transaction_hash: transaction.hash,
+      hash: transaction.hash,
       from: transaction.from_address_hash,
       to: transaction.to_address_hash,
-      value: transaction.value
+      amount: transaction.value
     })
     |> select_repo(options).all()
     |> Enum.map(fn item ->
       item
-      |> Map.merge(%{kind: "transaction", asset: @native_asset_id})
-      |> Map.update!(:value, fn %Wei{value: value} -> value end)
-      |> stringify_hashes()
+      |> Map.merge(%{kind: "transaction", side: :chain, asset: native_asset_ref()})
+      |> Map.update!(:amount, fn %Wei{value: value} -> value end)
+      |> counterparty(address_hash)
     end)
-  end
-
-  defp page_transactions(query, nil), do: query
-
-  defp page_transactions(query, {block_number, index}) do
-    where(
-      query,
-      [transaction],
-      transaction.block_number < ^block_number or
-        (transaction.block_number == ^block_number and transaction.index < ^index)
-    )
   end
 
   defp token_transfer_activity(address_hash, paging_key, limit, options) do
@@ -376,165 +372,170 @@ defmodule Explorer.Chain.PaxeerX.UnifiedAccount do
       [token_transfer],
       token_transfer.from_address_hash == ^address_hash or token_transfer.to_address_hash == ^address_hash
     )
-    |> join(:inner, [token_transfer], block in assoc(token_transfer, :block))
-    |> where([token_transfer, block], block.consensus == true)
-    |> page_token_transfers(paging_key)
+    |> join(:inner, [token_transfer], block in assoc(token_transfer, :block), as: :block)
+    |> join(:left, [token_transfer], token in assoc(token_transfer, :token), as: :token)
+    |> where([block: block], block.consensus == true)
+    |> page_by_log_index(paging_key)
     |> order_by([token_transfer], desc: token_transfer.block_number, desc: token_transfer.log_index)
     |> limit(^limit)
-    |> select([token_transfer, block], %{
+    |> select([token_transfer, block: block, token: token], %{
       block_number: token_transfer.block_number,
       ordinal: token_transfer.log_index,
       timestamp: block.timestamp,
-      transaction_hash: token_transfer.transaction_hash,
+      hash: token_transfer.transaction_hash,
       from: token_transfer.from_address_hash,
       to: token_transfer.to_address_hash,
-      value: token_transfer.amount,
-      asset: token_transfer.token_contract_address_hash
+      amount: token_transfer.amount,
+      contract_address_hash: token_transfer.token_contract_address_hash,
+      symbol: token.symbol,
+      decimals: token.decimals
     })
     |> select_repo(options).all()
     |> Enum.map(fn item ->
+      id = Address.checksum(item.contract_address_hash)
+
       item
-      |> Map.put(:kind, "token-transfer")
-      |> Map.update!(:asset, &Address.checksum/1)
-      |> stringify_hashes()
+      |> Map.merge(%{
+        kind: "token_transfer",
+        side: :chain,
+        asset: %{id: id, denom: item.symbol || id, symbol: item.symbol, decimals: decimals(item.decimals)}
+      })
+      |> Map.drop([:contract_address_hash, :symbol, :decimals])
+      |> counterparty(address_hash)
     end)
   end
 
-  defp page_token_transfers(query, nil), do: query
+  defp event_activity(repo, address_hash, kernel_account, paging_key, limit) do
+    condition =
+      case kernel_account_hash(kernel_account) do
+        nil -> dynamic([event], event.address_hash == ^address_hash)
+        account -> dynamic([event], event.address_hash == ^address_hash or event.account == ^account)
+      end
 
-  defp page_token_transfers(query, {block_number, log_index}) do
+    query =
+      CustodyEvent.only_consensus_query()
+      |> where(^condition)
+      |> page_by_log_index(paging_key)
+      |> order_by([event], desc: event.block_number, desc: event.log_index)
+      |> limit(^limit)
+      |> select([event, block: block], %{
+        kind: event.kind,
+        block_number: event.block_number,
+        ordinal: event.log_index,
+        timestamp: block.timestamp,
+        hash: event.transaction_hash,
+        address_hash: event.address_hash,
+        account: event.account,
+        amount: event.amount,
+        asset_id: event.asset_id
+      })
+
+    query
+    |> repo.all()
+    |> Enum.map(fn item ->
+      %{
+        kind: to_string(item.kind),
+        side: :kernel,
+        block_number: item.block_number,
+        ordinal: item.ordinal,
+        timestamp: item.timestamp,
+        hash: to_string(item.hash),
+        amount: item.amount,
+        asset: item.asset_id && custody_asset_ref(to_string(item.asset_id)),
+        counterparty: event_counterparty(item, address_hash)
+      }
+    end)
+  end
+
+  defp event_counterparty(%{address_hash: address_hash, account: account}, requested) do
+    if address_hash == requested do
+      account && to_string(account)
+    else
+      address_hash && Address.checksum(address_hash)
+    end
+  end
+
+  defp counterparty(item, address_hash) do
+    other = if item.from == address_hash, do: item.to, else: item.from
+
+    item
+    |> Map.drop([:from, :to])
+    |> Map.merge(%{hash: to_string(item.hash), counterparty: other && Address.checksum(other)})
+  end
+
+  defp native_asset_ref do
+    %{id: @native_asset_id, denom: Explorer.coin(), symbol: Explorer.coin(), decimals: @native_decimals}
+  end
+
+  defp decimals(nil), do: nil
+  defp decimals(%Decimal{} = value), do: Decimal.to_integer(value)
+  defp decimals(value) when is_integer(value), do: value
+
+  defp page_by_index(query, nil), do: query
+
+  defp page_by_index(query, {block_number, index}) do
     where(
       query,
-      [token_transfer],
-      token_transfer.block_number < ^block_number or
-        (token_transfer.block_number == ^block_number and token_transfer.log_index < ^log_index)
+      [item],
+      item.block_number < ^block_number or (item.block_number == ^block_number and item.index < ^index)
     )
   end
 
-  defp event_activity(repo, address_hash, kernel_account, paging_key, limit) do
-    types = column_types(repo, @custody_table)
+  defp page_by_log_index(query, nil), do: query
 
-    if readable?(types, @custody_columns) do
-      {filter, params} = event_paging(paging_key, [address_hash.bytes, account_candidates(kernel_account)])
+  defp page_by_log_index(query, {block_number, log_index}) do
+    where(
+      query,
+      [item],
+      item.block_number < ^block_number or (item.block_number == ^block_number and item.log_index < ^log_index)
+    )
+  end
 
-      repo
-      |> rows(
-        "SELECT event_type, asset_id, amount, evm_address, kernel_account, block_number, log_index, " <>
-          "transaction_hash FROM #{@custody_table} " <>
-          "WHERE (evm_address = $1 OR kernel_account = ANY($2)) #{filter} " <>
-          "ORDER BY block_number DESC, log_index DESC LIMIT #{limit}",
-        params,
-        types
-      )
-      |> Enum.map(fn row ->
-        %{
-          kind: row["event_type"],
-          block_number: row["block_number"],
-          ordinal: row["log_index"],
-          timestamp: nil,
-          transaction_hash: row["transaction_hash"],
-          from: row["evm_address"],
-          to: row["kernel_account"],
-          value: to_decimal(row["amount"]),
-          asset: to_string(row["asset_id"])
-        }
-      end)
-    else
-      []
+  defp page_anchors(query, nil), do: query
+
+  defp page_anchors(query, batch_number) when is_integer(batch_number),
+    do: where(query, [anchor], anchor.batch_number < ^batch_number)
+
+  defp page_receipts(query, nil), do: query
+
+  defp page_receipts(query, id) when is_binary(id) do
+    case Hash.Full.cast(id) do
+      {:ok, receipt_id} -> where(query, [receipt], receipt.receipt_id < ^receipt_id)
+      :error -> query
     end
   end
 
-  defp event_paging(nil, params), do: {"", params}
-
-  defp event_paging({block_number, log_index}, params) do
-    {"AND (block_number, log_index) < ($3, $4)", params ++ [block_number, log_index]}
+  defp select_receipt(query) do
+    select(query, [receipt, block: block], %{
+      id: receipt.receipt_id,
+      account: receipt.account,
+      verification_status: receipt.status,
+      payload_hash: receipt.payload_hash,
+      transaction_hash: receipt.transaction_hash,
+      block_number: receipt.block_number,
+      timestamp: block.timestamp
+    })
   end
+
+  defp put_receipt_rung(row, heights), do: Map.put(row, :status, Status.of(row.block_number, heights).rung)
 
   defp account_candidates(nil), do: []
 
-  defp account_candidates(kernel_account) do
-    case Identity.key(kernel_account) do
-      nil -> [kernel_account]
-      key -> Enum.uniq([kernel_account, key, Identity.kernel_account(key), Identity.did(key)])
+  defp account_candidates(account) do
+    case Identity.key(account) do
+      nil -> [account]
+      key -> Enum.uniq([account, key, Identity.kernel_account(key), Identity.did(key)])
     end
   end
 
-  defp binding_lookup(:pax, %Identity{pax: pax}), do: {"pax_address", [pax]}
+  defp kernel_account_hash(nil), do: nil
 
-  defp binding_lookup(:did, %Identity{did: did}), do: {"did", account_candidates(did)}
-
-  defp binding_lookup(:kernel_account, %Identity{kernel_account: kernel_account}),
-    do: {"kernel_account", account_candidates(kernel_account)}
-
-  defp binding_row(repo, column, params) do
-    types = column_types(repo, @bindings_table)
-
-    if readable?(types, @bindings_columns) do
-      condition = if column == "evm_address", do: "evm_address = $1", else: "#{column} = ANY($1)"
-
-      case rows(
-             repo,
-             "SELECT evm_address, pax_address, did, kernel_account FROM #{@bindings_table} " <>
-               "WHERE #{condition} LIMIT 1",
-             params,
-             types
-           ) do
-        [row] -> {:ok, row}
-        _ -> :error
-      end
+  defp kernel_account_hash(kernel_account) do
+    with key when is_binary(key) <- Identity.key(kernel_account),
+         {:ok, %Hash{} = hash} <- Hash.Full.cast("0x" <> key) do
+      hash
     else
-      :error
+      _unparsed -> nil
     end
   end
-
-  defp rows(repo, statement, params, types) do
-    case Ecto.Adapters.SQL.query(repo, statement, params) do
-      {:ok, %{columns: columns, rows: rows}} ->
-        Enum.map(rows, fn row ->
-          columns
-          |> Enum.zip(row)
-          |> Map.new(fn {column, value} -> {column, decode(value, Map.get(types, column))} end)
-        end)
-
-      {:error, _error} ->
-        []
-    end
-  end
-
-  defp decode(nil, _type), do: nil
-
-  defp decode(value, "bytea") when is_binary(value), do: "0x" <> Base.encode16(value, case: :lower)
-
-  defp decode(%Decimal{} = value, _type), do: Decimal.to_string(value, :normal)
-
-  defp decode(value, _type), do: value
-
-  defp to_decimal(%Decimal{} = value), do: value
-  defp to_decimal(value) when is_integer(value), do: Decimal.new(value)
-  defp to_decimal(value) when is_float(value), do: Decimal.from_float(value)
-  defp to_decimal(value) when is_binary(value), do: Decimal.new(value)
-  defp to_decimal(nil), do: Decimal.new(0)
-
-  defp stringify_hashes(item) do
-    item
-    |> Map.update!(:transaction_hash, &to_string/1)
-    |> Map.update!(:from, &Address.checksum/1)
-    |> Map.update!(:to, &maybe_checksum/1)
-  end
-
-  defp maybe_checksum(nil), do: nil
-  defp maybe_checksum(value), do: Address.checksum(value)
-
-  defp column_types(repo, table) do
-    statement =
-      "SELECT column_name::text, data_type::text FROM information_schema.columns " <>
-        "WHERE table_schema = current_schema() AND table_name = $1"
-
-    case Ecto.Adapters.SQL.query(repo, statement, [table]) do
-      {:ok, %{rows: rows}} -> Map.new(rows, fn [column, type] -> {column, type} end)
-      {:error, _error} -> %{}
-    end
-  end
-
-  defp readable?(types, required), do: Enum.all?(required, &Map.has_key?(types, &1))
 end
