@@ -155,6 +155,7 @@ defmodule Explorer.Application do
         configure(Explorer.Chain.Cache.Counters.Rootstock.LockedBTCCount),
         configure(Explorer.Chain.Cache.OptimismFinalizationPeriod),
         configure(Explorer.Chain.Cache.CeloEpochs),
+        configure(Explorer.Chain.PaxeerX.Capabilities),
         configure_mode_dependent_process(Explorer.Migrator.TransactionsDenormalization, :indexer),
         configure_mode_dependent_process(Explorer.Migrator.AddressCurrentTokenBalanceTokenType, :indexer),
         configure_mode_dependent_process(Explorer.Migrator.AddressTokenBalanceTokenType, :indexer),
