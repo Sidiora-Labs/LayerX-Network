@@ -58,7 +58,7 @@ That is why consensus execution forbids floating point, local clocks, and unstab
 
 ## What LayerX is not claiming here
 
-This ladder is how LayerX qualifies a checkpoint onto Paxeer. It is not "final on L0." Receipts at accept are evidence of ordering in-channel. Custody moves on the Paxeer side at L4. The public network exposes a gateway API and a faucet. Custody and settlement live on Paxeer. LayerX is licensed under the Apache License, Version 2.0.
+This ladder is how LayerX qualifies a checkpoint onto Paxeer. It is not "final on L0." Receipts at accept are evidence of ordering in-channel. Custody moves on the Paxeer side at L4. The limited beta has not opened yet. The gateway API becomes available when it does. This is a mainnet beta on real value, so the team does not run a faucet for general use; approved developers receive test allocations directly from the team through this service. Custody and settlement live on Paxeer. LayerX is licensed under the Apache License, Version 2.0.
 
 ---
 

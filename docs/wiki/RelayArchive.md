@@ -13,8 +13,9 @@ bootstrap and batch material through `layerx-archive-codec`. Python
 does not reimplement or weaken the native codecs.
 
 This page is operator documentation for `platform/relay_archive`. It
-is not a hosted beta service. The public hosted JSON-RPC surface
-remains [Public JSON-RPC](PublicRpc.md).
+is not a hosted beta service. Hosted JSON-RPC access is documented in
+[Public JSON-RPC](PublicRpc.md); the limited beta has not opened yet,
+and that surface becomes available when it does.
 
 ---
 

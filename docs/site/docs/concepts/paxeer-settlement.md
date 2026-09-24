@@ -61,8 +61,11 @@ The web application has an exit surface at `/app/settings/exit`
 
 ## Status
 
-Custody and settlement live on Paxeer. The public
-beta exposes a gateway API and a faucet. Hosted beta bring-up deploys
+Custody and settlement live on Paxeer. The limited beta has not opened
+yet. The gateway API becomes available when it does. This is a mainnet
+beta on real value, so the team does not run a faucet for general use;
+approved developers receive test allocations directly from the team
+through this service. Hosted beta bring-up deploys
 Paxeer contracts on chain id `125` inside the disposable cluster
 ([Beta cluster](../operators/beta-cluster.md)). Live production certification
 of peers, DNS, TLS, and KMS is outside the beta bar

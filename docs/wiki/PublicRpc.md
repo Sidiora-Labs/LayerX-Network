@@ -1,6 +1,7 @@
 # Public JSON-RPC
 
-The public JSON-RPC gateway publishes **18** `lx_*` methods in the
+The limited beta has not opened yet; the gateway API becomes available
+when it does. Once available, the JSON-RPC gateway publishes **18** `lx_*` methods in the
 embedded OpenRPC 1.3.2 document
 (`platform/hosted/gateway/openrpc.json`). Those names are self-service
 onboarding, authenticated canonical submission, unauthenticated
