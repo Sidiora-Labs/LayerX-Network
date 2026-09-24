@@ -4,6 +4,18 @@ All notable changes to Paxeer X Network are documented in this file.
 
 ## 2026-09-24
 
+### Added
+
+- Add the Paxeer X Network branding preset to the explorer frontend
+- Add the Paxeer X one-account view to the explorer API
+- Add the Paxeer X settlement ladder as one pure status function
+- Add the Paxeer X kernel tables, schemas and import runners to the explorer
+- Add reproducible deployment definitions for the explorer
+
+### Fixed
+
+- Guard the indexing node against concurrent archive-style JSON-RPC bursts
+
 ### Changed
 
 - Reconcile docs/wiki against code: modules count, precompiles, duplicate page (#473)
@@ -18,6 +30,21 @@ All notable changes to Paxeer X Network are documented in this file.
 ### Housekeeping
 
 - Close the remaining wave-9 tasks after their gates passed on the merged tree
+
+### Other
+
+- Generate the changelog from git history with git-cliff
+- Set the explorer native coin name to Paxeer in both Paxeer X presets
+- Explorer frontend: settlement status badge, anchors and receipts pages, Paxeer X search
+- Discover which Paxeer X surfaces the node answers, and publish them
+- Import realtime blocks as ranges instead of one block per newHeads
+- Teach the indexer the Paxeer X chain quirks behind a paxeer_x JSON-RPC variant
+- Decode Paxeer X precompile logs into the lx_* rows inside the logs pipeline
+- Publish the explorer container images to the container registry
+- Tune the explorer's hot tables for 500k blocks per day
+- Explorer CI: skip husky in monorepo install, install protoc openapiv2 plugin for service builds
+- Size catchup indexing for a sub-second chain and stop retrying untraceable blocks
+- Import Blockscout backend v10.2.6, frontend v2.7.2 and MIT services into explorer/
 
 ## 2026-09-23
 
