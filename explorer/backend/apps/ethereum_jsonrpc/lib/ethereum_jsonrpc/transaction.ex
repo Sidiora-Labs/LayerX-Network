@@ -24,6 +24,7 @@ defmodule EthereumJSONRPC.Transaction do
     ]
 
   alias EthereumJSONRPC
+  alias EthereumJSONRPC.PaxeerX
   alias EthereumJSONRPC.SignedAuthorization
 
   case @chain_type do
@@ -320,6 +321,7 @@ defmodule EthereumJSONRPC.Transaction do
   @spec elixir_to_params(elixir) :: params
   def elixir_to_params(elixir) do
     elixir
+    |> PaxeerX.normalize_transaction()
     |> do_elixir_to_params()
     |> chain_type_fields(elixir)
     |> chain_identity_fields(elixir)
