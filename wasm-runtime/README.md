@@ -92,9 +92,6 @@ CGO_ENABLED=0 go build .
 
 ## Supported Platforms
 
-See [COMPILER_VERSIONS.md](docs/COMPILER_VERSIONS.md) for information on Go and
-Rust compiler support.
-
 The Rust implementation of the VM is compiled to a library called libwasmvm.
 This is then linked to the Go code when the final binary is built. For that
 reason not all systems supported by Go are supported by this project.

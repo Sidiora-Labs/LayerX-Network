@@ -27,7 +27,7 @@ The Cosmos-style chain identifier used by node distribution is `hyperpax_125-1` 
 | --- | --- |
 | `daemon/paxd/` | `paxd` node binary |
 | `node/` | Application wiring, genesis, upgrades |
-| `modules/` | Paxeer chain modules (`evm`, `epoch`, `mint`, `oracle`, `tokenfactory`) |
+| `modules/` | Paxeer chain modules (`evm`, `epoch`, `mint`, `oracle`, `tokenfactory`) and the LayerX settlement modules (`layerxanchor`, `layerxcustody`, `layerxexchange`, `layerxbridge`, `launchpad`) |
 | `rpc/` | EVM JSON-RPC compatibility |
 | `contracts/` | Paxeer-native Solidity (WPAX, pointers, precompile interfaces) - not the LayerX settlement contracts |
 | `consensus/`, `sdk/`, `storage/` | Consensus, Cosmos SDK fork, storage engines |

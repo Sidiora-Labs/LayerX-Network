@@ -22,7 +22,7 @@ on your local machine for development and testing purposes.
 ## Writing Tests
 Each integration test is defined in a YAML file under its specific module folder under the integration_test directory
 
-There's a template yaml file which you can copy from to start with: [template](https://github.com/sidiora-labs/paxeer-network/tree/main/integration_test/template/template_test.yaml)
+There's a template yaml file which you can copy from to start with: [template](template/template_test.yaml)
 
 A typical yaml test case would look like this:
 ```yaml
