@@ -694,6 +694,11 @@ config :explorer, Explorer.Chain.Transaction,
   rootstock_remasc_address: System.get_env("ROOTSTOCK_REMASC_ADDRESS"),
   rootstock_bridge_address: System.get_env("ROOTSTOCK_BRIDGE_ADDRESS")
 
+config :explorer, Explorer.Chain.PaxeerX.Finality,
+  cache_ms: ConfigHelper.parse_integer_env_var("PAXEER_X_FINALITY_CACHE_MS", 1000),
+  probe_batches: ConfigHelper.parse_integer_env_var("PAXEER_X_FINALITY_PROBE_BATCHES", 16),
+  final_confirmations: ConfigHelper.parse_integer_env_var("PAXEER_X_FINAL_CONFIRMATIONS", 0)
+
 config :explorer, Explorer.Chain.Transaction.History.Historian,
   enabled: transactions_stats_enabled,
   init_lag_milliseconds: ConfigHelper.parse_time_env_var("TXS_HISTORIAN_INIT_LAG", "0"),
