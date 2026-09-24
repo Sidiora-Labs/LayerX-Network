@@ -287,7 +287,7 @@ Two points need owner confirmation before the corresponding task starts, and one
   - [x] 9.7 Add the spot kernel module
     - Create src/modules/spot with lx_spot_dispatch.c, lx_spot_market.c, lx_spot_book.c reusing the perps book matching, and lx_spot_codec.h; module id 7 LXP_MODULE_SPOT, ordinals 0x00070001 to 0x00070005; each fill settles both legs immediately through the asset module and writes a transfer set into the receipt; register the module in cmd/layerxd/lxp_daemon_modules.h, platform/hosted/node/genesis-modules.conf and the genesis module table; add tests/modules/test_spot_book.c with a conservation check and a Makefile target test-spot-book.
     - _Requirements: 17.6_
-  - [ ] 9.8 Route precompile events through the intent router and add typed SDK helpers
+  - [x] 9.8 Route precompile events through the intent router and add typed SDK helpers
     - Extend human/crates/layerx-intents with intent kinds for the layerxexchange, layerxbridge and launchpad ABI events and their LayerX activity encodings (perps ordinals 0x0006xxxx, spot 0x0007xxxx, custody credit), extend agent/crates/layerx-types/src/payload.rs with typed Perps and Spot payload structs replacing the opaque bytes, and add typed helpers to agent/sdk/typescript and agent/sdk/python for every write on the three precompiles and for perps and spot activities, with round-trip tests against the C codec vectors.
     - _Requirements: 17.7_
   - [x] 9.9 Ship the layerx-bridge-relayer service
@@ -302,19 +302,19 @@ Two points need owner confirmation before the corresponding task starts, and one
   - [x] 9.12 Write the fork rehearsal script and the validator runbook
     - Create platform/hosted/paxeer/fork-rehearsal.sh that exports state from a synced full node's data dir, starts a disposable single-validator hyperpax_125-1 chain from that export on the current binary, submits a software-upgrade plan named v6.6 at a height a few blocks ahead, waits for the halt, swaps the binary to the v6.6 build, restarts and asserts the three new stores exist and one view on each of 0x1013 through 0x1017 answers; and docs/runbooks/paxeer-x-fork.md with the halt height formula from the measured block rate, the UTC time, the binary sha256 slot, the per-validator steps for the four validators and the resync steps for lagging full nodes; the script SHALL support --check for a syntax and dependency dry run.
     - _Requirements: 17.10_
-  - [ ] 9.13 Add human web surfaces for launchpad, exchange and bridge
+  - [x] 9.13 Add human web surfaces for launchpad, exchange and bridge
     - Add launchpad, exchange and bridge routes to human/apps/web/src/app using the generated client and the new gateway history methods: market list and create, buy and sell with quotes, order placement and positions, bridge in and out with attestation status, each showing the same state an agent reaches through the SDK.
     - _Requirements: 17.7_
-  - [-] 9.14 Gate the fork surfaces on live precompile capabilities in the gateway and web app
+  - [x] 9.14 Gate the fork surfaces on live precompile capabilities in the gateway and web app
     - Add a capabilities probe to platform/hosted/gateway that calls eth_getCode for the exchange, bridge and launchpad precompile addresses against the configured Paxeer RPC, caches it with a short TTL, exposes it as a px_getCapabilities method in openrpc.json (sync the CLI fixture), and makes every exchange, bridge and launchpad write method return a typed surface_unavailable error while its precompile has no code.
     - In human/apps/web read px_getCapabilities through the generated client and render the launchpad, exchange and bridge routes in read-only mode with an explicit not-yet-live state until the capability is true, keeping history and explorer pages fully functional against the current mainnet.
     - _Requirements: 17.12_
-  - [-] 9.15 Backfill Paxeer history from the paxscan Blockscout Postgres with a height cutover
+  - [x] 9.15 Backfill Paxeer history from the paxscan Blockscout Postgres with a height cutover
     - Add a backfill mode to platform/hosted/indexer that reads the Blockscout schema (blocks, transactions, logs, token_transfers, internal_transactions, tokens) read-only from PAXSCAN_DATABASE_PUBLIC_URL in height ranges, reuses decode_block and the existing store writers so backfilled rows are byte-for-byte the shape the live PaxeerIngester writes, and records a resumable backfill cursor.
     - Fill every height absent from paxscan (about 2.85 million of 23.86 million) from the node EVM JSON-RPC, verify each block hash against the node before commit, stop at a fixed finalized cutover height passed on the command line, and write the live ingester's cursor at that height so the two never overlap.
     - Make the Paxeer cosmos path tolerate a node with tx_index off (CometBFT answers transaction searching is disabled): log once, index EVM only, never fail the step; add tests with a recorded Blockscout fixture and a gap-fill case.
     - _Requirements: 17.11_
-  - [-] 9.16 Script the v6.6 software-upgrade and consensus-parameter governance for the fork
+  - [x] 9.16 Script the v6.6 software-upgrade and consensus-parameter governance for the fork
     - Add platform/hosted/paxeer/gov-upgrade.sh that, given an RPC, a key name and a target UTC time, computes the halt height from the live block rate, submits a v6.6 software-upgrade proposal with the minimum deposit, prints the vote command for each validator, waits for the tally and confirms the scheduled plan through the upgrade current_plan query, refusing to proceed if the voting period would end after the halt.
     - Add platform/hosted/paxeer/gov-consensus-params.sh that submits a consensus-parameter change for timeout commit, bypass commit timeout and timeout vote from values passed on the command line, with the same vote and confirm flow, and document in docs/runbooks/paxeer-x-fork.md the submission timeline against a 172800 s deposit window and the live voting period, the 33.4 percent quorum and 50 percent threshold, and the abort path (cancel plan) if a validator is not staged.
     - Add tests that run both scripts against the disposable single-validator chain from fork-rehearsal.sh in dry-run mode and assert the generated transactions, the height math and the refusal on a late voting end.

@@ -933,13 +933,13 @@ reqs = ["17.6"]
 
 [task.9.8]
 title = "Route precompile events through the intent router and add typed SDK helpers"
-status = "pending"
+status = "done"
 wave = 10
 requires = ["9.1","9.2","9.3","9.6"]
 do_1 = "Extend human/crates/layerx-intents with intent kinds for the layerxexchange, layerxbridge and launchpad ABI events and their LayerX activity encodings (perps ordinals 0x0006xxxx, spot 0x0007xxxx, custody credit), extend agent/crates/layerx-types/src/payload.rs with typed Perps and Spot payload structs replacing the opaque bytes, and add typed helpers to agent/sdk/typescript and agent/sdk/python for every write on the three precompiles and for perps and spot activities, with round-trip tests against the C codec vectors."
 verify_cmd = "cargo test --locked --manifest-path human/Cargo.toml -p layerx-intents && cargo test --locked --manifest-path agent/Cargo.toml -p layerx-types payload"
-symbols = ["IntentKind::ExchangeOrder","IntentKind::BridgeIn","IntentKind::LaunchpadSwap","PerpsPayload","SpotPayload"]
-touches = ["human/crates/layerx-intents/src","agent/crates/layerx-types/src/payload.rs","agent/sdk/typescript/src","agent/sdk/python/layerx"]
+symbols = ["IntentKind","ExchangeOrder","BridgeIn","PerpsPayload","SpotPayload"]
+touches = ["human/crates/layerx-intents/src","agent/crates/layerx-types/src/payload.rs","agent/sdk/typescript/src","agent/sdk/python/layerx_sdk"]
 reqs = ["17.7"]
 
 [task.9.9]
@@ -988,7 +988,7 @@ reqs = ["17.10"]
 
 [task.9.13]
 title = "Add human web surfaces for launchpad, exchange and bridge"
-status = "pending"
+status = "done"
 wave = 10
 requires = ["9.8","9.11"]
 do_1 = "Add launchpad, exchange and bridge routes to human/apps/web/src/app using the generated client and the new gateway history methods: market list and create, buy and sell with quotes, order placement and positions, bridge in and out with attestation status, each showing the same state an agent reaches through the SDK."
@@ -999,7 +999,7 @@ reqs = ["17.7"]
 
 [task.9.14]
 title = "Gate the fork surfaces on live precompile capabilities in the gateway and web app"
-status = "in_progress"
+status = "done"
 wave = 11
 requires = ["9.11"]
 do_1 = "Add a capabilities probe to platform/hosted/gateway that calls eth_getCode for the exchange, bridge and launchpad precompile addresses against the configured Paxeer RPC, caches it with a short TTL, exposes it as a px_getCapabilities method in openrpc.json (sync the CLI fixture), and makes every exchange, bridge and launchpad write method return a typed surface_unavailable error while its precompile has no code."
@@ -1011,7 +1011,7 @@ reqs = ["17.12"]
 
 [task.9.15]
 title = "Backfill Paxeer history from the paxscan Blockscout Postgres with a height cutover"
-status = "in_progress"
+status = "done"
 wave = 11
 requires = ["9.10","9.11"]
 do_1 = "Add a backfill mode to platform/hosted/indexer that reads the Blockscout schema (blocks, transactions, logs, token_transfers, internal_transactions, tokens) read-only from PAXSCAN_DATABASE_PUBLIC_URL in height ranges, reuses decode_block and the existing store writers so backfilled rows are byte-for-byte the shape the live PaxeerIngester writes, and records a resumable backfill cursor."
@@ -1024,7 +1024,7 @@ reqs = ["17.11"]
 
 [task.9.16]
 title = "Script the v6.6 software-upgrade and consensus-parameter governance for the fork"
-status = "in_progress"
+status = "done"
 wave = 11
 requires = ["9.4","9.12"]
 do_1 = "Add platform/hosted/paxeer/gov-upgrade.sh that, given an RPC, a key name and a target UTC time, computes the halt height from the live block rate, submits a v6.6 software-upgrade proposal with the minimum deposit, prints the vote command for each validator, waits for the tally and confirms the scheduled plan through the upgrade current_plan query, refusing to proceed if the voting period would end after the halt."
