@@ -268,6 +268,10 @@ config :ethereum_jsonrpc, EthereumJSONRPC.Geth,
   debug_trace_timeout: System.get_env("ETHEREUM_JSONRPC_DEBUG_TRACE_TRANSACTION_TIMEOUT", "5s"),
   tracer: System.get_env("INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE", "call_tracer")
 
+config :ethereum_jsonrpc, EthereumJSONRPC.PaxeerX,
+  cosmos_transaction_type: ConfigHelper.parse_integer_env_var("PAXEER_X_COSMOS_TRANSACTION_TYPE", 127),
+  native_coin_decimals: ConfigHelper.parse_integer_env_var("PAXEER_X_NATIVE_COIN_DECIMALS", 18)
+
 config :ethereum_jsonrpc, EthereumJSONRPC.PendingTransaction,
   type: System.get_env("ETHEREUM_JSONRPC_PENDING_TRANSACTIONS_TYPE", "default")
 
