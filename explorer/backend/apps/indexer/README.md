@@ -110,7 +110,7 @@ After all deployed instances get all needed data, these fetchers should be depre
 
 ## Memory Usage
 
-The work queues for building the index of all blocks, balances (coin and token), and internal transactions can grow quite large.   By default, the soft-limit is 1 GiB, which can be changed by setting `INDEXER_MEMORY_LIMIT` environment variable https://docs.blockscout.com/for-developers/developer-faqs/how-do-i-update-memory-consumption-to-fix-indexer-memory-errors#updating-memory-consumption.
+The work queues for building the index of all blocks, balances (coin and token), and internal transactions can grow quite large.  The soft-limit is `INDEXER_MEMORY_LIMIT` when that variable is set; see https://docs.blockscout.com/for-developers/developer-faqs/how-do-i-update-memory-consumption-to-fix-indexer-memory-errors#updating-memory-consumption. When it is not set, the limit is a share of the memory the host reports: `INDEXER_SYSTEM_MEMORY_PERCENTAGE` of total system memory, 60 by default, or 100 percent of it in `indexer` mode. A host whose total memory `:memsup` cannot report falls back to a fixed 4 GiB.
 
 Memory usage is checked once per minute.  If the soft-limit is reached, the shrinkable work queues will shed half their load.  The shed load will be restored from the database, the same as when a restart of the server occurs, so rebuilding the work queue will be slower, but use less memory.
 
