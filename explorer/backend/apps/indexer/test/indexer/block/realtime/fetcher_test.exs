@@ -1230,96 +1230,29 @@ defmodule Indexer.Block.Realtime.FetcherTest do
       reorg_block_1_data =
         Map.put(block_1_data, "hash", "0xa4ec735cabe1510b5ae081b30f17222580b4588dbec52830529753a688b046cd")
 
+      {:ok, blocks_agent} = Agent.start_link(fn -> %{3_946_079 => block_1_data, 3_946_080 => block_2_data} end)
+
+      balance_by_address = %{
+        "0x5ee341ac44d344ade1ca3a771c59b98eb2a77df2" => "0x53474fa377a46000",
+        "0x66c9343c7e8ca673a1fedf9dbf2cd7936dbbf7e3" => "0x53507afe51f28000"
+      }
+
+      # the realtime fetcher imports the whole range in one batched request set, so the node double answers whatever
+      # batch it is given instead of a fixed sequence of single request calls
       if json_rpc_named_arguments[:transport] == EthereumJSONRPC.Mox do
-        EthereumJSONRPC.Mox
-        |> expect(:json_rpc, 6, fn
-          [
-            %{
-              id: 0,
-              jsonrpc: "2.0",
-              method: "eth_getBlockByNumber",
-              params: ["0x3C365F", true]
-            }
-          ],
-          _ ->
-            {:ok,
-             [
-               %{
-                 id: 0,
-                 jsonrpc: "2.0",
-                 result: block_1_data
-               }
-             ]}
+        stub(EthereumJSONRPC.Mox, :json_rpc, fn requests, _options ->
+          blocks = Agent.get(blocks_agent, & &1)
 
-          [
-            %{
-              id: 0,
-              jsonrpc: "2.0",
-              method: "eth_getBlockByNumber",
-              params: ["0x3C3660", true]
-            }
-          ],
-          _ ->
-            {:ok,
-             [
-               %{
-                 id: 0,
-                 jsonrpc: "2.0",
-                 result: block_2_data
-               }
-             ]}
+          {:ok,
+           requests
+           |> List.wrap()
+           |> Enum.map(fn
+             %{id: id, method: "eth_getBlockByNumber", params: [quantity, true]} ->
+               %{id: id, jsonrpc: "2.0", result: Map.fetch!(blocks, EthereumJSONRPC.quantity_to_integer(quantity))}
 
-          [
-            %{
-              id: 0,
-              jsonrpc: "2.0",
-              method: "eth_getBalance",
-              params: ["0x5ee341ac44d344ade1ca3a771c59b98eb2a77df2", "0x3C365F"]
-            }
-          ],
-          _ ->
-            {:ok, [%{id: 0, jsonrpc: "2.0", result: "0x53474fa377a46000"}]}
-
-          [
-            %{
-              id: 0,
-              jsonrpc: "2.0",
-              method: "eth_getBalance",
-              params: ["0x66c9343c7e8ca673a1fedf9dbf2cd7936dbbf7e3", "0x3C3660"]
-            }
-          ],
-          _ ->
-            {:ok, [%{id: 0, jsonrpc: "2.0", result: "0x53507afe51f28000"}]}
-        end)
-        |> expect(:json_rpc, 3, fn
-          [
-            %{
-              id: 0,
-              jsonrpc: "2.0",
-              method: "eth_getBlockByNumber",
-              params: ["0x3C365F", true]
-            }
-          ],
-          _ ->
-            {:ok,
-             [
-               %{
-                 id: 0,
-                 jsonrpc: "2.0",
-                 result: reorg_block_1_data
-               }
-             ]}
-
-          [
-            %{
-              id: 0,
-              jsonrpc: "2.0",
-              method: "eth_getBalance",
-              params: ["0x5ee341ac44d344ade1ca3a771c59b98eb2a77df2", "0x3C365F"]
-            }
-          ],
-          _ ->
-            {:ok, [%{id: 0, jsonrpc: "2.0", result: "0x53474fa377a46000"}]}
+             %{id: id, method: "eth_getBalance", params: [address_hash, _quantity]} ->
+               %{id: id, jsonrpc: "2.0", result: Map.fetch!(balance_by_address, address_hash)}
+           end)}
         end)
       end
 
@@ -1333,6 +1266,8 @@ defmodule Indexer.Block.Realtime.FetcherTest do
       block_2 = Enum.find(result_blocks, fn block -> block.number == 3_946_080 end)
       assert to_string(block_1.hash) == block_1_data["hash"]
       assert to_string(block_2.hash) == block_2_data["hash"]
+
+      Agent.update(blocks_agent, &Map.put(&1, 3_946_079, reorg_block_1_data))
 
       Realtime.Fetcher.start_fetch_and_import(3_946_079, block_fetcher, 3_946_080)
       Process.sleep(6000)
