@@ -29,6 +29,8 @@ defmodule Explorer.Chain.Search do
     UserOperation
   }
 
+  alias Explorer.Chain.PaxeerX.{Identity, UnifiedAccount}
+
   alias Explorer.MicroserviceInterfaces.{Metadata, TACOperationLifecycle}
 
   use Utils.CompileTimeEnvHelper, chain_type: [:explorer, :chain_type]
@@ -110,6 +112,10 @@ defmodule Explorer.Chain.Search do
     )
   end
 
+  defp search_result({:paxeer_x, identity}, paging_options, _query_string, options) do
+    {paxeer_x_search(identity, paging_options, options), nil}
+  end
+
   defp search_result({:number, block_number}, _paging_options, _query_string, options) do
     {block_number
      |> search_block_by_number_query()
@@ -177,6 +183,16 @@ defmodule Explorer.Chain.Search do
       end)
 
     {prepared_results, next_page_params}
+  end
+
+  # A `pax` bech32 string, a `did:layerx:` DID and a kernel account id all name the same
+  # account as its EVM address does, so every one of them is routed to the one-account view
+  # through the binding that `Explorer.Chain.PaxeerX.UnifiedAccount` resolves.
+  defp paxeer_x_search(identity, paging_options, options) do
+    case UnifiedAccount.resolve(identity, options) do
+      {:ok, address_hash} -> address_hash_search_if_first_page(paging_options, address_hash, options)
+      :error -> []
+    end
   end
 
   defp address_hash_search_if_first_page(%PagingOptions{key: nil}, address_hash, options) do
@@ -264,6 +280,7 @@ defmodule Explorer.Chain.Search do
       address_hash_result: Chain.string_to_address_hash(query),
       ton_address_result: Ton.parse_address(query),
       filecoin_address_result: maybe_parse_filecoin_address(query),
+      paxeer_x_result: Identity.parse(query),
       full_hash_result: Chain.string_to_full_hash(query),
       non_negative_integer_result: ExplorerHelper.safe_parse_non_negative_integer(query),
       query_length: String.length(query)
@@ -272,6 +289,7 @@ defmodule Explorer.Chain.Search do
 
   @type base_search_results ::
           {:address_hash, Hash.Address.t()}
+          | {:paxeer_x, Identity.t()}
           | {:ton_address, Ton.Address.t()}
           | {:full_hash, Hash.t()}
           | {:number, non_neg_integer()}
@@ -299,6 +317,8 @@ defmodule Explorer.Chain.Search do
   end
 
   defp match_search_result(%{full_hash_result: {:ok, hash}}, _prepared_term), do: {:full_hash, hash}
+
+  defp match_search_result(%{paxeer_x_result: {:ok, identity}}, _prepared_term), do: {:paxeer_x, identity}
 
   defp match_search_result(%{non_negative_integer_result: {:ok, block_number}, query_length: ql}, _prepared_term)
        when ql < @min_query_length,
@@ -397,6 +417,10 @@ defmodule Explorer.Chain.Search do
     %{items: tac_operation_results} = await_task_with_paging(tac_operation_task)
 
     [results, tac_operation_results]
+  end
+
+  defp balanced_unpaginated_search_result({:paxeer_x, identity}, paging_options, _query_string, options) do
+    [paxeer_x_search(identity, paging_options, options)]
   end
 
   defp balanced_unpaginated_search_result({:number, block_number}, _paging_options, _query_string, options) do

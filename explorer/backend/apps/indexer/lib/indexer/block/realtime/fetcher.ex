@@ -51,6 +51,9 @@ defmodule Indexer.Block.Realtime.Fetcher do
   @minimum_safe_polling_period :timer.seconds(1)
   @max_realtime_blocks_in_memory 10
 
+  @default_batch_size 64
+  @default_max_lag 5_000
+
   @shutdown_after :timer.minutes(1)
 
   @enforce_keys ~w(block_fetcher)a
@@ -105,7 +108,7 @@ defmodule Indexer.Block.Realtime.Fetcher do
   # - `{:noreply, state}` tuple where the `state` is the current or updated GenServer's state.
   @impl GenServer
   def handle_info(
-        {subscription, {:ok, %{"number" => quantity, "hash" => hash}}},
+        {subscription, {:ok, %{"number" => quantity, "hash" => hash} = new_head}},
         %__MODULE__{
           block_fetcher: %Block.Fetcher{} = block_fetcher,
           subscription: %Subscription{} = subscription,
@@ -125,8 +128,13 @@ defmodule Indexer.Block.Realtime.Fetcher do
       Process.cancel_timer(timer)
 
       # Subscriptions don't support getting all the blocks and transactions data,
-      # so we need to go back and get the full block
-      start_fetch_and_import(number, block_fetcher, previous_number)
+      # so we need to go back and get the full blocks of the whole range up to the new head
+      start_fetch_and_import(
+        number,
+        block_fetcher,
+        previous_number,
+        parent_mismatch?(new_head, number, last_realtime_blocks)
+      )
 
       new_timer = schedule_polling()
 
@@ -316,26 +324,107 @@ defmodule Indexer.Block.Realtime.Fetcher do
     {:ok, []}
   end
 
-  def start_fetch_and_import(number, block_fetcher, previous_number) do
-    start_at = determine_start_at(number, previous_number)
-    is_reorg = reorg?(number, previous_number)
+  @doc """
+  Fetches and imports every block from the last known height up to `number` as batched ranges.
 
-    for block_number_to_fetch <- start_at..number do
-      args = [block_number_to_fetch, block_fetcher, is_reorg]
-      Task.Supervisor.start_child(TaskSupervisor, __MODULE__, :fetch_and_import_block, args, shutdown: @shutdown_after)
+  The range is split into chunks of at most `INDEXER_REALTIME_BATCH_SIZE` blocks and each chunk is imported with a
+  single `Indexer.Block.Fetcher.fetch_and_import_range/2` call, so that blocks, receipts and the coin balances of the
+  addresses touched anywhere in the chunk are fetched with one set of batched JSON RPC requests instead of one set per
+  block.
+
+  When the distance between `previous_number` and `number` is larger than `INDEXER_REALTIME_MAX_LAG`, the older part of
+  the range is handed to the catchup fetcher through `Explorer.Utility.MissingBlockRange` instead of blocking the
+  realtime fetcher with the backlog.
+  """
+  @spec start_fetch_and_import(non_neg_integer(), Block.Fetcher.t(module()), non_neg_integer() | nil, boolean()) :: :ok
+  def start_fetch_and_import(number, block_fetcher, previous_number, parent_mismatch? \\ false) do
+    is_reorg = reorg?(number, previous_number) or parent_mismatch?
+
+    number
+    |> determine_start_at(previous_number, parent_mismatch?)
+    |> import_ranges(number)
+    |> Enum.each(fn range ->
+      args = [range, block_fetcher, is_reorg]
+
+      Task.Supervisor.start_child(TaskSupervisor, __MODULE__, :fetch_and_import_block_range, args,
+        shutdown: @shutdown_after
+      )
+    end)
+  end
+
+  # `true` when the new head reports a parent hash that differs from the hash already seen for `number - 1`, which means
+  # the previously imported parent has to be refetched together with the new head.
+  @spec parent_mismatch?(map(), non_neg_integer(), map()) :: boolean()
+  defp parent_mismatch?(%{"parentHash" => parent_hash}, number, last_realtime_blocks) when is_binary(parent_hash) do
+    case Map.get(last_realtime_blocks, number - 1) do
+      nil -> false
+      known_parent_hash -> known_parent_hash != parent_hash
     end
   end
 
-  defp determine_start_at(number, nil), do: number
+  defp parent_mismatch?(_new_head, _number, _last_realtime_blocks), do: false
 
-  defp determine_start_at(number, previous_number) do
-    if reorg?(number, previous_number) do
-      # set start_at to NOT fill in skipped numbers
-      number
-    else
-      # set start_at to fill in skipped numbers, if any
-      previous_number + 1
+  defp determine_start_at(number, nil, _parent_mismatch?), do: number
+
+  defp determine_start_at(number, previous_number, parent_mismatch?) do
+    cond do
+      reorg?(number, previous_number) ->
+        # set start_at to NOT fill in skipped numbers
+        number
+
+      parent_mismatch? ->
+        # set start_at to also refetch the parent whose hash no longer matches the new head
+        max(min(previous_number + 1, number - 1), 0)
+
+      true ->
+        # set start_at to fill in skipped numbers, if any
+        previous_number + 1
     end
+  end
+
+  # Splits `start_at..number` into the ranges the realtime fetcher imports itself, handing the part that exceeds
+  # `INDEXER_REALTIME_MAX_LAG` to the catchup fetcher.
+  @spec import_ranges(non_neg_integer(), non_neg_integer()) :: [Range.t()]
+  defp import_ranges(start_at, number) when start_at > number, do: []
+
+  defp import_ranges(start_at, number) do
+    max_lag = max_lag()
+
+    realtime_start_at =
+      if number - start_at + 1 > max_lag do
+        hand_off_to_catchup(start_at..(number - max_lag)//1, max_lag)
+        number - max_lag + 1
+      else
+        start_at
+      end
+
+    realtime_start_at..number//1
+    |> Enum.chunk_every(batch_size())
+    |> Enum.map(fn numbers -> List.first(numbers)..List.last(numbers)//1 end)
+  end
+
+  defp hand_off_to_catchup(first..last//_ = range, max_lag) do
+    MissingBlockRange.save_batch([range])
+
+    Logger.info(fn ->
+      [
+        "Realtime lag is above ",
+        to_string(max_lag),
+        " blocks, so blocks ",
+        to_string(first),
+        "..",
+        to_string(last),
+        " were handed to the catchup fetcher."
+      ]
+    end)
+  end
+
+  defp batch_size do
+    max(Application.get_env(:indexer, __MODULE__)[:batch_size] || @default_batch_size, 1)
+  end
+
+  defp max_lag do
+    max(Application.get_env(:indexer, __MODULE__)[:max_lag] || @default_max_lag, 1)
   end
 
   defp reorg?(number, previous_number) when is_integer(previous_number) and number <= previous_number do
@@ -355,25 +444,34 @@ defmodule Indexer.Block.Realtime.Fetcher do
 
   @reorg_delay 5_000
 
-  @decorate trace(name: "fetch", resource: "Indexer.Block.Realtime.Fetcher.fetch_and_import_block/3", tracer: Tracer)
-  def fetch_and_import_block(block_number_to_fetch, block_fetcher, reorg?, retry \\ 3) do
+  @decorate trace(
+              name: "fetch",
+              resource: "Indexer.Block.Realtime.Fetcher.fetch_and_import_block_range/3",
+              tracer: Tracer
+            )
+  def fetch_and_import_block_range(first..last//_ = range, block_fetcher, reorg?, retry \\ 3) do
     Process.flag(:trap_exit, true)
 
     Indexer.Logger.metadata(
       fn ->
         if reorg? do
-          remove_assets_by_number(block_number_to_fetch)
+          Enum.each(range, &remove_assets_by_number/1)
 
-          # give previous fetch attempt (for same block number) a chance to finish
+          # give previous fetch attempt (for the same block numbers) a chance to finish
           # before fetching again, to reduce block consensus mistakes
           :timer.sleep(@reorg_delay)
         end
 
-        do_fetch_and_import_block(block_number_to_fetch, block_fetcher, retry)
+        do_fetch_and_import_block_range(range, block_fetcher, retry)
       end,
       fetcher: :block_realtime,
-      block_number: block_number_to_fetch
+      first_block_number: first,
+      block_number: last
     )
+  end
+
+  def fetch_and_import_block(block_number_to_fetch, block_fetcher, reorg?, retry \\ 3) do
+    fetch_and_import_block_range(block_number_to_fetch..block_number_to_fetch//1, block_fetcher, reorg?, retry)
   end
 
   @spec remove_assets_by_number(non_neg_integer()) :: any()
@@ -419,26 +517,29 @@ defmodule Indexer.Block.Realtime.Fetcher do
   defp do_remove_assets_by_number(_, _), do: :ok
 
   @decorate span(tracer: Tracer)
-  defp do_fetch_and_import_block(block_number_to_fetch, block_fetcher, retry) do
+  defp do_fetch_and_import_block_range(first..last//_ = range, block_fetcher, retry) do
     time_before = Timex.now()
 
-    {fetch_duration, result} =
-      :timer.tc(fn -> fetch_and_import_range(block_fetcher, block_number_to_fetch..block_number_to_fetch) end)
+    {fetch_duration, result} = :timer.tc(fn -> fetch_and_import_range(block_fetcher, range) end)
 
     Prometheus.Instrumenter.set_block_full_process(fetch_duration, __MODULE__)
 
     case result do
       {:ok, %{inserted: inserted, errors: []}} ->
         log_import_timings(inserted, fetch_duration, time_before)
-        MissingBlockRange.clear_batch([block_number_to_fetch..block_number_to_fetch])
+        MissingBlockRange.clear_batch([range])
         Logger.debug("Fetched and imported.")
 
       {:ok, %{inserted: _, errors: [_ | _] = errors}} ->
         Logger.error(fn ->
           [
-            "failed to fetch block: ",
+            "failed to fetch blocks ",
+            to_string(first),
+            "..",
+            to_string(last),
+            ": ",
             inspect(errors),
-            ".  Block will be retried by catchup indexer."
+            ".  Blocks will be retried by catchup indexer."
           ]
         end)
 
@@ -447,20 +548,22 @@ defmodule Indexer.Block.Realtime.Fetcher do
 
         params = %{
           changesets: changesets,
-          block_number_to_fetch: block_number_to_fetch,
+          range: range,
           block_fetcher: block_fetcher,
           retry: retry
         }
 
-        if retry_fetch_and_import_block(params) == :ignore do
+        if retry_fetch_and_import_block_range(params) == :ignore do
           Logger.error(
             fn ->
               [
-                "failed to validate for block ",
-                to_string(block_number_to_fetch),
+                "failed to validate for blocks ",
+                to_string(first),
+                "..",
+                to_string(last),
                 ": ",
                 inspect(changesets),
-                ".  Block will be retried by catchup indexer."
+                ".  Blocks will be retried by catchup indexer."
               ]
             end,
             step: step
@@ -477,7 +580,7 @@ defmodule Indexer.Block.Realtime.Fetcher do
             [
               "failed to fetch: ",
               inspect(reason),
-              ".  Block will be retried by catchup indexer."
+              ".  Blocks will be retried by catchup indexer."
             ]
           end,
           step: step
@@ -489,7 +592,7 @@ defmodule Indexer.Block.Realtime.Fetcher do
             [
               "failed to insert: ",
               inspect(failed_value),
-              ".  Block will be retried by catchup indexer."
+              ".  Blocks will be retried by catchup indexer."
             ]
           end,
           step: step
@@ -497,29 +600,28 @@ defmodule Indexer.Block.Realtime.Fetcher do
     end
   end
 
-  defp log_import_timings(%{blocks: [%{number: number, timestamp: timestamp}]}, fetch_duration, time_before) do
+  defp log_import_timings(%{blocks: [_ | _] = blocks}, fetch_duration, time_before) do
+    %{number: number, timestamp: timestamp} = Enum.max_by(blocks, & &1.number)
+
     node_delay = Timex.diff(time_before, timestamp, :seconds)
     Prometheus.Instrumenter.set_json_rpc_node_delay(node_delay)
 
-    Logger.debug("Block #{number} fetching duration: #{fetch_duration / 1_000_000}s. Node delay: #{node_delay}s.",
+    Logger.debug(
+      "#{Enum.count(blocks)} block(s) up to #{number} fetching duration: #{fetch_duration / 1_000_000}s. Node delay: #{node_delay}s.",
       fetcher: :block_import_timings
     )
   end
 
   defp log_import_timings(_inserted, _duration, _time_before), do: nil
 
-  defp retry_fetch_and_import_block(%{retry: retry}) when retry < 1, do: :ignore
+  defp retry_fetch_and_import_block_range(%{retry: retry}) when retry < 1, do: :ignore
 
-  defp retry_fetch_and_import_block(%{changesets: changesets} = params) do
+  defp retry_fetch_and_import_block_range(%{changesets: changesets} = params) do
     if unknown_block_number_error?(changesets) do
-      # Wait half a second to give Nethermind time to sync.
+      # Wait half a second to give the node time to sync.
       :timer.sleep(500)
 
-      number = params.block_number_to_fetch
-      fetcher = params.block_fetcher
-      updated_retry = params.retry - 1
-
-      do_fetch_and_import_block(number, fetcher, updated_retry)
+      do_fetch_and_import_block_range(params.range, params.block_fetcher, params.retry - 1)
     else
       :ignore
     end

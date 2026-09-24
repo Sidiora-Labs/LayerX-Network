@@ -1,0 +1,20 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "docker/Dockerfile",
+    "watchPatterns": [
+      "/explorer/backend/**",
+      "/explorer/deploy/railway/backend.railway.json"
+    ]
+  },
+  "deploy": {
+    "startCommand": "/bin/sh -c \"bin/blockscout eval 'Elixir.Explorer.ReleaseTasks.create_and_migrate()' && bin/blockscout start\"",
+    "healthcheckPath": "/api/health/liveness",
+    "healthcheckTimeout": 600,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10,
+    "drainingSeconds": 30,
+    "overlapSeconds": 60
+  }
+}

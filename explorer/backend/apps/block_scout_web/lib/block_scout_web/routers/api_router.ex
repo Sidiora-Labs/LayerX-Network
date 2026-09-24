@@ -153,6 +153,10 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
       end
     end
 
+    scope "/paxeer-x" do
+      get("/capabilities", V2.PaxeerX.CapabilitiesController, :capabilities)
+    end
+
     scope "/transactions" do
       get("/", V2.TransactionController, :transactions)
       get("/watchlist", V2.TransactionController, :watchlist_transactions)
@@ -189,6 +193,7 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
       get("/:transaction_hash_param/raw-trace", V2.TransactionController, :raw_trace)
       get("/:transaction_hash_param/state-changes", V2.TransactionController, :state_changes)
       get("/:transaction_hash_param/summary", V2.TransactionController, :summary)
+      get("/:transaction_hash_param/status", V2.PaxeerX.TransactionStatusController, :status)
 
       chain_scope :neon do
         get("/:transaction_hash_param/external-transactions", V2.TransactionController, :external_transactions)
@@ -257,6 +262,7 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
       get("/:address_hash_param/withdrawals", V2.AddressController, :withdrawals)
       get("/:address_hash_param/nft", V2.AddressController, :nft_list)
       get("/:address_hash_param/nft/collections", V2.AddressController, :nft_collections)
+      get("/:address_hash_param/unified", V2.PaxeerX.UnifiedAccountController, :unified)
 
       if @chain_identity == {:optimism, :celo} do
         get("/:address_hash_param/celo/election-rewards", V2.AddressController, :celo_election_rewards)
@@ -266,6 +272,12 @@ defmodule BlockScoutWeb.Routers.ApiRouter do
       if @chain_type == :ethereum do
         get("/:address_hash_param/beacon/deposits", V2.AddressController, :beacon_deposits)
       end
+    end
+
+    scope "/paxeer-x" do
+      get("/anchors", V2.PaxeerX.AnchorController, :anchors)
+      get("/receipts", V2.PaxeerX.ReceiptController, :receipts)
+      get("/receipts/:id", V2.PaxeerX.ReceiptController, :receipt)
     end
 
     scope "/main-page" do

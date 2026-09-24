@@ -68,6 +68,13 @@ defmodule Explorer.Chain.Import.Stage.ChainTypeSpecific do
     ],
     stability: [
       Runner.Stability.Validators
+    ],
+    paxeer_x: [
+      Runner.PaxeerX.AccountBindings,
+      Runner.PaxeerX.CustodyEvents,
+      Runner.PaxeerX.Anchors,
+      Runner.PaxeerX.Receipts,
+      Runner.PaxeerX.MarketEvents
     ]
   }
 

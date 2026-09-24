@@ -131,6 +131,10 @@ const schema = yup
       }),
     NEXT_PUBLIC_FLASHBLOCKS_SOCKET_URL: yup.string().test(urlTest),
     NEXT_PUBLIC_HOT_CONTRACTS_ENABLED: yup.boolean(),
+    NEXT_PUBLIC_PAXEER_X_ENABLED: yup.boolean(),
+
+    // Paxeer X Network
+    NEXT_PUBLIC_PAXEER_X_ENABLED: yup.boolean(),
 
     // Misc
     NEXT_PUBLIC_USE_NEXT_JS_PROXY: yup.boolean(),

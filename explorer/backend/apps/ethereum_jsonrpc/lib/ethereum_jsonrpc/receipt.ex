@@ -9,6 +9,7 @@ defmodule EthereumJSONRPC.Receipt do
   import EthereumJSONRPC, only: [quantity_to_integer: 1]
 
   alias EthereumJSONRPC.Logs
+  alias EthereumJSONRPC.PaxeerX
 
   case @chain_type do
     :ethereum ->
@@ -206,6 +207,7 @@ defmodule EthereumJSONRPC.Receipt do
   def elixir_to_params(elixir) do
     elixir
     |> do_elixir_to_params()
+    |> PaxeerX.put_cosmos_transaction_type(elixir)
     |> chain_type_fields(elixir)
   end
 

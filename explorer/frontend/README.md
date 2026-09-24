@@ -20,6 +20,30 @@ Alternatively, you can build your own docker image and run your app from that. P
 
 For more information on migrating from the previous frontend, please see the [frontend migration docs](https://docs.blockscout.com/setup/deployment/frontend-migration).
 
+## Paxeer X
+
+This tree is deployed as the Paxeer X Network explorer. Two run-time ENV presets are tracked under [`configs/envs`](./configs/envs):
+
+- `paxeer-x.env` — the public deployment (https, wss).
+- `paxeer-x-dev.env` — the development deployment (http, ws).
+
+Both describe network `Paxeer X Network` (short name `Paxeer X`, network id `125`, native coin `PAX`, 18 decimals), carry the Paxeer X marks from [`public/static/paxeer-x`](./public/static/paxeer-x), and link out to nothing except `https://paxeer.app` and the monorepo on GitHub. Marketplace, ads and third-party analytics are off.
+
+Using a preset:
+
+1. Copy it to a dotfile name the container entrypoint understands, e.g. `cp configs/envs/paxeer-x.env configs/envs/.env.paxeer-x`, and build or run with `ENVS_PRESET=paxeer-x`.
+2. Replace the two deployment inputs in the copy: `REPLACE_API_HOST` (Blockscout API host) and `REPLACE_APP_HOST` (host the explorer itself is served from). `NEXT_PUBLIC_APP_*` is on the entrypoint's preset blacklist, so the app host can also be supplied straight from the container environment.
+
+Validating a preset without a full build:
+
+```sh
+cd deploy/tools/envs-validator
+yarn install --frozen-lockfile
+NEXT_PUBLIC_GIT_COMMIT_SHA=$(git rev-parse --short HEAD) NEXT_PUBLIC_GIT_TAG=$(git describe --tags --always --abbrev=0) ../../scripts/collect_envs.sh ../../../docs/ENVS.md
+yarn build
+./node_modules/.bin/dotenv -e ../../../configs/envs/paxeer-x.env yarn run validate
+```
+
 ## Contributing
 
 See our [Contribution guide](./docs/CONTRIBUTING.md) for pull request protocol. We expect contributors to follow our [code of conduct](./CODE_OF_CONDUCT.md) when submitting code or comments.

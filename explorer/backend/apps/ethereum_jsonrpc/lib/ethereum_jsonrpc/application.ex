@@ -6,6 +6,7 @@ defmodule EthereumJSONRPC.Application do
   use Application
 
   alias EthereumJSONRPC.{IPC, RequestCoordinator, RollingWindow}
+  alias EthereumJSONRPC.HTTP.Throttle
   alias EthereumJSONRPC.Utility.{EndpointAvailabilityChecker, EndpointAvailabilityObserver}
 
   @impl Application
@@ -15,11 +16,21 @@ defmodule EthereumJSONRPC.Application do
     rolling_window_opts = Keyword.fetch!(config, :rolling_window_opts)
 
     if Application.get_env(:nft_media_handler, :standalone_media_worker?) do
-      Supervisor.start_link([], strategy: :one_for_one, name: EthereumJSONRPC.Supervisor)
+      Supervisor.start_link([{Throttle, []}],
+        strategy: :one_for_one,
+        name: EthereumJSONRPC.Supervisor
+      )
     else
       [
-        :hackney_pool.child_spec(:ethereum_jsonrpc, recv_timeout: 60_000, timeout: 60_000, max_connections: 1000),
-        Supervisor.child_spec({RollingWindow, [rolling_window_opts]}, id: RollingWindow.ErrorThrottle),
+        {Throttle, []},
+        :hackney_pool.child_spec(:ethereum_jsonrpc,
+          recv_timeout: 60_000,
+          timeout: 60_000,
+          max_connections: 1000
+        ),
+        Supervisor.child_spec({RollingWindow, [rolling_window_opts]},
+          id: RollingWindow.ErrorThrottle
+        ),
         {EndpointAvailabilityObserver, []},
         {EndpointAvailabilityChecker, []}
       ]
@@ -34,7 +45,9 @@ defmodule EthereumJSONRPC.Application do
       case Keyword.fetch(config, :throttle_rolling_window_opts) do
         {:ok, throttle_rolling_window_opts} ->
           child =
-            Supervisor.child_spec({RollingWindow, [throttle_rolling_window_opts]}, id: RollingWindow.ThrottleRateLimit)
+            Supervisor.child_spec({RollingWindow, [throttle_rolling_window_opts]},
+              id: RollingWindow.ThrottleRateLimit
+            )
 
           [child | children]
 
@@ -50,7 +63,9 @@ defmodule EthereumJSONRPC.Application do
     case Application.get_env(:ethereum_jsonrpc, :rpc_transport) do
       :ipc ->
         [
-          :poolboy.child_spec(:worker, poolboy_config(), path: Application.get_env(:ethereum_jsonrpc, :ipc_path))
+          :poolboy.child_spec(:worker, poolboy_config(),
+            path: Application.get_env(:ethereum_jsonrpc, :ipc_path)
+          )
           | children
         ]
 

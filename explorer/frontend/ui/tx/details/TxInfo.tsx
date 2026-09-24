@@ -45,6 +45,7 @@ import HashStringShortenDynamic from 'ui/shared/HashStringShortenDynamic';
 import IconSvg from 'ui/shared/IconSvg';
 import LogDecodedInputData from 'ui/shared/logs/LogDecodedInputData';
 import RawInputData from 'ui/shared/RawInputData';
+import TxStatusLadderBadge from 'ui/shared/statusLadder/TxStatusLadderBadge';
 import StatusTag from 'ui/shared/statusTag/StatusTag';
 import TxStatus from 'ui/shared/statusTag/TxStatus';
 import TextSeparator from 'ui/shared/TextSeparator';
@@ -209,6 +210,7 @@ const TxInfo = ({ data, tacOperations, isLoading, socketStatus, noTxActions }: P
       </DetailedInfo.ItemLabel>
       <DetailedInfo.ItemValue>
         <TxStatus status={ data.status } errorText={ data.status === 'error' ? data.result : undefined } isLoading={ isLoading }/>
+        <TxStatusLadderBadge hash={ data.hash } ml={ 3 }/>
         { data.method && (
           <Badge colorPalette={ data.method === 'Multicall' ? 'teal' : 'gray' } loading={ isLoading } truncated ml={ 3 }>
             { data.method }
