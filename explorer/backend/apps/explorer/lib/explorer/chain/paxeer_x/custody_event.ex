@@ -28,12 +28,16 @@ defmodule Explorer.Chain.PaxeerX.CustodyEvent do
   @directions ~w(deposit withdrawal balance_delta)a
 
   @required_attrs ~w(kind direction block_hash block_number transaction_hash log_index)a
-  @optional_attrs ~w(reference_id asset_id amount address_hash account block_consensus)a
+  @optional_attrs ~w(event_name parameters nullifier checkpoint_hash reference_id asset_id amount address_hash account block_consensus)a
 
   @typedoc """
   * `kind` - the custody event as the precompile emits it.
   * `direction` - the balance effect of the event on the custodied account.
+  * `event_name` - the Solidity name of the precompile event the row was decoded from.
+  * `parameters` - every decoded argument of that event under its ABI name, lossless.
   * `reference_id` - the deposit id or claim id shared by the rows of one custody flow.
+  * `nullifier` - the claim nullifier that links a queued claim to its finalisation or exit.
+  * `checkpoint_hash` - the checkpoint the claim proves against, as the custody ABI spells it.
   * `asset_id` - the custody asset id the event moves, when the event carries one.
   * `amount` - the moved amount, when the event carries one.
   * `address_hash` - the EVM address acting in the event (payer or recipient).
@@ -51,7 +55,11 @@ defmodule Explorer.Chain.PaxeerX.CustodyEvent do
     field(:block_consensus, :boolean, null: false)
     field(:kind, Ecto.Enum, values: @kinds, null: false)
     field(:direction, Ecto.Enum, values: @directions, null: false)
+    field(:event_name, :string)
+    field(:parameters, :map)
     field(:reference_id, Hash.Full)
+    field(:nullifier, Hash.Full)
+    field(:checkpoint_hash, Hash.Full)
     field(:asset_id, Hash.Full)
     field(:amount, :decimal)
     field(:address_hash, Hash.Address)
