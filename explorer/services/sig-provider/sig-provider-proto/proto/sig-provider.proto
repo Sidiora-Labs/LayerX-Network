@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package blockscout.sig_provider.v1;
+
+option go_package = "github.com/blockscout/blockscout-rs/sig-provider";
+
+service SignatureService {
+  rpc CreateSignatures(CreateSignaturesRequest)
+      returns (CreateSignaturesResponse) {}
+}
+
+service AbiService {
+  rpc GetFunctionAbi(GetFunctionAbiRequest) returns (GetFunctionAbiResponse) {}
+  rpc GetEventAbi(GetEventAbiRequest) returns (GetEventAbiResponse) {}
+
+  rpc BatchGetEventAbis(BatchGetEventAbisRequest) returns (BatchGetEventAbisResponse) {}
+}
+
+message CreateSignaturesRequest { string abi = 1; }
+
+message CreateSignaturesResponse {}
+
+message Argument {
+  string name = 1;
+  string type = 2;
+  repeated Argument components = 3;
+  // this is present only in events
+  optional bool indexed = 4;
+  // decoded value
+  string value = 5;
+}
+
+message Abi {
+  string name = 1;
+  repeated Argument inputs = 2;
+}
+
+message GetFunctionAbiRequest { string tx_input = 1; }
+
+message GetFunctionAbiResponse { repeated Abi abi = 1; }
+
+message GetEventAbiRequest {
+  string data = 1;
+  // comma separated hex values, ex. `0x0000..1234,0x0000...5678`
+  string topics = 2;
+}
+
+message GetEventAbiResponse { repeated Abi abi = 1; }
+
+message BatchGetEventAbisRequest {
+  repeated GetEventAbiRequest requests = 1;
+}
+
+message BatchGetEventAbisResponse {
+  repeated GetEventAbiResponse responses = 1;
+}

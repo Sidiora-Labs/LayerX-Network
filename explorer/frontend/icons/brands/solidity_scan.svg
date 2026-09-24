@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 23 20">
+  <path fill="url(#solidity_scan_svg__a)" d="M1.12 1.111v5.556h2.241V2.222h4.482V0H2.241a1.13 1.13 0 0 0-.793.325c-.21.209-.327.491-.327.786Zm20.168 5.556V1.11c0-.295-.118-.577-.328-.786A1.125 1.125 0 0 0 20.168 0h-5.603v2.222h4.482v4.445h2.24Zm-2.24 11.11h-4.483V20h5.603c.297 0 .582-.117.792-.326.21-.208.328-.49.328-.785v-5.556h-2.24v4.445ZM7.842 20v-2.222H3.361v-4.445h-2.24v5.556c0 .295.117.577.327.785.21.209.496.326.793.326h5.602ZM0 8.889h22.408v2.222H0V8.89Z"/>
+  <defs>
+    <linearGradient id="solidity_scan_svg__a" x1="2.161" x2="21.104" y1="1.429" y2="18.729" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#52FF00"/>
+      <stop offset="1" stop-color="#00EEFD"/>
+    </linearGradient>
+  </defs>
+</svg>

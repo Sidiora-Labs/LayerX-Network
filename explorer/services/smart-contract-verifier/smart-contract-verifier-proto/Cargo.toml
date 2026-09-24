@@ -1,0 +1,48 @@
+[package]
+name = "smart-contract-verifier-proto"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+actix-prost = { workspace = true }
+actix-prost-macros = { workspace = true }
+actix-web = { workspace = true }
+async-trait = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_with = { workspace = true, features = ["hex", "base64"] }
+tonic = { workspace = true }
+
+anyhow = { workspace = true, optional = true }
+mockall = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+reqwest-middleware = { workspace = true, optional = true }
+reqwest-retry = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+
+[build-dependencies]
+actix-prost-build = { workspace = true }
+prost-build = { workspace = true }
+tonic-build = { workspace = true }
+
+[dev-dependencies]
+smart-contract-verifier-proto = { workspace = true, features = ["http-client", "mock"] }
+tokio = { workspace = true, features = ["rt"] }
+
+[features]
+http-client = [
+    "dep:anyhow",
+    "dep:reqwest",
+    "dep:reqwest-middleware",
+    "dep:reqwest-retry",
+    "dep:thiserror",
+    "dep:url",
+]
+mock = [
+    "dep:mockall",
+    "dep:tokio",
+]

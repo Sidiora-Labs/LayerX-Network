@@ -1,0 +1,383 @@
+syntax = "proto3";
+
+package blockscout.smartContractVerifier.v2;
+
+option go_package = "github.com/blockscout/blockscout-rs/smart-contract-verifier";
+
+service SolidityVerifier {
+  rpc VerifyMultiPart(VerifySolidityMultiPartRequest) returns (VerifyResponse) {}
+
+  rpc VerifyStandardJson(VerifySolidityStandardJsonRequest) returns (VerifyResponse) {}
+
+  rpc BatchVerifyMultiPart(BatchVerifySolidityMultiPartRequest) returns (BatchVerifyResponse) {}
+
+  rpc BatchVerifyStandardJson(BatchVerifySolidityStandardJsonRequest) returns (BatchVerifyResponse) {}
+
+  rpc ListCompilerVersions(ListCompilerVersionsRequest) returns (ListCompilerVersionsResponse) {}
+
+  rpc LookupMethods(LookupMethodsRequest) returns (LookupMethodsResponse) {}
+}
+
+service VyperVerifier {
+  rpc VerifyMultiPart(VerifyVyperMultiPartRequest) returns (VerifyResponse) {}
+
+  rpc VerifyStandardJson(VerifyVyperStandardJsonRequest) returns (VerifyResponse) {}
+
+  rpc ListCompilerVersions(ListCompilerVersionsRequest) returns (ListCompilerVersionsResponse) {}
+}
+
+service SourcifyVerifier {
+  rpc Verify(VerifySourcifyRequest) returns (VerifyResponse) {}
+
+  rpc VerifyFromEtherscan(VerifyFromEtherscanSourcifyRequest) returns (VerifyResponse) {}
+}
+
+message Source {
+  /// The name of the file verified contract was located at
+  string file_name = 1;
+
+  /// The name of the contract which was verified
+  string contract_name = 2;
+
+  // Compiler version used to compile the contract
+  string compiler_version = 3;
+
+  /// 'settings' key in Standard Input JSON
+  /// (https://docs.soliditylang.org/en/latest/using-the-compiler.html#input-description)
+  string compiler_settings = 4;
+
+  enum SourceType {
+    // Default value. Used if is impossible to determine the source type.
+    SOURCE_TYPE_UNSPECIFIED = 0;
+    SOLIDITY = 1;
+    VYPER = 2;
+    YUL = 3;
+  }
+  SourceType source_type = 5;
+
+  map<string, string> source_files = 6;
+
+  /// Contract abi (https://docs.soliditylang.org/en/latest/abi-spec.html?highlight=abi#json);
+  /// (does not exist for Yul contracts)
+  optional string abi = 7;
+
+  /// Constructor arguments used for deploying verified contract
+  /// (exists only for creation inputs)
+  optional string constructor_arguments = 8;
+
+  enum MatchType {
+    // Default value. This value is unused.
+    MATCH_TYPE_UNSPECIFIED = 0;
+    PARTIAL = 1;
+    FULL = 2;
+  }
+  /// Similar to Sourcify (see https://docs.sourcify.dev/docs/full-vs-partial-match/)
+  MatchType match_type = 9;
+
+  /// General and compiler-specific artifacts (abi, userdoc, devdoc, licenses, ast, etc),
+  /// encoded as a json.
+  optional string compilation_artifacts = 10;
+
+  /// Info about the creation code (sourcemaps, linkreferences) encoded as a json.
+  optional string creation_input_artifacts = 11;
+
+  /// Info about the runtime code (sourcemaps, linkreferences, immutables) encoded as a json.
+  optional string deployed_bytecode_artifacts = 12;
+
+  /// If true, the verified contract was a ERC-5202 compatible blueprint contract
+  bool is_blueprint = 13;
+
+  /// Mapping from fully qualified name to the address the library is deployed at
+  /// (includes both automatically and manually linked libraries)
+  map<string, string> libraries = 14;
+}
+
+enum BytecodeType {
+  BYTECODE_TYPE_UNSPECIFIED = 0;
+  CREATION_INPUT = 1;
+  DEPLOYED_BYTECODE = 2;
+}
+
+message VerificationMetadata {
+  /// Id of the chain the contract is verified on
+  optional string chain_id = 1;
+  /// The address of the contract to be verified
+  optional string contract_address = 2;
+}
+
+message VerifySolidityMultiPartRequest {
+  reserved 7 /* libraries */;
+  /// Bytecode to compare local compilation result with
+  string bytecode = 1;
+  /// Either CREATION_INPUT or DEPLOYED_BYTECODE, depending on what should be verified
+  BytecodeType bytecode_type = 2;
+  /// Compiler version used to compile the contract
+  string compiler_version = 3;
+  /// Version of the EVM to compile for. If absent results in default EVM version
+  optional string evm_version = 4;
+  /// If present, optimizations are enabled with specified number of runs,
+  /// otherwise optimizations are disabled
+  optional int32 optimization_runs = 5;
+  /// Map from a source file name to the actual source code
+  map<string, string> source_files = 6;
+
+  /// An optional field to be filled by explorers
+  optional VerificationMetadata metadata = 8;
+
+  /// Additional actions the client wants the result to be returned.
+  /// Currently supports only: "lookup-methods" for Solidity contracts.
+  repeated string post_actions = 9;
+}
+
+message VerifySolidityStandardJsonRequest {
+  /// Bytecode to compare local compilation result with
+  string bytecode = 1;
+  /// Either CREATION_INPUT or DEPLOYED_BYTECODE, depending on what should be verified
+  BytecodeType bytecode_type = 2;
+  /// Compiler version used to compile the contract
+  string compiler_version = 3;
+  /// https://docs.soliditylang.org/en/latest/using-the-compiler.html#input-description
+  string input = 4;
+
+  /// An optional field to be filled by explorers
+  optional VerificationMetadata metadata = 5;
+
+  /// Additional actions the client wants the result to be returned.
+  /// Currently supports only: "lookup-methods" for Solidity contracts.
+  repeated string post_actions = 9;
+}
+
+message VerifyVyperMultiPartRequest {
+  /// Bytecode to compare local compilation result with
+  string bytecode = 1;
+  /// Either CREATION_INPUT or DEPLOYED_BYTECODE, depending on what should be verified
+  BytecodeType bytecode_type = 2;
+  /// Compiler version used to compile the contract
+  string compiler_version = 3;
+  /// Version of the EVM to compile for. If absent results in default EVM version
+  optional string evm_version = 4;
+  /// Map from a source file name to the actual source code
+  map<string, string> source_files = 6;
+  /// Map from an interface names to the actual interfaces.
+  /// If non-specified, no interfaces are considered.
+  map<string, string> interfaces = 8;
+
+  /// An optional field to be filled by explorers
+  optional VerificationMetadata metadata = 7;
+
+  reserved 5;
+  reserved "optimizations";
+}
+
+message VerifyVyperStandardJsonRequest {
+  /// Bytecode to compare local compilation result with
+  string bytecode = 1;
+  /// Either CREATION_INPUT or DEPLOYED_BYTECODE, depending on what should be verified
+  BytecodeType bytecode_type = 2;
+  /// Compiler version used to compile the contract
+  string compiler_version = 3;
+  /// https://docs.vyperlang.org/en/stable/compiling-a-contract.html#input-json-description
+  string input = 4;
+
+  /// An optional field to be filled by explorers
+  optional VerificationMetadata metadata = 5;
+}
+
+message VerifyResponse {
+  string message = 1;
+
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    SUCCESS = 1;
+    FAILURE = 2;
+  }
+  Status status = 2;
+
+  Source source = 3;
+
+  message ExtraData {
+    message BytecodePart {
+      string type = 1;
+      string data = 2;
+    }
+    /// Creation transaction input resultant from local compilation
+    /// parsed and split on Main and Meta parts. Is empty for Sourcify verification.
+    repeated BytecodePart local_creation_input_parts = 1;
+    /// Deployed bytecode resultant from local compilation
+    /// parsed and split on Main and Meta parts. Is empty for Sourcify verification.
+    repeated BytecodePart local_deployed_bytecode_parts = 2;
+  }
+  ExtraData extra_data = 4;
+
+  message PostActionResponses {
+    /// If requested, will contain the response for
+    /// 'lookup-methods' processing applied to the verified contract.
+    optional LookupMethodsResponse lookup_methods = 1;
+  }
+  PostActionResponses post_action_responses = 5;
+}
+
+message VerifySourcifyRequest {
+  /// Address of the contract to be verified
+  string address = 1;
+  /// The chain (network) the contract was deployed to
+  /// (https://docs.sourcify.dev/docs/api/chains/)
+  string chain = 2;
+  /// Files required for verification (see Sourcify Api)
+  // Is named as `files` instead of `source_files`
+  // to correspond with Sourcify api
+  map<string, string> files = 3;
+  // (optional) see Sourcify Api
+  optional int32 chosen_contract = 4;
+}
+
+message VerifyFromEtherscanSourcifyRequest {
+  /// Address of the contract to be verified
+  string address = 1;
+  /// The chain (network) the contract was deployed to
+  /// (https://docs.sourcify.dev/docs/api/chains/)
+  string chain = 2;
+}
+
+message ListCompilerVersionsRequest {}
+
+message ListCompilerVersionsResponse {
+  /// Compiler versions available
+  repeated string compiler_versions = 1;
+}
+
+message LookupMethodsRequest {
+  string bytecode = 1;
+  string abi = 2;
+  string source_map = 3;
+  map<uint32, string> file_ids = 4;
+}
+
+message LookupMethodsResponse {
+  message Method {
+    string file_name = 1;
+    uint32 file_offset = 2;
+    uint32 length = 3;
+  }
+  map<string, Method> methods = 1;
+}
+
+/*************** Batch related messages ***************/
+
+message BatchVerifySolidityMultiPartRequest {
+  reserved 6 /* libraries */;
+  /// Contracts to be verified
+  repeated Contract contracts = 1;
+
+  /// Compiler version used to compile the contract
+  string compiler_version = 2;
+  /// Map from a source file name to the actual source code
+  map<string, string> sources = 3;
+  /// Version of the EVM to compile for. If absent results in default EVM version
+  optional string evm_version = 4;
+  /// If present, optimizations are enabled with specified number of runs,
+  /// otherwise optimizations are disabled
+  optional uint32 optimization_runs = 5;
+}
+
+message BatchVerifySolidityStandardJsonRequest {
+  /// Contracts to be verified
+  repeated Contract contracts = 1;
+
+  /// Compiler version used to compile the contract
+  string compiler_version = 2;
+  /// https://docs.soliditylang.org/en/latest/using-the-compiler.html#input-description
+  string input = 3;
+}
+
+message BatchVerifyResponse {
+  message ContractVerificationResults {
+    repeated ContractVerificationResult items = 1;
+  }
+
+  oneof verification_result {
+    CompilationFailure compilation_failure = 1;
+    ContractVerificationResults contract_verification_results = 2;
+  }
+}
+
+message Contract {
+  optional string creation_code = 1;
+  optional string runtime_code = 2;
+  /// An optional field with metadata used for logging purposes
+  optional VerificationMetadata metadata = 3;
+}
+
+message CompilationFailure {
+  string message = 1;
+}
+
+message ContractVerificationResult {
+  oneof verification_result {
+    ContractVerificationFailure failure = 1;
+    ContractVerificationSuccess success = 2;
+  }
+}
+
+message ContractVerificationSuccess {
+  string creation_code = 1;
+  string runtime_code = 2;
+
+  message Compiler {
+    enum Compiler {
+      UNSPECIFIED = 0;
+      SOLC = 1;
+      VYPER = 2;
+    }
+  }
+
+  Compiler.Compiler compiler = 3;
+
+  string compiler_version = 4;
+
+  message Language {
+    enum Language {
+      UNSPECIFIED = 0;
+      SOLIDITY = 1;
+      YUL = 2;
+      VYPER = 3;
+    }
+  }
+  Language.Language language = 5;
+
+  string file_name = 6;
+  string contract_name = 7;
+
+  /// Map of path to source code
+  /// (includes only files related to the verified contracts)
+  map<string, string> sources = 8;
+
+  /// Compiler-specific settings such as optimization, linking, etc (json)
+  string compiler_settings = 9;
+
+  /// General and compiler-specific artifacts (abi, userdoc, devdoc, licenses, etc) (json)
+  string compilation_artifacts = 10;
+
+  /// Store info about the creation code (sourcemaps, linkreferences) (json)
+  string creation_code_artifacts = 11;
+
+  /// Store info about the runtime code (sourcemaps, linkreferences, immutables) (json)
+  string runtime_code_artifacts = 12;
+
+  enum MatchType {
+    UNDEFINED = 0;
+    PARTIAL = 1;
+    FULL = 2;
+  }
+
+  message MatchDetails {
+    MatchType match_type = 1;
+    string values = 2;
+    string transformations = 3;
+  }
+
+  optional MatchDetails creation_match_details = 13;
+  optional MatchDetails runtime_match_details = 14;
+}
+
+message ContractVerificationFailure {}

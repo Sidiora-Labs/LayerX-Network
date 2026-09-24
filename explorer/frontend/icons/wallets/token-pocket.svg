@@ -1,0 +1,17 @@
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <mask id="token-pocket_svg__a" style="mask-type:luminance" maskUnits="userSpaceOnUse" x="2" y="6" width="20" height="13">
+    <path d="M22 6H2v12.904h20V6Z" fill="#fff"/>
+  </mask>
+  <g mask="url(#token-pocket_svg__a)">
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M9.84 6H2.611A.61.61 0 0 0 2 6.611v2.482a.61.61 0 0 0 .611.611h2.327v8.589c0 .338.274.611.612.611h2.604a.61.61 0 0 0 .611-.611V9.704h1.064c1.022 0 1.853-.83 1.853-1.852A1.838 1.838 0 0 0 9.84 6Zm5.877 10.112.003.001v-4.992a1.156 1.156 0 0 1 2.309 0 1.15 1.15 0 0 1-1.154 1.155v3.967a5.125 5.125 0 0 0 5.121-5.121A5.119 5.119 0 0 0 16.875 6a5.123 5.123 0 0 0-5.121 5.121v7.154a.61.61 0 0 0 .611.612h2.74a.61.61 0 0 0 .612-.612v-2.163Z" fill="#2980FE"/>
+    <path d="M15.72 11.122v4.991a5.169 5.169 0 0 0 1.04.13h.036v-3.97c-.6-.04-1.075-.54-1.075-1.151Z" fill="url(#token-pocket_svg__b)"/>
+    <path d="M16.875 16.243v-3.967c-.029 0-.054 0-.083-.004v3.97h.083Z" fill="#2980FE"/>
+  </g>
+  <defs>
+    <linearGradient id="token-pocket_svg__b" x1="16.877" y1="13.683" x2="15.721" y2="13.683" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2980FE"/>
+      <stop offset=".967" stop-color="#6CA8FF"/>
+      <stop offset="1" stop-color="#2980FE"/>
+    </linearGradient>
+  </defs>
+</svg>

@@ -1,0 +1,54 @@
+{
+    "_comment": "A simple contract with cancun evm version",
+    "is_full_match": true,
+    "creation_bytecode": "0x608060405234801561000f575f80fd5b5060d98061001c5f395ff3fe6080604052348015600e575f80fd5b50600436106026575f3560e01c806345ac732814602a575b5f80fd5b60406004803603810190603c9190607d565b6042565b005b805f5d50565b5f80fd5b5f60ff82169050919050565b605f81604c565b81146068575f80fd5b50565b5f813590506077816058565b92915050565b5f60208284031215608f57608e6048565b5b5f609a84828501606b565b9150509291505056fea2646970667358221220a89d800667cbcdfd6ba7e7385c15bb850fe961dd398cfdfa50bb60245cc2d46964736f6c63430008180033",
+    "deployed_bytecode": "0x6080604052348015600e575f80fd5b50600436106026575f3560e01c806345ac732814602a575b5f80fd5b60406004803603810190603c9190607d565b6042565b005b805f5d50565b5f80fd5b5f60ff82169050919050565b605f81604c565b81146068575f80fd5b50565b5f813590506077816058565b92915050565b5f60208284031215608f57608e6048565b5b5f609a84828501606b565b9150509291505056fea2646970667358221220a89d800667cbcdfd6ba7e7385c15bb850fe961dd398cfdfa50bb60245cc2d46964736f6c63430008180033",
+    "compiler_version": "v0.8.24+commit.e11b9ed9",
+    "file_name": "contracts/Cancun.sol",
+    "contract_name": "Cancun",
+    "input": {
+        "language": "Solidity",
+        "sources": {
+            "contracts/Cancun.sol": {
+                "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.24;\n\ncontract Cancun {\n    // uint8 _reentry\n\n    function storeReentryLock(uint8 reentry) external {\n        assembly { \n            tstore(0x00, reentry)\n        }\n    }\n}"
+            }
+        },
+        "settings": {
+            "optimizer": {
+                "enabled": false,
+                "runs": 200
+            },
+            "evmVersion": "cancun",
+            "libraries": {},
+            "outputSelection": { "*": { "*": [ "*" ], "": [ "*" ] } }
+        }
+    },
+    "expected_compiler_artifacts": {
+        "abi": [{"inputs":[{"internalType":"uint8","name":"reentry","type":"uint8"}],"name":"storeReentryLock","outputs":[],"stateMutability":"nonpayable","type":"function"}],
+        "userdoc": {"kind":"user","methods":{},"version":1},
+        "devdoc": {"kind":"dev","methods":{},"version":1},
+        "storageLayout": {"storage":[],"types":null},
+        "sources": {"contracts/Cancun.sol": {"id":  0} }
+    },
+    "expected_creation_input_artifacts": {
+        "sourceMap": "58:168:0:-:0;;;;;;;;;;;;;;;;;;;",
+        "linkReferences": {},
+        "cborAuxdata": {
+            "1": {
+                "offset": 192,
+                "value": "0xa2646970667358221220a89d800667cbcdfd6ba7e7385c15bb850fe961dd398cfdfa50bb60245cc2d46964736f6c63430008180033"
+            }
+        }
+    },
+    "expected_deployed_bytecode_artifacts": {
+        "sourceMap": "58:168:0:-:0;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;103:121;;;;;;;;;;;;;:::i;:::-;;:::i;:::-;;;200:7;194:4;187:21;103:121;:::o;88:117:1:-;197:1;194;187:12;334:86;369:7;409:4;402:5;398:16;387:27;;334:86;;;:::o;426:118::-;497:22;513:5;497:22;:::i;:::-;490:5;487:33;477:61;;534:1;531;524:12;477:61;426:118;:::o;550:135::-;594:5;632:6;619:20;610:29;;648:31;673:5;648:31;:::i;:::-;550:135;;;;:::o;691:325::-;748:6;797:2;785:9;776:7;772:23;768:32;765:119;;;803:79;;:::i;:::-;765:119;923:1;948:51;991:7;982:6;971:9;967:22;948:51;:::i;:::-;938:61;;894:115;691:325;;;;:::o",
+        "linkReferences": {},
+        "immutableReferences": {},
+        "cborAuxdata": {
+            "1": {
+                "offset": 164,
+                "value": "0xa2646970667358221220a89d800667cbcdfd6ba7e7385c15bb850fe961dd398cfdfa50bb60245cc2d46964736f6c63430008180033"
+            }
+        }
+    }
+}

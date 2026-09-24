@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/v2/blocks/12345"
+  },
+  "response": {
+    "status": 200,
+    "body": "{\"base_fee_per_gas\":null,\"blob_gas_price\":null,\"blob_gas_used\":null,\"blob_transaction_count\":0,\"blob_transactions_count\":0,\"burnt_blob_fees\":\"0\",\"burnt_fees\":\"0\",\"burnt_fees_percentage\":null,\"difficulty\":\"735512610763\",\"excess_blob_gas\":null,\"gas_limit\":\"5000\",\"gas_target_percentage\":-100,\"gas_used\":\"0\",\"gas_used_percentage\":0,\"hash\":\"0x767c2bfb3bdee3f78676c1285cd757bcd5d8c272cef2eb30d9733800a78c0b6d\",\"height\":12345,\"internal_transactions_count\":0,\"miner\":{\"ens_domain_name\":null,\"hash\":\"0xad5C1768e5974C231b2148169da064e61910f31a\",\"implementations\":[],\"is_contract\":false,\"is_scam\":false,\"is_verified\":false,\"metadata\":null,\"name\":null,\"private_tags\":[],\"proxy_type\":null,\"public_tags\":[],\"watchlist_names\":[]},\"nonce\":\"0x549f882c5f356f85\",\"parent_hash\":\"0x4b3c1d7e65a507b62734feca1ee9f27a5379e318bd52ae62de7ba67dbeac66a3\",\"priority_fee\":\"0\",\"rewards\":[{\"reward\":\"5000000000000000000\",\"type\":\"Miner Reward\"}],\"size\":539,\"timestamp\":\"2015-07-31T18:23:50.000000Z\",\"total_difficulty\":\"3862140487204603\",\"transaction_count\":0,\"transaction_fees\":\"0\",\"transactions_count\":0,\"type\":\"block\",\"uncles_hashes\":[],\"withdrawals_count\":0}",
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}

@@ -31,6 +31,7 @@ docker
 agent
 cmd
 contributors
+explorer
 fuzz
 human
 include

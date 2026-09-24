@@ -1,0 +1,7 @@
+<svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path fill-rule="evenodd" clip-rule="evenodd" d="M4 1a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h12a3 3 0 0 0 3-3V4a3 3 0 0 0-3-3H4Zm.2 1.2a2 2 0 0 0-2 2v11.6a2 2 0 0 0 2 2h11.6a2 2 0 0 0 2-2V4.2a2 2 0 0 0-2-2H4.2Z" fill="currentColor"/>
+  <rect x="4" y="5" width="12" height="1.4" rx=".7" fill="currentColor"/>
+  <rect x="4" y="8" width="8" height="1.4" rx=".7" fill="currentColor"/>
+  <rect x="4" y="10.8" width="12" height="1.4" rx=".7" fill="currentColor"/>
+  <rect x="4" y="13.6" width="9" height="1.4" rx=".7" fill="currentColor"/>
+</svg>

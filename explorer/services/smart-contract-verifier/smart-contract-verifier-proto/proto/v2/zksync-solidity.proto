@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package blockscout.smartContractVerifier.v2.zksync.solidity;
+
+option go_package = "github.com/blockscout/blockscout-rs/smart-contract-verifier/zksync/solidity";
+
+service ZkSyncSolidityVerifier {
+  rpc VerifyStandardJson(VerifyStandardJsonRequest) returns (VerifyResponse) {}
+
+  rpc ListCompilers(ListCompilersRequest) returns (ListCompilersResponse) {}
+}
+
+message VerifyStandardJsonRequest {
+  string code = 1;
+  optional string constructor_arguments = 2;
+  string zk_compiler = 3;
+  string solc_compiler = 4;
+  string input = 5;
+}
+
+message CompilationFailure {
+  string message = 1;
+}
+
+message VerificationFailure {
+  string message = 1;
+}
+
+message VerificationSuccess {
+  string file_name = 1;
+  string contract_name = 2;
+
+  message Compiler {
+    string compiler = 1;
+    string version = 2;
+  }
+  Compiler zk_compiler = 3;
+  Compiler evm_compiler = 4;
+
+  enum Language {
+    LANGUAGE_UNKNOWN = 0;
+    SOLIDITY = 1;
+  }
+  Language language = 5;
+
+  string compiler_settings = 6;
+  map <string, string> sources = 7;
+  string compilation_artifacts = 8;
+  string creation_code_artifacts = 9;
+  string runtime_code_artifacts = 10;
+
+  optional Match creation_match = 11;
+  Match runtime_match = 12;
+}
+
+message VerifyResponse {
+  oneof verify_response {
+    CompilationFailure compilation_failure = 1;
+    VerificationFailure verification_failure = 2;
+    VerificationSuccess verification_success = 3;
+  }
+}
+
+message ListCompilersRequest {}
+
+message ListCompilersResponse {
+  repeated string zk_compilers = 1;
+  repeated string solc_compilers = 2;
+}
+
+message Match {
+  enum MatchType {
+    MATCH_TYPE_UNSPECIFIED = 0;
+    PARTIAL = 1;
+    FULL = 2;
+  }
+  MatchType type = 1;
+  string values = 2;
+  string transformations = 3;
+}

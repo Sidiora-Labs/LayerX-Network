@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="robots" content="noindex,nofollow">
+  <title></title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; }
+  </style>
+</head>
+<body>
+  <!--
+    Inner iframe: hosts API-provided NFT HTML (often data:text/html;base64,...).
+
+    sandbox="allow-scripts" only (no allow-same-origin):
+    - Untrusted NFT code runs here. Opaque origin prevents reading the explorer’s cookies,
+      localStorage, or authenticated same-origin fetches as the user’s session.
+    - We avoid pairing allow-scripts + allow-same-origin on this document: that combination would
+      let a same-origin framed page script remove or weaken its own sandbox via frameElement.
+
+    The outer iframe (NftHtml) uses allow-scripts allow-same-origin so this first-party shell can
+    participate in normal same-origin postMessage with the app; isolation for untrusted content is
+    enforced at this nested layer instead.
+  -->
+  <iframe width="100%" height="100%" frameborder="0" sandbox="allow-scripts"></iframe>
+  <script>
+    (function () {
+      'use strict';
+        window.addEventListener('message', function (event) {
+          if (event.origin !== window.location.origin) {
+            return;
+          }
+          var data = event.data;
+
+          if (!data || data.type !== 'nft-html-embed' || typeof data.src !== 'string') {
+            return;
+          }
+
+          const iframe = window.document.querySelector('iframe');
+          if (!iframe) {
+            return;
+          }
+          iframe.src = data.src;
+          iframe.onload = () => {
+            window.parent.postMessage({ type: 'nft-html-embed-loaded', src: data.src }, window.location.origin);
+          };
+      });
+    })();
+  </script>
+</body>
+</html>

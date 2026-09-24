@@ -1,0 +1,22 @@
+{
+  "name": "@blockscout/llms-txt-generator",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "yarn build && yarn generate:dev",
+    "build": "vite build --logLevel error",
+    "generate": "node dist/index.js",
+    "generate:dev": "dotenv -e ../../../configs/envs/.env.eth -- node dist/index.js"
+  },
+  "dependencies": {
+    "dedent": "1.6.0"
+  },
+  "devDependencies": {
+    "@types/dedent": "0.7.2",
+    "@types/node": "22.12.0",
+    "dotenv-cli": "10.0.0",
+    "typescript": "5.4.2",
+    "vite": "6.4.1"
+  }
+}

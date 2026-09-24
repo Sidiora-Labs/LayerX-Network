@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "es2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "baseUrl": ".",
+    "types": ["node"],
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.node.ts", "**/*.tsx", "**/*.pw.tsx", "decs.d.ts", "global.d.ts"],
+  "exclude": ["node_modules", "node_modules_linux", "./deploy/tools/envs-validator", "./deploy/tools/favicon-generator", "./deploy/tools/multichain-config-generator", "./deploy/tools/essential-dapps-chains-config-generator", "./toolkit/package", "./deploy/tools/llms-txt-generator"],
+}

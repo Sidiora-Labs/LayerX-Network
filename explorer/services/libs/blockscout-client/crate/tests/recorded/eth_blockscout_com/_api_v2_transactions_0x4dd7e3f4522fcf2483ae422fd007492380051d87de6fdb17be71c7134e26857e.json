@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/v2/transactions/0x4dd7e3f4522fcf2483ae422fd007492380051d87de6fdb17be71c7134e26857e"
+  },
+  "response": {
+    "status": 200,
+    "body": "{\"priority_fee\":\"0\",\"raw_input\":\"0x\",\"result\":\"success\",\"hash\":\"0x4dd7e3f4522fcf2483ae422fd007492380051d87de6fdb17be71c7134e26857e\",\"max_fee_per_gas\":\"20224552694\",\"revert_reason\":null,\"confirmation_duration\":[0,12000],\"transaction_burnt_fee\":\"599577089166324\",\"type\":2,\"token_transfers_overflow\":false,\"confirmations\":3039016,\"position\":134,\"max_priority_fee_per_gas\":\"0\",\"transaction_tag\":null,\"created_contract\":null,\"value\":\"2498258890879368298\",\"from\":{\"ens_domain_name\":null,\"hash\":\"0xdf99A0839818B3f120EBAC9B73f82B617Dc6A555\",\"implementations\":[],\"is_contract\":false,\"is_scam\":false,\"is_verified\":false,\"metadata\":{\"tags\":[{\"meta\":{\"tooltipUrl\":\"https://www.flashbots.net/\"},\"name\":\"Flashbots: Builder 2\",\"ordinal\":10,\"slug\":\"flashbots-builder-2\",\"tagType\":\"name\"},{\"meta\":{},\"name\":\"Flashbots\",\"ordinal\":0,\"slug\":\"flashbots\",\"tagType\":\"protocol\"},{\"meta\":{},\"name\":\"MEV Builder\",\"ordinal\":0,\"slug\":\"mev-builder\",\"tagType\":\"generic\"}]},\"name\":null,\"private_tags\":[],\"proxy_type\":null,\"public_tags\":[],\"watchlist_names\":[]},\"gas_used\":\"29646\",\"status\":\"ok\",\"to\":{\"ens_domain_name\":null,\"hash\":\"0x90B0c836a19A74195d45Fad2d2D3895a7a3eab08\",\"implementations\":[{\"address\":\"0x219A4E8f8c73d977F8d69596D434B5961068B26b\",\"address_hash\":\"0x219A4E8f8c73d977F8d69596D434B5961068B26b\",\"name\":\"FeeRecipient_R1\"}],\"is_contract\":true,\"is_scam\":false,\"is_verified\":true,\"metadata\":{\"tags\":[{\"meta\":{},\"name\":\"Fee Recipient\",\"ordinal\":0,\"slug\":\"fee-recipient\",\"tagType\":\"protocol\"},{\"meta\":{},\"name\":\"Fee Recipient: 0x90B...b08\",\"ordinal\":10,\"slug\":\"fee-recipient-0x90bb08\",\"tagType\":\"name\"}]},\"name\":\"AdminUpgradeabilityProxy\",\"private_tags\":[],\"proxy_type\":\"eip1967\",\"public_tags\":[],\"watchlist_names\":[]},\"authorization_list\":[],\"method\":null,\"fee\":{\"type\":\"actual\",\"value\":\"599577089166324\"},\"actions\":[],\"gas_limit\":\"29646\",\"gas_price\":\"20224552694\",\"decoded_input\":null,\"token_transfers\":[],\"base_fee_per_gas\":\"20224552694\",\"timestamp\":\"2024-06-12T19:45:23.000000Z\",\"nonce\":5166,\"historic_exchange_rate\":\"3490.63\",\"transaction_types\":[\"coin_transfer\",\"contract_call\"],\"exchange_rate\":\"4273.55\",\"block_number\":20077921,\"has_error_in_internal_transactions\":false}",
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}

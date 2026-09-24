@@ -1,0 +1,74 @@
+{
+  "name": "@blockscout/ui-toolkit",
+  "version": "2.4.0-alpha",
+  "description": "A comprehensive collection of reusable Chakra UI components and theme system for Blockscout's projects",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "license": "GPL-3.0-only",
+  "author": "Blockscout Team",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/blockscout/frontend.git",
+    "directory": "toolkit/package"
+  },
+  "homepage": "https://github.com/blockscout/frontend/tree/main/toolkit/package",
+  "bugs": {
+    "url": "https://github.com/blockscout/frontend/issues"
+  },
+  "keywords": [
+    "blockscout",
+    "ui",
+    "components",
+    "chakra-ui",
+    "react",
+    "typescript",
+    "design-system"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@chakra-ui/react": ">=3.33.0",
+    "@emotion/react": ">=11.14.0",
+    "next": ">=15.2.3",
+    "next-themes": ">=0.4.4",
+    "react": ">=18.3.1",
+    "react-dom": ">=18.3.1",
+    "react-hook-form": ">=7.52.1"
+  },
+  "devDependencies": {
+    "@svgr/plugin-jsx": "8.1.0",
+    "@types/node": "20.16.7",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "4.3.4",
+    "typescript": "5.9.2",
+    "vite": "6.4.1",
+    "vite-plugin-dts": "4.5.4",
+    "vite-plugin-svgr": "4.5.0",
+    "vite-tsconfig-paths": "5.1.4"
+  },
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "resolutions": {
+    "vite-plugin-dts/**/brace-expansion": "2.0.2",
+    "vite-plugin-svgr/**/js-yaml": "4.1.1"
+  }
+}

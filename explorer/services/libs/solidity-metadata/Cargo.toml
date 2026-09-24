@@ -1,0 +1,19 @@
+[package]
+name = "solidity-metadata"
+version = "1.1.0"
+description = "Parsing solidity metadata stored in bytecode"
+license = "MIT"
+repository = "https://github.com/blockscout/blockscout-rs"
+edition = "2021"
+keywords = ["solidity", "metadata", "parsing"]
+categories = ["parsing"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+minicbor = { version = "0.24", features = ["std"] }
+semver = "1.0"
+thiserror = "1.0"
+
+[dev-dependencies]
+blockscout-display-bytes = "1.1.0"

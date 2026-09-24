@@ -1,0 +1,37 @@
+[server.http]
+enabled = true
+addr = "0.0.0.0:8050"
+max_body_size = 2097152
+
+[server.http.cors]
+enabled = false
+allowed_origin = ""
+allowed_methods = "PUT, GET, POST, OPTIONS, DELETE, PATCH"
+allowed_credentials = true
+max_age = 3600
+block_on_origin_mismatch = false
+
+[server.grpc]
+enabled = false
+addr = "0.0.0.0:8051"
+
+[sources]
+fourbyte = "https://www.4byte.directory/"
+sigeth = "https://sig.eth.samczsun.com/"
+
+[sources.eth_bytecode_db]
+enabled = true
+url = "https://eth-bytecode-db.services.blockscout.com/"
+
+[metrics]
+enabled = false
+addr = "0.0.0.0:6060"
+route = "/metrics"
+
+[jaeger]
+enabled = false
+agent_endpoint = "127.0.0.1:6831"
+
+[tracing]
+enabled = true
+format = "default"

@@ -1,0 +1,86 @@
+import type { AddressParam } from 'types/api/addressParams';
+import type { DepositsResponse } from 'types/api/deposits';
+
+export const data: DepositsResponse = {
+  items: [
+    {
+      amount: '192175000000000',
+      block_number: 43242,
+      index: 11688,
+      pubkey: '0xf97e180c050e5Ab072211Ad2C213Eb5AEE4DF134',
+      signature: '0xf97e180c050e5Ab072211Ad2C213Eb5AEE4DF134',
+      status: 'completed',
+      from_address: {
+        hash: '0xf97e180c050e5Ab072211Ad2C213Eb5AEE4DF134',
+        implementations: null,
+        is_contract: false,
+        is_verified: null,
+        name: null,
+      } as AddressParam,
+      block_hash: '0xf97e180c050e5Ab072211Ad2C213Eb5AEE4DF134',
+      block_timestamp: '2022-06-07T18:12:24.000000Z',
+      transaction_hash: '0xf97e180c050e5Ab072211Ad2C213Eb5AEE4DF134',
+      withdrawal_address: {
+        hash: '0xf97e180c050e5Ab072211Ad2C213Eb5AEE4DF134',
+        implementations: null,
+        is_contract: false,
+        is_verified: null,
+        name: null,
+      } as AddressParam,
+    },
+    {
+      amount: '192175000000000',
+      block_number: 43242,
+      index: 11687,
+      pubkey: '0xf97e180c050e5Ab072211Ad2C213Eb5AEE4DF134',
+      signature: '0xf97e180c050e5Ab072211Ad2C213Eb5AEE4DF134',
+      status: 'pending',
+      from_address: {
+        hash: '0xf97e987c050e5Ab072211Ad2C213Eb5AEE4DF134',
+        implementations: null,
+        is_contract: false,
+        is_verified: null,
+        name: null,
+      } as AddressParam,
+      block_hash: '0xf97e180c050e5Ab072211Ad2C213Eb5AEE4DF134',
+      block_timestamp: '2022-05-07T18:12:24.000000Z',
+      transaction_hash: '0xf97e180c050e5Ab072211Ad2C213Eb5AEE4DF134',
+      withdrawal_address: {
+        hash: '0xf97e180c050e5Ab072211Ad2C213Eb5AEE4DF134',
+        implementations: null,
+        is_contract: false,
+        is_verified: null,
+        name: null,
+      } as AddressParam,
+    },
+    {
+      amount: '182773000000000',
+      block_number: 43242,
+      index: 11686,
+      pubkey: '0xf97e180c050e5Ab072211Ad2C213Eb5AEE4DF134',
+      signature: '0xf97e180c050e5Ab072211Ad2C213Eb5AEE4DF134',
+      status: 'invalid',
+      from_address: {
+        hash: '0xf97e123c050e5Ab072211Ad2C213Eb5AEE4DF134',
+        implementations: null,
+        is_contract: false,
+        is_verified: null,
+        name: null,
+      } as AddressParam,
+      block_hash: '0xf97e180c050e5Ab072211Ad2C213Eb5AEE4DF134',
+      block_timestamp: '2022-04-07T18:12:24.000000Z',
+      transaction_hash: '0xf97e180c050e5Ab072211Ad2C213Eb5AEE4DF134',
+      withdrawal_address: {
+        hash: '0xf97e180c050e5Ab072211Ad2C213Eb5AEE4DF134',
+        implementations: null,
+        is_contract: false,
+        is_verified: null,
+        name: null,
+      } as AddressParam,
+    },
+  ],
+  next_page_params: {
+    index: 11639,
+    items_count: 50,
+  },
+};

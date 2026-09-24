@@ -1,0 +1,59 @@
+# just is like `make` but better https://github.com/casey/just
+
+# list all recipes
+default:
+    just --list --unsorted
+
+blockscout-version := env_var_or_default('BLOCKSCOUT_VERSION', "7.0.2")
+user-ops-indexer-version := env_var_or_default('USER_OPS_INDEXER_VERSION', "1.3.1")
+
+start-postgres:
+    # we run it in --rm mode, so all data will be deleted after stopping
+    docker run -p 5432:5432 --name blockscout-postgres -e POSTGRES_PASSWORD=admin --rm -d postgres
+    # wait for postgres to start
+    sleep 3
+    docker exec -it blockscout-postgres psql -U postgres -c 'create database blockscout;'
+
+stop-postgres:
+    docker kill blockscout-postgres
+
+migrate-up database_url="postgres://postgres:admin@localhost:5432/blockscout":
+    DATABASE_URL={{database_url}} sea-orm-cli migrate up
+
+migrate-down database_url="postgres://postgres:admin@localhost:5432/blockscout":
+    DATABASE_URL={{database_url}} sea-orm-cli migrate down
+
+new-migration name:
+    sea-orm-cli migrate generate {{name}}
+
+generate-entities database_url="postgres://postgres:admin@localhost:5432/blockscout":
+    rm entity/src/* || true
+    DATABASE_URL={{database_url}} sea-orm-cli generate entity --lib -o entity/src
+    cargo fmt --all -- --config imports_granularity=Crate
+
+_migrate-user-ops-up-from-image database_url="postgres://postgres:admin@localhost:5432/blockscout":
+    docker run --network=host \
+        -e "USER_OPS_INDEXER__DATABASE__CONNECT__URL={{database_url}}" \
+        -e "USER_OPS_INDEXER__SERVER__HTTP__MAX_BODY_SIZE=2097152" \
+        -e "USER_OPS_INDEXER__API__MAX_PAGE_SIZE=100" \
+        -e "USER_OPS_INDEXER__INDEXER__CONCURRENCY=10" \
+        -e "USER_OPS_INDEXER__DATABASE__RUN_MIGRATIONS=true" \
+        -e "USER_OPS_INDEXER__INDEXER__RPC_URL=1" \
+        -e "USER_OPS_INDEXER__INDEXER__ENTRYPOINTS__V06=true" \
+        -e "USER_OPS_INDEXER__INDEXER__ENTRYPOINTS__V07=true" \
+        -e "USER_OPS_INDEXER__INDEXER__REALTIME__ENABLED=true" \
+        -e "USER_OPS_INDEXER__INDEXER__PAST_RPC_LOGS_INDEXER__ENABLED=true" \
+        -e "USER_OPS_INDEXER__INDEXER__PAST_RPC_LOGS_INDEXER__BLOCK_RANGE=1000" \
+        -e "USER_OPS_INDEXER__INDEXER__PAST_DB_LOGS_INDEXER__ENABLED=true" \
+        -e "USER_OPS_INDEXER__INDEXER__PAST_DB_LOGS_INDEXER__START_BLOCK=10723578" \
+        -e "USER_OPS_INDEXER__INDEXER__PAST_DB_LOGS_INDEXER__END_BLOCK=0" \
+        --entrypoint "/bin/sh" --rm --platform "linux/amd64" ghcr.io/blockscout/user-ops-indexer:v{{user-ops-indexer-version}} -c "./user-ops-indexer-server" \
+        || true
+    echo "'Error: custom error: relative URL without a base' is an expected error, everything is ok"
+
+generate-migration database_url="postgres://postgres:admin@localhost:5432/blockscout?ssl=false" migration_file="migration/src/migration.sql":
+    docker run --network=host -e 'DATABASE_URL={{database_url}}' -e 'ECTO_USE_SSL=false' --entrypoint "/bin/sh" --rm blockscout/blockscout:{{blockscout-version}} -c 'bin/blockscout eval "Elixir.Explorer.ReleaseTasks.create_and_migrate()"'
+    just _migrate-user-ops-up-from-image {{database_url}}
+    docker exec blockscout-postgres pg_dump -s --inserts -h localhost -U postgres blockscout > {{migration_file}}
+    # remove unwanted config
+    sed -e '/SELECT pg_catalog.set_config/d' {{migration_file}} > {{migration_file}}_tmp && mv {{migration_file}}_tmp {{migration_file}}

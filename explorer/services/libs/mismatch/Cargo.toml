@@ -1,0 +1,17 @@
+[package]
+name = "mismatch"
+version = "1.0.0"
+description = "Crate for abstract mismatching. Useful for error propagation."
+license = "MIT"
+repository = "https://github.com/blockscout/blockscout-rs"
+edition = "2021"
+keywords = ["mismatch", "error"]
+categories = ["data-structures"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+thiserror = "1.0"
+
+[dev-dependencies]
+pretty_assertions = "1.2"

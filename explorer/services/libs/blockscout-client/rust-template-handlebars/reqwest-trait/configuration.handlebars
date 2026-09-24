@@ -1,0 +1,141 @@
+{{>partial_header}}
+
+{{#if withAWSV4Signature}}
+use std::time::SystemTime;
+use aws_sigv4::http_request::{sign, SigningSettings, SigningParams, SignableRequest};
+use http;
+use secrecy::{SecretString, ExposeSecret};
+{{/if}}
+{{# if useBonBuilder}}
+use bon::Builder;
+{{/if}}
+{{#if supportTokenSource}}
+use std::sync::Arc;
+use google_cloud_token::TokenSource;
+use async_trait::async_trait;
+{{/if}}
+
+#[derive(Debug, Clone)]
+{{# if useBonBuilder }}
+#[derive(Builder)]
+{{/if}}
+pub struct Configuration {
+    {{#if useBonBuilder }}
+    #[builder(into)]
+    {{/if}}
+    pub base_path: String,
+    {{#if useBonBuilder }}
+    #[builder(into)]
+    {{/if}}
+    pub user_agent: Option<String>,
+    {{# if useBonBuilder }}
+    #[builder(default)]
+    {{/if}}
+    pub client: {{#if supportMiddleware}}reqwest_middleware::ClientWithMiddleware{{/if}}{{#unless supportMiddleware}}reqwest::Client{{/unless}},
+    {{#unless supportTokenSource}}
+    pub basic_auth: Option<BasicAuth>,
+    {{#if useBonBuilder }}
+    #[builder(into)]
+    {{/if}}
+    pub oauth_access_token: Option<String>,
+    {{#if useBonBuilder }}
+    #[builder(into)]
+    {{/if}}
+    pub bearer_access_token: Option<String>,
+    pub api_key: Option<ApiKey>,
+    {{/unless}}
+    {{#if withAWSV4Signature}}
+    pub aws_v4_key: Option<AWSv4Key>,
+    {{/if}}
+    {{#if supportTokenSource}}
+    pub token_source: Arc<dyn TokenSource>,
+    {{/if}}
+}
+{{#unless supportTokenSource}}
+
+pub type BasicAuth = (String, Option<String>);
+
+#[derive(Debug, Clone)]
+pub struct ApiKey {
+    pub prefix: Option<String>,
+    pub key: String,
+}
+{{/unless}}
+
+{{#if withAWSV4Signature}}
+#[derive(Debug, Clone)]
+pub struct AWSv4Key {
+    pub access_key: String,
+    pub secret_key: SecretString,
+    pub region: String,
+    pub service: String,
+}
+
+impl AWSv4Key {
+    pub fn sign(&self, uri: &str, method: &str, body: &str) -> Result<Vec::<(String, String)>, aws_sigv4::http_request::Error> {
+	let request = http::Request::builder()
+	    .uri(uri)
+	    .method(method)
+	    .body(body).unwrap();
+	let signing_settings = SigningSettings::default();
+	let signing_params = SigningParams::builder()
+	    .access_key(self.access_key.as_str())
+	    .secret_key(self.secret_key.expose_secret().as_str())
+	    .region(self.region.as_str())
+	    .service_name(self.service.as_str())
+	    .time(SystemTime::now())
+	    .settings(signing_settings)
+	    .build()
+	    .unwrap();
+	let signable_request = SignableRequest::from(&request);
+	let (mut signing_instructions, _signature) = sign(signable_request, &signing_params)?.into_parts();
+	let mut additional_headers = Vec::<(String, String)>::new();
+	if let Some(new_headers) = signing_instructions.take_headers() {
+            for (name, value) in new_headers.into_iter() {
+		additional_headers.push((name.expect("header should have name").to_string(),
+		                         value.to_str().expect("header value should be a string").to_string()));
+            }
+        }
+	Ok(additional_headers)
+    }
+}
+{{/if}}
+
+impl Configuration {
+    pub fn new() -> Configuration {
+        Configuration::default()
+    }
+}
+
+impl Default for Configuration {
+    fn default() -> Self {
+        Configuration {
+            base_path: "{{{basePath}}}".to_owned(),
+            user_agent: {{#with httpUserAgent}}Some("{{{.}}}".to_owned()){{/with}}{{#unless httpUserAgent}}Some("OpenAPI-Generator/{{{version}}}/rust".to_owned()){{/unless}},
+            client: {{#if supportMiddleware}}reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build(){{/if}}{{#unless supportMiddleware}}reqwest::Client::new(){{/unless}},
+            {{#unless supportTokenSource}}
+            basic_auth: None,
+            oauth_access_token: None,
+            bearer_access_token: None,
+            api_key: None,
+            {{/unless}}
+            {{#if withAWSV4Signature}}
+            aws_v4_key: None,
+            {{/if}}
+            {{#if supportTokenSource}}
+            token_source: Arc::new(NoopTokenSource{}),
+            {{/if}}
+        }
+    }
+}
+{{#if supportTokenSource}}
+#[derive(Debug)]
+struct NoopTokenSource{}
+
+#[async_trait]
+impl TokenSource for NoopTokenSource {
+    async fn token(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        panic!("This is dummy token source. You can use TokenSourceProvider from 'google_cloud_auth' crate, or any other compatible crate.")
+    }
+}
+{{/if}}

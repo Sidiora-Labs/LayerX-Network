@@ -1,0 +1,891 @@
+swagger: "2.0"
+info:
+  title: v2/smart-contract-verifier.proto
+  version: version not set
+tags:
+  - name: SolidityVerifier
+  - name: VyperVerifier
+  - name: SourcifyVerifier
+  - name: ZkSyncSolidityVerifier
+  - name: Health
+consumes:
+  - application/json
+produces:
+  - application/json
+paths:
+  /api/v2/verifier/solidity/methods:lookup:
+    post:
+      operationId: SolidityVerifier_LookupMethods
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v2LookupMethodsResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/v2LookupMethodsRequest'
+      tags:
+        - SolidityVerifier
+  /api/v2/verifier/solidity/sources:batch-verify-multi-part:
+    post:
+      operationId: SolidityVerifier_BatchVerifyMultiPart
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v2BatchVerifyResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/v2BatchVerifySolidityMultiPartRequest'
+      tags:
+        - SolidityVerifier
+  /api/v2/verifier/solidity/sources:batch-verify-standard-json:
+    post:
+      operationId: SolidityVerifier_BatchVerifyStandardJson
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v2BatchVerifyResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/v2BatchVerifySolidityStandardJsonRequest'
+      tags:
+        - SolidityVerifier
+  /api/v2/verifier/solidity/sources:verify-multi-part:
+    post:
+      operationId: SolidityVerifier_VerifyMultiPart
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/smartContractVerifierv2VerifyResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/v2VerifySolidityMultiPartRequest'
+      tags:
+        - SolidityVerifier
+  /api/v2/verifier/solidity/sources:verify-standard-json:
+    post:
+      operationId: SolidityVerifier_VerifyStandardJson
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/smartContractVerifierv2VerifyResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/v2VerifySolidityStandardJsonRequest'
+      tags:
+        - SolidityVerifier
+  /api/v2/verifier/solidity/versions:
+    get:
+      operationId: SolidityVerifier_ListCompilerVersions
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v2ListCompilerVersionsResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      tags:
+        - SolidityVerifier
+  /api/v2/verifier/sourcify/sources:verify:
+    post:
+      operationId: SourcifyVerifier_Verify
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/smartContractVerifierv2VerifyResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/v2VerifySourcifyRequest'
+      tags:
+        - SourcifyVerifier
+  /api/v2/verifier/sourcify/sources:verify-from-etherscan:
+    post:
+      operationId: SourcifyVerifier_VerifyFromEtherscan
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/smartContractVerifierv2VerifyResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/v2VerifyFromEtherscanSourcifyRequest'
+      tags:
+        - SourcifyVerifier
+  /api/v2/verifier/vyper/sources:verify-multi-part:
+    post:
+      operationId: VyperVerifier_VerifyMultiPart
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/smartContractVerifierv2VerifyResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/v2VerifyVyperMultiPartRequest'
+      tags:
+        - VyperVerifier
+  /api/v2/verifier/vyper/sources:verify-standard-json:
+    post:
+      operationId: VyperVerifier_VerifyStandardJson
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/smartContractVerifierv2VerifyResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/v2VerifyVyperStandardJsonRequest'
+      tags:
+        - VyperVerifier
+  /api/v2/verifier/vyper/versions:
+    get:
+      operationId: VyperVerifier_ListCompilerVersions
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v2ListCompilerVersionsResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      tags:
+        - VyperVerifier
+  /api/v2/zksync-verifier/solidity/sources:verify-standard-json:
+    post:
+      operationId: ZkSyncSolidityVerifier_VerifyStandardJson
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/zksyncsolidityVerifyResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/solidityVerifyStandardJsonRequest'
+      tags:
+        - ZkSyncSolidityVerifier
+  /api/v2/zksync-verifier/solidity/versions:
+    get:
+      operationId: ZkSyncSolidityVerifier_ListCompilers
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/solidityListCompilersResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      tags:
+        - ZkSyncSolidityVerifier
+  /health:
+    get:
+      summary: |-
+        If the requested service is unknown, the call will fail with status
+        NOT_FOUND.
+      operationId: Health_Check
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v2HealthCheckResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/googlerpcStatus'
+      parameters:
+        - name: service
+          in: query
+          required: false
+          type: string
+      tags:
+        - Health
+definitions:
+  BatchVerifyResponseContractVerificationResults:
+    type: object
+    properties:
+      items:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v2ContractVerificationResult'
+  ContractVerificationSuccessCompilerCompiler:
+    type: string
+    enum:
+      - UNSPECIFIED
+      - SOLC
+      - VYPER
+    default: UNSPECIFIED
+  ContractVerificationSuccessLanguageLanguage:
+    type: string
+    enum:
+      - UNSPECIFIED
+      - SOLIDITY
+      - YUL
+      - VYPER
+    default: UNSPECIFIED
+  ContractVerificationSuccessMatchDetails:
+    type: object
+    properties:
+      matchType:
+        $ref: '#/definitions/v2ContractVerificationSuccessMatchType'
+      values:
+        type: string
+      transformations:
+        type: string
+  ExtraDataBytecodePart:
+    type: object
+    properties:
+      type:
+        type: string
+      data:
+        type: string
+  HealthCheckResponseServingStatus:
+    type: string
+    enum:
+      - UNKNOWN
+      - SERVING
+      - NOT_SERVING
+      - SERVICE_UNKNOWN
+    default: UNKNOWN
+    description: ' - SERVICE_UNKNOWN: Used only by the Watch method.'
+  LookupMethodsResponseMethod:
+    type: object
+    properties:
+      fileName:
+        type: string
+      fileOffset:
+        type: integer
+        format: int64
+      length:
+        type: integer
+        format: int64
+  SourceSourceType:
+    type: string
+    enum:
+      - SOURCE_TYPE_UNSPECIFIED
+      - SOLIDITY
+      - VYPER
+      - YUL
+    default: SOURCE_TYPE_UNSPECIFIED
+    description: ' - SOURCE_TYPE_UNSPECIFIED: Default value. Used if is impossible to determine the source type.'
+  VerifyResponseExtraData:
+    type: object
+    properties:
+      localCreationInputParts:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/ExtraDataBytecodePart'
+        description: |-
+          / Creation transaction input resultant from local compilation
+          / parsed and split on Main and Meta parts. Is empty for Sourcify verification.
+      localDeployedBytecodeParts:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/ExtraDataBytecodePart'
+        description: |-
+          / Deployed bytecode resultant from local compilation
+          / parsed and split on Main and Meta parts. Is empty for Sourcify verification.
+  VerifyResponsePostActionResponses:
+    type: object
+    properties:
+      lookupMethods:
+        $ref: '#/definitions/v2LookupMethodsResponse'
+        description: |-
+          / If requested, will contain the response for
+          / 'lookup-methods' processing applied to the verified contract.
+  googlerpcStatus:
+    type: object
+    properties:
+      code:
+        type: integer
+        format: int32
+      message:
+        type: string
+      details:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/protobufAny'
+  protobufAny:
+    type: object
+    properties:
+      '@type':
+        type: string
+    additionalProperties: {}
+  smartContractVerifierv2CompilationFailure:
+    type: object
+    properties:
+      message:
+        type: string
+  smartContractVerifierv2VerifyResponse:
+    type: object
+    properties:
+      message:
+        type: string
+      status:
+        $ref: '#/definitions/v2VerifyResponseStatus'
+      source:
+        $ref: '#/definitions/v2Source'
+      extraData:
+        $ref: '#/definitions/VerifyResponseExtraData'
+      postActionResponses:
+        $ref: '#/definitions/VerifyResponsePostActionResponses'
+  solidityListCompilersResponse:
+    type: object
+    properties:
+      zkCompilers:
+        type: array
+        items:
+          type: string
+      solcCompilers:
+        type: array
+        items:
+          type: string
+  solidityMatch:
+    type: object
+    properties:
+      type:
+        $ref: '#/definitions/solidityMatchMatchType'
+      values:
+        type: string
+      transformations:
+        type: string
+  solidityMatchMatchType:
+    type: string
+    enum:
+      - MATCH_TYPE_UNSPECIFIED
+      - PARTIAL
+      - FULL
+    default: MATCH_TYPE_UNSPECIFIED
+  solidityVerificationFailure:
+    type: object
+    properties:
+      message:
+        type: string
+  solidityVerificationSuccess:
+    type: object
+    properties:
+      fileName:
+        type: string
+      contractName:
+        type: string
+      zkCompiler:
+        $ref: '#/definitions/solidityVerificationSuccessCompiler'
+      evmCompiler:
+        $ref: '#/definitions/solidityVerificationSuccessCompiler'
+      language:
+        $ref: '#/definitions/solidityVerificationSuccessLanguage'
+      compilerSettings:
+        type: string
+      sources:
+        type: object
+        additionalProperties:
+          type: string
+      compilationArtifacts:
+        type: string
+      creationCodeArtifacts:
+        type: string
+      runtimeCodeArtifacts:
+        type: string
+      creationMatch:
+        $ref: '#/definitions/solidityMatch'
+      runtimeMatch:
+        $ref: '#/definitions/solidityMatch'
+  solidityVerificationSuccessCompiler:
+    type: object
+    properties:
+      compiler:
+        type: string
+      version:
+        type: string
+  solidityVerificationSuccessLanguage:
+    type: string
+    enum:
+      - LANGUAGE_UNKNOWN
+      - SOLIDITY
+    default: LANGUAGE_UNKNOWN
+  solidityVerifyStandardJsonRequest:
+    type: object
+    properties:
+      code:
+        type: string
+      constructorArguments:
+        type: string
+      zkCompiler:
+        type: string
+      solcCompiler:
+        type: string
+      input:
+        type: string
+  v2BatchVerifyResponse:
+    type: object
+    properties:
+      compilationFailure:
+        $ref: '#/definitions/smartContractVerifierv2CompilationFailure'
+      contractVerificationResults:
+        $ref: '#/definitions/BatchVerifyResponseContractVerificationResults'
+  v2BatchVerifySolidityMultiPartRequest:
+    type: object
+    properties:
+      contracts:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v2Contract'
+        title: / Contracts to be verified
+      compilerVersion:
+        type: string
+        title: / Compiler version used to compile the contract
+      sources:
+        type: object
+        additionalProperties:
+          type: string
+        title: / Map from a source file name to the actual source code
+      evmVersion:
+        type: string
+        title: / Version of the EVM to compile for. If absent results in default EVM version
+      optimizationRuns:
+        type: integer
+        format: int64
+        title: |-
+          / If present, optimizations are enabled with specified number of runs,
+          / otherwise optimizations are disabled
+  v2BatchVerifySolidityStandardJsonRequest:
+    type: object
+    properties:
+      contracts:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v2Contract'
+        title: / Contracts to be verified
+      compilerVersion:
+        type: string
+        title: / Compiler version used to compile the contract
+      input:
+        type: string
+        title: / https://docs.soliditylang.org/en/latest/using-the-compiler.html#input-description
+  v2BytecodeType:
+    type: string
+    enum:
+      - BYTECODE_TYPE_UNSPECIFIED
+      - CREATION_INPUT
+      - DEPLOYED_BYTECODE
+    default: BYTECODE_TYPE_UNSPECIFIED
+  v2Contract:
+    type: object
+    properties:
+      creationCode:
+        type: string
+      runtimeCode:
+        type: string
+      metadata:
+        $ref: '#/definitions/v2VerificationMetadata'
+        title: / An optional field with metadata used for logging purposes
+  v2ContractVerificationFailure:
+    type: object
+  v2ContractVerificationResult:
+    type: object
+    properties:
+      failure:
+        $ref: '#/definitions/v2ContractVerificationFailure'
+      success:
+        $ref: '#/definitions/v2ContractVerificationSuccess'
+  v2ContractVerificationSuccess:
+    type: object
+    properties:
+      creationCode:
+        type: string
+      runtimeCode:
+        type: string
+      compiler:
+        $ref: '#/definitions/ContractVerificationSuccessCompilerCompiler'
+      compilerVersion:
+        type: string
+      language:
+        $ref: '#/definitions/ContractVerificationSuccessLanguageLanguage'
+      fileName:
+        type: string
+      contractName:
+        type: string
+      sources:
+        type: object
+        additionalProperties:
+          type: string
+        title: |-
+          / Map of path to source code
+          / (includes only files related to the verified contracts)
+      compilerSettings:
+        type: string
+        title: / Compiler-specific settings such as optimization, linking, etc (json)
+      compilationArtifacts:
+        type: string
+        title: / General and compiler-specific artifacts (abi, userdoc, devdoc, licenses, etc) (json)
+      creationCodeArtifacts:
+        type: string
+        title: / Store info about the creation code (sourcemaps, linkreferences) (json)
+      runtimeCodeArtifacts:
+        type: string
+        title: / Store info about the runtime code (sourcemaps, linkreferences, immutables) (json)
+      creationMatchDetails:
+        $ref: '#/definitions/ContractVerificationSuccessMatchDetails'
+      runtimeMatchDetails:
+        $ref: '#/definitions/ContractVerificationSuccessMatchDetails'
+  v2ContractVerificationSuccessMatchType:
+    type: string
+    enum:
+      - UNDEFINED
+      - PARTIAL
+      - FULL
+    default: UNDEFINED
+  v2HealthCheckResponse:
+    type: object
+    properties:
+      status:
+        $ref: '#/definitions/HealthCheckResponseServingStatus'
+  v2ListCompilerVersionsResponse:
+    type: object
+    properties:
+      compilerVersions:
+        type: array
+        items:
+          type: string
+        title: / Compiler versions available
+  v2LookupMethodsRequest:
+    type: object
+    properties:
+      bytecode:
+        type: string
+      abi:
+        type: string
+      sourceMap:
+        type: string
+      fileIds:
+        type: object
+        additionalProperties:
+          type: string
+  v2LookupMethodsResponse:
+    type: object
+    properties:
+      methods:
+        type: object
+        additionalProperties:
+          $ref: '#/definitions/LookupMethodsResponseMethod'
+  v2Source:
+    type: object
+    properties:
+      fileName:
+        type: string
+        title: / The name of the file verified contract was located at
+      contractName:
+        type: string
+        title: / The name of the contract which was verified
+      compilerVersion:
+        type: string
+        title: Compiler version used to compile the contract
+      compilerSettings:
+        type: string
+        title: |-
+          / 'settings' key in Standard Input JSON
+          / (https://docs.soliditylang.org/en/latest/using-the-compiler.html#input-description)
+      sourceType:
+        $ref: '#/definitions/SourceSourceType'
+      sourceFiles:
+        type: object
+        additionalProperties:
+          type: string
+      abi:
+        type: string
+        title: |-
+          / Contract abi (https://docs.soliditylang.org/en/latest/abi-spec.html?highlight=abi#json);
+          / (does not exist for Yul contracts)
+      constructorArguments:
+        type: string
+        title: |-
+          / Constructor arguments used for deploying verified contract
+          / (exists only for creation inputs)
+      matchType:
+        $ref: '#/definitions/v2SourceMatchType'
+        title: / Similar to Sourcify (see https://docs.sourcify.dev/docs/full-vs-partial-match/)
+      compilationArtifacts:
+        type: string
+        description: |-
+          / General and compiler-specific artifacts (abi, userdoc, devdoc, licenses, ast, etc),
+          / encoded as a json.
+      creationInputArtifacts:
+        type: string
+        description: / Info about the creation code (sourcemaps, linkreferences) encoded as a json.
+      deployedBytecodeArtifacts:
+        type: string
+        description: / Info about the runtime code (sourcemaps, linkreferences, immutables) encoded as a json.
+      isBlueprint:
+        type: boolean
+        title: / If true, the verified contract was a ERC-5202 compatible blueprint contract
+      libraries:
+        type: object
+        additionalProperties:
+          type: string
+        title: |-
+          / Mapping from fully qualified name to the address the library is deployed at
+          / (includes both automatically and manually linked libraries)
+  v2SourceMatchType:
+    type: string
+    enum:
+      - MATCH_TYPE_UNSPECIFIED
+      - PARTIAL
+      - FULL
+    default: MATCH_TYPE_UNSPECIFIED
+    description: ' - MATCH_TYPE_UNSPECIFIED: Default value. This value is unused.'
+  v2VerificationMetadata:
+    type: object
+    properties:
+      chainId:
+        type: string
+        title: / Id of the chain the contract is verified on
+      contractAddress:
+        type: string
+        title: / The address of the contract to be verified
+  v2VerifyFromEtherscanSourcifyRequest:
+    type: object
+    properties:
+      address:
+        type: string
+        title: / Address of the contract to be verified
+      chain:
+        type: string
+        title: |-
+          / The chain (network) the contract was deployed to
+          / (https://docs.sourcify.dev/docs/api/chains/)
+  v2VerifyResponseStatus:
+    type: string
+    enum:
+      - STATUS_UNSPECIFIED
+      - SUCCESS
+      - FAILURE
+    default: STATUS_UNSPECIFIED
+  v2VerifySolidityMultiPartRequest:
+    type: object
+    properties:
+      bytecode:
+        type: string
+        title: / Bytecode to compare local compilation result with
+      bytecodeType:
+        $ref: '#/definitions/v2BytecodeType'
+        title: / Either CREATION_INPUT or DEPLOYED_BYTECODE, depending on what should be verified
+      compilerVersion:
+        type: string
+        title: / Compiler version used to compile the contract
+      evmVersion:
+        type: string
+        title: / Version of the EVM to compile for. If absent results in default EVM version
+      optimizationRuns:
+        type: integer
+        format: int32
+        title: |-
+          / If present, optimizations are enabled with specified number of runs,
+          / otherwise optimizations are disabled
+      sourceFiles:
+        type: object
+        additionalProperties:
+          type: string
+        title: / Map from a source file name to the actual source code
+      metadata:
+        $ref: '#/definitions/v2VerificationMetadata'
+        title: / An optional field to be filled by explorers
+      postActions:
+        type: array
+        items:
+          type: string
+        description: |-
+          / Additional actions the client wants the result to be returned.
+          / Currently supports only: "lookup-methods" for Solidity contracts.
+  v2VerifySolidityStandardJsonRequest:
+    type: object
+    properties:
+      bytecode:
+        type: string
+        title: / Bytecode to compare local compilation result with
+      bytecodeType:
+        $ref: '#/definitions/v2BytecodeType'
+        title: / Either CREATION_INPUT or DEPLOYED_BYTECODE, depending on what should be verified
+      compilerVersion:
+        type: string
+        title: / Compiler version used to compile the contract
+      input:
+        type: string
+        title: / https://docs.soliditylang.org/en/latest/using-the-compiler.html#input-description
+      metadata:
+        $ref: '#/definitions/v2VerificationMetadata'
+        title: / An optional field to be filled by explorers
+      postActions:
+        type: array
+        items:
+          type: string
+        description: |-
+          / Additional actions the client wants the result to be returned.
+          / Currently supports only: "lookup-methods" for Solidity contracts.
+  v2VerifySourcifyRequest:
+    type: object
+    properties:
+      address:
+        type: string
+        title: / Address of the contract to be verified
+      chain:
+        type: string
+        title: |-
+          / The chain (network) the contract was deployed to
+          / (https://docs.sourcify.dev/docs/api/chains/)
+      files:
+        type: object
+        additionalProperties:
+          type: string
+        title: |-
+          / Files required for verification (see Sourcify Api)
+          Is named as `files` instead of `source_files`
+          to correspond with Sourcify api
+      chosenContract:
+        type: integer
+        format: int32
+        title: (optional) see Sourcify Api
+  v2VerifyVyperMultiPartRequest:
+    type: object
+    properties:
+      bytecode:
+        type: string
+        title: / Bytecode to compare local compilation result with
+      bytecodeType:
+        $ref: '#/definitions/v2BytecodeType'
+        title: / Either CREATION_INPUT or DEPLOYED_BYTECODE, depending on what should be verified
+      compilerVersion:
+        type: string
+        title: / Compiler version used to compile the contract
+      evmVersion:
+        type: string
+        title: / Version of the EVM to compile for. If absent results in default EVM version
+      sourceFiles:
+        type: object
+        additionalProperties:
+          type: string
+        title: / Map from a source file name to the actual source code
+      interfaces:
+        type: object
+        additionalProperties:
+          type: string
+        description: |-
+          / Map from an interface names to the actual interfaces.
+          / If non-specified, no interfaces are considered.
+      metadata:
+        $ref: '#/definitions/v2VerificationMetadata'
+        title: / An optional field to be filled by explorers
+  v2VerifyVyperStandardJsonRequest:
+    type: object
+    properties:
+      bytecode:
+        type: string
+        title: / Bytecode to compare local compilation result with
+      bytecodeType:
+        $ref: '#/definitions/v2BytecodeType'
+        title: / Either CREATION_INPUT or DEPLOYED_BYTECODE, depending on what should be verified
+      compilerVersion:
+        type: string
+        title: / Compiler version used to compile the contract
+      input:
+        type: string
+        title: / https://docs.vyperlang.org/en/stable/compiling-a-contract.html#input-json-description
+      metadata:
+        $ref: '#/definitions/v2VerificationMetadata'
+        title: / An optional field to be filled by explorers
+  zksyncsolidityCompilationFailure:
+    type: object
+    properties:
+      message:
+        type: string
+  zksyncsolidityVerifyResponse:
+    type: object
+    properties:
+      compilationFailure:
+        $ref: '#/definitions/zksyncsolidityCompilationFailure'
+      verificationFailure:
+        $ref: '#/definitions/solidityVerificationFailure'
+      verificationSuccess:
+        $ref: '#/definitions/solidityVerificationSuccess'

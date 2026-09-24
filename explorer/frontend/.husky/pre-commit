@@ -1,0 +1,20 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# lint js/ts files
+echo 🧿 Running file linter...
+npx lint-staged
+
+echo 🧿 Running spelling checker...
+git diff --diff-filter=ACMRT --cached --name-only | npx cspell --config cspell.jsonc --file-list stdin --no-must-find-files
+
+# format svg
+echo 🧿 Running svg formatter...
+for file in `git diff --diff-filter=ACMRT --cached --name-only | grep ".svg\$"`
+    do 
+        echo "Formatting $file" 
+        ./node_modules/.bin/svgo -q $file --config svgo.config.format.js
+        git add $file
+    done
+
+echo ✅ All pre-commit jobs are done

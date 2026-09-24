@@ -1,0 +1,57 @@
+fullNameOverride: bs-stack
+nameOverride: bs-stack
+imagePullSecrets:
+  - name: regcred
+config:
+  network:
+    id: 420
+    name: "Base"
+    shortname: Base
+    currency:
+      name: Ether
+      symbol: ETH
+      decimals: 18
+  account:
+    enabled: true
+  testnet: true
+blockscout:
+  enabled: false
+stats:
+  enabled: false
+frontend:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ghcr.io/blockscout/frontend-private
+    tag: review-{{ requiredEnv "GITHUB_REF_NAME_SLUG" }}
+    pullPolicy: Always
+  ingress:
+    enabled: true
+    annotations:
+      kubernetes.io/ingress.class: internal-and-public
+      nginx.ingress.kubernetes.io/proxy-body-size: 500m
+      nginx.ingress.kubernetes.io/client-max-body-size: "500M"
+      nginx.ingress.kubernetes.io/proxy-buffering: "on"
+      nginx.ingress.kubernetes.io/proxy-connect-timeout: "15m"
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "15m"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "15m"
+      nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
+      nginx.ingress.kubernetes.io/proxy-buffers-number: "8"
+      cert-manager.io/cluster-issuer: "zerossl-prod"
+    hostname: review-l2-{{ requiredEnv "GITHUB_REF_NAME_SLUG" }}.k8s-dev.blockscout.com
+
+  resources:
+    limits:
+      memory: 768Mi
+      cpu: "1"
+    requests:
+      memory: 384Mi
+      cpu: 250m
+  env:
+    NEXT_PUBLIC_APP_ENV: review
+    NEXT_PUBLIC_USE_NEXT_JS_PROXY: true
+    SKIP_ENVS_VALIDATION: true
+  envFromSecret:
+    NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID: ref+vault://deployment-values/blockscout/dev/review-l2?token_env=VAULT_TOKEN&address=https://vault.k8s.blockscout.com#/NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID
+    NEXT_PUBLIC_RE_CAPTCHA_APP_SITE_KEY: ref+vault://deployment-values/blockscout/eth-sepolia/testnet?token_env=VAULT_TOKEN&address=https://vault.k8s.blockscout.com#/RE_CAPTCHA_CLIENT_KEY
+    NEXT_PUBLIC_MIXPANEL_PROJECT_TOKEN: ref+vault://deployment-values/blockscout/common?token_env=VAULT_TOKEN&address=https://vault.k8s.blockscout.com#/NEXT_PUBLIC_MIXPANEL_PROJECT_TOKEN

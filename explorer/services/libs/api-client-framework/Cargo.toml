@@ -1,0 +1,28 @@
+[package]
+name = "api-client-framework"
+description = "A framework helping to write custom http api clients."
+license = "MIT"
+repository = "https://github.com/blockscout/blockscout-rs"
+homepage = "https://github.com/blockscout/blockscout-rs/tree/main/libs/api-client-framework"
+version = "0.1.1"
+edition = "2021"
+
+[dependencies]
+anyhow = { version = "1.0", default-features = false }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest-middleware = { version = "0.4", default-features = false }
+serde = { version = "1", default-features = false }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+serde_path_to_error = { version = "0.1.16", default-features = false }
+serde_urlencoded = { version = "0.7", default-features = false }
+thiserror = { version = "2", default-features = false }
+url = { version = "2", default-features = false }
+
+reqwest-retry = { version = "0.7.0", default-features = false, optional = true }
+
+[features]
+"blockscout" = [
+    "dep:reqwest-retry",
+    "serde/derive",
+    "url/serde",
+]

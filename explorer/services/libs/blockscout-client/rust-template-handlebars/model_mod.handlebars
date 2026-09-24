@@ -1,0 +1,6 @@
+{{#each models}}
+{{#with model}}
+pub mod {{{classFilename}}};
+pub use self::{{{classFilename}}}::{{{classname}}};
+{{/with}}
+{{/each}}

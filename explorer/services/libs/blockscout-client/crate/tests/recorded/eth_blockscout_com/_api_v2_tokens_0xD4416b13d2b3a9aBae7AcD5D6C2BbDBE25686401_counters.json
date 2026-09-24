@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/v2/tokens/0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401/counters"
+  },
+  "response": {
+    "status": 200,
+    "body": "{\"token_holders_count\":\"471036\",\"transfers_count\":\"775949\"}",
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}

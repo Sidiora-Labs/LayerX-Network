@@ -1,0 +1,22 @@
+{
+    "language": "Solidity",
+    "sources": {
+        "ExternalTestJson.sol": {
+            "content": "//SPDX-License-Identifier: MIT\r\npragma solidity ^0.6.8;\r\n\r\nimport \"./ExternalTestLibraryJson.sol\";\r\n\r\ncontract ExternalTestJson {\r\n\r\n  address[] stack;\r\n\r\n  function identity(address input) public returns (address) {\r\n    stack.push(input);\r\n    return ExternalTestLibraryJson.pop(stack);\r\n  }\r\n\r\n}"
+        },
+        "ExternalTestLibraryJson.sol": {
+            "content": "//SPDX-License-Identifier: MIT\r\npragma solidity ^0.6.8;\r\n\r\nlibrary ExternalTestLibraryJson {\r\n  function pop(address[] storage list) external returns (address out) {\r\n    out = list[list.length - 1];\r\n    list.pop();\r\n  }\r\n}"
+        }
+    },
+    "settings": {
+        "remappings": [],
+        "libraries": {
+            "ExternalTestJson.sol": {
+                "ExternalTestLibraryJson": "0x2375DfcB3a4c0d88260B2A689B5ec8956F3f98FF"
+            }
+        },
+        "optimizer": {
+            "enabled": false
+        }
+    }
+}

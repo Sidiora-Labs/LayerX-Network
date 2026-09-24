@@ -1,0 +1,70 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/node_modules_linux
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+/public/assets/envs.js
+/public/assets/configs
+/public/assets/multichain
+/public/assets/essential-dapps
+/public/icons/sprite.svg
+/public/icons/sprite.*.svg
+/public/icons/registry.json
+/public/icons/README.md
+/public/static/og_image.png
+/public/sitemap.xml
+/public/robots.txt
+/public/llms.txt
+/analyze
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+.tools
+grafana
+.zed
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# local env files
+.env*.local
+/configs/envs/.env.secrets
+/configs/envs/.samples
+
+# typescript
+*.tsbuildinfo
+
+.eslintcache
+
+**.decrypted~**
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.browser/
+/playwright/envs.js
+/playwright/affected-tests.txt
+
+**.dec**
+
+# build outputs
+/tools/preset-sync/index.js
+/toolkit/package/dist
+license.json
+release-prs-data.json

@@ -1,0 +1,37 @@
+[package]
+name = "sig-provider-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sig-provider = { path = "../sig-provider" }
+sig-provider-proto = { path = "../sig-provider-proto" }
+async-trait = "0.1"
+actix-web = "4"
+actix-web-prom = "0.6"
+prometheus = "0.13"
+tonic = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_with = { version = "2.0", features = ["hex", "base64"] }
+bytes = "1.2"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+config = "0.13"
+opentelemetry = { version = "0.18", features = ["rt-tokio"] }
+opentelemetry-jaeger = { version = "0.17", features = ["rt-tokio"] }
+tracing = "0.1"
+tracing-opentelemetry = "0.18"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+futures = "0.3"
+anyhow = "1.0"
+url = { version = "2", features = ["serde"] }
+hex = "0.4"
+ethabi = "18.0.0"
+blockscout-service-launcher = { workspace = true }
+
+[dev-dependencies]
+blockscout-service-launcher = { workspace = true, features = ["test-server"] }
+http = "0.2"
+httpmock = "0.6"
+pretty_assertions = "1.3"
+serde_json = "1.0"
+toml = "0.5"

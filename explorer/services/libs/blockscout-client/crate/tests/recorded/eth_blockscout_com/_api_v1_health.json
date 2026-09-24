@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/v1/health"
+  },
+  "response": {
+    "status": 200,
+    "body": "{\"data\":{\"cache_latest_block_inserted_at\":\"2025-02-19 08:27:35.000000Z\",\"cache_latest_block_number\":\"21879216\",\"latest_block_inserted_at\":\"2025-02-19 08:27:35.000000Z\",\"latest_block_number\":\"21879216\"},\"healthy\":true}",
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}

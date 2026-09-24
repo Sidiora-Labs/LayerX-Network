@@ -1,0 +1,21 @@
+[
+    {
+      "title": "Duck Deep into Transactions",
+      "description": "Explore and track all blockchain transactions",
+      "title_color": ["#1a472a", "#4ade80"],
+      "description_color": ["#374151", "#d1d5db"],
+      "background": ["#e0f2fe", "#0f172a"],
+      "side_img_url": [
+        "https://example.com",
+        "https://example.com"
+      ],
+      "page_path": "/txs"
+    },
+    {
+      "title": "Capybara Hot Spring Pools",
+      "description": "Monitor liquidity and staking pools",
+      "is_pinned": true,
+      "redirect_url": "https://example.com"
+    }
+  ]
+  

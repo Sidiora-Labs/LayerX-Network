@@ -1,0 +1,22 @@
+{
+  "name": "feature-reporter",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "compile_config": "yarn tsc -p ./tsconfig.json && yarn tsc-alias -p ./tsconfig.json",
+    "build": "yarn webpack-cli -c ./webpack.config.js",
+    "print_report": "node ./index.js",
+    "dev": "./dev.sh"
+  },
+  "dependencies": {
+    "tsc": "^2.0.4",
+    "tsc-alias": "^1.8.7",
+    "typescript": "5.1",
+    "webpack": "^5.88.2",
+    "webpack-cli": "^5.1.4"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^7.2.1"
+  }
+}

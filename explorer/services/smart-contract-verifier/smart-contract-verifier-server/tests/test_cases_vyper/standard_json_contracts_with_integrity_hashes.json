@@ -1,0 +1,29 @@
+{
+  "_comment": "Contains integrity hash inside creation bytecode",
+  "deployed_bytecode": "0x5f3560e01c632688454a811861002057346100245760055460405260206040f35b5f5ffd5b5f80fd",
+  "creation_bytecode": "0x61002861000f6000396100286000f35f3560e01c632688454a811861002057346100245760055460405260206040f35b5f5ffd5b5f80fd855820b85677b7259f06429499a005d09b92bbb824e37c1753bff5586c521f777999b018288000a1657679706572830004010034",
+  "compiler_version": "v0.4.1-rc2+commit.305813c9",
+  "file_name": "contract.vy",
+  "contract_name": "contract",
+  "input": {
+    "language": "Vyper",
+    "sources": {
+      "lib1.vy": {
+        "content": "\nO: String[2]\nN: bytes32\nL: int128\nY: bytes4\n"
+      },
+      "contract.vy": {
+        "content": "#pragma version ==0.4.1rc2\n\nimport lib1\n\ninitializes: lib1\n\nU: public(uint256)\nP: DynArray[uint256, 10]\n\n"
+      }
+    },
+    "settings": {
+      "outputSelection": {
+        "contract.vy": [
+          "*"
+        ]
+      },
+      "search_paths": [
+        "."
+      ]
+    }
+  }
+}

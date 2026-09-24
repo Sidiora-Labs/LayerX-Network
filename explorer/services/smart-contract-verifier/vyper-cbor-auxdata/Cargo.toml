@@ -1,0 +1,12 @@
+[package]
+name = "vyper-cbor-auxdata"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+minicbor = { workspace = true, features = ["std"] }
+semver = { workspace = true }
+thiserror  = { workspace = true }
+
+[dev-dependencies]
+blockscout-display-bytes = { workspace = true }

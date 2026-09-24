@@ -1,0 +1,62 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`generates correct metadata for: > dynamic route 1`] = `
+{
+  "canonical": undefined,
+  "description": "View transaction 0x12345 on Blockscout (Blockscout) Explorer",
+  "jsonLd": undefined,
+  "opengraph": {
+    "description": "",
+    "imageUrl": "",
+    "title": "Blockscout transaction 0x12345 | Blockscout",
+  },
+  "title": "Blockscout transaction 0x12345 | Blockscout",
+}
+`;
+
+exports[`generates correct metadata for: > dynamic route with API data 1`] = `
+{
+  "canonical": undefined,
+  "description": "0x12345, balances and analytics on the Blockscout (Blockscout) Explorer",
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    "brand": {
+      "@type": "Brand",
+      "name": "Tether",
+    },
+    "description": "USDT is a stablecoin",
+    "image": "https://example.com/usdt.png",
+    "name": "USDT",
+    "offers": {
+      "@type": "Offer",
+      "availability": "InStock",
+      "price": "1.00",
+      "priceCurrency": "USD",
+      "priceValidUntil": "2024-01-02T00:00:00.000Z",
+    },
+    "productID": "0x12345",
+    "url": "http://localhost:3000/token/0x12345",
+  },
+  "opengraph": {
+    "description": "",
+    "imageUrl": "",
+    "title": "Blockscout USDT token details | Blockscout",
+  },
+  "title": "Blockscout USDT token details | Blockscout",
+}
+`;
+
+exports[`generates correct metadata for: > static route 1`] = `
+{
+  "canonical": "http://localhost:3000/txs",
+  "description": "Open-source block explorer by Blockscout. Search transactions, verify smart contracts, analyze addresses, and track network activity. Complete blockchain data and APIs for the Blockscout (Blockscout) Explorer network.",
+  "jsonLd": undefined,
+  "opengraph": {
+    "description": "",
+    "imageUrl": "http://localhost:3000/static/og_image.png",
+    "title": "Blockscout transactions - Blockscout explorer | Blockscout",
+  },
+  "title": "Blockscout transactions - Blockscout explorer | Blockscout",
+}
+`;

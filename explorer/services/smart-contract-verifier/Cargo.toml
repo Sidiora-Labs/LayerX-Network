@@ -1,0 +1,71 @@
+[workspace]
+resolver = "2"
+members = [
+    "smart-contract-verifier",
+    "smart-contract-verifier-proto",
+    "smart-contract-verifier-server",
+    "vyper-cbor-auxdata",
+]
+
+[workspace.dependencies]
+smart-contract-verifier = { path = "smart-contract-verifier" }
+smart-contract-verifier-proto = { path = "smart-contract-verifier-proto" }
+smart-contract-verifier-server = { path = "smart-contract-verifier-server" }
+verification-common = { path = "verification-common" }
+vyper-cbor-auxdata = { path = "vyper-cbor-auxdata" }
+
+actix-prost = { version = "0.1.0" }
+actix-prost-build = { version = "0.1.0" }
+actix-prost-macros = { version = "0.1.0" }
+actix-web = { version = "4" }
+alloy-core = { version = "0.8" }
+alloy-dyn-abi = { version = "0.8" }
+alloy-json-abi = { version = "0.8" }
+amplify = { version = "4.6.0" }
+anyhow = { version = "1.0" }
+async-trait = { version = "0.1" }
+blockscout-display-bytes = "1.1.0"
+blockscout-service-launcher = "0.17.0"
+bytes = { version = "1.2" }
+chrono = { version = "0.4" }
+cron = { version = "0.11" }
+era-compiler-common = { git = "https://github.com/matter-labs/era-compiler-common", rev = "9969de1" }
+foundry-compilers = { version = "0.19" }
+futures = { version = "0.3" }
+hex = { version = "0.4" }
+lazy_static = { version = "1" }
+minicbor = { version = "0.26" }
+mismatch = { version = "1.0" }
+mockall = { version = "0.11" }
+nonempty = { version = "0.10.0" }
+parking_lot = { version = "0.12" }
+pretty_assertions = { version = "1.2" }
+primitive-types = { version = "0.14.0" }
+prometheus = { version = "0.13" }
+prost = { version = "0.13" }
+prost-build = { version = "0.13" }
+quick-xml = { version = "0.24" }
+rand = { version = "0.8" }
+readonly = { version = "0.2" }
+reqwest = { version = "0.11" }
+reqwest-middleware = { version = "0.1" }
+reqwest-retry = { version = "0.1" }
+rstest = { version = "0.19" }
+rust-s3 = { version = "0.32.0" }
+semver = { version = "1.0" }
+serde = { version = "1" }
+serde_json = { version = "1" }
+serde_path_to_error = { version = "0.1.16" }
+serde_with = { version = "3" }
+sha2 = { version = "0.10" }
+solidity-metadata = { version = "1.1.0" }
+sourcify = { git = "https://github.com/blockscout/blockscout-rs", rev = "c4261d0" }
+sscanf = { version = "0.3" }
+tempfile = { version = "3.19" }
+thiserror = { version = "1.0" }
+tokio = { version = "1" }
+tonic = { version = "0.12" }
+tonic-build = { version = "0.12" }
+tracing = { version = "0.1" }
+url = { version = "2.4" }
+wiremock = { version = "0.5" }

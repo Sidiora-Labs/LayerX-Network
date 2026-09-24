@@ -1,0 +1,18 @@
+export const POOL = {
+  pool_id: '0x6a1041865b76d1dc33da0257582591227c57832c',
+  is_contract: true,
+  chain_id: '1',
+  base_token_address: '0xf63e309818e4ea13782678ce6c31c1234fa61809',
+  base_token_symbol: 'JANET',
+  base_token_icon_url: null,
+  quote_token_address: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+  quote_token_symbol: 'WETH',
+  quote_token_icon_url: 'https://coin-images.coingecko.com/coins/images/2518/small/weth.png?1696503332',
+  base_token_fully_diluted_valuation_usd: '15211385',
+  base_token_market_cap_usd: '15211385',
+  quote_token_fully_diluted_valuation_usd: '15211385',
+  quote_token_market_cap_usd: '15211385',
+  liquidity: '394101.2428',
+  dex: { id: 'uniswap_v2', name: 'Uniswap V2' },
+  coin_gecko_terminal_url: 'https://www.geckoterminal.com/eth/pools/0x6a1041865b76d1dc33da0257582591227c57832c',
+};

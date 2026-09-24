@@ -1,0 +1,19 @@
+[package]
+name = "recache"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1.88"
+bon = "3.6.4"
+dashmap = "6.1.0"
+futures = "0.3.31"
+redis = {version = "0.32.2", features = ["tokio-comp", "connection-manager"]}
+serde = "1.0.219"
+serde_json = "1.0.140"
+thiserror = "2.0.12"
+tokio = { version = "1.45.1", features = ["rt"] }
+
+[dev-dependencies]
+serde = { version = "1.0.219", features = ["derive"] }
+tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros"] }

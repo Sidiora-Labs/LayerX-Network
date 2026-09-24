@@ -1,0 +1,31 @@
+{
+  "widget-1": {
+    "name": "Widget 1",
+    "url": "https://example.com/widget-1/{address}",
+    "icon": "https://example.com/icon.svg",
+    "title": "Widget 1",
+    "hint": "Widget 1 hint",
+    "valuePath": "result.value",
+    "pages": [ "eoa", "contract", "token" ]
+  },
+  "widget-2": {
+    "name": "Widget 2",
+    "url": "https://example.com/widget-2/{address}",
+    "icon": "https://example.com/icon.svg",
+    "title": "Widget 2",
+    "valuePath": "value",
+    "pages": [ "eoa" ]
+  },
+  "widget-3": {
+    "name": "Widget 3",
+    "url": "https://example.com/widget-3/{address}?chainId={chainId}",
+    "icon": "https://example.com/icon.svg",
+    "title": "Widget 3",
+    "valuePath": "result.length",
+    "pages": [ "token" ],
+    "chainIds": {
+      "1": "eth",
+      "10": "op"
+    }
+  }
+}

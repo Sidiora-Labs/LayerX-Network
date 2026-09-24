@@ -1,0 +1,54 @@
+{{#each models}}{{#with model}}# {{{classname}}}
+{{#if isEnum}}
+
+## Enum Variants
+
+| Name | Value |
+|---- | -----|{{#with allowableValues}}{{#each enumVars}}
+| {{name}} | {{value}} |{{/each}}{{/with}}
+
+{{/if}}
+{{#with discriminator}}
+
+## Enum Variants
+
+| Name | Value |
+|---- | -----|{{#each vendorExtensions}}{{#each x-mapped-models}}
+| {{modelName}} | {{mappingName}} |{{/each}}{{/each}}
+{{#each vendorExtensions}}
+{{#each x-mapped-models}}
+
+## {{modelName}}
+
+Name | Type | Description | Notes
+------------ | ------------- | ------------- | -------------
+{{#each vars}}**{{{name}}}** | {{#unless required}}Option<{{/unless}}{{#if required}}{{#if isNullable}}Option<{{/if}}{{/if}}{{#if isPrimitiveType}}**{{{dataType}}}**{{/if}}{{#unless isPrimitiveType}}[**{{{dataType}}}**]({{{complexType}}}.md){{/unless}}{{#unless required}}>{{/unless}}{{#if required}}{{#if isNullable}}>{{/if}}{{/if}} | {{{description}}} | {{#unless required}}[optional]{{/unless}}{{#if isReadOnly}}[readonly]{{/if}}{{#if defaultValue}}[default to {{{.}}}]{{/if}}
+{{/each}}
+{{/each}}
+{{/each}}
+{{/with}}
+{{#unless discriminator}}
+{{#unless isEnum}}
+{{#if oneOf.isEmpty}}
+
+## Properties
+
+Name | Type | Description | Notes
+------------ | ------------- | ------------- | -------------
+{{#each vars}}**{{{name}}}** | {{#unless required}}Option<{{/unless}}{{#if required}}{{#if isNullable}}Option<{{/if}}{{/if}}{{#if isPrimitiveType}}**{{{dataType}}}**{{/if}}{{#unless isPrimitiveType}}[**{{{dataType}}}**]({{{complexType}}}.md){{/unless}}{{#unless required}}>{{/unless}}{{#if required}}{{#if isNullable}}>{{/if}}{{/if}} | {{{description}}} | {{#unless required}}[optional]{{/unless}}{{#if isReadOnly}}[readonly]{{/if}}{{#if defaultValue}}[default to {{{.}}}]{{/if}}
+{{/each}}
+{{/if}}
+{{#unless oneOf.isEmpty}}
+
+## Enum Variants
+
+| Name | Description |
+|---- | -----|{{#each oneOf}}
+| {{{.}}} | {{description}} |{{/each}}
+{{/unless}}
+{{/unless}}
+{{/unless}}
+
+[[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
+
+{{/with}}{{/each}}

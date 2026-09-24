@@ -1,0 +1,10 @@
+[package]
+name = "blockscout-db"
+version = "0.5.0+blockscout.7.0.2"
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+blockscout-db-migration = { path = "./migration" }
+blockscout-db-entity = { path = "./entity" }

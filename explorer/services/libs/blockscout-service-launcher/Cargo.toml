@@ -1,0 +1,133 @@
+[package]
+name = "blockscout-service-launcher"
+version = "0.22.0"
+description = "Allows to launch blazingly fast blockscout rust services"
+license = "MIT"
+repository = "https://github.com/blockscout/blockscout-rs"
+keywords = ["blockscout", "service", "starter", "launcher", "microservices"]
+categories = ["web-programming::http-server"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+actix-web = { version = "4", optional = true }
+actix-cors = { version = "0.7", optional = true }
+actix-web-prom = { version = "0.10", optional = true }
+anyhow = { version = "1.0", optional = true }
+config = { version = "0.15", optional = true }
+futures = { version = "0.3", optional = true }
+cfg-if = { version = "1.0.0", optional = true }
+keccak-hash = { version = "0.12.0", optional = true }
+once_cell = { version = "1", optional = true }
+opentelemetry = { version = "0.19", optional = true }
+opentelemetry-jaeger = { version = "0.18", features = ["rt-tokio"], optional = true }
+prometheus = { version = "0.14", optional = true }
+reqwest = { version = "0.12", features = ["json"], optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+serde_with = { version = "3", optional = true }
+tokio = { version = "1.44", optional = true }
+tokio-util = { version = "0.7.13", features = ["rt"], optional = true }
+tonic = { version = "0.14", optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-actix-web = { package = "blockscout-tracing-actix-web", version = "0.8.0", optional = true }
+tracing-opentelemetry = { version = "0.19", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"], optional = true }
+url = { version = "2.3.1", optional = true }
+uuid = { version = "1", features = ["v4"], optional = true }
+
+# Dependencies required for database initialization
+
+sea-orm-0_10 = { package = "sea-orm", version = "0.10", optional = true }
+sea-orm-migration-0_10 = { package = "sea-orm-migration", version = "0.10", optional = true }
+
+sea-orm-0_11 = { package = "sea-orm", version = "0.11", optional = true }
+sea-orm-migration-0_11 = { package = "sea-orm-migration", version = "0.11", optional = true }
+
+# 1.1.8 and older sea-orm do not compile against sqlx 0.8.6 (TransactionManager::begin signature).
+sea-orm-1 = { package = "sea-orm", version = "1.1.14", optional = true, features = [
+    "sqlx-postgres",
+    "runtime-tokio-rustls",
+] }
+sea-orm-migration-1 = { package = "sea-orm-migration", version = "1.1.14", optional = true, features = [
+    "sqlx-postgres",
+    "runtime-tokio-rustls",
+] }
+
+[dev-dependencies]
+pretty_assertions = "1.4.0"
+tempfile = "3.10.1"
+regex = { version = "1", features = ["std"], default-features = false }
+
+
+[features]
+default = ["launcher", "tracing", "actix-request-id"]
+launcher = [
+    "dep:actix-web",
+    "dep:actix-web-prom",
+    "dep:actix-cors",
+    "dep:anyhow",
+    "dep:config",
+    "dep:futures",
+    "dep:once_cell",
+    "dep:prometheus",
+    "dep:serde",
+    "dep:tokio",
+    "dep:tokio-util",
+    "dep:tonic",
+    "dep:tracing",
+    "dep:tracing-actix-web",
+]
+tracing = [
+    "dep:anyhow",
+    "dep:opentelemetry",
+    "dep:opentelemetry-jaeger",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:tracing",
+    "dep:tracing-opentelemetry",
+    "dep:tracing-subscriber",
+    "dep:uuid",
+]
+
+# Cannot be used without corresponding sea-orm dependency.
+# Choose any of `database-1`, `database-0_11`, `database-0_10` for the actual usage.
+database = [
+    "dep:anyhow",
+    "dep:cfg-if",
+    "dep:serde",
+    "dep:serde_with",
+    "dep:tracing",
+    "dep:url",
+]
+database-1 = [
+    "database",
+    "dep:sea-orm-1",
+    "dep:sea-orm-migration-1",
+]
+# 0_12 introduces conflicts with native sqlite library
+# and thus not supported
+# see https://github.com/launchbadge/sqlx/issues/3556
+database-0_11 = [
+    "database",
+    "dep:sea-orm-0_11",
+    "dep:sea-orm-migration-0_11",
+]
+database-0_10 = [
+    "database",
+    "dep:sea-orm-0_10",
+    "dep:sea-orm-migration-0_10",
+]
+
+actix-request-id = []
+
+test-server = [
+    "launcher",
+    "dep:reqwest",
+]
+
+test-database = [
+    "database",
+    "dep:keccak-hash",
+]

@@ -1,0 +1,20 @@
+#![allow(unused_imports)]
+#![allow(clippy::too_many_arguments)]
+
+extern crate serde_repr;
+extern crate serde;
+extern crate serde_json;
+extern crate url;
+{{#if hyper}}
+extern crate hyper;
+extern crate futures;
+{{/if}}
+{{#if reqwest}}
+extern crate reqwest;
+{{/if}}
+
+pub mod apis;
+pub mod models;
+
+// changed
+pub use apis::{configuration::Configuration, Error, ResponseContent, Api, ApiClient};

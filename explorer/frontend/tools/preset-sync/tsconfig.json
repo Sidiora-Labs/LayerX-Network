@@ -1,0 +1,15 @@
+{
+	"extends": "../../tsconfig.json",
+	"compilerOptions": {
+		"module": "node16",
+    	"target": "es2022",
+		"resolveJsonModule": false,
+		"isolatedModules": false,
+		"noEmit": false,
+		"moduleResolution": "node16"
+	},
+	"include": [ 
+		"./index.ts", 
+	]
+}
+  

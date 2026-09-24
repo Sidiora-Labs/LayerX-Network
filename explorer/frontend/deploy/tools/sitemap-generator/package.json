@@ -1,0 +1,12 @@
+{
+  "name": "sitemap-generator",
+  "version": "1.0.0",
+  "main": "index.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "next-sitemap": "4.2.3"
+  }
+}

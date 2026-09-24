@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/v2/tokens/0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401"
+  },
+  "response": {
+    "status": 200,
+    "body": "{\"address\":\"0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401\",\"address_hash\":\"0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401\",\"circulating_market_cap\":null,\"decimals\":null,\"exchange_rate\":null,\"holders\":\"471036\",\"holders_count\":\"471036\",\"icon_url\":null,\"name\":\"NameWrapper\",\"symbol\":null,\"total_supply\":null,\"type\":\"ERC-1155\",\"volume_24h\":null}",
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}

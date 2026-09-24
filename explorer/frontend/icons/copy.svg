@@ -1,0 +1,10 @@
+<svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g clip-path="url(#copy_svg__a)">
+    <path d="M8.597 3H1.228C.55 3 0 3.57 0 4.273v8.909h1.228v-8.91h7.369V3Zm1.842 2.545H3.684c-.678 0-1.228.57-1.228 1.273v8.91c0 .702.55 1.272 1.228 1.272h6.755c.678 0 1.228-.57 1.228-1.273V6.818c0-.703-.55-1.273-1.228-1.273Zm0 10.182H3.684V6.818h6.755v8.91Z" fill="currentColor" stroke="currentColor" stroke-width=".3"/>
+  </g>
+  <defs>
+    <clipPath id="copy_svg__a">
+      <path d="M0 0h20v20H0z"/>
+    </clipPath>
+  </defs>
+</svg>

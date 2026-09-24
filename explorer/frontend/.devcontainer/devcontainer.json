@@ -1,0 +1,32 @@
+{
+	"name": "blockscout dev",
+	"image": "mcr.microsoft.com/devcontainers/typescript-node:20",
+	"forwardPorts": [ 3000 ],
+	"customizations": {
+		"vscode": {
+			"settings": {
+				"terminal.integrated.defaultProfile.linux": "zsh", 
+				"terminal.integrated.profiles.linux": {
+					"zsh": {
+						"path": "/bin/zsh"
+					}
+				}
+			},
+		  "extensions": [
+				"streetsidesoftware.code-spell-checker",
+				"formulahendry.auto-close-tag",
+				"formulahendry.auto-rename-tag",
+				"dbaeumer.vscode-eslint",
+				"eamodio.gitlens",
+				"yatki.vscode-surround",
+				"simonsiefke.svg-preview"
+			]
+		}
+	},
+	"features": {
+		"ghcr.io/devcontainers-contrib/features/zsh-plugins:0": {
+			"plugins": "npm",
+			"omzPlugins": "https://github.com/zsh-users/zsh-autosuggestions"
+		}
+	}
+}

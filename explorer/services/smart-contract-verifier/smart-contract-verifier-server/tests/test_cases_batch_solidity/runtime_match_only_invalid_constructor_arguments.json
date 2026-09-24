@@ -1,0 +1,64 @@
+{
+  "_comment": "Constructor arguments do not correspond to ABI. Only runtime code should match",
+  "request": {
+    "contracts": [
+      {
+        "creationCode": "0x608060405234801561000f575f80fd5b5060405161015738038061015783398181016040528101906100319190610074565b805f819055505061009f565b5f80fd5b5f819050919050565b61005381610041565b811461005d575f80fd5b50565b5f8151905061006e8161004a565b92915050565b5f602082840312156100895761008861003d565b5b5f61009684828501610060565b91505092915050565b60ac806100ab5f395ff3fe6080604052348015600e575f80fd5b50600436106026575f3560e01c80630dbe671f14602a575b5f80fd5b60306044565b604051603b9190605f565b60405180910390f35b5f5481565b5f819050919050565b6059816049565b82525050565b5f60208201905060705f8301846052565b9291505056fea26469706673582212207a2c6f0e80be2a2e54c4c4cec7bfad682cc29ab30b05f643823aad465c8d3d3464736f6c63430008180033cafecafe",
+        "runtimeCode": "0x6080604052348015600e575f80fd5b50600436106026575f3560e01c80630dbe671f14602a575b5f80fd5b60306044565b604051603b9190605f565b60405180910390f35b5f5481565b5f819050919050565b6059816049565b82525050565b5f60208201905060705f8301846052565b9291505056fea26469706673582212207a2c6f0e80be2a2e54c4c4cec7bfad682cc29ab30b05f643823aad465c8d3d3464736f6c63430008180033"
+      }
+    ],
+    "compilerVersion": "v0.8.24+commit.e11b9ed9",
+    "input": "{\"language\":\"Solidity\",\"sources\":{\"contracts/Constructor.sol\":{\"content\":\"// SPDX-License-Identifier: MIT\\npragma solidity ^0.8.24;\\n\\ncontract WithConstructor {\\n    uint256 public a;\\n\\n    constructor(uint256 _a) {\\n        a = _a;\\n    }\\n}\"}},\"settings\":{\"optimizer\":{\"enabled\":false,\"runs\":200},\"libraries\":{}}}"
+  },
+  "response": {
+    "success": {
+      "creationCode": "0x608060405234801561000f575f80fd5b5060405161015738038061015783398181016040528101906100319190610074565b805f819055505061009f565b5f80fd5b5f819050919050565b61005381610041565b811461005d575f80fd5b50565b5f8151905061006e8161004a565b92915050565b5f602082840312156100895761008861003d565b5b5f61009684828501610060565b91505092915050565b60ac806100ab5f395ff3fe6080604052348015600e575f80fd5b50600436106026575f3560e01c80630dbe671f14602a575b5f80fd5b60306044565b604051603b9190605f565b60405180910390f35b5f5481565b5f819050919050565b6059816049565b82525050565b5f60208201905060705f8301846052565b9291505056fea26469706673582212207a2c6f0e80be2a2e54c4c4cec7bfad682cc29ab30b05f643823aad465c8d3d3464736f6c63430008180033",
+      "runtimeCode": "0x6080604052348015600e575f80fd5b50600436106026575f3560e01c80630dbe671f14602a575b5f80fd5b60306044565b604051603b9190605f565b60405180910390f35b5f5481565b5f819050919050565b6059816049565b82525050565b5f60208201905060705f8301846052565b9291505056fea26469706673582212207a2c6f0e80be2a2e54c4c4cec7bfad682cc29ab30b05f643823aad465c8d3d3464736f6c63430008180033",
+      "compiler": "SOLC",
+      "compilerVersion": "v0.8.24+commit.e11b9ed9",
+      "language": "SOLIDITY",
+      "fileName": "contracts/Constructor.sol",
+      "contractName": "WithConstructor",
+      "sources": {
+        "contracts/Constructor.sol": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.24;\n\ncontract WithConstructor {\n    uint256 public a;\n\n    constructor(uint256 _a) {\n        a = _a;\n    }\n}"
+      },
+      "compilerSettings": {
+        "libraries": {},
+        "optimizer": {"enabled":false,"runs":200}
+      },
+      "compilationArtifacts": {
+        "abi": [{"inputs":[{"internalType":"uint256","name":"_a","type":"uint256"}],"stateMutability":"nonpayable","type":"constructor"},{"inputs":[],"name":"a","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"}],
+        "userdoc": {"kind":"user","methods":{},"version":1},
+        "devdoc": {"kind":"dev","methods":{},"version":1},
+        "storageLayout": {"storage":[{"astId":3,"contract":"contracts/Constructor.sol:WithConstructor","label":"a","offset":0,"slot":"0","type":"t_uint256"}],"types":{"t_uint256":{"encoding":"inplace","label":"uint256","numberOfBytes":"32"}}},
+        "sources": {"contracts/Constructor.sol":{"id":0}}
+      },
+      "creationCodeArtifacts": {
+        "cborAuxdata": {
+          "1": {
+            "offset": 290,
+            "value": "0xa26469706673582212207a2c6f0e80be2a2e54c4c4cec7bfad682cc29ab30b05f643823aad465c8d3d3464736f6c63430008180033"}
+        },
+        "linkReferences": {},
+        "sourceMap": "58:103:0:-:0;;;112:47;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;:::i;:::-;150:2;146:1;:6;;;;112:47;58:103;;88:117:1;197:1;194;187:12;334:77;371:7;400:5;389:16;;334:77;;;:::o;417:122::-;490:24;508:5;490:24;:::i;:::-;483:5;480:35;470:63;;529:1;526;519:12;470:63;417:122;:::o;545:143::-;602:5;633:6;627:13;618:22;;649:33;676:5;649:33;:::i;:::-;545:143;;;;:::o;694:351::-;764:6;813:2;801:9;792:7;788:23;784:32;781:119;;;819:79;;:::i;:::-;781:119;939:1;964:64;1020:7;1011:6;1000:9;996:22;964:64;:::i;:::-;954:74;;910:128;694:351;;;;:::o;58:103:0:-;;;;;;;"
+      },
+      "runtimeCodeArtifacts": {
+        "cborAuxdata": {
+          "1": {
+            "offset": 119,
+            "value": "0xa26469706673582212207a2c6f0e80be2a2e54c4c4cec7bfad682cc29ab30b05f643823aad465c8d3d3464736f6c63430008180033"
+          }
+        },
+        "immutableReferences": {},
+        "linkReferences": {},
+        "sourceMap":"58:103:0:-:0;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;89:16;;;:::i;:::-;;;;;;;:::i;:::-;;;;;;;;;;;;:::o;7:77:1:-;44:7;73:5;62:16;;7:77;;;:::o;90:118::-;177:24;195:5;177:24;:::i;:::-;172:3;165:37;90:118;;:::o;214:222::-;307:4;345:2;334:9;330:18;322:26;;358:71;426:1;415:9;411:17;402:6;358:71;:::i;:::-;214:222;;;;:::o"
+      },
+      "creationMatchDetails": null,
+      "runtimeMatchDetails": {
+        "matchType": "FULL",
+        "values": {},
+        "transformations": []
+      }
+    }
+  }
+}
