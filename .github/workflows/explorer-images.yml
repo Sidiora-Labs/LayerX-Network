@@ -1,0 +1,91 @@
+name: Explorer / Images
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'explorer/**'
+      - '.github/workflows/explorer-images.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: explorer-images-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish ${{ matrix.image }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: paxeer-x-explorer-backend
+            context: explorer/backend
+            dockerfile: explorer/backend/docker/Dockerfile
+            build_args: |
+              RELEASE_VERSION=10.2.6
+            timeout: 120
+          - image: paxeer-x-explorer-frontend
+            context: explorer/frontend
+            dockerfile: explorer/frontend/Dockerfile
+            build_args: ''
+            timeout: 60
+          - image: paxeer-x-explorer-smart-contract-verifier
+            context: explorer/services/smart-contract-verifier
+            dockerfile: explorer/services/smart-contract-verifier/Dockerfile
+            build_args: ''
+            timeout: 60
+          - image: paxeer-x-explorer-sig-provider
+            context: explorer/services/sig-provider
+            dockerfile: explorer/services/sig-provider/Dockerfile
+            build_args: ''
+            timeout: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to the container registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Collect image tags
+        id: tags
+        env:
+          IMAGE: ghcr.io/sidiora-labs/${{ matrix.image }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          short_sha="${COMMIT_SHA:0:7}"
+          tags="${IMAGE}:sha-${short_sha}"
+          if [ "${REF_NAME}" = 'main' ]; then
+            tags="${tags},${IMAGE}:main,${IMAGE}:latest"
+          fi
+          echo "tags=${tags}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build and push ${{ matrix.image }}
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          build-args: ${{ matrix.build_args }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
