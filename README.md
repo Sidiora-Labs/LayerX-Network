@@ -147,9 +147,171 @@ make paxeer-ci
 
 `layerx-agentd` is `agent/crates/layerx-agentd`. The MCP server is `agent/crates/layerx-mcp`. The developer CLI in `platform/cli` installs those transports with `layerx install mcp` and `layerx install a2a`.
 
-## Diagram of System Flow 
+## Architecture
 
-<p align="center"><img src="https://cdn.usercontent.paxeercode.com/diagram%20(1).png" alt="Paxeer X Network" width="900"></p>
+Paxeer X Network is one network with two execution domains: the Paxeer X chain node (`paxd`, Go) and the LayerX kernel (`layerxd`, C17), joined by EVM precompiles on one side and hosted platform services on the other. Rounded boxes are running services, cylinders are durable stores, hexagons are contracts and EVM precompiles (labelled with their address), and plain boxes are modules inside a state machine. Arrows follow the direction data moves: solid arrows submit or write, dotted arrows carry reads, events and proofs.
+
+```mermaid
+flowchart TB
+  subgraph users ["Users and agents"]
+    direction TB
+    human(["Human"])
+    agent(["Autonomous agent"])
+    web("Human web app")
+    hsvc("layerx-human-service")
+    intents("layerx-intents<br/>typed intent compiler")
+    kms("layerx-human-kms")
+    mcp("layerx-mcp")
+    sdk("layerx-sdk<br/>Rust · TypeScript · Python")
+    agentd("layerx-agentd")
+  end
+
+  subgraph platform ["Platform services"]
+    direction TB
+    gateway("layerx-gateway<br/>eth_* relay · px_* · px_getCapabilities")
+    indexer("layerx-indexer<br/>LayerX and Paxeer ingesters")
+    idxdb[("SQLite history")]
+    relay("relay/archive node")
+  end
+
+  subgraph lx ["LayerX kernel · C17"]
+    direction TB
+    layerxd("layerxd<br/>LNI server · sequencer")
+    kernel["Activity kernel<br/>module dispatch"]
+    perps["perps · 6"]
+    spot["spot · 10"]
+    gov["governance · 7"]
+    kbridge["bridge · 8"]
+    ledger["402LXP ledger<br/>sole balance writer"]
+    alog[("Activity log")]
+    guarantor("layerx-guarantor")
+  end
+
+  subgraph px ["Paxeer X node · paxd"]
+    direction TB
+    evm("EVM JSON-RPC<br/>pax-geth")
+    cons("Tendermint consensus")
+    occ("OCC parallel executor")
+    pAnchor{{"layerxAnchor<br/>0x1014"}}
+    pCustody{{"layerxCustody<br/>0x1013"}}
+    pExch{{"layerxExchange<br/>0x1015"}}
+    pBridge{{"layerxBridge<br/>0x1016"}}
+    pLaunch{{"launchpad<br/>0x1017"}}
+    mCustody["layerxcustody module"]
+    mExch["layerxexchange module"]
+    mBridge["layerxbridge module"]
+    mLaunch["launchpad module"]
+    paxdb[("PaxDB state store")]
+  end
+
+  subgraph eth ["Bridge to Ethereum"]
+    direction TB
+    relayer("layerx-bridge-relayer")
+    vault{{"PaxeerXVault"}}
+  end
+
+  human --> web
+  web -->|"HTTPS"| hsvc
+  hsvc -->|"typed intent"| intents
+  hsvc -->|"custody signing"| kms
+  intents -->|"compiled Activity"| agentd
+  agent --> mcp
+  agent --> sdk
+  mcp -->|"tool calls"| agentd
+  sdk -->|"daemon socket"| agentd
+  agentd -->|"LNI frames"| layerxd
+
+  layerxd --> kernel
+  kernel --> perps & spot & gov & kbridge
+  kernel -->|"transfer sets"| ledger
+  ledger -->|"signed receipt"| alog
+  alog -->|"sealed batch"| guarantor
+  guarantor -->|"submitCheckpoint"| pAnchor
+
+  layerxd -.->|"batch sync"| relay
+  relay -.->|"history batches"| indexer
+  evm -.->|"blocks · logs · tx_search"| indexer
+  indexer --> idxdb
+  indexer -.->|"px_getHistory"| gateway
+  layerxd -.->|"lx_* reads"| gateway
+  gateway -->|"eth_* relay"| evm
+  gateway -.->|"eth_call · eth_getLogs"| web
+  gateway -.->|"px_* reads"| hsvc
+
+  evm -->|"txs"| cons
+  cons -->|"ordered blocks"| occ
+  occ --> pAnchor & pCustody & pExch & pBridge & pLaunch
+  pCustody --> mCustody
+  pExch -->|"pending intent"| mExch
+  pExch -->|"margin deposit"| mCustody
+  pBridge --> mBridge
+  pLaunch --> mLaunch
+  occ -->|"state commits"| paxdb
+
+  pExch -.->|"intent logs decoded"| intents
+  mCustody -.->|"custody credit proof"| kbridge
+
+  vault -.->|"Deposit event"| relayer
+  relayer -->|"bridgeIn"| pBridge
+  pBridge -.->|"BridgeOut event"| relayer
+  relayer -->|"release"| vault
+
+  classDef actor fill:#e4dcf2,stroke:#7a68ad,color:#2a2340
+  classDef svc fill:#d8e5f3,stroke:#4d77a8,color:#1b2a3c
+  classDef store fill:#e1ecd4,stroke:#6a8c48,color:#23321a
+  classDef contract fill:#f3e2cc,stroke:#ad7a3e,color:#3b2913
+  classDef module fill:#e6e8eb,stroke:#6b7480,color:#22272e
+
+  class human,agent actor
+  class web,hsvc,intents,kms,mcp,sdk,agentd,gateway,indexer,relay,layerxd,guarantor,evm,cons,occ,relayer svc
+  class idxdb,alog,paxdb store
+  class pAnchor,pCustody,pExch,pBridge,pLaunch,vault contract
+  class kernel,perps,spot,gov,kbridge,ledger,mCustody,mExch,mBridge,mLaunch module
+```
+
+The bridge to Ethereum in detail: each relayer instance holds one attestor key behind a remote signer, journals every observed event and signed transaction before broadcast, and meets a signature threshold above one by exchanging signatures with other instances.
+
+```mermaid
+flowchart LR
+  subgraph ethb ["Ethereum"]
+    bVault{{"PaxeerXVault"}}
+  end
+
+  subgraph relb ["Relayer instance"]
+    direction TB
+    bRelayer("layerx-bridge-relayer")
+    bSigner("Remote signer<br/>one attestor key")
+    bJournal[("Append-only journal")]
+    bCosign[("Cosign directory")]
+  end
+
+  subgraph pxb ["Paxeer X node"]
+    direction TB
+    bPrec{{"layerxBridge<br/>0x1016"}}
+    bModule["layerxbridge module<br/>attestors · caps · nullifiers"]
+    bTf["tokenfactory<br/>bridged denoms"]
+  end
+
+  bVault -.->|"Deposit event"| bRelayer
+  bRelayer -->|"digest to sign"| bSigner
+  bRelayer -->|"events · signed txs"| bJournal
+  bRelayer -->|"threshold signatures"| bCosign
+  bRelayer -->|"bridgeIn + signatures"| bPrec
+  bPrec --> bModule
+  bModule -->|"mint · burn"| bTf
+  bPrec -.->|"BridgeOut event"| bRelayer
+  bRelayer -->|"release + signatures"| bVault
+
+  classDef svc fill:#d8e5f3,stroke:#4d77a8,color:#1b2a3c
+  classDef store fill:#e1ecd4,stroke:#6a8c48,color:#23321a
+  classDef contract fill:#f3e2cc,stroke:#ad7a3e,color:#3b2913
+  classDef module fill:#e6e8eb,stroke:#6b7480,color:#22272e
+
+  class bRelayer,bSigner svc
+  class bJournal,bCosign store
+  class bVault,bPrec contract
+  class bModule,bTf module
+```
 
 ## Contributing
 
