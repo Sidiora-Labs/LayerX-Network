@@ -54,6 +54,7 @@ defmodule Indexer.Block.Fetcher do
     Addresses,
     AddressTokenBalances,
     MintTransfers,
+    PaxeerXLogs,
     SignedAuthorizations,
     TokenInstances,
     TokenTransfers,
@@ -195,6 +196,7 @@ defmodule Indexer.Block.Fetcher do
          tokens = Enum.uniq(tokens ++ celo_tokens),
          %{transaction_actions: transaction_actions} = TransactionActions.parse(logs),
          %{mint_transfers: mint_transfers} = MintTransfers.parse(logs),
+         paxeer_x_logs = PaxeerXLogs.parse(logs),
          optimism_withdrawals =
            if(callback_module == Indexer.Block.Realtime.Fetcher, do: OptimismWithdrawals.parse(logs), else: []),
          scroll_l1_fee_params =
@@ -278,7 +280,8 @@ defmodule Indexer.Block.Fetcher do
              celo_epochs: celo_l1_epochs ++ celo_l2_epochs,
              celo_pending_account_operations: celo_pending_account_operations,
              arbitrum_messages: arbitrum_xlevel_messages,
-             stability_validators: stability_validators
+             stability_validators: stability_validators,
+             paxeer_x_logs: paxeer_x_logs
            }
            |> extend_with_zilliqa_import_options(fetched_blocks),
          {:ok, inserted} <-
