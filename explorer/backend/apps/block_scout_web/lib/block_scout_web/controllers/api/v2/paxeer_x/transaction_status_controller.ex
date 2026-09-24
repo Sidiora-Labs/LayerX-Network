@@ -1,4 +1,8 @@
 defmodule BlockScoutWeb.API.V2.PaxeerX.TransactionStatusController do
+  @moduledoc """
+  Publishes the rung a transaction has reached on the Paxeer X Network settlement ladder.
+  """
+
   use BlockScoutWeb, :controller
 
   alias Explorer.Chain
@@ -11,8 +15,8 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.TransactionStatusController do
   @doc """
   Handles GET requests to `/api/v2/transactions/:transaction_hash_param/status`.
 
-  Answers with the rung the transaction has reached on the settlement ladder and the reason it
-  sits there.
+  Answers with the rung the transaction has reached and the anchor batches that rung was
+  measured against.
   """
   @spec status(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def status(conn, %{"transaction_hash_param" => transaction_hash_string} = _params) do
@@ -20,10 +24,7 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.TransactionStatusController do
          {:ok, transaction} <- Chain.hash_to_transaction(transaction_hash, @api_true) do
       conn
       |> put_status(200)
-      |> render(:status, %{
-        transaction: transaction,
-        status: UnifiedAccount.ladder_status(transaction.block_number, @api_true)
-      })
+      |> render(:status, %{status: UnifiedAccount.ladder_status(transaction.block_number, @api_true)})
     end
   end
 end

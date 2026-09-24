@@ -1,7 +1,11 @@
 defmodule BlockScoutWeb.API.V2.PaxeerX.AnchorController do
+  @moduledoc """
+  Publishes the anchor checkpoints the LayerX anchor precompile has logged.
+  """
+
   use BlockScoutWeb, :controller
 
-  import BlockScoutWeb.Chain, only: [split_list_by_page: 1]
+  import BlockScoutWeb.Chain, only: [next_page_params: 5, split_list_by_page: 1]
   import Explorer.PagingOptions, only: [default_paging_options: 0]
 
   alias Explorer.Chain.PaxeerX.UnifiedAccount
@@ -26,7 +30,10 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.AnchorController do
 
     conn
     |> put_status(200)
-    |> render(:anchors, %{anchors: anchors, next_page_params: anchors_next_page_params(next_page, anchors)})
+    |> render(:anchors, %{
+      anchors: anchors,
+      next_page_params: next_page_params(next_page, anchors, params, false, &paging_params/1)
+    })
   end
 
   defp paging_key(%{"batch_number" => batch_number}) do
@@ -38,9 +45,5 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.AnchorController do
 
   defp paging_key(_params), do: nil
 
-  defp anchors_next_page_params([], _anchors), do: nil
-
-  defp anchors_next_page_params(_next_page, anchors) do
-    %{"batch_number" => anchors |> List.last() |> Map.get("batch_number")}
-  end
+  defp paging_params(%{batch_number: batch_number}), do: %{batch_number: batch_number}
 end

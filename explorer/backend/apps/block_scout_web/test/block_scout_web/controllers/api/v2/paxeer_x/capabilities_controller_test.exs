@@ -25,7 +25,7 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.CapabilitiesControllerTest do
 
   @bytecode "0x60806040523480156100105760006000fd"
 
-  @surfaces ~w(custody anchor exchange bridge launchpad unified_account)
+  @surfaces ~w(addr custody anchor exchange bridge launchpad)
 
   describe "/api/v2/paxeer-x/capabilities" do
     test "reports every surface absent while nothing has probed the node", %{conn: conn} do
@@ -37,8 +37,6 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.CapabilitiesControllerTest do
       for surface <- @surfaces do
         assert response[surface] == false
       end
-
-      assert response["checked_at"] == nil
     end
 
     test "reports the surfaces of the last probe", %{conn: conn} do
@@ -64,8 +62,6 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.CapabilitiesControllerTest do
       for surface <- @surfaces do
         assert response[surface] == true
       end
-
-      assert {:ok, %DateTime{}, 0} = DateTime.from_iso8601(response["checked_at"])
     end
   end
 

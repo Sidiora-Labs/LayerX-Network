@@ -20,6 +20,7 @@ end
 defmodule Explorer.Chain.PaxeerX.StatusTest do
   use Explorer.DataCase, async: false
 
+  alias Explorer.Chain.PaxeerX.Anchor, as: AnchorRow
   alias Explorer.Chain.PaxeerX.Finality
   alias Explorer.Chain.PaxeerX.Finality.{Anchor, Heights}
   alias Explorer.Chain.PaxeerX.Status
@@ -170,8 +171,42 @@ defmodule Explorer.Chain.PaxeerX.StatusTest do
   end
 
   describe "latest_anchor/0" do
-    test "answers :no_anchor while the lx_anchors table has not been migrated yet" do
-      refute lx_anchors_exists?()
+    test "answers :no_anchor while no consensus block carries a checkpoint" do
+      assert Finality.latest_anchor() == :no_anchor
+    end
+
+    test "seals from the highest checkpoint and finalizes from the highest finalized one" do
+      insert_anchor(18, :final, 4_250)
+      sealing = insert_anchor(19, :submitted, 4_300)
+
+      assert {:ok, anchor} = Finality.latest_anchor()
+
+      assert %Anchor{
+               source: :anchor_table,
+               batch_number: 19,
+               checkpoint_height: 4_300,
+               sealed_height: 4_300,
+               finalized_batch_number: 18,
+               finalized_height: 4_250
+             } = anchor
+
+      assert anchor.checkpoint_id == to_string(sealing.checkpoint_id)
+      assert anchor.block_number == sealing.block_number
+    end
+
+    test "an unknown checkpoint seals nothing" do
+      insert_anchor(20, :unknown, 4_400)
+
+      assert Finality.latest_anchor() == :no_anchor
+    end
+
+    test "leaves out the checkpoints a reorged block carried" do
+      anchor = insert_anchor(21, :final, 4_500)
+
+      Explorer.Chain.Block
+      |> Repo.get_by!(hash: anchor.block_hash)
+      |> Ecto.Changeset.change(consensus: false)
+      |> Repo.update!()
 
       assert Finality.latest_anchor() == :no_anchor
     end
@@ -246,10 +281,28 @@ defmodule Explorer.Chain.PaxeerX.StatusTest do
     end
   end
 
-  defp lx_anchors_exists? do
-    %Postgrex.Result{rows: [[exists?]]} =
-      Repo.query!("SELECT EXISTS (SELECT FROM pg_tables WHERE tablename = 'lx_anchors')", [])
+  defp insert_anchor(batch_number, status, sealed_height) do
+    block = insert(:block, number: 5_000 + batch_number)
+    transaction = :transaction |> insert() |> with_block(block)
 
-    exists?
+    attributes = %{
+      transaction_hash: transaction.hash,
+      log_index: 0,
+      block_hash: block.hash,
+      block_number: block.number,
+      block_consensus: true,
+      batch_number: batch_number,
+      checkpoint_id: "0x" <> Base.encode16(<<batch_number::256>>, case: :lower),
+      state_root: to_string(block_hash()),
+      receipt_root: to_string(block_hash()),
+      signers: 5,
+      status: status,
+      kernel_height: sealed_height,
+      sealed_height: sealed_height
+    }
+
+    %AnchorRow{}
+    |> AnchorRow.changeset(attributes)
+    |> Repo.insert!()
   end
 end
