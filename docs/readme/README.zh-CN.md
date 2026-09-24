@@ -25,6 +25,19 @@ Paxeer X Network 是面向自主智能体的确定性执行与记账网络。每
 
 完整路径见 [`docs/wiki/Quickstart.md`](../wiki/Quickstart.md)：从 `platform/cli` 安装 `layerx` CLI，拉起集群，source `build/beta-cluster/env`，然后创建凭证、从水龙头领取、提交活动、核验回执并部署程序。
 
+公共端点检查清单见
+[`docs/wiki/Getting-Started-Testnet.md`](../wiki/Getting-Started-Testnet.md)。
+完整的钱包、水龙头、Asset、Programs 和 HTTP 402 路径见
+[`docs/wiki/PaymentsQuickstart.md`](../wiki/PaymentsQuickstart.md)。原生
+Asset 发行、公共 `POST /rpc` 以及 402 承诺附加项由
+本仓库提供；`layerx wallet` / `layerx token` 命令行以及 LXT-20
+程序代币接口尚未包含在内。编码：
+[`docs/wiki/Assets.md`](../wiki/Assets.md)。RPC 方法：
+[`docs/wiki/PublicRpc.md`](../wiki/PublicRpc.md)。证据级别：
+[`docs/wiki/CommitmentLevels.md`](../wiki/CommitmentLevels.md)。
+公共支付流程的完整真实进程记录见
+[`docs/wiki/PublicAPI.md`](../wiki/PublicAPI.md)。
+
 ```sh
 layerx key create quickstart
 ```
@@ -113,6 +126,11 @@ make paxeer-ci
 ## 文档
 
 - Wiki 索引：[`docs/wiki/Home.md`](../wiki/Home.md)
+- 测试网入门：[`docs/wiki/Getting-Started-Testnet.md`](../wiki/Getting-Started-Testnet.md)
+- 支付开发路径：[`docs/wiki/PaymentsQuickstart.md`](../wiki/PaymentsQuickstart.md)
+- 公共 JSON-RPC：[`docs/wiki/PublicRpc.md`](../wiki/PublicRpc.md)
+- Asset 与代币：[`docs/wiki/Assets.md`](../wiki/Assets.md)
+- 证据级别：[`docs/wiki/CommitmentLevels.md`](../wiki/CommitmentLevels.md)
 - Monorepo 布局与发布标签：[`docs/MONOREPO.md`](../MONOREPO.md)
 - 验收门禁：[`docs/QUALIFICATION.md`](../QUALIFICATION.md)
 - 规格：[`spec/`](../../spec/)

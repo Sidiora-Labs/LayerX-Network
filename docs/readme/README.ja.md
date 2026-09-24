@@ -25,6 +25,19 @@ Paxeer X Network は自律エージェント向けの決定的実行および会
 
 全手順は [`docs/wiki/Quickstart.md`](../wiki/Quickstart.md) です。`platform/cli` から `layerx` CLI をインストールし、クラスタを起動し、`build/beta-cluster/env` を source したうえで、クレデンシャルを作成し、faucet から請求し、Activity を送信し、レシートを検証し、プログラムをデプロイします。
 
+公開エンドポイントのチェックリストは
+[`docs/wiki/Getting-Started-Testnet.md`](../wiki/Getting-Started-Testnet.md) です。
+ウォレット、faucet、Asset、Programs、HTTP 402 の完全な経路は
+[`docs/wiki/PaymentsQuickstart.md`](../wiki/PaymentsQuickstart.md) です。Native
+Asset の発行、公開の `POST /rpc`、402 コミットメントの追加機能はこのツリーで
+提供されていますが、`layerx wallet` / `layerx token` コマンドラインと LXT-20
+プログラムトークンインターフェースはまだ含まれていません。エンコーディング:
+[`docs/wiki/Assets.md`](../wiki/Assets.md)。RPC メソッド:
+[`docs/wiki/PublicRpc.md`](../wiki/PublicRpc.md)。エビデンスレベル:
+[`docs/wiki/CommitmentLevels.md`](../wiki/CommitmentLevels.md)。
+公開の決済フローの正確な実プロセストランスクリプトは
+[`docs/wiki/PublicAPI.md`](../wiki/PublicAPI.md) です。
+
 ```sh
 layerx key create quickstart
 ```
@@ -113,6 +126,11 @@ make paxeer-ci
 ## ドキュメント
 
 - Wiki 索引: [`docs/wiki/Home.md`](../wiki/Home.md)
+- テストネットの始め方: [`docs/wiki/Getting-Started-Testnet.md`](../wiki/Getting-Started-Testnet.md)
+- 決済デベロッパーパス: [`docs/wiki/PaymentsQuickstart.md`](../wiki/PaymentsQuickstart.md)
+- 公開 JSON-RPC: [`docs/wiki/PublicRpc.md`](../wiki/PublicRpc.md)
+- Asset とトークン: [`docs/wiki/Assets.md`](../wiki/Assets.md)
+- コミットメントレベル: [`docs/wiki/CommitmentLevels.md`](../wiki/CommitmentLevels.md)
 - モノレポ構成とリリースタグ: [`docs/MONOREPO.md`](../MONOREPO.md)
 - 適格化ゲート: [`docs/QUALIFICATION.md`](../QUALIFICATION.md)
 - 仕様: [`spec/`](../../spec/)

@@ -25,6 +25,19 @@ Paxeer X Network является детерминированной сетью 
 
 Полный путь описан в [`docs/wiki/Quickstart.md`](../wiki/Quickstart.md): установите CLI `layerx` из `platform/cli`, поднимите кластер, выполните source `build/beta-cluster/env`, затем создайте учётные данные, запросите средства из faucet, отправьте активность, проверьте квитанцию и разверните программу.
 
+Чек-лист публичного эндпоинта:
+[`docs/wiki/Getting-Started-Testnet.md`](../wiki/Getting-Started-Testnet.md).
+Полный путь по кошельку, faucet, Asset, Programs и HTTP 402:
+[`docs/wiki/PaymentsQuickstart.md`](../wiki/PaymentsQuickstart.md). Выпуск
+собственного Asset, публичный `POST /rpc` и дополнительные данные для 402
+commitment обслуживаются этим деревом; командная строка `layerx wallet` /
+`layerx token` и интерфейс токен-программы LXT-20 в него пока не входят.
+Кодировки: [`docs/wiki/Assets.md`](../wiki/Assets.md). Методы RPC:
+[`docs/wiki/PublicRpc.md`](../wiki/PublicRpc.md). Уровни подтверждения:
+[`docs/wiki/CommitmentLevels.md`](../wiki/CommitmentLevels.md).
+Точная транскрипция публичного платёжного потока на реальном процессе:
+[`docs/wiki/PublicAPI.md`](../wiki/PublicAPI.md).
+
 ```sh
 layerx key create quickstart
 ```
@@ -113,6 +126,11 @@ make paxeer-ci
 ## Документация
 
 - Индекс wiki: [`docs/wiki/Home.md`](../wiki/Home.md)
+- Начало работы в тестовой сети: [`docs/wiki/Getting-Started-Testnet.md`](../wiki/Getting-Started-Testnet.md)
+- Путь разработчика платежей: [`docs/wiki/PaymentsQuickstart.md`](../wiki/PaymentsQuickstart.md)
+- Публичный JSON-RPC: [`docs/wiki/PublicRpc.md`](../wiki/PublicRpc.md)
+- Assets и токены: [`docs/wiki/Assets.md`](../wiki/Assets.md)
+- Уровни подтверждения: [`docs/wiki/CommitmentLevels.md`](../wiki/CommitmentLevels.md)
 - Структура монорепозитория и теги выпуска: [`docs/MONOREPO.md`](../MONOREPO.md)
 - Квалификационные шлюзы: [`docs/QUALIFICATION.md`](../QUALIFICATION.md)
 - Спецификации: [`spec/`](../../spec/)
