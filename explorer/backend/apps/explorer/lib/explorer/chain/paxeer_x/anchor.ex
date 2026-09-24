@@ -26,11 +26,13 @@ defmodule Explorer.Chain.PaxeerX.Anchor do
   @statuses ~w(unknown submitted final)a
 
   @required_attrs ~w(batch_number checkpoint_id status block_hash block_number transaction_hash log_index)a
-  @optional_attrs ~w(state_root receipt_root signers kernel_height sealed_height block_consensus)a
+  @optional_attrs ~w(event_name parameters state_root receipt_root signers kernel_height sealed_height block_consensus)a
 
   @typedoc """
   * `batch_number` - the checkpoint height, that is the anchor batch number.
   * `checkpoint_id` - the identifier of the checkpoint.
+  * `event_name` - the Solidity name of the precompile event the row was decoded from.
+  * `parameters` - every decoded argument of that event under its ABI name, lossless.
   * `state_root` - the state root the checkpoint commits to.
   * `receipt_root` - the receipt root the checkpoint commits to.
   * `signers` - the number of guarantors that signed the checkpoint.
@@ -50,6 +52,8 @@ defmodule Explorer.Chain.PaxeerX.Anchor do
     field(:block_consensus, :boolean, null: false)
     field(:batch_number, :integer, null: false)
     field(:checkpoint_id, Hash.Full, null: false)
+    field(:event_name, :string)
+    field(:parameters, :map)
     field(:state_root, Hash.Full)
     field(:receipt_root, Hash.Full)
     field(:signers, :integer)

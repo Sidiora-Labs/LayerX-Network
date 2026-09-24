@@ -21,10 +21,12 @@ defmodule Explorer.Chain.PaxeerX.AccountBinding do
   alias Explorer.Chain.{Block, Hash, Transaction}
 
   @required_attrs ~w(evm_address_hash bound block_hash block_number transaction_hash log_index)a
-  @optional_attrs ~w(pax_address layerx_did layerx_account nonce block_consensus)a
+  @optional_attrs ~w(event_name parameters pax_address layerx_did layerx_account nonce block_consensus)a
 
   @typedoc """
   * `evm_address_hash` - the EVM address the binding is about.
+  * `event_name` - the Solidity name of the precompile event the row was decoded from.
+  * `parameters` - every decoded argument of that event under its ABI name, lossless.
   * `pax_address` - the `pax` bech32 spelling of the same account, when known.
   * `layerx_did` - the `did:layerx:<64 hex>` decentralized identifier, when known.
   * `layerx_account` - the kernel account id derived from the DID, when known.
@@ -42,6 +44,8 @@ defmodule Explorer.Chain.PaxeerX.AccountBinding do
     field(:block_number, :integer, null: false) :: Block.block_number()
     field(:block_consensus, :boolean, null: false)
     field(:evm_address_hash, Hash.Address, null: false)
+    field(:event_name, :string)
+    field(:parameters, :map)
     field(:pax_address, :string)
     field(:layerx_did, :string)
     field(:layerx_account, :string)

@@ -22,11 +22,13 @@ defmodule Explorer.Chain.PaxeerX.MarketEvent do
   @domains ~w(exchange bridge launchpad)a
 
   @required_attrs ~w(domain kind block_hash block_number transaction_hash log_index)a
-  @optional_attrs ~w(address_hash account asset_id asset_address_hash amount block_consensus)a
+  @optional_attrs ~w(event_name parameters address_hash account asset_id asset_address_hash amount block_consensus)a
 
   @typedoc """
   * `domain` - the market precompile that emitted the action.
   * `kind` - the name of the event within that domain.
+  * `event_name` - the Solidity name of the precompile event the row was decoded from.
+  * `parameters` - every decoded argument of that event under its ABI name, lossless.
   * `address_hash` - the EVM address acting in the event.
   * `account` - the kernel account the event belongs to.
   * `asset_id` - the custody asset id the event moves, when the event carries one.
@@ -45,6 +47,8 @@ defmodule Explorer.Chain.PaxeerX.MarketEvent do
     field(:block_consensus, :boolean, null: false)
     field(:domain, Ecto.Enum, values: @domains, null: false)
     field(:kind, :string, null: false)
+    field(:event_name, :string)
+    field(:parameters, :map)
     field(:address_hash, Hash.Address)
     field(:account, Hash.Full)
     field(:asset_id, Hash.Full)

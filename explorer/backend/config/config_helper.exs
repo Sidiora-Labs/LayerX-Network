@@ -414,6 +414,7 @@ defmodule ConfigHelper do
     "ethereum" => :ethereum,
     "filecoin" => :filecoin,
     "optimism" => :optimism,
+    "paxeer_x" => :paxeer_x,
     "polygon_zkevm" => :polygon_zkevm,
     "rsk" => :rsk,
     "scroll" => :scroll,
