@@ -11,6 +11,7 @@
 //! there because the EVM walk already indexed them.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{json, Map, Value};
 
@@ -31,6 +32,10 @@ pub const CHAIN: &str = "paxeer";
 pub const NATIVE_ASSET: &str = "evm:native";
 
 const TX_SEARCH_PAGE: u64 = 100;
+
+/// The JSON-RPC error `data` CometBFT answers `tx_search` with when the
+/// node runs with its transaction index off.
+pub const TX_INDEX_DISABLED: &str = "transaction searching is disabled due to no kvEventSink";
 
 /// How CometBFT renders event attribute keys and values.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -644,6 +649,7 @@ pub struct PaxeerIngester {
     start_block: u64,
     expected_chain_id: Option<u64>,
     encoding: AttributeEncoding,
+    tx_index_off_reported: AtomicBool,
 }
 
 impl PaxeerIngester {
@@ -665,7 +671,101 @@ impl PaxeerIngester {
             start_block,
             expected_chain_id,
             encoding,
+            tx_index_off_reported: AtomicBool::new(false),
         }
+    }
+
+    /// The first block this ingester indexes on an empty store.
+    #[must_use]
+    pub const fn start_block(&self) -> u64 {
+        self.start_block
+    }
+
+    /// The follow policy (finality depth and step size).
+    #[must_use]
+    pub const fn policy(&self) -> FollowPolicy {
+        self.policy
+    }
+
+    /// Confirms the EVM endpoint serves the configured chain.
+    ///
+    /// # Errors
+    /// Returns source failures and [`IndexError::Integrity`] on a mismatch.
+    pub fn check_chain_id(&self) -> Result<(), IndexError> {
+        if let Some(expected) = self.expected_chain_id {
+            let chain_id = self.evm.rpc("eth_chainId", &json!([]))?;
+            let actual = quantity_u64(chain_id.as_str().unwrap_or_default())?;
+            if actual != expected {
+                return Err(IndexError::Integrity(format!(
+                    "EVM endpoint serves chain {actual}, expected {expected}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The node's block header at `height` (transaction hashes only), or
+    /// `None` when the node has no block there.
+    ///
+    /// # Errors
+    /// Returns source failures.
+    pub fn header(&self, height: u64) -> Result<Option<Value>, IndexError> {
+        let block = self
+            .evm
+            .rpc("eth_getBlockByNumber", &json!([to_quantity(height), false]))?;
+        Ok((!block.is_null()).then_some(block))
+    }
+
+    /// The node's full block at `height` with every transaction's receipt,
+    /// exactly as [`PaxeerIngester::step`] fetches it.
+    ///
+    /// # Errors
+    /// Returns source failures and a missing receipt.
+    pub fn block_with_receipts(
+        &self,
+        height: u64,
+    ) -> Result<Option<(Value, BTreeMap<String, Value>)>, IndexError> {
+        let Some(block) = self.block(height)? else {
+            return Ok(None);
+        };
+        let receipts = self.receipts(&block)?;
+        Ok(Some((block, receipts)))
+    }
+
+    /// The CometBFT `tx_search` results for `from..=to`, grouped by height,
+    /// exactly as [`PaxeerIngester::step`] reads them.
+    ///
+    /// # Errors
+    /// Returns source and decode failures.
+    pub fn cosmos_range(
+        &self,
+        from: u64,
+        to: u64,
+    ) -> Result<BTreeMap<u64, Vec<Value>>, IndexError> {
+        self.tx_search(from, to)
+    }
+
+    /// Decodes one block with this ingester's registry and encoding.
+    ///
+    /// # Errors
+    /// As [`decode_block`].
+    pub fn decode(
+        &self,
+        block: &Value,
+        receipts: &BTreeMap<String, Value>,
+        cosmos_txs: &[Value],
+        is_pointer: &dyn Fn(&str) -> Result<bool, IndexError>,
+    ) -> Result<Unit, IndexError> {
+        decode_block(
+            block,
+            &BlockInputs {
+                registry: &self.registry,
+                receipts,
+                cosmos_txs,
+                encoding: self.encoding,
+                is_pointer,
+            },
+        )
     }
 
     fn block(&self, height: u64) -> Result<Option<Value>, IndexError> {
@@ -707,7 +807,7 @@ impl PaxeerIngester {
         let mut collected = Vec::new();
         let mut page = 1_u64;
         loop {
-            let result = comet.rpc(
+            let answer = comet.rpc_answer(
                 "tx_search",
                 &json!({
                     "query": query,
@@ -717,6 +817,23 @@ impl PaxeerIngester {
                     "order_by": "asc",
                 }),
             )?;
+            let result = match answer {
+                Ok(result) => result,
+                Err(error)
+                    if page == 1
+                        && error.get("data").and_then(Value::as_str) == Some(TX_INDEX_DISABLED) =>
+                {
+                    if !self.tx_index_off_reported.swap(true, Ordering::Relaxed) {
+                        eprintln!(
+                            "layerx-indexer paxeer: the CometBFT node has its tx index off ({TX_INDEX_DISABLED}); indexing EVM only"
+                        );
+                    }
+                    return Ok(BTreeMap::new());
+                }
+                Err(error) => {
+                    return Err(IndexError::Source(format!("tx_search refused: {error}")))
+                }
+            };
             let txs = result
                 .get("txs")
                 .and_then(Value::as_array)
@@ -750,15 +867,7 @@ impl PaxeerIngester {
     /// Returns source, decode, integrity and store failures, and
     /// [`IndexError::ReorgBeyondFinality`].
     pub fn step(&self, store: &Store) -> Result<StepOutcome, IndexError> {
-        if let Some(expected) = self.expected_chain_id {
-            let chain_id = self.evm.rpc("eth_chainId", &json!([]))?;
-            let actual = quantity_u64(chain_id.as_str().unwrap_or_default())?;
-            if actual != expected {
-                return Err(IndexError::Integrity(format!(
-                    "EVM endpoint serves chain {actual}, expected {expected}"
-                )));
-            }
-        }
+        self.check_chain_id()?;
         let head_value = self.evm.rpc("eth_blockNumber", &json!([]))?;
         let head = quantity_u64(head_value.as_str().unwrap_or_default())?;
         let cursor = store.cursor(CHAIN)?;

@@ -10,6 +10,7 @@ use crate::abi::address_text;
 use crate::codec::unhex_fixed;
 use crate::follow::FollowPolicy;
 use crate::paxeer::AttributeEncoding;
+use crate::paxscan::PaxscanTls;
 use crate::store::AssetRow;
 use crate::transport::{Endpoint, Security};
 use crate::IndexError;
@@ -23,6 +24,7 @@ const DEFAULT_BATCH_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_POLL_MS: u64 = 1_000;
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_MAX_UNITS_PER_STEP: u64 = 64;
+const DEFAULT_BACKFILL_RANGE_BLOCKS: u64 = 1_000;
 
 /// The number of units a reorganisation may still reach: every unit whose
 /// age is inside the challenge window stays reversible, and at least the
@@ -66,6 +68,109 @@ pub struct Config {
     pub paxeer: Option<PaxeerSource>,
     pub pointers: Vec<AssetRow>,
     pub poll: Duration,
+}
+
+/// The backfill mode's settings: `backfill --cutover-height N
+/// [--range-blocks N]` plus the paxscan database environment.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BackfillConfig {
+    /// The last height the backfill indexes; live ingestion resumes after it.
+    pub cutover: u64,
+    /// Heights read from paxscan per step.
+    pub range_blocks: u64,
+    /// The paxscan Postgres URL (`PAXSCAN_DATABASE_PUBLIC_URL`).
+    pub paxscan_url: String,
+    pub paxscan_tls: PaxscanTls,
+}
+
+impl std::fmt::Debug for BackfillConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BackfillConfig")
+            .field("cutover", &self.cutover)
+            .field("range_blocks", &self.range_blocks)
+            .field("paxscan_url", &"<redacted>")
+            .field("paxscan_tls", &self.paxscan_tls)
+            .finish()
+    }
+}
+
+impl BackfillConfig {
+    /// Parses the backfill arguments (after the `backfill` word) and reads
+    /// the paxscan settings through `lookup`.
+    ///
+    /// # Errors
+    /// Refuses a missing or malformed `--cutover-height`, an unknown
+    /// argument, a missing `PAXSCAN_DATABASE_PUBLIC_URL`, and a missing
+    /// TLS authentication choice.
+    pub fn from_args<F>(args: &[String], lookup: &F) -> Result<Self, IndexError>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let mut cutover = None;
+        let mut range_blocks = number(
+            lookup,
+            "LAYERX_INDEXER_BACKFILL_RANGE_BLOCKS",
+            DEFAULT_BACKFILL_RANGE_BLOCKS,
+        )?;
+        let mut rest = args.iter();
+        while let Some(argument) = rest.next() {
+            let (name, inline) = match argument.split_once('=') {
+                Some((name, value)) => (name, Some(value.to_owned())),
+                None => (argument.as_str(), None),
+            };
+            let mut value = || {
+                inline
+                    .clone()
+                    .or_else(|| rest.next().cloned())
+                    .ok_or_else(|| IndexError::Config(format!("{name} needs a value")))
+            };
+            let parse = |text: String| {
+                text.trim()
+                    .parse::<u64>()
+                    .map_err(|_| IndexError::Config(format!("{name} must be a decimal number")))
+            };
+            match name {
+                "--cutover-height" => cutover = Some(parse(value()?)?),
+                "--range-blocks" => range_blocks = parse(value()?)?,
+                other => {
+                    return Err(IndexError::Config(format!(
+                        "unknown backfill argument {other}"
+                    )))
+                }
+            }
+        }
+        let cutover = cutover
+            .ok_or_else(|| IndexError::Config("backfill needs --cutover-height".to_owned()))?;
+        let paxscan_url = lookup("PAXSCAN_DATABASE_PUBLIC_URL").ok_or_else(|| {
+            IndexError::Config("PAXSCAN_DATABASE_PUBLIC_URL is required for backfill".to_owned())
+        })?;
+        let paxscan_tls = match (
+            lookup("LAYERX_INDEXER_PAXSCAN_CERT_SHA256"),
+            lookup("LAYERX_INDEXER_PAXSCAN_TLS_UNAUTHENTICATED").as_deref(),
+        ) {
+            (Some(pin), _) => PaxscanTls::PinnedLeaf(unhex_fixed::<32>(pin.trim()).map_err(
+                |_| {
+                    IndexError::Config(
+                        "LAYERX_INDEXER_PAXSCAN_CERT_SHA256 must be 32 bytes of hex".to_owned(),
+                    )
+                },
+            )?),
+            (None, Some("1")) => PaxscanTls::Unauthenticated,
+            (None, _) => {
+                return Err(IndexError::Config(
+                    "set LAYERX_INDEXER_PAXSCAN_CERT_SHA256 to pin the paxscan certificate, or LAYERX_INDEXER_PAXSCAN_TLS_UNAUTHENTICATED=1 to accept it unauthenticated"
+                        .to_owned(),
+                ))
+            }
+        };
+        Ok(Self {
+            cutover,
+            range_blocks: range_blocks.max(1),
+            paxscan_url,
+            paxscan_tls,
+        })
+    }
 }
 
 fn number<F>(lookup: &F, name: &str, default: u64) -> Result<u64, IndexError>

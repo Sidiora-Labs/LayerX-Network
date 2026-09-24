@@ -158,6 +158,22 @@ impl Endpoint {
     /// Refuses transport failures, non-200 answers, an answer bound to a
     /// different request, and returns the upstream's own error.
     pub fn rpc(&self, method: &str, params: &Value) -> Result<Value, IndexError> {
+        self.rpc_answer(method, params)?
+            .map_err(|error| IndexError::Source(format!("{method} refused: {error}")))
+    }
+
+    /// Issues one JSON-RPC 2.0 call and returns either its `result` or the
+    /// upstream's own `error` object, so a caller can recognise a specific
+    /// refusal.
+    ///
+    /// # Errors
+    /// Refuses transport failures, non-200 answers, an answer bound to a
+    /// different request, and an answer with neither result nor error.
+    pub fn rpc_answer(
+        &self,
+        method: &str,
+        params: &Value,
+    ) -> Result<Result<Value, Value>, IndexError> {
         let id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
         let body = serde_json::json!({
             "jsonrpc": "2.0",
@@ -180,11 +196,12 @@ impl Endpoint {
             )));
         }
         if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
-            return Err(IndexError::Source(format!("{method} refused: {error}")));
+            return Ok(Err(error.clone()));
         }
         value
             .get("result")
             .cloned()
+            .map(Ok)
             .ok_or_else(|| IndexError::Decode(format!("{method} answer has no result")))
     }
 
