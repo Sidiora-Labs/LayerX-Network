@@ -75,7 +75,12 @@ does not import `oracle_read`.
 No constant-product pool, swap activity, or AMM module appears in
 `include/layerx/lxp_module.h`, `src/modules/`, or the four cited specs.
 Value movement remains Asset send/receive, escrow, budget, stream, perps
-margin, and Programs `402LXP` legs.
+margin, spot order-book fills, and Programs `402LXP` legs. Spot
+(module `10`, [Spot](Spot.md)) is a price-time order book, not a
+constant-product pool. The Paxeer-side `Launchpad` precompile
+(`0x1017`, see [Unified Network Architecture](UnifiedNetwork.md)) does run
+a constant-product curve for token launches, but it is a Paxeer EVM
+feature outside the LayerX kernel, so this item is unchanged.
 
 ---
 
@@ -104,7 +109,7 @@ surface returns key material.
 
 ## What is shipped today
 
-The nine registered modules, the fee schedule versions 1–4, LNI 1.6,
+The ten registered modules, the fee schedule versions 1–4, LNI 1.6,
 the Agent API write/approval/subscription contract, and the 21 MCP tools
 are documented on the pages linked from [Home](Home.md).
 

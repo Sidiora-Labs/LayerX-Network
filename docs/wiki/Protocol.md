@@ -87,7 +87,7 @@ Oracle prices enter as signed activities through a Crossverse adapter - outside 
 
 ## Programs: module `0x09`
 
-Programs are where untrusted guest code runs. The kernel registers them as module ID `9` (`LXP_MODULE_PROGRAMS` in `include/layerx/lxp_module.h:22`; activity types `0x0009xxxx` in `include/layerx/programs.h`). They sit alongside the eight economic modules (`0x01`–`0x08`) and are not a ninth `402LXP` writer. A program executes inside the authority of the activity that invoked it, on a deterministic WASM runtime, and every monetary effect it produces compiles to a `402LXP` transfer set applied by the kernel. The runtime, registry, SDKs, and porting kits live under `programs/`. See [Programs](Programs.md).
+Programs are where untrusted guest code runs. The kernel registers them as module ID `9` (`LXP_MODULE_PROGRAMS` in `include/layerx/lxp_module.h:22`; activity types `0x0009xxxx` in `include/layerx/programs.h`). They sit alongside the nine economic modules (`0x01`–`0x08`, `0x0A`) and are not a `402LXP` writer. A program executes inside the authority of the activity that invoked it, on a deterministic WASM runtime, and every monetary effect it produces compiles to a `402LXP` transfer set applied by the kernel. The runtime, registry, SDKs, and porting kits live under `programs/`. See [Programs](Programs.md).
 
 Four rules define the programs money story:
 
@@ -134,7 +134,7 @@ The public network exposes a gateway API and a faucet. Custody and settlement li
 
 - [Home](Home.md)
 - [Getting started](Getting-Started-Beta.md)
-- [Modules](Modules.md): `0x01`–`0x09` and one page per module
+- [Modules](Modules.md): `0x01`–`0x0A` and one page per module
 - [Fees](Fees.md): schedule versions 1–4 and admission policy
 - [Sequencing](Sequencing.md): batches, guarantors, checkpoints
 - [Programs](Programs.md): DEPLOY / UPGRADE / CALL, simulate, guest ABI 2, occupancy

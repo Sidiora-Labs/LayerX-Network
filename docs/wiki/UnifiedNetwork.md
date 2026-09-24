@@ -12,7 +12,7 @@ Paxeer is a Cosmos-SDK chain with a native EVM. LayerX is a deterministic execut
 
 ## The proof-carrying connector
 
-Four precompiles at well-known EVM addresses connect the two domains. Each one is declared as a Solidity interface and implemented as a native Go function inside the EVM module. A precompile sees only Paxeer state and calldata; it never makes an outbound network call. Its job is to verify submitted LayerX evidence using the `layerxproof/codec` and `layerxproof/verify` Go packages, both of which are pure — no clock, no network, no database.
+Seven precompiles at well-known EVM addresses connect the two domains. Each one is declared as a Solidity interface and implemented as a native Go function inside the EVM module. `LayerXVerify`, `Addr`, `LayerXCustody` and `LayerXAnchor` see only Paxeer state and calldata and verify submitted LayerX evidence using the `layerxproof/codec` and `layerxproof/verify` Go packages, both of which are pure — no clock, no network, no database. `LayerXExchange`, `LayerXBridge` and `Launchpad` (below) are newer additions with different jobs: the first two move value between chains or domains under signed evidence, and the third runs a self-contained AMM on Paxeer alone.
 
 ### LayerXVerify — `0x0000000000000000000000000000000000001012`
 
@@ -87,6 +87,78 @@ View methods: `latestFinalized`, `checkpoint`, `finalizedStateRoot`, `finalizedR
 
 The `statusOf` function returns the checkpoint status ladder: **0 unknown**, **1 submitted**, **2 final**.
 
+### LayerXExchange — `0x0000000000000000000000000000000000001015`
+
+Records pending trading intents; it never matches an order on Paxeer.
+Every write emits an event carrying an `intentId`
+(`sha256("LXP/Paxeer/exchange-intent/v1" || chain id || this || owner ||
+kind || nonce)`) for the LayerX intent router. Margin only moves through
+`layerxcustody`: a margin deposit is a `LayerXCustody` deposit tagged for
+this account, and a margin withdrawal is paid out later by a proof-carrying
+`LayerXCustody` withdrawal. Declared in
+`precompiles/layerxexchange/LayerXExchange.sol`:
+
+| Method | Purpose |
+|--------|---------|
+| `depositMargin(account) → intentId, depositId` | Custody `msg.value` as margin for a LayerX account. |
+| `depositMarginToken(pointer, amount, account) → intentId, depositId` | Custody a bank-denom pointer as margin. |
+| `withdrawMargin(account, assetId, amount) → intentId` | Ask LayerX to release margin to a withdrawable balance. |
+| `placeOrder(market, side, price, qty, tif) → intentId` | Record a spot/perps order intent. |
+| `cancelOrder(orderId) → intentId` | Record a cancel intent. |
+| `requestSettlement(positionId) → intentId` | Record a settlement-request intent. |
+
+View methods `getIntent`, `intentNonce`, `getMarket`, `getOrder`,
+`getPosition` and `getMargin` prove LayerX state under a caller-supplied
+witness and finalized batch number rather than reading over the network.
+`human/crates/layerx-intents/src/precompile.rs` decodes and types these
+events (`ExchangeOrder`, `ExchangeCancel`, `ExchangeSettle`,
+`ExchangeMarginDeposit`, `ExchangeMarginWithdraw`), but nothing in the tree
+calls that router outside its own tests yet — see
+[Not yet built](#not-yet-built).
+
+### LayerXBridge — `0x0000000000000000000000000000000000001016`
+
+An attested bridge between Paxeer and registered external chains,
+distinct from the LayerX kernel's own `bridge` module (module `8`, see
+[Bridge](Bridge.md)), which is the LayerX↔Paxeer custody path. Governance
+registers each external chain (vault address, finality depth), the
+attestor set and threshold, and per-asset caps; genesis registers no
+chain, so the bridge is dormant until governance brings one up. Declared
+in `precompiles/layerxbridge/LayerXBridge.sol`:
+
+| Method | Purpose |
+|--------|---------|
+| `bridgeIn(chain, vault, txHash, logIndex, recipient, asset, amount, signatures) → denom` | Mint the bridged denom against at least `threshold` attestor signatures over the vault deposit digest. |
+| `bridgeOut(chain, asset, amount, recipient) → nonce` | Burn the caller's bridged denom and emit `BridgeOut` for attestors to countersign. |
+
+View methods: `getChain`, `getAttestors`, `getCap`, `isPaused`,
+`isNullified`. The `layerx-bridge-relayer` service journals observed
+Ethereum events and signed transactions and gathers attestor signatures
+before broadcast; `modules/layerxbridge/ATTESTATION.md` is the byte-exact
+signing specification.
+
+### Launchpad — `0x0000000000000000000000000000000000001017`
+
+A native token-launch AMM local to Paxeer — it does not touch LayerX
+evidence. Each market is a fixed-supply, 6-decimal `tokenfactory` denom
+priced against a quote denom on a virtual-reserve constant-product curve;
+`token` is the denom's ERC20 pointer. Declared in
+`precompiles/launchpad/Launchpad.sol`:
+
+| Method | Purpose |
+|--------|---------|
+| `createMarket(name, symbol, feeStrategy) → token, denom` | Launch a new fixed-supply market. |
+| `buy(token, quoteIn, minOut, recipient, deadline) → amountOut` | Buy along the curve. |
+| `sell(token, amountIn, minOut, recipient, deadline) → amountOut` | Sell along the curve. |
+| `claimFees` / `executeBurn` / `executeAirdrop` / `claimAirdrop` / `executeLpRewards` | Distribute accumulated fees per the market's chosen fee strategy. |
+| `pause(token)` / `unpause(token)` | Governance-only trading halt. |
+
+View methods include `quoteBuy`, `quoteSell`, `getReserves`, `getPrice`,
+`getMarket(s)` and `getConfig`. This constant-product curve is a Paxeer EVM
+feature; it is not the LayerX kernel module described in
+[Roadmap 8.5](Roadmap.md#85-constant-product-swap), which remains
+unimplemented on the LayerX side.
+
 ## Account binding
 
 An EVM address can be linked to a `did:layerx` identifier. The binding requires consent from both keys: the LayerX DID key signs a message, and the EVM address sends the transaction.
@@ -128,6 +200,6 @@ Genesis for the anchor module is written by `platform/hosted/paxeer/anchor-genes
 The following components are planned but not yet implemented:
 
 - **Shared single endpoint** — a unified RPC endpoint that routes requests to the appropriate domain without requiring callers to know which chain to target.
-- **Unified index / explorer account page** — a single view that merges activity from both domains for one account.
-- **Intent routing** — a mechanism for expressing cross-domain intents that the network resolves automatically.
+- **Unified index / explorer account page** — a single view that merges activity from both domains for one account. `platform/hosted/indexer` (`layerx-indexer`) now ingests both chains into one SQLite store behind one `GET /v1/history/{account}` shape (`platform/hosted/indexer/src/store.rs`), but a query is still keyed by one domain's own identifier — a LayerX account id or a Paxeer address — since the indexer does not resolve the `Addr` binding between them. There is still no page that merges one person's activity across both domains automatically.
+- **Intent routing, end to end** — `human/crates/layerx-intents` decodes and types `layerxexchange`, `layerxbridge` and `launchpad` precompile events into LayerX intents (`human/crates/layerx-intents/src/precompile.rs`), so the mapping itself exists. Nothing in the tree calls that router outside its own tests, so no running service yet resolves a cross-domain intent automatically end to end.
 - **Light-client verification of Paxeer deposits on LayerX** — a light-client proof that a deposit transaction was included in a Paxeer block, verifiable on the LayerX side without a full Paxeer node.
