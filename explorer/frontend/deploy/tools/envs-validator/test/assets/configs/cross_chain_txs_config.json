@@ -1,0 +1,18 @@
+[
+    {
+        "id": "8021",
+        "name": "Numine",
+        "explorer_url": "https://example.com/blockchain/numine",
+        "route_templates": {
+            "tx": "/transaction/{hash}",
+            "address": "/wallet/{hash}",
+            "token": "/address/{hash}"
+        }
+      },
+      {
+        "id": "43114",
+        "name": "C-Chain",
+        "logo": "https://example.com/logo.svg",
+        "explorer_url": "https://example.com/blockchain/c"
+      }
+]

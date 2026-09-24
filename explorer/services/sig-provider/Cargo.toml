@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+members = ["sig-provider", "sig-provider-proto", "sig-provider-server"]
+
+[workspace.dependencies]
+blockscout-service-launcher = "0.10.0"

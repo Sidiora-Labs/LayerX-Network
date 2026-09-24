@@ -1,0 +1,13 @@
+{
+    "language": "Yul",
+    "sources": {
+        "MainCombined.sol": {
+            "content": "object \"Proxy\" {\n\t// deployment code\n\tcode {\n\t\tlet size := datasize(\"runtime\")\n\t\tdatacopy(0, dataoffset(\"runtime\"), size)\n\t\treturn(0, size)\n\t}\n\tobject \"runtime\" {\n\t\t// deployed code\n\t\tcode {\n\t\t\tcalldatacopy(0, 32, sub(calldatasize(), 32))\n\t\t\tlet result := create2(callvalue(), 0, sub(calldatasize(), 32), calldataload(0))\n\t\t\tif iszero(result) { revert(0, 0) }\n\t\t\tmstore(0, result)\n\t\t\treturn(12, 20)\n\t\t}\n\t}\n}"
+        }
+    },
+    "settings": {
+        "optimizer": {
+            "enabled": false
+        }
+    }
+}

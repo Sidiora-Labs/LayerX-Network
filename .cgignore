@@ -73,3 +73,6 @@ agent/target/
 .pytest_cache/
 .worktrees/
 
+
+# Imported upstream explorer fork (GPL-3.0/MIT), not indexed with the kernel sources
+/explorer/

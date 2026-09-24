@@ -1,0 +1,74 @@
+paths:
+  /api/health:
+    get:
+      tags:
+        - Health
+      operationId: Health
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthCheckResponse'
+  /api/v1/health:
+    get:
+      tags:
+        - Health
+      operationId: HealthV1
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/v1HealthCheckResponse'
+components:
+  schemas:
+    LatestBlock:
+      type: object
+      properties:
+        cache:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+            mber:
+              type: string
+        db:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+            number:
+              type: string
+    HealthCheckResponse:
+      type: object
+      properties:
+        healthy:
+          type: boolean
+        metadata:
+          type: object
+          properties:
+            latest_block:
+              $ref: '#/components/schemas/LatestBlock'
+    v1Data:
+      type: object
+      properties:
+        cache_latest_block_inserted_at:
+          type: string
+        cache_latest_block_number:
+          type: string
+        latest_block_inserted_at:
+          type: string
+        latest_block_number:
+          type: string
+    v1HealthCheckResponse:
+      type: object
+      properties:
+        healthy:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/v1Data'

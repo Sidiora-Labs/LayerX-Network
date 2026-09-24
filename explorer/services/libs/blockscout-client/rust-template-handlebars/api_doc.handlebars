@@ -1,0 +1,47 @@
+# {{{invokerPackage}}}\{{{classname}}}{{#with description}}
+
+{{{.}}}{{/with}}
+
+All URIs are relative to *{{{basePath}}}*
+
+Method | HTTP request | Description
+------------- | ------------- | -------------
+{{#with operations}}{{#each operation}}[**{{{operationId}}}**]({{{classname}}}.md#{{{operationId}}}) | **{{{httpMethod}}}** {{{path}}} | {{{summary}}}
+{{/each}}{{/with}}
+
+{{#with operations}}
+{{#each operation}}
+
+## {{{operationId}}}
+
+> {{#with returnType}}{{{.}}} {{/with}}{{{operationId}}}({{#each allParams}}{{{paramName}}}{{#unless @last}}, {{/unless}}{{/each}})
+{{{summary}}}{{#with notes}}
+
+{{{.}}}{{/with}}
+
+### Parameters
+
+{{#unless allParams}}This endpoint does not need any parameter.{{/unless}}{{#each allParams}}{{#if @last}}
+Name | Type | Description  | Required | Notes
+------------- | ------------- | ------------- | ------------- | -------------{{/if}}{{/each}}
+{{#each allParams}}
+**{{{paramName}}}** | {{#unless required}}Option<{{/unless}}{{#if required}}{{#if isNullable}}Option<{{/if}}{{/if}}{{#if isPrimitiveType}}**{{{dataType}}}**{{/if}}{{#unless isPrimitiveType}}[**{{{dataType}}}**]({{{baseType}}}.md){{/unless}}{{#unless required}}>{{/unless}}{{#if required}}{{#if isNullable}}>{{/if}}{{/if}} | {{{description}}} | {{#if required}}[required]{{/if}} |{{#if defaultValue}}[default to {{{.}}}]{{/if}}
+{{/each}}
+
+### Return type
+
+{{#if returnType}}{{#if returnTypeIsPrimitive}}**{{{returnType}}}**{{/if}}{{#unless returnTypeIsPrimitive}}[**{{{returnType}}}**]({{{returnBaseType}}}.md){{/unless}}{{/if}}{{#unless returnType}} (empty response body){{/unless}}
+
+### Authorization
+
+{{#unless authMethods}}No authorization required{{/unless}}{{#each authMethods}}[{{{name}}}](../README.md#{{{name}}}){{#unless @last}}, {{/unless}}{{/each}}
+
+### HTTP request headers
+
+- **Content-Type**: {{#if consumes}}{{{mediaType}}}{{#unless @last}}, {{/unless}}{{/if}}{{#unless consumes}}Not defined{{/unless}}
+- **Accept**: {{#if produces}}{{{mediaType}}}{{#unless @last}}, {{/unless}}{{/if}}{{#unless produces}}Not defined{{/unless}}
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+{{/each}}
+{{/with}}

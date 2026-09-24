@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+    "blockscout-auth",
+    "blockscout-chains",
+    "blockscout-client/crate",
+    "blockscout-db",
+    "endpoints/swagger",
+    "blockscout-service-launcher",
+    "display-bytes",
+    "env-collector",
+    "metrics-tools",
+    "mismatch",
+    "recaptcha-verifier",
+    "reqwest-rate-limiter",
+    "solidity-metadata",
+    "sourcify",
+    "api-client-framework",
+    "actix-phoenix-channel",
+    "recache",
+]

@@ -1,0 +1,24 @@
+<svg viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M11.939 6.559C12.41 5.502 10.08 2.55 7.854 1.32 6.451.368 4.989.5 4.693.918c-.65.918 2.152 1.695 4.025 2.603a2.14 2.14 0 0 0-1.005.893C7.014 3.65 5.48 2.99 3.682 3.521c-1.212.358-2.22 1.2-2.61 2.475a.764.764 0 0 0-1.073.7.765.765 0 0 0 .764.765c.078 0 .323-.052.323-.052l3.903.028c-1.561 2.485-2.795 2.848-2.795 3.279 0 .43 1.18.313 1.624.153 2.121-.768 4.4-3.162 4.791-3.851 1.642.205 3.022.23 3.33-.46Z" fill="url(#rabby_svg__a)"/>
+  <path fill-rule="evenodd" clip-rule="evenodd" d="M8.718 3.521c.087-.034.073-.163.05-.264-.056-.232-1.001-1.17-1.89-1.589-1.21-.572-2.1-.542-2.232-.279.246.507 1.389.983 2.583 1.48.509.212 1.027.428 1.49.652h-.001Z" fill="url(#rabby_svg__b)"/>
+  <path fill-rule="evenodd" clip-rule="evenodd" d="M7.182 8.623a7.155 7.155 0 0 0-.835-.258c.335-.602.405-1.492.089-2.056-.444-.79-1.002-1.21-2.298-1.21-.712 0-2.63.24-2.665 1.847-.003.169 0 .323.012.466l3.504.025c-.473.752-.915 1.31-1.302 1.733.465.12.849.22 1.2.313l.961.249c.483-.353.938-.738 1.334-1.109Z" fill="url(#rabby_svg__c)"/>
+  <path d="M1.026 7.247c.143 1.22.835 1.699 2.247 1.84 1.413.142 2.224.047 3.303.146.901.082 1.706.543 2.004.383.269-.143.119-.66-.24-.993-.467-.43-1.112-.73-2.246-.836.226-.621.162-1.492-.189-1.966-.508-.686-1.445-.996-2.632-.86-1.239.141-2.427.754-2.247 2.286Z" fill="url(#rabby_svg__d)"/>
+  <defs>
+    <linearGradient id="rabby_svg__a" x1="3.541" y1="5.623" x2="11.841" y2="7.969" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8697FF"/>
+      <stop offset="1" stop-color="#ABB7FF"/>
+    </linearGradient>
+    <linearGradient id="rabby_svg__b" x1="10.44" y1="5.465" x2="4.434" y2="-.536" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8697FF"/>
+      <stop offset="1" stop-color="#5156D8" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="rabby_svg__c" x1="7.349" y1="8.833" x2="1.589" y2="5.532" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#465EED"/>
+      <stop offset="1" stop-color="#8697FF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="rabby_svg__d" x1="4.036" y1="5.561" x2="7.939" y2="10.504" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8898FF"/>
+      <stop offset=".984" stop-color="#6277F1"/>
+    </linearGradient>
+  </defs>
+</svg>

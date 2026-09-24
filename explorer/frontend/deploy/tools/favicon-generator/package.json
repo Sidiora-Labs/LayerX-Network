@@ -1,0 +1,20 @@
+{
+  "name": "favicon-generator",
+  "version": "1.0.0",
+  "main": "index.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "favicons": "^7.2.0",
+    "ts-loader": "^9.4.4",
+    "webpack": "^5.88.2",
+    "webpack-cli": "^5.1.4"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^7.4.2",
+    "node-loader": "^2.0.0",
+    "tsconfig-paths-webpack-plugin": "^4.1.0"
+  }
+}

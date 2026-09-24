@@ -1,0 +1,11 @@
+{
+    "typescript.tsdk": "node_modules/typescript/lib",
+    "javascript.preferences.autoImportFileExcludePatterns": [
+        "./toolkit/package/**",
+        "./toolkit/components/**/index.ts",
+    ],
+    "typescript.preferences.autoImportFileExcludePatterns": [
+        "./toolkit/package/**",
+        "./toolkit/components/**/index.ts",
+    ]
+}

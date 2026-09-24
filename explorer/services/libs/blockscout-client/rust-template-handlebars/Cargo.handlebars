@@ -1,0 +1,132 @@
+[package]
+name = "{{{packageName}}}"
+version = "{{#with lambdaVersion}}{{{packageVersion}}}{{/with}}"
+{{#with infoEmail}}
+authors = ["{{{.}}}"]
+{{/with}}
+{{#unless infoEmail}}
+authors = ["OpenAPI Generator team and contributors"]
+{{/unless}}
+{{#with appDescription}}
+description = "{{{.}}}"
+{{/with}}
+{{#with licenseInfo}}
+license = "{{.}}"
+{{/with}}
+{{#unless licenseInfo}}
+# Override this license by providing a License Object in the OpenAPI.
+license = "Unlicense"
+{{/unless}}
+edition = "2021"
+{{#with publishRustRegistry}}
+publish = ["{{.}}"]
+{{/with}}
+{{#with repositoryUrl}}
+repository = "{{.}}"
+{{/with}}
+{{#with documentationUrl}}
+documentation = "{{.}}"
+{{/with}}
+{{#with homePageUrl}}
+homepage = "{{.}}"
+{{/with}}
+
+[dependencies]
+serde = { version = "^1.0", features = ["derive"] }
+# // changed
+serde-aux = "4.7.0"
+serde_json_path_to_error = "0.1"
+rust_decimal = "1.37.0"
+{{#if serdeWith}}
+serde_with = { version = "^3.8", default-features = false, features = ["base64", "std", "macros"] }
+{{/if}}
+serde_json = "^1.0"
+serde_repr = "^0.1"
+url = "^2.5"
+{{#if hasUUIDs}}
+uuid = { version = "^1.8", features = ["serde", "v4"] }
+{{/if}}
+{{#if hyper}}
+{{#if hyper0x}}
+hyper = { version = "~0.14", features = ["full"] }
+hyper-tls = "~0.5"
+{{/if}}
+{{#unless hyper0x}}
+hyper = { version = "^1.3.1", features = ["full"] }
+hyper-util = { version = "0.1.5", features = ["client", "client-legacy", "http1", "http2"] }
+http-body-util = { version = "0.1.2" }
+{{/unless}}
+http = "~0.2"
+base64 = "~0.7.0"
+futures = "^0.3"
+{{/if}}
+{{#if withAWSV4Signature}}
+aws-sigv4 = "0.3.0"
+http = "0.2.5"
+secrecy = "0.8.0"
+{{/if}}
+{{#if reqwest}}
+{{#unless supportAsync}}
+reqwest = { version = "^0.12", features = ["json", "blocking", "multipart"] }
+{{#if supportMiddleware}}
+reqwest-middleware = { version = "^0.4", features = ["json", "blocking", "multipart"] }
+{{/if}}
+{{/unless}}
+{{#if supportAsync}}
+reqwest = { version = "^0.12", features = ["json", "multipart"] }
+{{#if supportMiddleware}}
+reqwest-middleware = { version = "^0.4", features = ["json", "multipart"] }
+{{/if}}
+{{#if supportTokenSource}}
+async-trait = "^0.1"
+# TODO: propose to Yoshidan to externalize this as non google related crate, so that it can easily be extended for other cloud providers.
+google-cloud-token = "^0.1"
+{{/if}}
+{{/if}}
+{{/if}}
+{{#if reqwestTrait}}
+async-trait = "^0.1"
+reqwest = { version = "^0.12", features = ["json", "multipart"] }
+{{#if supportMiddleware}}
+reqwest-middleware = { version = "^0.4", features = ["json", "multipart"] }
+{{/if}}
+{{#if supportTokenSource}}
+# TODO: propose to Yoshidan to externalize this as non google related crate, so that it can easily be extended for other cloud providers.
+google-cloud-token = "^0.1"
+{{/if}}
+{{#if mockall}}
+mockall = { version = "^0.13", optional = true}
+{{/if}}
+{{#if useBonBuilder}}
+bon = { version = "3.6.4", optional = true }
+{{/if}}
+
+# // changed
+derive-new = "0.7.0"
+reqwest-retry = "0.7.0"
+
+[features]
+
+default = [
+    {{#if useBonBuilder}}
+    "bon",
+    {{/if}}
+]
+
+
+{{#if mockall}}
+mockall = ["dep:mockall"]
+{{/if}}
+{{#if useBonBuilder}}
+bon = ["dep:bon"]
+{{/if}}
+{{/if}}
+
+# // changed
+[dev-dependencies]
+asserhttp = "0.7.1"
+pretty_assertions = "1.4.0"
+rstest = "0.21.0"
+stubr = { version = "0.6.2", features = ["record-reqwest", "record-standalone"] }
+tokio = { version = "1.38.0", features = ["full"] }
+lazy_static = "1.4.0"

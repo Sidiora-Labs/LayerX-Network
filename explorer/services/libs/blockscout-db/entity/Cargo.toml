@@ -1,0 +1,14 @@
+[package]
+name = "blockscout-db-entity"
+version = "0.5.0+blockscout.7.0.2"
+edition = "2024"
+publish = false
+
+[lib]
+name = "entity"
+path = "src/lib.rs"
+
+[dependencies]
+# TryGetable is implemented for `Vec<Vec<u8>>` only starting from 1.1.8
+# won't compile with older versions
+sea-orm = { version = "1.1.8", features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "postgres-array"] }

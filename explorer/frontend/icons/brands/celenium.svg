@@ -1,0 +1,16 @@
+<svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="10" cy="10" r="10" fill="url(#celenium_svg__a)"/>
+  <g clip-path="url(#celenium_svg__b)" fill="#fff" fill-opacity=".95">
+    <path d="M15.763 12.826c.119-.243.178-.365.158-.462a.292.292 0 0 0-.148-.199c-.088-.047-.244-.02-.554.033a6.409 6.409 0 0 1-5.632-1.786 6.409 6.409 0 0 1-1.785-5.631c.053-.31.08-.466.033-.554a.292.292 0 0 0-.199-.149c-.098-.02-.219.04-.462.159a6.417 6.417 0 1 0 8.589 8.589Z"/>
+    <path d="M15.9 10.817c.152-.054.229-.082.31-.152a.686.686 0 0 0 .163-.228c.04-.1.04-.183.043-.35a6.398 6.398 0 0 0-1.879-4.624 6.398 6.398 0 0 0-4.624-1.88c-.167.003-.25.004-.35.044a.685.685 0 0 0-.229.163c-.07.081-.097.158-.151.31a5.25 5.25 0 0 0 6.717 6.717Z"/>
+  </g>
+  <defs>
+    <linearGradient id="celenium_svg__a" x1="17.5" y1="2" x2="0" y2="20" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#196E41"/>
+      <stop offset="1" stop-color="#092E1B"/>
+    </linearGradient>
+    <clipPath id="celenium_svg__b">
+      <rect x="3" y="3" width="14" height="14" rx="7" fill="#fff"/>
+    </clipPath>
+  </defs>
+</svg>

@@ -1,0 +1,5 @@
+function initializeProvider() {}
+
+export {
+  initializeProvider,
+};

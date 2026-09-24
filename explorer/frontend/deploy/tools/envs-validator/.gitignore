@@ -1,0 +1,7 @@
+/node_modules
+/public
+/dist
+.env
+.env.registry
+.env.secrets
+index.js

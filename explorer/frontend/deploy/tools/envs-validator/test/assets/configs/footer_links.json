@@ -1,0 +1,32 @@
+[
+    {
+      "title": "Foo",
+      "links": [
+        {
+          "text": "Home",
+          "url": "https://example.com"
+        },
+        {
+          "text": "Brand",
+          "url": "https://example.com"
+        }
+      ]
+    },
+    {
+      "title": "Developers",
+      "links": [
+        {
+          "text": "Develop",
+          "url": "https://example.com",
+          "iconUrl": [
+            "https://example.com/mocks/image_s.jpg",
+            "https://example.com/mocks/image_svg.svg"
+          ]
+        },
+        {
+          "text": "Grants",
+          "url": "https://example.com"
+        }
+      ]
+    }
+  ]

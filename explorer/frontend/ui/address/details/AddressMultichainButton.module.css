@@ -1,0 +1,119 @@
+/* Animation source - https://codepen.io/ARS/pen/vEwEPP */
+.promo {
+    position: relative;
+    z-index: 1;
+
+    &::after {
+        position: absolute;
+        top: -2px;
+        left: -2px;
+        right: -2px;
+        bottom: -2px;
+        margin: auto;
+        z-index: -1;
+        border-radius: 6px;
+
+        content: "";
+        background: linear-gradient(120deg, #e15eff, #fffb22, #e15eff);
+        background-size: 400% 400%;
+        clip-path: polygon(
+            0% 100%,
+            4px 100%,
+            4px 4px,
+            20px 4px,
+            20px 20px,
+            4px 20px,
+            4px 100%,
+            100% 100%,
+            100% 0%,
+            0% 0%
+        );
+        animation: gradient 3s ease-in-out 0.5s infinite, border 5s ease-in-out;
+    }
+}
+
+@keyframes gradient {
+  0% {
+    background-position: 14% 0%;
+  }
+  50% {
+    background-position: 87% 100%;
+  }
+  100% {
+    background-position: 14% 0%;
+  }
+}
+
+@keyframes border {
+  0% {
+    clip-path: polygon(
+      0% 100%,
+      4px 100%,
+      4px 100%,
+      4px 100%,
+      4px 100%,
+      4px 100%,
+      4px 100%,
+      4px 100%,
+      4px 100%,
+      0% 100%
+    );
+  }
+  5% {
+    clip-path: polygon(
+      0% 100%,
+      4px 100%,
+      4px 4px,
+      4px 4px,
+      4px 4px,
+      4px 4px,
+      4px 4px,
+      4px 4px,
+      4px 0%,
+      0% 0%
+    );
+  }
+  10% {
+    clip-path: polygon(
+      0% 100%,
+      4px 100%,
+      4px 4px,
+      20px 4px,
+      20px 4px,
+      20px 4px,
+      20px 4px,
+      20px 4px,
+      100% 0%,
+      0% 0%
+    );
+  }
+  15% {
+    clip-path: polygon(
+      0% 100%,
+      4px 100%,
+      4px 4px,
+      20px 4px,
+      20px 20px,
+      20px 20px,
+      20px 100%,
+      100% 100%,
+      100% 0%,
+      0% 0%
+    );
+  }
+  20%,
+  100% {
+    clip-path: polygon(
+      0% 100%,
+      4px 100%,
+      4px 4px,
+      20px 4px,
+      20px 20px,
+      4px 20px,
+      4px 100%,
+      100% 100%,
+      100% 0%,
+      0% 0%
+    );
+  }
+}

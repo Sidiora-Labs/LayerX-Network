@@ -1,0 +1,13 @@
+{
+    "version": 1,
+    "hooks": {
+        "afterFileEdit": [
+            {
+                "command": "yarn eslint --fix ${file}",
+                "filter": {
+                    "include": ["**/*.{ts,tsx,js,jsx}"]
+                }
+            }
+        ]
+    }
+}

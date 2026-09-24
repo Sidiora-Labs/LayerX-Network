@@ -1,0 +1,26 @@
+type: google.api.Service
+config_version: 3
+
+http:
+  rules:
+    - selector: blockscout.smartContractVerifier.v1.SolidityVerifier.VerifyMultiPart
+      post: /api/v1/solidity/verify/multiple-files
+      body: "*"
+    - selector: blockscout.smartContractVerifier.v1.SolidityVerifier.VerifyStandardJson
+      post: /api/v1/solidity/verify/standard-json
+      body: "*"
+    - selector: blockscout.smartContractVerifier.v1.SolidityVerifier.ListVersions
+      get: /api/v1/solidity/versions
+
+    - selector: blockscout.smartContractVerifier.v1.VyperVerifier.VerifyMultiPart
+      post: /api/v1/vyper/verify/multiple-files
+      body: "*"
+    - selector: blockscout.smartContractVerifier.v1.VyperVerifier.ListVersions
+      get: /api/v1/vyper/versions
+
+    - selector: blockscout.smartContractVerifier.v1.SourcifyVerifier.Verify
+      post: /api/v1/sourcify/verify
+      body: "*"
+
+    - selector: blockscout.smartContractVerifier.v1.Health.Check
+      get: /health

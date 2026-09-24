@@ -1,0 +1,153 @@
+components:
+  schemas:
+    AddressParam:
+      required: [hash, private_tags, public_tags, watchlist_names, ~,~,~,~,~]
+    Block:
+      required: [hash, parent_hash, height,~,~,~,~,~,~,~,~,~,~,~,~,~,~,~,~,~,~,~,~,~,~,~,~]
+      properties:
+        priority_fee:
+          type: number
+    InternalTransaction:
+      properties:
+        created_contract:
+          nullable: true
+          $ref: '__REMOVE__'
+          allOf:
+            - $ref: "#/components/schemas/AddressParam"
+        error:
+          nullable: true
+    IndexingStatus:
+      properties:
+        indexed_blocks_ratio:
+          nullable: true
+    SmartContract:
+      properties:
+        abi:
+          nullable: true
+    SmartContractForList:
+      properties:
+        coin_balance:
+          nullable: true
+        transaction_count:
+          nullable: true
+        market_cap:
+          nullable: true
+    TokenTransfer:
+      properties:
+        method:
+          nullable: true
+        timestamp:
+          nullable: true
+    Transaction:
+      properties:
+        method:
+          nullable: true
+        to:
+          nullable: true
+        transaction_burnt_fee:
+          nullable: true
+        max_fee_per_gas:
+          nullable: true
+        priority_fee:
+          type: number
+          nullable: true
+        created_contract:
+          nullable: true
+          $ref: '__REMOVE__'
+          allOf:
+            - $ref: "#/components/schemas/AddressParam"
+        has_error_in_internal_transactions:
+          nullable: true
+        decoded_input:
+          $ref: '__REMOVE__'
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/DecodedInput"
+        token_transfers:
+          nullable: true
+        token_transfers_overflow:
+          nullable: true
+        max_priority_fee_per_gas:
+          nullable: true
+        revert_reason:
+          type: object
+          nullable: true
+        transaction_tag:
+          nullable: true
+    DecodedInput:
+      properties:
+        parameters:
+          nullable: true
+    DecodedInputParameter:
+      properties:
+        value:
+          type: object
+          nullable: true
+        type:
+          nullable: true
+    Reward:
+      properties:
+        reward:
+          type: number
+          format: int64
+
+    TokenInfoDetailed:
+      required: [address, ~,~,~,~,~,~,~,~,~]
+      properties:
+        total_supply:
+          type: string
+    TokenInfo:
+      required: [address, ~,~,~,~,~,~,~,~,~]
+      properties:
+        total_supply:
+          type: string
+
+    TotalERC20:
+      required: [~,~]
+    TotalERC1155:
+      required: [token_id, ~,~]
+    Log:
+      properties:
+        topics:
+          items:
+            nullable: true
+
+    TokenBalance:
+      required: [~,~,~]
+
+    NFTInstance:
+      required: [id,~,~,~]
+
+    StatsResponse:
+      required: [~,~,~,~,~,~,~,~,~,~,~,~]
+
+    AddressNFTInstance:
+      required: [token_type, id, ~,~,~,~]
+
+
+    Token:
+      required: [address,~,~,~,~,~,~,~]
+
+    AddressNFTInstanceCollection:
+      required: [token_type, id, ~,~,~,~,~,~,~]
+
+    SearchResultToken:
+      required: [address,address_url,~,~,~,~,~,~,~]
+    SearchResultAddressOrContract:
+      required: [address,url]
+    SearchResultBlock:
+      required: [block_hash,timestamp,url,~,~]
+    SearchResultTransaction:
+      required: [timestamp,transaction_hash,url,~,~]
+    
+
+  parameters:
+    id:
+      schema:
+        type: string
+
+        
+
+        
+
+      

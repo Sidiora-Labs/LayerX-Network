@@ -1,0 +1,141 @@
+syntax = "proto3";
+
+package blockscout.smartContractVerifier.v1;
+
+option go_package = "github.com/blockscout/blockscout-rs/smart-contract-verifier";
+
+service SolidityVerifier {
+  rpc VerifyMultiPart(VerifySolidityMultiPartRequest) returns (VerifyResponse) {}
+
+  rpc VerifyStandardJson(VerifySolidityStandardJsonRequest) returns (VerifyResponse) {}
+
+  rpc ListVersions(ListVersionsRequest) returns (ListVersionsResponse) {}
+}
+
+service VyperVerifier {
+  rpc VerifyMultiPart(VerifyVyperMultiPartRequest) returns (VerifyResponse) {}
+
+  rpc ListVersions(ListVersionsRequest) returns (ListVersionsResponse) {}
+}
+
+service SourcifyVerifier {
+  rpc Verify(VerifyViaSourcifyRequest) returns (VerifyResponse) {}
+}
+
+message VerifySolidityMultiPartRequest {
+  /// If present, used to compare local compilation result with
+  optional string creation_bytecode = 1;
+  /// If creation_bytecode is not present, used to compare local compilation result with
+  string deployed_bytecode = 2;
+  /// Compiler version used to compile the contract
+  string compiler_version = 3;
+  /// Map from a source file name to the actual source code
+  map<string, string> sources = 6;
+  /// Version of the EVM to compile for
+  string evm_version = 4;
+  /// If present, optimizations are enabled with specified number of runs,
+  /// otherwise optimizations are disabled
+  optional int32 optimization_runs = 5;
+  /// Map from a library name to its address
+  map<string, string> contract_libraries = 7;
+}
+
+message VerifySolidityStandardJsonRequest {
+  /// If present, used to compare local compilation result with
+  optional string creation_bytecode = 1;
+  /// If creation_bytecode is not present, used to compare local compilation result with
+  string deployed_bytecode = 2;
+  /// Compiler version used to compile the contract
+  string compiler_version = 3;
+  /// https://docs.soliditylang.org/en/latest/using-the-compiler.html#input-description
+  string input = 4;
+}
+
+
+message VerifyVyperMultiPartRequest {
+  /// If present, used to compare local compilation result with
+  optional string creation_bytecode = 1;
+  /// If creation_bytecode is not present, used to compare local compilation result with
+  string deployed_bytecode = 2;
+  /// Compiler version used to compile the contract
+  string compiler_version = 3;
+  /// Source file name to the actual source code
+  map<string, string> sources = 6;
+  /// Version of the EVM to compile for
+  optional string evm_version = 4;
+}
+
+message VerifyViaSourcifyRequest {
+  /// Address of the contract to be verified
+  string address = 1;
+  /// The chain (network) the contract was deployed to
+  /// (https://docs.sourcify.dev/docs/api/chains/)
+  string chain = 2;
+  /// Files required for verification (see Sourcify Api)
+  map<string, string> files = 3;
+  // (optional) see Sourcify Api
+  optional int32 chosenContract = 4;
+}
+
+message VerifyResponse {
+  string message = 1;
+  /// Status of "0" indicates successful verification,
+  /// status of "1" - that verification failed
+  string status = 2;
+
+  message Result {
+    /// The name of the file verified contract was located at
+    string file_name = 1;
+    /// The name of the contract which was verified
+    string contract_name = 2;
+    /// Compiler version used for verification
+    string compiler_version = 3;
+    /// Source files given for verification
+    map<string, string> sources = 4;
+    /// Version of the EVM contract was compile for
+    string evm_version = 5;
+    /// (optional) WARNING: Before version 0.8.6 omitting the 'enabled' key was not equivalent to setting
+    /// it to false and would actually disable all the optimizations.
+    optional bool optimization = 6;
+    /// (optional) Specify number of optimizer runs, if optimizations are enabled
+    optional int32 optimization_runs = 7;
+    /// Addresses of the libraries
+    map<string, string> contract_libraries = 8;
+    /// Raw settings pushed submitted to the compiler on local compilation
+    /// (https://docs.soliditylang.org/en/v0.8.17/using-the-compiler.html#input-description)
+    string compiler_settings = 9;
+    /// Constructor arguments used for deploying verified contract
+    /// (exists only for creation inputs)
+    optional string constructor_arguments = 10;
+    /// Contract abi (https://docs.soliditylang.org/en/latest/abi-spec.html?highlight=abi#json);
+    /// (does not exist for Yul contracts)
+    optional string abi = 11;
+
+    message bytecode_part {
+      string type = 1;
+      string data = 2;
+    };
+    /// Creation transaction input resultant from local compilation
+    /// parsed and split on Main and Meta parts. Is empty for Sourcify verification.
+    repeated bytecode_part local_creation_input_parts = 12;
+    /// Deployed bytecode resultant from local compilation
+    /// parsed and split on Main and Meta parts. Is empty for Sourcify verification.
+    repeated bytecode_part local_deployed_bytecode_parts = 13;
+
+    enum MatchType {
+      MATCH_TYPE_UNSPECIFIED = 0;
+      PARTIAL = 1;
+      FULL = 2;
+    }
+    /// Similar to Sourcify (see https://docs.sourcify.dev/docs/full-vs-partial-match/)
+    MatchType match_type = 14;
+  }
+  Result result = 3;
+}
+
+message ListVersionsRequest {}
+
+message ListVersionsResponse {
+  /// Compiler versions available for verification
+  repeated string versions = 1;
+}

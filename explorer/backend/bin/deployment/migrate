@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+set -e
+
+cd /opt/app || exit 1
+
+export HOME=/home/ec2-user
+export MIX_ENV=prod
+
+source /etc/environment
+
+export DATABASE_URL
+export POOL_SIZE
+export ECTO_USE_SSL
+
+mix ecto.create
+mix ecto.migrate
+
+exit 0

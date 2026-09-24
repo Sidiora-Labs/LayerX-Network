@@ -1,0 +1,24 @@
+[package]
+name = "recaptcha-verifier"
+version = "0.1.0"
+edition = "2024"
+description = "Google reCAPTCHA v2/v3 verification library"
+
+[features]
+default = ["rustls-tls"]
+
+default-tls = ["reqwest/default-tls"]
+native-tls = ["reqwest/native-tls"]
+rustls-tls = ["reqwest/rustls-tls"]
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2"
+tonic = "0.14"
+tracing = "0.1"
+
+[dev-dependencies]
+serde_json = "1"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6"

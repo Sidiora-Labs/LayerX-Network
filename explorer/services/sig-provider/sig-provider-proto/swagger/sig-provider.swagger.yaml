@@ -1,0 +1,236 @@
+swagger: "2.0"
+info:
+  title: sig-provider.proto
+  version: version not set
+tags:
+  - name: SignatureService
+  - name: AbiService
+  - name: Health
+consumes:
+  - application/json
+produces:
+  - application/json
+paths:
+  /api/v1/abi/event:
+    get:
+      operationId: AbiService_GetEventAbi
+      responses:
+        "200":
+          description: ""
+          schema:
+            type: array
+            items:
+              type: object
+              $ref: '#/definitions/v1Abi'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/rpcStatus'
+      parameters:
+        - name: data
+          in: query
+          required: false
+          type: string
+        - name: topics
+          description: comma separated hex values, ex. `0x0000..1234,0x0000...5678`
+          in: query
+          required: false
+          type: string
+      tags:
+        - AbiService
+  /api/v1/abi/events:batch-get:
+    post:
+      operationId: AbiService_BatchGetEventAbis
+      responses:
+        "200":
+          description: ""
+          schema:
+            type: array
+            items:
+              type: object
+              $ref: '#/definitions/v1GetEventAbiResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/rpcStatus'
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/v1BatchGetEventAbisRequest'
+      tags:
+        - AbiService
+  /api/v1/abi/function:
+    get:
+      operationId: AbiService_GetFunctionAbi
+      responses:
+        "200":
+          description: ""
+          schema:
+            type: array
+            items:
+              type: object
+              $ref: '#/definitions/v1Abi'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/rpcStatus'
+      parameters:
+        - name: txInput
+          in: query
+          required: false
+          type: string
+      tags:
+        - AbiService
+  /api/v1/signatures:
+    post:
+      operationId: SignatureService_CreateSignatures
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v1CreateSignaturesResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/rpcStatus'
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/v1CreateSignaturesRequest'
+      tags:
+        - SignatureService
+  /health:
+    get:
+      summary: |-
+        If the requested service is unknown, the call will fail with status
+        NOT_FOUND.
+      operationId: Health_Check
+      responses:
+        "200":
+          description: A successful response.
+          schema:
+            $ref: '#/definitions/v1HealthCheckResponse'
+        default:
+          description: An unexpected error response.
+          schema:
+            $ref: '#/definitions/rpcStatus'
+      parameters:
+        - name: service
+          in: query
+          required: false
+          type: string
+      tags:
+        - Health
+definitions:
+  HealthCheckResponseServingStatus:
+    type: string
+    enum:
+      - UNKNOWN
+      - SERVING
+      - NOT_SERVING
+      - SERVICE_UNKNOWN
+    default: UNKNOWN
+    description: ' - SERVICE_UNKNOWN: Used only by the Watch method.'
+  protobufAny:
+    type: object
+    properties:
+      '@type':
+        type: string
+    additionalProperties: {}
+  rpcStatus:
+    type: object
+    properties:
+      code:
+        type: integer
+        format: int32
+      message:
+        type: string
+      details:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/protobufAny'
+  v1Abi:
+    type: object
+    properties:
+      name:
+        type: string
+      inputs:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v1Argument'
+  v1Argument:
+    type: object
+    properties:
+      name:
+        type: string
+      type:
+        type: string
+      components:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v1Argument'
+      indexed:
+        type: boolean
+        title: this is present only in events
+      value:
+        type: string
+        title: decoded value
+  v1BatchGetEventAbisRequest:
+    type: object
+    properties:
+      requests:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v1GetEventAbiRequest'
+  v1BatchGetEventAbisResponse:
+    type: object
+    properties:
+      responses:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v1GetEventAbiResponse'
+  v1CreateSignaturesRequest:
+    type: object
+    properties:
+      abi:
+        type: string
+  v1CreateSignaturesResponse:
+    type: object
+  v1GetEventAbiRequest:
+    type: object
+    properties:
+      data:
+        type: string
+      topics:
+        type: string
+        title: comma separated hex values, ex. `0x0000..1234,0x0000...5678`
+  v1GetEventAbiResponse:
+    type: object
+    properties:
+      abi:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v1Abi'
+  v1GetFunctionAbiResponse:
+    type: object
+    properties:
+      abi:
+        type: array
+        items:
+          type: object
+          $ref: '#/definitions/v1Abi'
+  v1HealthCheckResponse:
+    type: object
+    properties:
+      status:
+        $ref: '#/definitions/HealthCheckResponseServingStatus'

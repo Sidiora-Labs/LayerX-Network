@@ -1,0 +1,25 @@
+[
+	{
+		"author": "Hop",
+		"id": "hop-exchange",
+		"title": "Hop",
+		"logo": "https://example.com/logo.svg",
+		"categories": ["Bridge"],
+		"shortDescription": "Hop is a scalable rollup-to-rollup general token bridge.",
+		"site": "https://example.com",
+		"description": "Hop is a scalable rollup-to-rollup general token bridge.",
+		"external": true,
+		"url": "https://example.com"
+	},
+	{
+		"author": "Blockscout",
+		"id": "token-approval-tracker",
+		"title": "Token Approval Tracker",
+		"logo": "https://example.com/logo.svg",
+		"categories": ["Infra & Dev tooling"],
+		"shortDescription": "Token Approval Tracker shows all approvals for any ERC20-compliant tokens and NFTs and lets to revoke them or adjust the approved amount.",
+		"site": "https://example.com",
+		"description": "Token Approval Tracker shows all approvals for any ERC20-compliant tokens and NFTs and lets to revoke them or adjust the approved amount.",
+		"url": "https://example.com"
+	}
+	]

@@ -1,0 +1,202 @@
+defmodule Explorer.Chain.PendingOperationsHelper do
+  @moduledoc false
+
+  import Ecto.Query
+
+  alias Explorer.Chain.{Hash, PendingBlockOperation, PendingTransactionOperation, Transaction}
+  alias Explorer.{Helper, Repo}
+
+  @transactions_batch_size 1000
+  @blocks_batch_size 10
+
+  def pending_operations_type do
+    if Application.get_env(:explorer, :json_rpc_named_arguments)[:variant] == EthereumJSONRPC.Geth and
+         !Application.get_env(:ethereum_jsonrpc, EthereumJSONRPC.Geth)[:block_traceable?],
+       do: "transactions",
+       else: "blocks"
+  end
+
+  @doc """
+  Deletes all entities from `PendingTransactionOperation` related to provided `transaction_hashes`.
+  """
+  @spec delete_related_transaction_operations([Hash.Full.t()]) :: {non_neg_integer(), nil}
+  def delete_related_transaction_operations(transaction_hashes) do
+    pending_operations_query =
+      from(
+        pto in PendingTransactionOperation,
+        where: pto.transaction_hash in ^transaction_hashes,
+        order_by: [asc: :transaction_hash],
+        lock: "FOR UPDATE"
+      )
+
+    Repo.delete_all(
+      from(
+        pto in PendingTransactionOperation,
+        join: s in subquery(pending_operations_query),
+        on: pto.transaction_hash == s.transaction_hash
+      )
+    )
+  end
+
+  def actual_entity do
+    case pending_operations_type() do
+      "blocks" -> PendingBlockOperation
+      "transactions" -> PendingTransactionOperation
+    end
+  end
+
+  def maybe_transfuse_data do
+    case {pending_operations_type(), data_exists?(PendingBlockOperation), data_exists?(PendingTransactionOperation)} do
+      {"blocks", _blocks_data_exists?, true} -> do_transfuse(&from_transactions_to_blocks_function/0)
+      {"transactions", true, _transactions_data_exists?} -> do_transfuse(&from_blocks_to_transactions_function/0)
+      {_entity, _blocks_data_exists?, _transactions_data_exists?} -> :ok
+    end
+  end
+
+  defp data_exists?(entity) do
+    entity
+    |> select([_], 1)
+    |> limit(1)
+    |> Repo.one()
+    |> is_nil()
+    |> Kernel.not()
+  end
+
+  defp do_transfuse(transfuse_function) do
+    case Repo.transaction(transfuse_function) do
+      {:ok, :finish} -> :ok
+      {:ok, :continue} -> do_transfuse(transfuse_function)
+    end
+  end
+
+  defp from_transactions_to_blocks_function do
+    pbo_params_query =
+      from(
+        pto in PendingTransactionOperation,
+        join: t in assoc(pto, :transaction),
+        select: %{block_hash: t.block_hash, block_number: t.block_number},
+        limit: @transactions_batch_size
+      )
+
+    case Repo.all(pbo_params_query) do
+      [] ->
+        :finish
+
+      pbo_params ->
+        filtered_pbo_params = Enum.reject(pbo_params, &is_nil(&1.block_hash))
+        Repo.insert_all(PendingBlockOperation, Helper.add_timestamps(filtered_pbo_params), on_conflict: :nothing)
+
+        block_numbers_to_delete = Enum.map(pbo_params, & &1.block_number)
+
+        delete_query =
+          from(
+            pto in PendingTransactionOperation,
+            join: t in assoc(pto, :transaction),
+            where: is_nil(t.block_number) or t.block_number in ^block_numbers_to_delete
+          )
+
+        Repo.delete_all(delete_query)
+
+        :continue
+    end
+  end
+
+  defp from_blocks_to_transactions_function do
+    pbo_block_numbers_query =
+      PendingBlockOperation
+      |> limit(@blocks_batch_size)
+      |> select([pbo], pbo.block_number)
+
+    case Repo.all(pbo_block_numbers_query) do
+      [] ->
+        :finish
+
+      pbo_block_numbers ->
+        pto_params =
+          Transaction
+          |> where([t], t.block_number in ^pbo_block_numbers)
+          |> select([t], %{transaction_hash: t.hash})
+          |> Repo.all()
+          |> Helper.add_timestamps()
+
+        Repo.insert_all(PendingTransactionOperation, pto_params, on_conflict: :nothing)
+
+        PendingBlockOperation
+        |> where([pbo], pbo.block_number in ^pbo_block_numbers)
+        |> Repo.delete_all()
+
+        :continue
+    end
+  end
+
+  @doc """
+  Generates a query to find pending block operations that match any of the given block hashes.
+
+  ## Parameters
+
+    - `block_hashes`: A list of block hashes to filter the pending block operations.
+
+  ## Returns
+
+    - An Ecto query that can be executed to retrieve the matching pending block operations.
+  """
+  @spec block_hash_in_query([Hash.Full.t()]) :: Ecto.Query.t()
+  def block_hash_in_query(block_hashes) do
+    from(
+      pending_ops in PendingBlockOperation,
+      where: pending_ops.block_hash in ^block_hashes
+    )
+  end
+
+  @doc """
+  Checks if a block with the given hash is pending.
+  A block is considered pending if there exists a corresponding entry in the `PendingBlockOperation` table.
+  """
+  @spec block_pending?(Hash.Full.t()) :: boolean()
+  def block_pending?(block_hash) do
+    [block_hash]
+    |> block_hash_in_query()
+    |> Repo.exists?()
+  end
+
+  # Generates a query to find pending block operations within a specified range of block numbers.
+  @spec block_range_in_query(non_neg_integer(), non_neg_integer()) :: Ecto.Query.t()
+  defp block_range_in_query(min_block_number, max_block_number)
+       when is_integer(min_block_number) and is_integer(max_block_number) do
+    from(
+      pending_ops in PendingBlockOperation,
+      where: pending_ops.block_number >= ^min_block_number and pending_ops.block_number <= ^max_block_number
+    )
+  end
+
+  defp block_range_in_query(min_block_number, max_block_number)
+       when is_nil(min_block_number) and is_nil(max_block_number) do
+    from(pending_ops in PendingBlockOperation)
+  end
+
+  defp block_range_in_query(min_block_number, max_block_number) when is_nil(min_block_number) do
+    from(
+      pending_ops in PendingBlockOperation,
+      where: pending_ops.block_number <= ^max_block_number
+    )
+  end
+
+  defp block_range_in_query(min_block_number, max_block_number) when is_nil(max_block_number) do
+    from(
+      pending_ops in PendingBlockOperation,
+      where: pending_ops.block_number >= ^min_block_number
+    )
+  end
+
+  @doc """
+  Checks if there are any pending blocks within the specified range of block numbers.
+  A block is considered pending if there exists a corresponding entry in the `PendingBlockOperation`
+  table.
+  """
+  @spec blocks_pending?(non_neg_integer() | nil, non_neg_integer() | nil) :: boolean()
+  def blocks_pending?(min_block_number, max_block_number) do
+    min_block_number
+    |> block_range_in_query(max_block_number)
+    |> Repo.exists?()
+  end
+end

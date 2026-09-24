@@ -1,0 +1,10 @@
+<svg viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g clip-path="url(#verified_contracts_svg__a)">
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M23.4 15a8.4 8.4 0 1 1-16.8 0 8.4 8.4 0 0 1 16.8 0Zm1.6 0c0 5.523-4.477 10-10 10S5 20.523 5 15 9.477 5 15 5s10 4.477 10 10Zm-5.895-3.706a.916.916 0 1 1 1.295 1.295l-6.022 6.022a1.05 1.05 0 0 1-1.485 0l-3.2-3.199a.915.915 0 0 1 1.296-1.295l2.257 2.258a.55.55 0 0 0 .778 0l5.081-5.081Z" fill="currentColor"/>
+  </g>
+  <defs>
+    <clipPath id="verified_contracts_svg__a">
+      <path fill="#fff" transform="translate(5 5)" d="M0 0h20v20H0z"/>
+    </clipPath>
+  </defs>
+</svg>

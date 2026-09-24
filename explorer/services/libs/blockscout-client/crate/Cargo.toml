@@ -1,0 +1,79 @@
+[package]
+name = "blockscout-client"
+version = "0.2.0-blockscout-9.0.0"
+
+authors = ["lymarenko.lev@blockscout.com"]
+
+
+
+description = "API for BlockScout web app"
+
+
+license = "Apache 2.0"
+
+
+edition = "2021"
+
+
+
+
+
+[dependencies]
+serde = { version = "^1.0", features = ["derive"] }
+# // changed
+serde-aux = "4.7.0"
+serde_json_path_to_error = "0.1"
+rust_decimal = "1.37.0"
+
+serde_with = { version = "^3.8", default-features = false, features = ["base64", "std", "macros"] }
+
+serde_json = "^1.0"
+serde_repr = "^0.1"
+url = "^2.5"
+
+
+
+
+
+async-trait = "^0.1"
+reqwest = { version = "^0.12", features = ["json", "multipart"] }
+
+reqwest-middleware = { version = "^0.4", features = ["json", "multipart"] }
+
+
+
+mockall = { version = "^0.13", optional = true}
+
+
+bon = { version = "3.6.4", optional = true }
+
+
+# // changed
+derive-new = "0.7.0"
+reqwest-retry = "0.7.0"
+
+[features]
+
+default = [
+    
+    "bon",
+    
+]
+
+
+
+mockall = ["dep:mockall"]
+
+
+bon = ["dep:bon"]
+
+
+
+# // changed
+[dev-dependencies]
+asserhttp = "0.7.1"
+pretty_assertions = "1.4.0"
+rstest = "0.21.0"
+stubr = { version = "0.6.2", features = ["record-reqwest", "record-standalone"] }
+tokio = { version = "1.38.0", features = ["full"] }
+lazy_static = "1.4.0"

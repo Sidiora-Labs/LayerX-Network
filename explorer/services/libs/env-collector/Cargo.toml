@@ -1,0 +1,21 @@
+[package]
+name = "env-collector"
+version = "0.3.1"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.86"
+config = "0.14.0"
+itertools = "0.13.0"
+json_dotpath = "1.1.0"
+regex = "1.10.4"
+serde = { version = "1.0.203", features = ["derive"] }
+serde_json = "1.0.117"
+markdown-table-formatter = "0.3.0"
+derive_builder = "0.20.2"
+clap = { version = "4.5.40", features = ["derive"] }
+
+[dev-dependencies]
+blockscout-service-launcher = { path = "../blockscout-service-launcher", features = ["database", "database-1"] }
+pretty_assertions = "1.4.0"
+tempfile = "3.10.1"

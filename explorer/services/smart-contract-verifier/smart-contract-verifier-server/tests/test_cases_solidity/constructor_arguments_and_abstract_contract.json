@@ -1,0 +1,54 @@
+{
+    "_comment": "Sources contain an abstract contract with a constructor",
+    "is_full_match": false,
+    "creation_bytecode": "0x6060604052341561000c57fe5b60405160208061026c83398101604052515b60008054600160a060020a031916600160a060020a0383161790555b505b6102218061004b6000396000f300606060405236156100495763ffffffff7c01000000000000000000000000000000000000000000000000000000006000350416636ea056a98114610052578063c0ee0b8a14610092575b6100505b5b565b005b341561005a57fe5b61007e73ffffffffffffffffffffffffffffffffffffffff60043516602435610104565b604080519115158252519081900360200190f35b341561009a57fe5b604080516020600460443581810135601f810184900484028501840190955284845261005094823573ffffffffffffffffffffffffffffffffffffffff169460248035956064949293919092019181908401838280828437509496506101ef95505050505050565b005b6000805460408051602090810184905281517f3c18d31800000000000000000000000000000000000000000000000000000000815273ffffffffffffffffffffffffffffffffffffffff878116600483015292519290931692633c18d318926024808301939282900301818787803b151561017b57fe5b6102c65a03f1151561018957fe5b5050506040518051905073ffffffffffffffffffffffffffffffffffffffff1660003660006040516020015260405180838380828437820191505092505050602060405180830381856102c65a03f415156101e057fe5b50506040515190505b92915050565b5b5050505600a165627a7a723058204cdd69fdcf3cf6cbee9677fe380fa5f044048aa9e060ec5619a21ca5a5bd4cd10029000000000000000000000000a3c1e324ca1ce40db73ed6026c4a177f099b5770",
+    "deployed_bytecode": "0x606060405236156100495763ffffffff7c01000000000000000000000000000000000000000000000000000000006000350416636ea056a98114610052578063c0ee0b8a14610092575b6100505b5b565b005b341561005a57fe5b61007e73ffffffffffffffffffffffffffffffffffffffff60043516602435610104565b604080519115158252519081900360200190f35b341561009a57fe5b604080516020600460443581810135601f810184900484028501840190955284845261005094823573ffffffffffffffffffffffffffffffffffffffff169460248035956064949293919092019181908401838280828437509496506101ef95505050505050565b005b6000805460408051602090810184905281517f3c18d31800000000000000000000000000000000000000000000000000000000815273ffffffffffffffffffffffffffffffffffffffff878116600483015292519290931692633c18d318926024808301939282900301818787803b151561017b57fe5b6102c65a03f1151561018957fe5b5050506040518051905073ffffffffffffffffffffffffffffffffffffffff1660003660006040516020015260405180838380828437820191505092505050602060405180830381856102c65a03f415156101e057fe5b50506040515190505b92915050565b5b5050505600a165627a7a723058204cdd69fdcf3cf6cbee9677fe380fa5f044048aa9e060ec5619a21ca5a5bd4cd10029",
+    "compiler_version": "v0.4.11+commit.68ef5810",
+    "file_name": "UserWallet.sol",
+    "contract_name": "UserWallet",
+    "input": {
+        "language": "Solidity",
+        "sources": {
+            "UserWallet.sol": {
+                "content": "pragma solidity ^0.4.10;\n\n// Copyright 2017 Bittrex\n\ncontract AbstractSweeper {\n    function sweep(address token, uint amount) returns (bool);\n\n    function () { throw; }\n\n    Controller controller;\n\n    function AbstractSweeper(address _controller) {\n        controller = Controller(_controller);\n    }\n\n    modifier canSweep() {\n        if (msg.sender != controller.authorizedCaller() && msg.sender != controller.owner()) throw;\n        if (controller.halted()) throw;\n        _;\n    }\n}\n\ncontract Token {\n    function balanceOf(address a) returns (uint) {\n        (a);\n        return 0;\n    }\n\n    function transfer(address a, uint val) returns (bool) {\n        (a);\n        (val);\n        return false;\n    }\n}\n\ncontract DefaultSweeper is AbstractSweeper {\n    function DefaultSweeper(address controller)\n             AbstractSweeper(controller) {}\n\n    function sweep(address _token, uint _amount)\n    canSweep\n    returns (bool) {\n        bool success = false;\n        address destination = controller.destination();\n\n        if (_token != address(0)) {\n            Token token = Token(_token);\n            uint amount = _amount;\n            if (amount > token.balanceOf(this)) {\n                return false;\n            }\n\n            success = token.transfer(destination, amount);\n        }\n        else {\n            uint amountInWei = _amount;\n            if (amountInWei > this.balance) {\n                return false;\n            }\n\n            success = destination.send(amountInWei);\n        }\n\n        if (success) {\n            controller.logSweep(this, destination, _token, _amount);\n        }\n        return success;\n    }\n}\n\ncontract UserWallet {\n    AbstractSweeperList sweeperList;\n    function UserWallet(address _sweeperlist) {\n        sweeperList = AbstractSweeperList(_sweeperlist);\n    }\n\n    function () public payable { }\n\n    function tokenFallback(address _from, uint _value, bytes _data) {\n        (_from);\n        (_value);\n        (_data);\n     }\n\n    function sweep(address _token, uint _amount)\n    returns (bool) {\n        (_amount);\n        return sweeperList.sweeperOf(_token).delegatecall(msg.data);\n    }\n}\n\ncontract AbstractSweeperList {\n    function sweeperOf(address _token) returns (address);\n}\n\ncontract Controller is AbstractSweeperList {\n    address public owner;\n    address public authorizedCaller;\n\n    address public destination;\n\n    bool public halted;\n\n    event LogNewWallet(address receiver);\n    event LogSweep(address indexed from, address indexed to, address indexed token, uint amount);\n    \n    modifier onlyOwner() {\n        if (msg.sender != owner) throw; \n        _;\n    }\n\n    modifier onlyAuthorizedCaller() {\n        if (msg.sender != authorizedCaller) throw; \n        _;\n    }\n\n    modifier onlyAdmins() {\n        if (msg.sender != authorizedCaller && msg.sender != owner) throw; \n        _;\n    }\n\n    function Controller() \n    {\n        owner = msg.sender;\n        destination = msg.sender;\n        authorizedCaller = msg.sender;\n    }\n\n    function changeAuthorizedCaller(address _newCaller) onlyOwner {\n        authorizedCaller = _newCaller;\n    }\n\n    function changeDestination(address _dest) onlyOwner {\n        destination = _dest;\n    }\n\n    function changeOwner(address _owner) onlyOwner {\n        owner = _owner;\n    }\n\n    function makeWallet() onlyAdmins returns (address wallet)  {\n        wallet = address(new UserWallet(this));\n        LogNewWallet(wallet);\n    }\n\n    function halt() onlyAdmins {\n        halted = true;\n    }\n\n    function start() onlyOwner {\n        halted = false;\n    }\n\n    address public defaultSweeper = address(new DefaultSweeper(this));\n    mapping (address => address) sweepers;\n\n    function addSweeper(address _token, address _sweeper) onlyOwner {\n        sweepers[_token] = _sweeper;\n    }\n\n    function sweeperOf(address _token) returns (address) {\n        address sweeper = sweepers[_token];\n        if (sweeper == 0) sweeper = defaultSweeper;\n        return sweeper;\n    }\n\n    function logSweep(address from, address to, address token, uint amount) {\n        LogSweep(from, to, token, amount);\n    }\n}"
+            }
+        },
+        "settings": {
+            "optimizer": {
+                "enabled": true,
+                "runs": 200
+            },
+            "libraries": {},
+            "outputSelection": { "*": { "*": [ "*" ], "": [ "*" ] } }
+        }
+    },
+    "expected_compiler_artifacts": {
+        "abi": [{"constant":false,"inputs":[{"name":"_token","type":"address"},{"name":"_amount","type":"uint256"}],"name":"sweep","outputs":[{"name":"","type":"bool"}],"payable":false,"type":"function"},{"constant":false,"inputs":[{"name":"_from","type":"address"},{"name":"_value","type":"uint256"},{"name":"_data","type":"bytes"}],"name":"tokenFallback","outputs":[],"payable":false,"type":"function"},{"inputs":[{"name":"_sweeperlist","type":"address"}],"payable":false,"type":"constructor"},{"payable":true,"type":"fallback"}],
+        "devdoc": {"methods":{}},
+        "userdoc": {"methods":{}},
+        "storageLayout": null,
+        "sources": {"UserWallet.sol": {"id":  0} }
+    },
+    "expected_creation_input_artifacts": {
+        "linkReferences": {},
+        "sourceMap": "1645:502:0:-;;;1708:106;;;;;;;;;;;;;;;;;;;1760:11;:47;;-1:-1:-1;;;;;;1760:47:0;-1:-1:-1;;;;;1760:47:0;;;;;1708:106;;1645:502;;;;;;;",
+        "cborAuxdata": {
+            "1": {
+                "offset": 577,
+                "value": "0xa165627a7a7230582064f0b9a9c2cac43139e1fe6bc1a124f8ec1205c7c09456b4f52b2cdb1ddcd5480029"
+            }
+        }
+    },
+    "expected_deployed_bytecode_artifacts": {
+        "immutableReferences": null,
+        "linkReferences": {},
+        "sourceMap": "1645:502:0:-;;;;;;;;;;;;;;;;;;;;;;;;;1820:30;;:::o;1645:502::-;;1986:159;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;1856:124;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;-1:-1:-1;1856:124:0;;-1:-1:-1;1856:124:0;;-1:-1:-1;;;;;;1856:124:0;;;1986:159;2044:4;2086:11;;:29;;;;;;;;;;;;;;;:11;:29;;;;;;;;;:11;;;;;:21;;:29;;;;;;;;;;;2044:4;2086:11;:29;;;;;;;;;;;;;;;;;;;;;;;;;;;:42;;2129:8;;2086:52;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;-1:-1:-1;;2086:52:0;;;;-1:-1:-1;1986:159:0;;;;;:::o;1856:124::-;;;;;:::o",
+        "cborAuxdata": {
+            "1": {
+                "offset": 502,
+                "value": "0xa165627a7a7230582064f0b9a9c2cac43139e1fe6bc1a124f8ec1205c7c09456b4f52b2cdb1ddcd5480029"
+            }
+        }
+    },
+    "expected_constructor_argument": "0x000000000000000000000000a3c1e324ca1ce40db73ed6026c4a177f099b5770"
+}

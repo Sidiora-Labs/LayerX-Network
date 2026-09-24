@@ -1,0 +1,4109 @@
+openapi: 3.0.0
+tags:
+  - name: default
+  - name: CelestiaService
+servers:
+  - url: https://{server}/
+    variables:
+      server:
+        default: eth.blockscout.com
+  - description: SwaggerHub API Auto Mocking
+    url: https://virtserver.swaggerhub.com/NIKITOSING4/CoreBlockScoutAPI/1.0.0
+info:
+  description: API for BlockScout web app
+  version: 1.0.0
+  title: BlockScout API
+  contact:
+    email: lymarenko.lev@blockscout.com
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+paths:
+  /api/v1/celestia/blob:
+    get:
+      operationId: CelestiaService_GetBlob
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/v1CelestiaBlob"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/rpcStatus"
+      parameters:
+        - name: height
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uint64
+        - name: commitment
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: skipData
+          in: query
+          required: false
+          schema:
+            type: boolean
+      tags:
+        - CelestiaService
+  /api/v1/celestia/l2BatchMetadata:
+    get:
+      operationId: CelestiaService_GetL2BatchMetadata
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/v1CelestiaL2BatchMetadata"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/rpcStatus"
+      parameters:
+        - name: height
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uint64
+        - name: namespace
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: commitment
+          in: query
+          required: false
+          schema:
+            type: string
+      tags:
+        - CelestiaService
+  /api/v2/search:
+    get:
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+            example: USDT
+      summary: search
+      operationId: search
+      responses:
+        "200":
+          description: search response
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      oneOf:
+                        - $ref: "#/components/schemas/SearchResultToken"
+                        - $ref: "#/components/schemas/SearchResultAddressOrContract"
+                        - $ref: "#/components/schemas/SearchResultBlock"
+                        - $ref: "#/components/schemas/SearchResultTransaction"
+                  next_page_params:
+                    type: object
+                    example:
+                      address_hash: "0x052Ad78E3aA0b0F2D3912FD3b50a9a289CF2f7Aa"
+                      block_hash: null
+                      holders_count: 548
+                      inserted_at: 2021-12-07T08:39:01.062253Z
+                      item_type: token
+                      items_count: 50
+                      name: RealToken S 13245 Monica St Detroit MI
+                      q: "1"
+                      transaction_hash: null
+        "400":
+          description: bad input parameter
+      tags:
+        - search
+  /api/v2/search/check-redirect:
+    get:
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+            example: USDT
+      summary: search redirect
+      operationId: search redirect
+      responses:
+        "200":
+          description: search response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResultRedirect"
+        "400":
+          description: bad input parameter
+      tags:
+        - search
+  /api/v2/transactions:
+    get:
+      parameters:
+        - in: query
+          name: filter
+          schema:
+            type: string
+            example: pending | validated
+        - in: query
+          name: type
+          schema:
+            type: string
+            example: token_transfer,contract_creation,contract_call,coin_transfer,token_creation
+        - in: query
+          name: method
+          schema:
+            type: string
+            example: approve,transfer,multicall,mint,commit
+      summary: get transactions
+      operationId: get_txs
+      responses:
+        "200":
+          description: block
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Transaction"
+                  next_page_params:
+                    type: object
+                    example:
+                      block_number: 27170298
+                      index: 0
+                      items_count: 50
+        "400":
+          description: bad input parameter
+      tags:
+        - transactions
+  /api/v2/blocks:
+    get:
+      parameters:
+        - in: query
+          name: type
+          schema:
+            type: string
+            example: block | uncle | reorg
+      summary: get blocks
+      operationId: get_blocks
+      responses:
+        "200":
+          description: block
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Block"
+                  next_page_params:
+                    type: object
+                    example:
+                      block_number: 27729304
+                      items_count: 50
+        "400":
+          description: bad input parameter
+      tags:
+        - blocks
+  /api/v2/token-transfers:
+    get:
+      summary: get token transfers
+      operationId: get_token_transfers
+      responses:
+        "200":
+          description: token transfers
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TokenTransfer"
+                  next_page_params:
+                    type: object
+                    example:
+                      block_number: 27170298
+                      index: 0
+        "400":
+          description: bad input parameter
+      tags:
+        - token-transfers
+  /api/v2/internal-transactions:
+    get:
+      summary: get internal transactions
+      operationId: get_internal_transactions
+      responses:
+        "200":
+          description: internal transactions
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/InternalTransaction"
+                  next_page_params:
+                    type: object
+                    example:
+                      block_number: 27170298
+                      index: 0
+                      transaction_index: 0
+      tags:
+        - internal-transactions
+  /api/v2/main-page/transactions:
+    get:
+      summary: get main page transactions
+      operationId: get_main_page_txs
+      responses:
+        "200":
+          description: transactions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Transaction"
+      tags:
+        - main-page
+  /api/v2/main-page/blocks:
+    get:
+      summary: get main page blocks
+      operationId: get_main_page_tokens
+      responses:
+        "200":
+          description: blocks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Block"
+      tags:
+        - main-page
+  /api/v2/main-page/indexing-status:
+    get:
+      summary: get indexing status
+      operationId: get_indexing_status
+      responses:
+        "200":
+          description: indexing status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexingStatus"
+      tags:
+        - main-page
+  /api/v2/stats:
+    get:
+      summary: get stats counters
+      operationId: get_stats
+      responses:
+        "200":
+          description: stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsResponse"
+      tags:
+        - stats
+  /api/v2/stats/charts/transactions:
+    get:
+      summary: get transactions chart
+      operationId: get_txs_chart
+      responses:
+        "200":
+          description: transaction chart
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - chart_data
+                properties:
+                  chart_data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TransactionChartItem"
+      tags:
+        - stats
+  /api/v2/stats/charts/market:
+    get:
+      summary: get market chart
+      operationId: get_market_chart
+      responses:
+        "200":
+          description: market chart
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - chart_data
+                  - available_supply
+                properties:
+                  available_supply:
+                    type: string
+                    example: "164918857.718061"
+                  chart_data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MarketChartItem"
+      tags:
+        - stats
+  /api/v2/transactions/{transaction_hash}:
+    get:
+      summary: get transaction info
+      operationId: get_tx
+      parameters:
+        - $ref: "#/components/parameters/transactionHash"
+      responses:
+        "200":
+          description: transaction info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+        "400":
+          description: bad input parameter
+      tags:
+        - transactions
+  /api/v2/transactions/{transaction_hash}/token-transfers:
+    get:
+      summary: get transaction token transfers
+      operationId: get_transaction_token_transfers
+      parameters:
+        - $ref: "#/components/parameters/transactionHash"
+        - in: query
+          name: type
+          schema:
+            type: string
+            example: ERC-20,ERC-721,ERC-1155
+      responses:
+        "200":
+          description: token transfers
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TokenTransfer"
+                  next_page_params:
+                    type: object
+                    example:
+                      block_number: 27350206
+                      index: 1
+                      items_count: 50
+                      transaction_hash: "0xa3b401d6f3124c9d1528cd8d4b692f523d86fd88e48c391ffe9c67e443\
+                        6ae5ca"
+              examples:
+                large_1155_batch:
+                  $ref: "#/components/examples/TokenTransferLarge1155Batch"
+                some_batches_on_the_first_page_and_one_on_the_second:
+                  $ref: "#/components/examples/TokenTransferSomeBatchesOnTheFirstPageAndOneOnTheS\
+                    econd"
+                a_lot_of_batches:
+                  $ref: "#/components/examples/TokenTransferALotOfBatches"
+        "400":
+          description: bad input parameter
+      tags:
+        - transactions
+  /api/v2/transactions/{transaction_hash}/internal-transactions:
+    get:
+      summary: get transaction internal transactions
+      operationId: get_transaction_internal_txs
+      parameters:
+        - $ref: "#/components/parameters/transactionHash"
+      responses:
+        "200":
+          description: internal transactions
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/InternalTransaction"
+                  next_page_params:
+                    type: object
+                    example:
+                      block_number: 27350206
+                      index: 1
+                      items_count: 50
+                      transaction_index: 0
+        "400":
+          description: bad input parameter
+      tags:
+        - transactions
+  /api/v2/transactions/{transaction_hash}/logs:
+    get:
+      summary: get transaction logs
+      operationId: get_transaction_logs
+      parameters:
+        - $ref: "#/components/parameters/transactionHash"
+      responses:
+        "200":
+          description: internal transactions
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Log"
+                  next_page_params:
+                    type: object
+                    example:
+                      index: 0
+                      items_count: 50
+                      block_number: 2
+        "400":
+          description: bad input parameter
+      tags:
+        - transactions
+  /api/v2/transactions/{transaction_hash}/raw-trace:
+    get:
+      summary: get transaction raw trace
+      operationId: get_transaction_raw_trace
+      parameters:
+        - $ref: "#/components/parameters/transactionHash"
+      responses:
+        "200":
+          description: raw trace
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RawTrace"
+        "400":
+          description: bad input parameter
+      tags:
+        - transactions
+  /api/v2/transactions/{transaction_hash}/state-changes:
+    get:
+      summary: get transaction state changes
+      operationId: get_transaction_state_changes
+      parameters:
+        - $ref: "#/components/parameters/transactionHash"
+      responses:
+        "200":
+          description: state changes
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/StateChange"
+                  next_page_params:
+                    type: object
+                    example:
+                      items_count: 1
+                      state_changes: null
+        "400":
+          description: bad input parameter
+      tags:
+        - transactions
+  /api/v2/transactions/{transaction_hash}/summary:
+    get:
+      summary: get human-readable transaction summary
+      operationId: get_transaction_summary
+      parameters:
+        - $ref: "#/components/parameters/transactionHash"
+      responses:
+        "200":
+          description: human-readable transaction summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionSummary"
+        "400":
+          description: bad input parameter
+      tags:
+        - transactions
+  /api/v2/blocks/{block_number_or_hash}:
+    get:
+      summary: get block info
+      operationId: get_block
+      parameters:
+        - $ref: "#/components/parameters/blockNumberOrHash"
+      responses:
+        "200":
+          description: block
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Block"
+        "400":
+          description: bad input parameter
+      tags:
+        - blocks
+  /api/v2/blocks/{block_number_or_hash}/transactions:
+    get:
+      summary: get block transactions
+      operationId: get_block_txs
+      parameters:
+        - $ref: "#/components/parameters/blockNumberOrHash"
+      responses:
+        "200":
+          description: block
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Transaction"
+                  next_page_params:
+                    type: object
+                    example:
+                      block_number: 27736955
+                      index: 4
+                      items_count: 50
+        "400":
+          description: bad input parameter
+      tags:
+        - blocks
+  /api/v2/blocks/{block_number_or_hash}/withdrawals:
+    get:
+      summary: get block withdrawals
+      operationId: get_block_withdrawals
+      parameters:
+        - $ref: "#/components/parameters/blockNumberOrHash"
+      responses:
+        "200":
+          description: block's withdrawals (pay attention that block_number together with
+            timestamp fields is not included to response in this endpoint)
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Withdrawal"
+                  next_page_params:
+                    type: object
+                    example:
+                      index: 1
+                      items_count: 50
+        "400":
+          description: bad input parameter
+      tags:
+        - blocks
+  /api/v2/addresses:
+    get:
+      summary: get native coin holders list
+      operationId: get_addresses
+      responses:
+        "200":
+          description: token
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - exchange_rate
+                  - total_supply
+                  - items
+                  - next_page_params
+                properties:
+                  exchange_rate:
+                    type: string
+                    example: "0.01"
+                  total_supply:
+                    type: string
+                    example: "100000000"
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AddressWithTxCount"
+                  next_page_params:
+                    type: object
+                    example:
+                      fetched_coin_balance: "269536604956070000000"
+                      hash: "0xf74769d9ffe1cd17f20b283995cf9e7fa2a262ed"
+                      items_count: 50
+        "400":
+          description: bad input parameter
+      tags:
+        - addresses
+  /api/v2/addresses/{address_hash}:
+    get:
+      summary: get address info
+      operationId: get_address
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+      responses:
+        "200":
+          description: address
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Address"
+        "400":
+          description: bad input parameter
+      tags:
+        - addresses
+  /api/v2/addresses/{address_hash}/counters:
+    get:
+      summary: get address counters
+      operationId: get_address_counters
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+      responses:
+        "200":
+          description: address
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AddressCounters"
+        "400":
+          description: bad input parameter
+      tags:
+        - addresses
+  /api/v2/addresses/{address_hash}/transactions:
+    get:
+      summary: get address transactions
+      operationId: get_address_txs
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+        - in: query
+          name: filter
+          schema:
+            type: string
+            example: to | from
+      responses:
+        "200":
+          description: address
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Transaction"
+                  next_page_params:
+                    type: object
+                    example:
+                      block_number: 27736955
+                      index: 4
+                      items_count: 50
+        "400":
+          description: bad input parameter
+      tags:
+        - addresses
+  /api/v2/addresses/{address_hash}/token-transfers:
+    get:
+      summary: get address token transfers
+      operationId: get_address_token_transfers
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+        - in: query
+          name: type
+          schema:
+            type: string
+            example: ERC-20,ERC-721,ERC-1155
+        - in: query
+          name: filter
+          schema:
+            type: string
+            example: to | from
+        - in: query
+          name: token
+          schema:
+            type: string
+            example: "0xb81afe27c103bcd42f4026cf719af6d802928765"
+      responses:
+        "200":
+          description: address
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TokenTransfer"
+                  next_page_params:
+                    type: object
+                    example:
+                      block_number: 27736955
+                      index: 4
+        "400":
+          description: bad input parameter
+      tags:
+        - addresses
+  /api/v2/addresses/{address_hash}/internal-transactions:
+    get:
+      summary: get address internal transactions
+      operationId: get_address_internal_txs
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+        - in: query
+          name: filter
+          schema:
+            type: string
+            example: to | from
+      responses:
+        "200":
+          description: address
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/InternalTransaction"
+                  next_page_params:
+                    type: object
+                    example:
+                      block_number: 27625575
+                      index: 0
+                      items_count: 50
+                      transaction_index: 0
+        "400":
+          description: bad input parameter
+      tags:
+        - addresses
+  /api/v2/addresses/{address_hash}/logs:
+    get:
+      summary: get address logs
+      operationId: get_address_logs
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+      responses:
+        "200":
+          description: address
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Log"
+                  next_page_params:
+                    type: object
+                    example:
+                      block_number: 27736955
+                      index: 68
+                      items_count: 50
+        "400":
+          description: bad input parameter
+      tags:
+        - addresses
+  /api/v2/addresses/{address_hash}/blocks-validated:
+    get:
+      summary: get blocks validated by address
+      operationId: get_address_blocks_validated
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+      responses:
+        "200":
+          description: address
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Block"
+                  next_page_params:
+                    type: object
+                    example:
+                      block_number: 27736955
+                      items_count: 50
+        "400":
+          description: bad input parameter
+      tags:
+        - addresses
+  /api/v2/addresses/{address_hash}/token-balances:
+    get:
+      summary: get all tokens balances for the address
+      operationId: get_address_token_balances
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+      responses:
+        "200":
+          description: address
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TokenBalance"
+        "400":
+          description: bad input parameter
+      tags:
+        - addresses
+  /api/v2/addresses/{address_hash}/tokens:
+    get:
+      summary: token balances with filtering and pagination
+      operationId: get_address_tokens
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+        - in: query
+          name: type
+          schema:
+            type: string
+            example: ERC-20,ERC-721,ERC-1155
+      responses:
+        "200":
+          description: address
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TokenBalance"
+                  next_page_params:
+                    type: object
+                    example:
+                      items_count: 50
+                      token_name: null
+                      token_type: ERC-1155
+                      value: 14
+        "400":
+          description: bad input parameter
+      tags:
+        - addresses
+  /api/v2/addresses/{address_hash}/coin-balance-history:
+    get:
+      summary: get address coin balance history
+      operationId: get_address_coin_balance_history
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+      responses:
+        "200":
+          description: address
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CoinBalanceHistoryEntry"
+                  next_page_params:
+                    type: object
+                    example:
+                      block_number: 27736955
+                      items_count: 50
+        "400":
+          description: bad input parameter
+      tags:
+        - addresses
+  /api/v2/addresses/{address_hash}/coin-balance-history-by-day:
+    get:
+      summary: get address coin balance history by day
+      operationId: get_address_coin_balance_history_by_day
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+      responses:
+        "200":
+          description: address
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CoinBalanceHistoryByDaysEntry"
+        "400":
+          description: bad input parameter
+      tags:
+        - addresses
+  /api/v2/addresses/{address_hash}/withdrawals:
+    get:
+      summary: get address withdrawals
+      operationId: get_address_withdrawals
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+      responses:
+        "200":
+          description: pay attention that receiver field is not included to response in
+            this endpoint
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Withdrawal"
+                  next_page_params:
+                    type: object
+                    example:
+                      index: 1
+                      items_count: 50
+        "400":
+          description: bad input parameter
+      tags:
+        - addresses
+  /api/v2/addresses/{address_hash}/nft:
+    get:
+      summary: get list of NFT owned by address
+      operationId: get_address_nft
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+        - in: query
+          name: type
+          schema:
+            type: string
+            example: ERC-721,ERC-404,ERC-1155
+      responses:
+        "200":
+          description: address
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AddressNFTInstance"
+                  next_page_params:
+                    type: object
+                    example:
+                      token_contract_address_hash: "0xb81afe27c103bcd42f4026cf719af6d802928765"
+                      token_id: "1011"
+                      token_type: ERC-721
+        "400":
+          description: bad input parameter
+      tags:
+        - addresses
+  /api/v2/addresses/{address_hash}/nft/collections:
+    get:
+      summary: get list of NFT owned by address, grouped by collection
+      operationId: get_address_nft_collections
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+        - in: query
+          name: type
+          schema:
+            type: string
+            example: ERC-721,ERC-404,ERC-1155
+      responses:
+        "200":
+          description: address
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AddressNFTCollection"
+                  next_page_params:
+                    type: object
+                    example:
+                      token_contract_address_hash: "0xb81afe27c103bcd42f4026cf719af6d802928765"
+                      token_type: ERC-721
+        "400":
+          description: bad input parameter
+      tags:
+        - addresses
+  /api/v2/tokens:
+    get:
+      summary: get tokens list
+      operationId: get_tokens_list
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+            example: USDT
+        - in: query
+          name: type
+          schema:
+            type: string
+            example: ERC-20,ERC-721,ERC-1155
+      responses:
+        "200":
+          description: token
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TokenInfo"
+                  next_page_params:
+                    type: object
+                    example:
+                      contract_address_hash: "0x68749665ff8d2d112fa859aa293f07a622782f38"
+                      holders_count: 1011
+                      is_name_null: false
+                      items_count: 50
+                      market_cap: "482534473.2170469"
+                      name: Tether Gold
+        "400":
+          description: bad input parameter
+      tags:
+        - tokens
+  /api/v2/tokens/{address_hash}:
+    get:
+      summary: get token info
+      operationId: get_token
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+      responses:
+        "200":
+          description: token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenInfo"
+        "400":
+          description: bad input parameter
+      tags:
+        - tokens
+  /api/v2/tokens/{address_hash}/transfers:
+    get:
+      summary: get token token transfers
+      operationId: get_token_token_transfers
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+      responses:
+        "200":
+          description: token
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TokenTransfer"
+                  next_page_params:
+                    type: object
+                    example:
+                      block_number: 27736955
+                      index: 61
+        "400":
+          description: bad input parameter
+      tags:
+        - tokens
+  /api/v2/tokens/{address_hash}/holders:
+    get:
+      summary: get token holders
+      operationId: get_token_holders
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+      responses:
+        "200":
+          description: token
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Holder"
+                  next_page_params:
+                    type: object
+                    example:
+                      items_count: 2
+                      value: 790000000000000000000
+        "400":
+          description: bad input parameter
+      tags:
+        - tokens
+  /api/v2/tokens/{address_hash}/counters:
+    get:
+      summary: get token holders
+      operationId: get_token_counters
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+      responses:
+        "200":
+          description: token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenCounters"
+        "400":
+          description: bad input parameter
+      tags:
+        - tokens
+  /api/v2/tokens/{address_hash}/instances:
+    get:
+      summary: get NFT instances
+      operationId: get_nft_instances
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+      responses:
+        "200":
+          description: token
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/NFTInstance"
+                  next_page_params:
+                    type: object
+                    example:
+                      unique_token: 97464
+        "400":
+          description: bad input parameter
+      tags:
+        - tokens
+  /api/v2/tokens/{address_hash}/instances/{id}:
+    get:
+      summary: get NFT instance by id
+      operationId: get_nft_instance
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NFTInstance"
+        "400":
+          description: bad input parameter
+      tags:
+        - tokens
+  /api/v2/tokens/{address_hash}/instances/{id}/transfers:
+    get:
+      summary: get transfers of NFT instance
+      operationId: get_nft_instance_transfers
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: token
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TokenTransfer"
+                  next_page_params:
+                    type: object
+                    example:
+                      block_number: 27736955
+                      index: 61
+                      token_id: 50
+        "400":
+          description: bad input parameter
+      tags:
+        - tokens
+  /api/v2/tokens/{address_hash}/instances/{id}/holders:
+    get:
+      summary: get token instance holders
+      operationId: get_token_instance_holders
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: token
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Holder"
+                  next_page_params:
+                    type: object
+                    example:
+                      value: 790000000000000000000
+                      token_id: "953848"
+                      items_count: 50
+        "400":
+          description: bad input parameter
+      tags:
+        - tokens
+  /api/v2/tokens/{address_hash}/instances/{id}/transfers-count:
+    get:
+      summary: get transfers count of NFT instance
+      operationId: get_nft_instance_transfers_count
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: token
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - transfers_count
+                properties:
+                  transfers_count:
+                    type: integer
+                    example: 10
+        "400":
+          description: bad input parameter
+      tags:
+        - tokens
+  /api/v2/tokens/{address_hash}/instances/{id}/refetch-metadata:
+    patch:
+      summary: re-fetch token instance metadata
+      operationId: refetch_token_instance_metadata
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+        - $ref: "#/components/parameters/id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecaptchaBody"
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  message:
+                    type: string
+                    example: OK
+        "403":
+          description: Invalid reCAPTCHA response
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  message:
+                    type: string
+                    example: Invalid reCAPTCHA response
+      tags:
+        - tokens
+  /api/v2/smart-contracts:
+    get:
+      summary: get verified smart contracts
+      operationId: get_smart_contracts
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+            example: proxy
+        - in: query
+          name: filter
+          schema:
+            type: string
+            example: vyper | solidity | yul
+      responses:
+        "200":
+          description: smart contract
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SmartContractForList"
+                  next_page_params:
+                    type: object
+                    example:
+                      items_count: 50
+                      smart_contract_id: 46
+        "400":
+          description: bad input parameter
+      tags:
+        - smart-contracts
+  /api/v2/smart-contracts/counters:
+    get:
+      summary: get verified smart contracts counters
+      operationId: get_smart_contracts_counters
+      responses:
+        "200":
+          description: smart contracts counters
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - new_smart_contracts_24h
+                  - new_verified_smart_contracts_24h
+                  - smart_contracts
+                  - verified_smart_contracts
+                properties:
+                  new_smart_contracts_24h:
+                    type: string
+                    example: "12"
+                  new_verified_smart_contracts_24h:
+                    type: string
+                    example: "11"
+                  smart_contracts:
+                    type: string
+                    example: "20"
+                  verified_smart_contracts:
+                    type: string
+                    example: "15"
+        "400":
+          description: bad input parameter
+      tags:
+        - smart-contracts
+  /api/v2/smart-contracts/{address_hash}:
+    get:
+      summary: get smart contract
+      operationId: get_smart_contract
+      parameters:
+        - $ref: "#/components/parameters/addressHash"
+      responses:
+        "200":
+          description: smart contract
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SmartContract"
+        "400":
+          description: bad input parameter
+      tags:
+        - smart-contracts
+  /api/v2/config/json-rpc-url:
+    get:
+      summary: get json rpc url
+      operationId: get_json_rpc_url
+      responses:
+        "200":
+          description: json rpc url
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - json_rpc_url
+                properties:
+                  json_rpc_url:
+                    type: string
+                    example: https://core.poa.network
+      tags:
+        - config
+  /api/v2/withdrawals:
+    get:
+      summary: get withdrawals
+      operationId: get_withdrawals
+      responses:
+        "200":
+          description: withdrawals
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                  - next_page_params
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Withdrawal"
+                  next_page_params:
+                    type: object
+                    example:
+                      index: 1
+                      items_count: 50
+      tags:
+        - withdrawals
+  /api/v2/proxy/account-abstraction/status:
+    get:
+      summary: get account abstraction indexing status
+      operationId: get_account_abstraction_status
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/v1IndexerStatus"
+        "500":
+          description: unexpected error
+      tags:
+        - proxy
+  /api/v2/health:
+    get:
+      summary: |-
+        If the requested service is unknown, the call will fail with status
+        NOT_FOUND.
+      operationId: Health_Check
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/v1HealthCheckResponse"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/rpcStatus"
+      parameters:
+        - name: service
+          in: query
+          required: false
+          schema:
+            type: string
+      tags:
+        - CelestiaService
+  /api/health:
+    get:
+      tags:
+        - Health
+      operationId: Health
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthCheckResponse"
+  /api/v1/health:
+    get:
+      tags:
+        - Health
+      operationId: HealthV1
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/v1HealthCheckResponse"
+components:
+  parameters:
+    addressHash:
+      name: address_hash
+      in: path
+      description: Address hash
+      required: true
+      schema:
+        type: string
+        pattern: ^0x([A-Fa-f0-9]{40})$
+    addressName:
+      name: address_name
+      in: query
+      description: the name of address in watchlist
+      required: true
+      schema:
+        type: string
+        maxLength: 256
+    transactionHash:
+      name: transaction_hash
+      in: path
+      description: Transaction hash
+      required: true
+      schema:
+        type: string
+        pattern: ^0x([A-Fa-f0-9]{64})$
+    blockNumberOrHash:
+      name: block_number_or_hash
+      schema:
+        type: string
+      in: path
+      required: true
+      description: Block number or hash
+    id:
+      name: id
+      schema:
+        type: string
+      in: path
+      required: true
+      description: integer id
+  schemas:
+    Block:
+      type: object
+      required:
+        - hash
+        - parent_hash
+        - height
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+      properties:
+        base_fee_per_gas:
+          type: string
+          example: "26618801760"
+        burnt_fees:
+          type: string
+          example: "261263193229977120"
+        burnt_fees_percentage:
+          type: number
+          example: 85.19028810863084
+        difficulty:
+          type: string
+          example: "0"
+        extra_data:
+          type: string
+          example: TODO
+        gas_limit:
+          type: string
+          example: "30000000"
+        gas_target_percentage:
+          type: number
+          example: -34.56675333333333
+        gas_used:
+          type: string
+          example: "9814987"
+        gas_used_percentage:
+          type: number
+          example: 32.71662333333333
+        hash:
+          type: string
+          example: "0xf569ec751152b2f814001fc730f7797aa155e4bc3ba9cb6ba24bc2c8c9468c1a"
+        height:
+          type: integer
+          example: 17615720
+        miner:
+          $ref: "#/components/schemas/AddressParam"
+        nonce:
+          type: string
+          example: "0x0000000000000000"
+        parent_hash:
+          type: string
+          example: "0xd464e02d81e2bdf6bc5fa9b8e33f0b564c464a82d821a3e56531f8636dc00dfa"
+        priority_fee:
+          type: number
+          example: "45418705646601378"
+        rewards:
+          type: array
+          items:
+            $ref: "#/components/schemas/Reward"
+        size:
+          type: integer
+          example: 49997
+        state_root:
+          type: string
+          example: TODO
+        timestamp:
+          type: string
+          example: 2023-07-03T20:09:59.000000Z
+        total_difficulty:
+          type: string
+          example: "58750003716598352816469"
+        transactions_count:
+          type: integer
+          example: 120
+        transaction_fees:
+          type: string
+          example: "306681898876578498"
+        type:
+          type: string
+          example: block
+        uncles_hashes:
+          type: array
+          items:
+            type: string
+            example: "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347"
+        withdrawals_count:
+          type: integer
+          example: 16
+    TokenTransfer:
+      type: object
+      required:
+        - block_hash
+        - from
+        - log_index
+        - to
+        - token
+        - total
+        - transaction_hash
+        - type
+      properties:
+        block_hash:
+          type: string
+          example: "0xf569ec751152b2f814001fc730f7797aa155e4bc3ba9cb6ba24bc2c8c9468c1a"
+        from:
+          $ref: "#/components/schemas/AddressParam"
+        log_index:
+          type: integer
+          example: 16
+        method:
+          type: string
+          example: transfer
+          nullable: true
+        timestamp:
+          type: string
+          example: 2023-07-03T20:09:59.000000Z
+          nullable: true
+        to:
+          $ref: "#/components/schemas/AddressParam"
+        token:
+          $ref: "#/components/schemas/TokenInfo"
+        total:
+          oneOf:
+            - $ref: "#/components/schemas/TotalERC20"
+            - $ref: "#/components/schemas/TotalERC721"
+            - $ref: "#/components/schemas/TotalERC1155"
+        transaction_hash:
+          type: string
+          example: "0x6662ad1ad2ea899e9e27832dc202fd2ef915a5d2816c1142e6933cff93f7c592"
+        type:
+          type: string
+          example: token_transfer
+    RawTrace:
+      type: object
+      required:
+        - action
+        - subtraces
+        - traceAddress
+        - type
+      properties:
+        action:
+          oneOf:
+            - $ref: "#/components/schemas/RawTraceCallAction"
+            - $ref: "#/components/schemas/RawTraceCreateAction"
+            - $ref: "#/components/schemas/RawTraceSelfDestructAction"
+        subtraces:
+          type: integer
+          example: 0
+        traceAddress:
+          type: array
+          items:
+            type: integer
+          example:
+            - 0
+            - 0
+        type:
+          type: string
+          example: call
+        error:
+          type: string
+          example: Reverted
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/RawTraceCallResult"
+            - $ref: "#/components/schemas/RawTraceCreateResult"
+    RawTraceCallAction:
+      type: object
+      required:
+        - callType
+        - to
+        - from
+        - input
+        - gas
+        - value
+      properties:
+        callType:
+          type: string
+          example: call
+        to:
+          type: string
+          example: "0x162e898bd0aacb578c8d5f8d6ca588c13d2a383f"
+        from:
+          type: string
+          example: "0xf57b55b01b831e602e09674a4e5d69cbcf343f98"
+        input:
+          type: string
+          example: "0x630cea8e00000000000000000000000000000000000000000000000000000000000\
+            0004000000000000000000000000000000000000000000000000000000000000000\
+            c00000000000000000000000000000000000000000000000000000000000000041c\
+            25b36779231e71769118210c3eb64c0a9c7577b925b309af3183e13acc7cf302104\
+            93d13c8c6c3c0bd337d5e39e454fece0c301f0aedb6c43c7a37650ac83e71c00000\
+            0000000000000000000000000000000000000000000000000000000000000000000\
+            00000000000000000000000000000000000000000000000000019500050000f0add\
+            9e5dc02faeca12e9669f045685449d6b80a000000000000744359447362798334d3\
+            485c64d1e4870fde2ddc0d75f0b456250dc9990662a6f25808cc74a6d1131ea9000\
+            927c001018064382ae87cdd000000000000000000000000bab3cbdcbcc578445480\
+            a79ed80269c50bb5b71800000000000000000000000000000000000000000000000\
+            000000000000000c000000000000000000000000000000000000000000000000000\
+            0000000000010000000000000000000000000000000000000000000000000000000\
+            00000000012000000000000000000000000351af1631aa5ea1ca62ad8a4e3cd8712\
+            8d4d910800000000000000000000000000000000000000000000005b8decde02914\
+            ce83700000000000000000000000000000000000000000000000000000000000000\
+            1e4d45444f4f5a412045636f73797374656d2076322e30206f6e207844616900000\
+            0000000000000000000000000000000000000000000000000000000000000044d44\
+            5a41000000000000000000000000000000000000000000000000000000000000000\
+            000000000000000"
+        gas:
+          type: string
+          example: "0x25D3FC"
+        value:
+          type: string
+          example: "0x0"
+    RawTraceCreateAction:
+      type: object
+      required:
+        - from
+        - gas
+        - init
+        - value
+      properties:
+        from:
+          type: string
+          example: "0xf57b55b01b831e602e09674a4e5d69cbcf343f98"
+        gas:
+          type: string
+          example: "0x25D3FC"
+        init:
+          type: string
+          example: "0x630cea8e00000000000000000000000000000000000000000000000000000000000\
+            0004000000000000000000000000000000000000000000000000000000000000000\
+            c00000000000000000000000000000000000000000000000000000000000000041c\
+            25b36779231e71769118210c3eb64c0a9c7577b925b309af3183e13acc7cf302104\
+            93d13c8c6c3c0bd337d5e39e454fece0c301f0aedb6c43c7a37650ac83e71c00000\
+            0000000000000000000000000000000000000000000000000000000000000000000\
+            00000000000000000000000000000000000000000000000000019500050000f0add\
+            9e5dc02faeca12e9669f045685449d6b80a000000000000744359447362798334d3\
+            485c64d1e4870fde2ddc0d75f0b456250dc9990662a6f25808cc74a6d1131ea9000\
+            927c001018064382ae87cdd000000000000000000000000bab3cbdcbcc578445480\
+            a79ed80269c50bb5b71800000000000000000000000000000000000000000000000\
+            000000000000000c000000000000000000000000000000000000000000000000000\
+            0000000000010000000000000000000000000000000000000000000000000000000\
+            00000000012000000000000000000000000351af1631aa5ea1ca62ad8a4e3cd8712\
+            8d4d910800000000000000000000000000000000000000000000005b8decde02914\
+            ce83700000000000000000000000000000000000000000000000000000000000000\
+            1e4d45444f4f5a412045636f73797374656d2076322e30206f6e207844616900000\
+            0000000000000000000000000000000000000000000000000000000000000044d44\
+            5a41000000000000000000000000000000000000000000000000000000000000000\
+            000000000000000"
+        value:
+          type: string
+          example: "0x0"
+    RawTraceSelfDestructAction:
+      type: object
+      required:
+        - address
+        - balance
+        - refundAddress
+      properties:
+        address:
+          type: string
+          example: "0xf57b55b01b831e602e09674a4e5d69cbcf343f98"
+        balance:
+          type: string
+          example: "0x25D3FC"
+        refundAddress:
+          type: string
+          example: "0x162e898bd0aacb578c8d5f8d6ca588c13d2a383f"
+    RawTraceCallResult:
+      type: object
+      required:
+        - gasUsed
+        - output
+      properties:
+        gasUsed:
+          type: string
+          example: "0x25D3FC"
+        output:
+          type: string
+          example: "0x0"
+    RawTraceCreateResult:
+      type: object
+      required:
+        - address
+        - code
+        - gasUsed
+      properties:
+        address:
+          type: string
+          example: "0xf57b55b01b831e602e09674a4e5d69cbcf343f98"
+        code:
+          type: string
+          example: "0x25D3FC"
+        gasUsed:
+          type: string
+          example: "0x25D3FC"
+    Log:
+      type: object
+      required:
+        - address
+        - data
+        - decoded
+        - index
+        - smart_contract
+        - topics
+        - transaction_hash
+      properties:
+        address_hash:
+          $ref: "#/components/schemas/AddressParam"
+        block_hash:
+          type: string
+          example: "0xf90fdff5f174f7f29ebdf203d32cad2fe95376e41880bb9e731ca5eb0eef7941"
+        block_number:
+          type: integer
+          example: 8844586
+        data:
+          type: string
+          example: "0x000000000000000000000000000000000000000000000000006a94d74f430000"
+        decoded:
+          $ref: "#/components/schemas/DecodedInputLog"
+          example:
+            method_call: Transfer(address indexed from, address indexed to, uint256 tokens)
+            method_id: "0x630cea8e"
+            parameters:
+              - name: signature
+                type: bytes
+                indexed?: true
+                value: "0x0"
+              - name: message
+                type: bytes
+                indexed?: false
+                value: "0x01"
+        index:
+          type: integer
+          example: 35
+        smart_contract:
+          $ref: "#/components/schemas/AddressParam"
+        topics:
+          type: array
+          items:
+            type: string
+            example: "0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c"
+            nullable: true
+        transaction_hash:
+          type: string
+          example: "0x08ea4d75ad0abe327a7fd368733eaeac43077989e635d800530d7906ebf3bd54"
+    InternalTransaction:
+      type: object
+      required:
+        - block_number
+        - created_contract
+        - error
+        - from
+        - gas_limit
+        - index
+        - success
+        - timestamp
+        - to
+        - transaction_hash
+        - type
+        - value
+      properties:
+        block_number:
+          type: integer
+          example: 8844586
+        created_contract:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AddressParam"
+        error:
+          type: string
+          example: reverted
+          nullable: true
+        from:
+          $ref: "#/components/schemas/AddressParam"
+        gas_limit:
+          type: string
+          example: "351759"
+        index:
+          type: integer
+          example: 1
+        success:
+          type: boolean
+          example: true
+        timestamp:
+          type: string
+          example: 2023-04-17T10:37:12.000000Z
+        to:
+          $ref: "#/components/schemas/AddressParam"
+        transaction_hash:
+          type: string
+          example: "0x08ea4d75ad0abe327a7fd368733eaeac43077989e635d800530d7906ebf3bd54"
+        type:
+          type: string
+          example: call
+        value:
+          type: string
+          example: "30000000000000000"
+    Fee:
+      type: object
+      required:
+        - type
+        - value
+      properties:
+        type:
+          type: string
+          example: maximum | actual
+        value:
+          type: string
+          example: "9853224000000000"
+    Transaction:
+      type: object
+      required:
+        - timestamp
+        - fee
+        - gas_limit
+        - block_number
+        - status
+        - method
+        - confirmations
+        - type
+        - exchange_rate
+        - to
+        - transaction_burnt_fee
+        - max_fee_per_gas
+        - result
+        - hash
+        - gas_price
+        - priority_fee
+        - base_fee_per_gas
+        - from
+        - token_transfers
+        - transaction_types
+        - gas_used
+        - created_contract
+        - position
+        - nonce
+        - has_error_in_internal_transactions
+        - actions
+        - decoded_input
+        - token_transfers_overflow
+        - raw_input
+        - value
+        - max_priority_fee_per_gas
+        - revert_reason
+        - confirmation_duration
+        - transaction_tag
+      properties:
+        timestamp:
+          type: string
+          example: 2022-08-02T07:18:05.000000Z
+        fee:
+          $ref: "#/components/schemas/Fee"
+        gas_limit:
+          type: integer
+        block_number:
+          type: integer
+          format: int32
+          example: 23484035
+        status:
+          type: string
+          example: ok | error
+        method:
+          type: string
+          example: transferFrom
+          nullable: true
+        confirmations:
+          type: integer
+          example: 1035
+        type:
+          type: integer
+          example: 2
+        exchange_rate:
+          type: string
+          example: "1866.51"
+        to:
+          nullable: true
+          $ref: "#/components/schemas/AddressParam"
+        transaction_burnt_fee:
+          type: string
+          example: "1099596081903840"
+          nullable: true
+        max_fee_per_gas:
+          type: string
+          example: "55357460102"
+          nullable: true
+        result:
+          type: string
+          example: "Error: (Awaiting internal transactions for reason)"
+        hash:
+          type: string
+          example: "0x5d90a9da2b8da402b11bc92c8011ec8a62a2d59da5c7ac4ae0f73ec51bb73368"
+        gas_price:
+          type: string
+          example: "26668595172"
+        priority_fee:
+          type: number
+          example: "2056916056308"
+          nullable: true
+        base_fee_per_gas:
+          type: string
+          example: "26618801760"
+        from:
+          $ref: "#/components/schemas/AddressParam"
+        token_transfers:
+          type: array
+          items:
+            $ref: "#/components/schemas/TokenTransfer"
+          nullable: true
+        transaction_types:
+          type: array
+          items:
+            type: string
+          example:
+            - token_transfer
+            - contract_creation
+            - contract_call
+            - token_creation
+            - coin_transfer
+        gas_used:
+          type: string
+          example: "41309"
+        created_contract:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AddressParam"
+        position:
+          type: integer
+          example: 117
+        nonce:
+          type: integer
+          example: 115
+        has_error_in_internal_transactions:
+          type: boolean
+          example: false
+          nullable: true
+        actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionAction"
+        decoded_input:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/DecodedInput"
+        token_transfers_overflow:
+          type: boolean
+          example: false
+          nullable: true
+        raw_input:
+          type: string
+          example: "0xa9059cbb000000000000000000000000ef8801eaf234ff82801821ffe2d78d60a02\
+            37f97000000000000000000000000000000000000000000000000000000003178cb\
+            80"
+        value:
+          type: string
+          example: "0"
+        max_priority_fee_per_gas:
+          type: string
+          example: "49793412"
+          nullable: true
+        revert_reason:
+          type: object
+          example: "Error: (Awaiting internal transactions for reason)"
+          nullable: true
+        confirmation_duration:
+          type: object
+          example:
+            - 0
+            - 17479
+        transaction_tag:
+          type: string
+          example: private_transaction_tag
+          nullable: true
+    ExtendedRevertReasonAsMap:
+      type: object
+      required:
+        - raw
+        - code
+        - message
+      properties:
+        raw:
+          type: string
+          example: 4b415032303a207472616e7366657220616d6f756e74206578636565647320616c6c6f77616e6365
+        code:
+          type: integer
+        message:
+          type: string
+          example: Reverted
+    ReadMethodWithValue:
+      type: object
+      example:
+        inputs: []
+        method_id: 2e64cec1
+        name: retrieve
+        outputs:
+          - internalType: uint256
+            name: ""
+            type: uint256
+            value: 0
+        stateMutability: view
+        type: function
+    ReadMethodWithoutValue:
+      type: object
+      example:
+        inputs: []
+        method_id: f851a440
+        name: admin
+        outputs:
+          - internalType: address
+            name: admin_
+            type: address
+        stateMutability: nonpayable
+        type: function
+    WriteMethod:
+      type: object
+      example:
+        inputs:
+          - internalType: uint256
+            name: num
+            type: uint256
+        name: store
+        outputs: []
+        stateMutability: nonpayable
+        type: function
+    DecodedInput:
+      type: object
+      required:
+        - method_call
+        - method_id
+        - parameters
+      properties:
+        method_call:
+          type: string
+          example: transferFrom(address _from, address _to, uint256 _value)
+        method_id:
+          type: string
+          example: 23b872dd
+        parameters:
+          type: array
+          items:
+            $ref: "#/components/schemas/DecodedInputParameter"
+          nullable: true
+    TokenAddressParam:
+      type: object
+      required:
+        - hash
+        - implementation_name
+        - is_contract
+        - is_verified
+        - name
+        - private_tags
+        - public_tags
+        - watchlist_names
+      properties:
+        hash:
+          type: string
+          example: "0xEb533ee5687044E622C69c58B1B12329F56eD9ad"
+        implementation_name:
+          type: string
+          example: implementationName
+        name:
+          type: string
+          example: contractName
+        is_contract:
+          type: boolean
+        is_verified:
+          type: boolean
+        private_tags:
+          type: array
+          items:
+            $ref: "#/components/schemas/AddressTag"
+        public_tags:
+          type: array
+          items:
+            $ref: "#/components/schemas/AddressTag"
+        watchlist_names:
+          type: array
+          items:
+            $ref: "#/components/schemas/WatchlistName"
+        address_hash:
+          type: string
+          example: 0x123abc...
+          description: Address
+    TransactionSummary:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: "#/components/schemas/TransactionSummaryObj"
+    TransactionSummaryObj:
+      type: object
+      properties:
+        summaries:
+          type: array
+          items:
+            $ref: "#/components/schemas/Summary"
+    Summary:
+      type: object
+      required:
+        - summary_template
+        - summary_template_variables
+      properties:
+        summary_template:
+          type: string
+          example: "{action_type} of {amount} {token}"
+          description: Summary template
+        summary_template_variables:
+          $ref: "#/components/schemas/SummaryTemplateVariables"
+          description: Variables for summary
+    SummaryTemplateVariables:
+      type: object
+      required:
+        - action_type
+        - amount
+        - token
+      properties:
+        action_type:
+          $ref: "#/components/schemas/SummaryVariable"
+          description: Action type
+        amount:
+          $ref: "#/components/schemas/SummaryVariableCurrency"
+          description: Amount
+        token:
+          $ref: "#/components/schemas/SummaryVariableToken"
+          description: Token info
+    SummaryVariable:
+      type: object
+      required:
+        - type
+        - value
+      properties:
+        type:
+          type: string
+          example: string
+          description: Variable type
+        value:
+          type: string
+          example: Registered withdrawal of
+          description: Action Type
+    SummaryVariableCurrency:
+      type: object
+      required:
+        - type
+        - value
+      properties:
+        type:
+          type: string
+          example: currency
+          description: Currency type
+        value:
+          type: string
+          example: "0.195999999980484004"
+          description: Value
+    SummaryVariableToken:
+      type: object
+      required:
+        - type
+        - value
+      properties:
+        type:
+          type: string
+          example: token
+          description: Type
+        value:
+          $ref: "#/components/schemas/TokenInfoDetailed"
+          description: Token info
+    TokenInfoDetailed:
+      type: object
+      required:
+        - address
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - volume_24h
+      properties:
+        address_hash:
+          type: string
+          example: "0xBEEF69Ac7870777598A04B2bd4771c71212E6aBc"
+          description: Token Address
+        circulating_market_cap:
+          type: string
+          example: "0.0"
+          description: Token circulating market cap
+        decimals:
+          type: string
+          example: "18"
+          description: Token decimals
+        exchange_rate:
+          type: string
+          example: "2890.96"
+          description: Token exchange rate
+        holders_count:
+          type: string
+          example: "2999"
+          description: Token holders amount
+        icon_url:
+          type: string
+          example: https://assets.coingecko.com/coins/images/39410/small/Steakhouse_logo-05.jpg?1722053893
+          description: "Token image URL "
+        name:
+          type: string
+          example: Steakhouse Resteaking Vault
+          description: Token name
+        symbol:
+          type: string
+          example: steakLRT
+          description: Token symbol
+        total_supply:
+          type: string
+          example: "9710057205959239302188"
+          description: Token total supply
+        type:
+          type: string
+          example: ERC-20
+          description: Token type
+        volume_24h:
+          type: string
+          example: "24298.765344836862"
+          description: Token trading volume for past 24h
+    DecodedInputParameter:
+      type: object
+      required:
+        - name
+        - type
+        - value
+      properties:
+        name:
+          type: string
+          example: signature
+        type:
+          type: string
+          example: bytes
+          nullable: true
+        value:
+          type: object
+          example: "0x0"
+          nullable: true
+    DecodedInputLog:
+      type: object
+      required:
+        - method_call
+        - method_id
+        - parameters
+      properties:
+        method_call:
+          type: string
+          example: transferFrom(address _from, address _to, uint256 _value)
+        method_id:
+          type: string
+          example: 23b872dd
+        parameters:
+          type: array
+          items:
+            $ref: "#/components/schemas/DecodedInputLogParameter"
+    DecodedInputLogParameter:
+      type: object
+      required:
+        - name
+        - type
+        - value
+        - indexed
+      properties:
+        name:
+          type: string
+          example: signature
+        type:
+          type: string
+          example: bytes
+        value:
+          type: string
+          example: "0x0"
+        indexed:
+          type: boolean
+    AddressParam:
+      type: object
+      required:
+        - hash
+        - private_tags
+        - public_tags
+        - watchlist_names
+        - null
+        - null
+        - null
+        - null
+        - null
+      properties:
+        hash:
+          type: string
+          example: "0xEb533ee5687044E622C69c58B1B12329F56eD9ad"
+        implementation_name:
+          type: string
+          example: implementationName
+        name:
+          type: string
+          example: contractName
+        ens_domain_name:
+          type: string
+          example: domain.eth
+        metadata:
+          type: object
+          example:
+            slug: tag_slug
+            name: Tag name
+            tagType: name
+            ordinal: 0
+            meta: {}
+        is_contract:
+          type: boolean
+        private_tags:
+          type: array
+          items:
+            $ref: "#/components/schemas/AddressTag"
+        watchlist_names:
+          type: array
+          items:
+            $ref: "#/components/schemas/WatchlistName"
+        public_tags:
+          type: array
+          items:
+            $ref: "#/components/schemas/AddressTag"
+        is_verified:
+          type: boolean
+    AddressTag:
+      type: object
+      required:
+        - address_hash
+        - display_name
+        - label
+      properties:
+        address_hash:
+          type: string
+          example: "0xEb533ee5687044E622C69c58B1B12329F56eD9ad"
+        display_name:
+          type: string
+          example: name to show
+        label:
+          type: string
+          example: label
+    WatchlistName:
+      type: object
+      required:
+        - display_name
+        - label
+      properties:
+        display_name:
+          type: string
+          example: name to show
+        label:
+          type: string
+          example: label
+    Address:
+      type: object
+      required:
+        - hash
+      properties:
+        creator_address_hash:
+          type: string
+          example: "0xEb533ee5687044E622C69c58B1B12329F56eD9ad"
+        creation_transaction_hash:
+          type: string
+          example: "0x1f610ff9c1efad6b5a8bb6afcc0786cd7343f03f9a61e2544fcff908cedee924"
+        token:
+          $ref: "#/components/schemas/TokenInfo"
+        coin_balance:
+          type: string
+          example: "10000000"
+        exchange_rate:
+          type: string
+          example: "1.01"
+        implementation_address:
+          type: string
+          example: "0xEb533ee5687044E622C69c58B1B12329F56eD9ad"
+        block_number_balance_updated_at:
+          type: integer
+          example: 27656552
+        hash:
+          type: string
+          example: "0xEb533ee5687044E622C69c58B1B12329F56eD9ad"
+        implementation_name:
+          type: string
+          example: implementationName
+        name:
+          type: string
+          example: contractName
+        is_contract:
+          type: boolean
+        private_tags:
+          type: array
+          items:
+            $ref: "#/components/schemas/AddressTag"
+        watchlist_names:
+          type: array
+          items:
+            $ref: "#/components/schemas/WatchlistName"
+        public_tags:
+          type: array
+          items:
+            $ref: "#/components/schemas/AddressTag"
+        is_verified:
+          type: boolean
+        has_beacon_chain_withdrawals:
+          type: boolean
+        has_logs:
+          type: boolean
+        has_token_transfers:
+          type: boolean
+        has_tokens:
+          type: boolean
+        has_validated_blocks:
+          type: boolean
+        creation_status:
+          type: string
+          example: selfdestructed | failed | success
+    AddressWithTxCount:
+      allOf:
+        - $ref: "#/components/schemas/Address"
+        - type: object
+          required:
+            - transactions_count
+          properties:
+            transactions_count:
+              type: string
+              example: "1234"
+    Reward:
+      type: object
+      required:
+        - reward
+        - type
+      properties:
+        reward:
+          type: number
+          format: int64
+        type:
+          type: string
+          example: Miner Reward | Emission Reward | Chore Reward | Uncle Reward
+    TransactionReward:
+      type: object
+      required:
+        - emission_reward
+        - block_hash
+        - from
+        - to
+        - types
+      properties:
+        types:
+          type: object
+          example:
+            - reward
+        emission_reward:
+          type: string
+          example: "500000000000000000"
+        block_hash:
+          type: string
+          example: "0x3169a7e9c513462403abb40eaa4fa51c5fbe1b908606e6eeef16232e308cb464"
+        from:
+          $ref: "#/components/schemas/AddressParam"
+        to:
+          $ref: "#/components/schemas/AddressParam"
+    AddressCounters:
+      type: object
+      required:
+        - transactions_count
+        - token_transfers_count
+        - gas_usage_count
+        - validations_count
+      properties:
+        transactions_count:
+          type: string
+          example: "0"
+        token_transfers_count:
+          type: string
+          example: "0"
+        gas_usage_count:
+          type: string
+          example: "0"
+        validations_count:
+          type: string
+          example: "0"
+    TokenBalance:
+      type: object
+      required:
+        - null
+        - null
+        - null
+      properties:
+        token_instance:
+          $ref: "#/components/schemas/NFTInstance"
+        value:
+          type: string
+          example: "10000"
+        token_id:
+          type: string
+          example: "123"
+        token:
+          $ref: "#/components/schemas/Token"
+    CoinBalanceHistoryEntry:
+      type: object
+      required:
+        - block_number
+        - block_timestamp
+        - delta
+        - value
+      properties:
+        transaction_hash:
+          type: string
+          example: "0x1f610ff9c1efad6b5a8bb6afcc0786cd7343f03f9a61e2544fcff908cedee924"
+        block_number:
+          type: integer
+          example: 1584930
+        block_timestamp:
+          type: string
+          example: 2022-08-02T07:18:05.000000Z
+        delta:
+          type: string
+          example: "-234959404"
+        value:
+          type: string
+          example: "100232323"
+    CoinBalanceHistoryByDaysEntry:
+      type: object
+      required:
+        - date
+        - value
+      properties:
+        date:
+          type: string
+          example: 2022-08-02
+        value:
+          type: number
+          example: "100232323"
+    Token:
+      type: object
+      required:
+        - address
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+      properties:
+        name:
+          type: string
+          example: Tether USD
+        decimals:
+          type: string
+          example: "16"
+        symbol:
+          type: string
+          example: USDT
+        address_hash:
+          type: string
+          example: "0x394c399dbA25B99Ab7708EdB505d755B3aa29997"
+        type:
+          type: string
+          example: ERC-20
+        holders_count:
+          type: integer
+          example: 837494234523
+        exchange_rate:
+          type: string
+          example: "0.99"
+        total_supply:
+          type: string
+          example: "10000000"
+    TotalERC20:
+      required:
+        - null
+        - null
+      properties:
+        decimals:
+          type: string
+          example: "18"
+        value:
+          type: string
+          example: "1000"
+    TotalERC721:
+      required:
+        - token_id
+      properties:
+        token_id:
+          type: string
+          example: "1"
+        token_instance:
+          $ref: "#/components/schemas/NFTInstance"
+    TotalERC1155:
+      required:
+        - token_id
+        - null
+        - null
+      properties:
+        token_id:
+          type: string
+          example: "1"
+        decimals:
+          type: string
+          example: null
+        value:
+          type: string
+          example: "1000"
+        token_instance:
+          $ref: "#/components/schemas/NFTInstance"
+    Holder:
+      required:
+        - address
+        - value
+        - token
+      properties:
+        address_hash:
+          $ref: "#/components/schemas/AddressParam"
+        value:
+          type: string
+          example: "10000"
+        token_id:
+          type: string
+          example: "10000"
+    NFTInstance:
+      required:
+        - id
+        - null
+        - null
+        - null
+      properties:
+        is_unique:
+          type: boolean
+        id:
+          type: string
+          example: "431"
+        holder_address_hash:
+          type: string
+          example: "0x394c399dbA25B99Ab7708EdB505d755B3aa29997"
+        image_url:
+          type: string
+          example: example.com/picture.png
+        animation_url:
+          type: string
+          example: example.com/video.mp4
+        external_app_url:
+          type: string
+          example: d-app.com
+        metadata:
+          type: object
+          example:
+            year: 2023
+            tags:
+              - poap
+              - event
+            name: "Social Listening Committee #2 Attendees"
+            image_url: https://assets.poap.xyz/chanel-poap-4c-2023-logo-1675083420470.png
+            home_url: https://app.poap.xyz/token/6292128
+            external_url: https://api.poap.tech/metadata/99010/6292128
+            description: This is the POAP for attendees of the second Social Listening
+              Committee.
+            attributes:
+              - value: 01-Feb-2023
+                trait_type: startDate
+              - value: 01-Feb-2023
+                trait_type: endDate
+              - value: "false"
+                trait_type: virtualEvent
+              - value: Paris
+                trait_type: city
+              - value: France
+                trait_type: country
+              - value: https://www.chanel.com
+                trait_type: eventURL
+        owner:
+          $ref: "#/components/schemas/AddressParam"
+        token:
+          $ref: "#/components/schemas/TokenInfo"
+    AddressNFTInstance:
+      required:
+        - token_type
+        - id
+        - null
+        - null
+        - null
+        - null
+      properties:
+        is_unique:
+          type: boolean
+        id:
+          type: string
+          example: "431"
+        holder_address_hash:
+          type: string
+          example: "0x394c399dbA25B99Ab7708EdB505d755B3aa29997"
+        image_url:
+          type: string
+          example: example.com/picture.png
+        animation_url:
+          type: string
+          example: example.com/video.mp4
+        external_app_url:
+          type: string
+          example: d-app.com
+        metadata:
+          type: object
+          example:
+            year: 2023
+            tags:
+              - poap
+              - event
+            name: "Social Listening Committee #2 Attendees"
+            image_url: https://assets.poap.xyz/chanel-poap-4c-2023-logo-1675083420470.png
+            home_url: https://app.poap.xyz/token/6292128
+            external_url: https://api.poap.tech/metadata/99010/6292128
+            description: This is the POAP for attendees of the second Social Listening
+              Committee.
+            attributes:
+              - value: 01-Feb-2023
+                trait_type: startDate
+              - value: 01-Feb-2023
+                trait_type: endDate
+              - value: "false"
+                trait_type: virtualEvent
+              - value: Paris
+                trait_type: city
+              - value: France
+                trait_type: country
+              - value: https://www.chanel.com
+                trait_type: eventURL
+        owner:
+          $ref: "#/components/schemas/AddressParam"
+        token:
+          $ref: "#/components/schemas/TokenInfo"
+        token_type:
+          type: string
+          example: ERC-721
+        value:
+          type: string
+          example: "1"
+    AddressNFTInstanceCollection:
+      required:
+        - token_type
+        - id
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+      properties:
+        is_unique:
+          type: boolean
+        id:
+          type: string
+          example: "431"
+        holder_address_hash:
+          type: string
+          example: "0x394c399dbA25B99Ab7708EdB505d755B3aa29997"
+        image_url:
+          type: string
+          example: example.com/picture.png
+        animation_url:
+          type: string
+          example: example.com/video.mp4
+        external_app_url:
+          type: string
+          example: d-app.com
+        metadata:
+          type: object
+          example:
+            year: 2023
+            tags:
+              - poap
+              - event
+            name: "Social Listening Committee #2 Attendees"
+            image_url: https://assets.poap.xyz/chanel-poap-4c-2023-logo-1675083420470.png
+            home_url: https://app.poap.xyz/token/6292128
+            external_url: https://api.poap.tech/metadata/99010/6292128
+            description: This is the POAP for attendees of the second Social Listening
+              Committee.
+            attributes:
+              - value: 01-Feb-2023
+                trait_type: startDate
+              - value: 01-Feb-2023
+                trait_type: endDate
+              - value: "false"
+                trait_type: virtualEvent
+              - value: Paris
+                trait_type: city
+              - value: France
+                trait_type: country
+              - value: https://www.chanel.com
+                trait_type: eventURL
+        owner:
+          $ref: "#/components/schemas/AddressParam"
+        token:
+          type: object
+          example: null
+        token_type:
+          type: string
+          example: ERC-721
+        value:
+          type: string
+          example: "1"
+    AddressNFTCollection:
+      required:
+        - token
+        - token_instances
+      properties:
+        token:
+          $ref: "#/components/schemas/TokenInfo"
+        amount:
+          type: string
+          example: "1"
+        token_instances:
+          type: array
+          items:
+            $ref: "#/components/schemas/AddressNFTInstanceCollection"
+    SmartContract:
+      properties:
+        verified_twin_address_hash:
+          type: string
+          example: "0x394c399dbA25B99Ab7708EdB505d755B3aa29997"
+        is_verified:
+          type: boolean
+        is_changed_bytecode:
+          type: boolean
+        is_partially_verified:
+          type: boolean
+        is_fully_verified:
+          type: boolean
+        is_verified_via_sourcify:
+          type: boolean
+        is_verified_via_eth_bytecode_db:
+          type: boolean
+        can_be_visualized_via_sol2uml:
+          type: boolean
+        minimal_proxy_address_hash:
+          type: string
+          example: "0x394c399dbA25B99Ab7708EdB505d755B3aa29997"
+        sourcify_repo_url:
+          type: string
+          example: https://sourcify.repo.com/100/link_to_a_contract_at_sourcify
+        name:
+          type: string
+          example: Cryptostamp3L2
+        optimization_enabled:
+          type: boolean
+          example: false
+        optimizations_runs:
+          type: integer
+          example: 200
+        compiler_version:
+          type: string
+          example: v0.8.4+commit.c7e474f2
+        evm_version:
+          type: string
+          example: default
+        verified_at:
+          type: string
+          example: 2021-06-02T17:54:17.116055Z
+        abi:
+          type: string
+          example: '[{"type":"constructor","stateMutability":"nonpayable","inputs":[{"type":"address","name":"_bridgeDataAddress","internalType":"address"},{"type":"uint256","name":"_finalSupply","internalType":"uint256"},{"type":"uint256[5]","name":"_totalColorSupply","internalType":"uint256[5]"}]}]'
+          nullable: true
+        source_code:
+          type: string
+          example: contract A {}
+        file_path:
+          type: string
+          example: contract.sol
+        compiler_settings:
+          type: object
+          example:
+            compilationTarget:
+              "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol": ERC1967Proxy
+            evmVersion: london
+            libraries: {}
+            metadata:
+              bytecodeHash: ipfs
+            optimizer:
+              enabled: true
+              runs: 200
+            remappings: []
+        constructor_args:
+          type: string
+          example: "0x01"
+        additional_sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContractSource"
+        decoded_constructor_args:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConstructorArguments"
+        deployed_bytecode:
+          type: string
+          example: "0x01"
+        creation_bytecode:
+          type: string
+          example: "0x02"
+        external_libraries:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExternalLibrary"
+        language:
+          type: string
+          example: solidity | vyper | yul
+        creation_status:
+          type: string
+          example: selfdestructed | failed | success
+    ExternalLibrary:
+      required:
+        - name
+        - address_hash
+      properties:
+        name:
+          type: string
+          example: MathLib
+        address_hash:
+          type: string
+          example: "0xF61f5c4a3664501F499A9289AaEe76a709CE536e"
+    ContractSource:
+      properties:
+        file_path:
+          type: string
+          example: contracts/erc-20.sol
+        source_code:
+          type: string
+          example: pragma solidity ^0.8.0; \n contract A {}
+    ConstructorArguments:
+      type: object
+      example:
+        - "0x2a3885b3f0c98f3e36334d4fa7beda53cb0ae095"
+        - internalType: address
+          name: _logic
+          type: address
+    TokenInfo:
+      type: object
+      required:
+        - address
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+      properties:
+        circulating_market_cap:
+          type: string
+          example: "83606435600.3635"
+        icon_url:
+          type: string
+          example: https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png
+        name:
+          type: string
+          example: Tether USD
+        decimals:
+          type: string
+          example: "6"
+        symbol:
+          type: string
+          example: USDT
+        address_hash:
+          type: string
+          example: "0x394c399dbA25B99Ab7708EdB505d755B3aa29997"
+        type:
+          type: string
+          example: ERC-20
+        holders_count:
+          type: string
+          example: "837494234523"
+        exchange_rate:
+          type: string
+          example: "0.99"
+        total_supply:
+          type: string
+          example: "10000000"
+    Argument:
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          example: uint256
+        value:
+          type: string
+          example: "100000"
+    SearchResultRedirect:
+      required:
+        - parameter
+        - redirect
+        - type
+      properties:
+        parameter:
+          type: string
+          example: "0xEb533ee5687044E622C69c58B1B12329F56eD9ad"
+        redirect:
+          type: boolean
+        type:
+          type: string
+          example: address | block | transaction
+    SearchResultToken:
+      required:
+        - address
+        - address_url
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - total_supply
+        - type
+      properties:
+        address_hash:
+          type: string
+          example: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+        address_url:
+          type: string
+          example: /address/0xdAC17F958D2ee523a2206206994597C13D831ec7
+        exchange_rate:
+          type: string
+          example: "0.999813"
+        icon_url:
+          type: string
+          example: https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png
+        is_smart_contract_verified:
+          type: boolean
+          example: true
+        name:
+          type: string
+          example: Tether USD
+        symbol:
+          type: string
+          example: USDT
+        token_type:
+          type: string
+          example: ERC-20
+        token_url:
+          type: string
+          example: /token/0xdAC17F958D2ee523a2206206994597C13D831ec7
+        total_supply:
+          type: string
+          example: "39030615894320966"
+        type:
+          type: string
+          example: token
+    SearchResultAddressOrContract:
+      required:
+        - address
+        - url
+        - name
+        - type
+        - url
+      properties:
+        address_hash:
+          type: string
+          example: "0xe2FBdeADC82c71C1b8bFf9CA4f9E7666224A362c"
+        is_smart_contract_verified:
+          type: boolean
+          example: true
+        name:
+          type: string
+          example: Name
+        type:
+          type: string
+          example: address|contract
+        url:
+          type: string
+          example: /xdai/mainnet/address/0xc1c1031e4A44B98707203480029e6576CB3267e3
+    SearchResultBlock:
+      required:
+        - block_hash
+        - timestamp
+        - url
+        - null
+        - null
+      properties:
+        block_hash:
+          type: string
+          example: "0xba83e9ba0b43e8d112a07fdab08d53f473d2b7fb0e585bd437ae739933db203e"
+        block_number:
+          type: integer
+          example: 24816691
+        timestamp:
+          type: string
+          example: 2022-10-31T07:18:05.000000Z
+        type:
+          type: string
+          example: block
+        url:
+          type: string
+          example: /xdai/mainnet/block/0xba83e9ba0b43e8d112a07fdab08d53f473d2b7fb0e585bd437ae739933db203e
+    SearchResultTransaction:
+      required:
+        - timestamp
+        - transaction_hash
+        - url
+        - null
+        - null
+      properties:
+        timestamp:
+          type: string
+          example: 2022-10-31T07:18:05.000000Z
+        transaction_hash:
+          type: string
+          example: "0xe38c6772f33edfbd218f59853befe18391cb786f911fb6c0b00ed6dd72ef6e69"
+        type:
+          type: string
+          example: transaction
+        url:
+          type: string
+          example: /xdai/mainnet/tx/0xe38c6772f33edfbd218f59853befe18391cb786f911fb6c0b00ed6dd72ef6e69
+    IndexingStatus:
+      required:
+        - finished_indexing
+        - finished_indexing_blocks
+        - indexed_blocks_ratio
+        - indexed_internal_transactions_ratio
+      properties:
+        finished_indexing:
+          type: boolean
+        finished_indexing_blocks:
+          type: boolean
+        indexed_blocks_ratio:
+          type: string
+          example: "1.0"
+          nullable: true
+        indexed_internal_transactions_ratio:
+          type: string
+          nullable: true
+          example: "1.0"
+    StatsResponse:
+      required:
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+        - null
+      properties:
+        total_blocks:
+          type: string
+          example: "508700"
+        total_addresses:
+          type: string
+          example: "982340"
+        total_transactions:
+          type: string
+          example: "1699427"
+        average_block_time:
+          type: number
+          example: 25000
+        coin_price:
+          type: string
+          example: "0.00254957"
+        total_gas_used:
+          type: string
+          example: "0"
+        transactions_today:
+          type: string
+          example: "622"
+        gas_used_today:
+          type: string
+          example: "49063630"
+        gas_prices:
+          type: object
+          example:
+            average: 10
+            fast: 10
+            slow: 10
+        static_gas_price:
+          type: string
+          example: "10.1"
+        market_cap:
+          type: string
+          example: "420471.10604559750644"
+        network_utilization_percentage:
+          type: number
+          example: 40.2142
+    MarketChartItem:
+      required:
+        - date
+        - closing_price
+        - market_cap
+      properties:
+        date:
+          type: string
+          example: 2022-10-31
+        closing_price:
+          type: string
+          example: "0.00254915"
+        market_cap:
+          type: string
+          example: "420471.10604559750644"
+    TransactionChartItem:
+      required:
+        - date
+        - transactions_count
+      properties:
+        date:
+          type: string
+          example: 2022-10-31
+        transactions_count:
+          type: integer
+          example: 622
+    TokenCounters:
+      required:
+        - token_holders_count
+        - transfers_count
+      properties:
+        token_holders_count:
+          type: string
+          example: "100"
+        transfers_count:
+          type: string
+          example: "1000"
+    RecaptchaBody:
+      required:
+        - recaptcha_response
+      properties:
+        recaptcha_response:
+          type: string
+          example: "123"
+    ReadMethodQueryBody:
+      required:
+        - args
+        - method_id
+      properties:
+        args:
+          type: array
+          example:
+            - 1123
+            - "0xBb36c792B9B45Aaf8b848A1392B0d6559202729E"
+        method_id:
+          type: string
+          example: ab470f05
+        from:
+          type: string
+          example: "0xBb36c792B9B45Aaf8b848A1392B0d6559202729E"
+        contract_type:
+          type: string
+          example: proxy | regular
+    ReadMethodResponse:
+      required:
+        - result
+        - is_error
+      properties:
+        is_error:
+          type: boolean
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/ExtendedRevertReasonAsMap"
+            - $ref: "#/components/schemas/Error"
+            - $ref: "#/components/schemas/DecodedInput"
+            - $ref: "#/components/schemas/CodeAndMessage"
+            - $ref: "#/components/schemas/OutputAndNames"
+    CodeAndMessage:
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+          example: Reverted
+    Error:
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          example: Some error
+    OutputAndNames:
+      required:
+        - output
+        - names
+      properties:
+        output:
+          type: array
+          example:
+            - type: uint256
+              value: 0
+        names:
+          type: array
+          example:
+            - null
+    StateChange:
+      required:
+        - address
+        - is_miner
+        - type
+      properties:
+        token:
+          $ref: "#/components/schemas/TokenInfo"
+        type:
+          type: string
+          example: coin | token
+        is_miner:
+          type: boolean
+        address_hash:
+          $ref: "#/components/schemas/AddressParam"
+        balance_before:
+          type: string
+          example: "100000000"
+        balance_after:
+          type: string
+          example: "100000000"
+        token_id:
+          type: string
+          example: null
+        change:
+          oneOf:
+            - $ref: "#/components/schemas/NFTChangesArray"
+            - $ref: "#/components/schemas/ERC20Or1155OrCoinChange"
+    ERC20Or1155OrCoinChange:
+      type: string
+      example: "-10000000"
+    NFTChangesArray:
+      type: array
+      items:
+        $ref: "#/components/schemas/NFTChange"
+    NFTChange:
+      required:
+        - direction
+        - total
+      properties:
+        direction:
+          type: string
+          example: from | to
+        total:
+          $ref: "#/components/schemas/TotalERC721"
+    SmartContractForList:
+      required:
+        - address
+        - coin_balance
+        - compiler_version
+        - has_constructor_args
+        - language
+        - optimization_enabled
+        - verified_at
+      properties:
+        address_hash:
+          $ref: "#/components/schemas/AddressParam"
+        coin_balance:
+          type: string
+          example: "10000"
+          nullable: true
+        compiler_version:
+          type: string
+          example: v0.5.10+commit.5a6ea5b1
+        language:
+          type: string
+          example: vyper | yul | solidity
+        has_constructor_args:
+          type: boolean
+        optimization_enabled:
+          type: boolean
+        transactions_count:
+          type: integer
+        verified_at:
+          type: string
+          example: 2022-03-05T11:40:29.087000Z
+        market_cap:
+          type: number
+          example: 1000000000.0001
+          nullable: true
+        transaction_count:
+          nullable: true
+    Withdrawal:
+      required:
+        - index
+        - amount
+        - validator_index
+      properties:
+        index:
+          type: integer
+          example: 1
+        amount:
+          type: string
+          example: "1000000000000000000"
+        validator_index:
+          type: integer
+          example: 1
+        receiver:
+          $ref: "#/components/schemas/AddressParam"
+        block_number:
+          type: integer
+          example: 1
+        timestamp:
+          type: string
+          example: 2023-06-20T07:55:00.000000Z
+    TransactionAction:
+      oneOf:
+        - $ref: "#/components/schemas/TransactionActionAaveV3LiquidationCall"
+        - $ref: "#/components/schemas/TransactionActionAaveV3BSWRF"
+        - $ref: "#/components/schemas/TransactionActionAaveV3EnableDisableCollateral"
+        - $ref: "#/components/schemas/TransactionActionUniswapV3MintNFT"
+        - $ref: "#/components/schemas/TransactionActionUniswapV3BCS"
+    TransactionActionAaveV3LiquidationCall:
+      required:
+        - data
+        - protocol
+        - type
+      properties:
+        data:
+          type: object
+          example:
+            debt_amount: "1.289548595490270429"
+            debt_symbol: AAVE
+            debt_address: "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9"
+            collateral_amount: "110.824768"
+            collateral_symbol: USDC
+            collateral_address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+            block_number: 1
+        protocol:
+          type: string
+          example: aave_v3
+        type:
+          type: string
+          example: liquidation_call
+    TransactionActionAaveV3BSWRF:
+      required:
+        - data
+        - protocol
+        - type
+      properties:
+        data:
+          type: object
+          example:
+            amount: "1.289548595490270429"
+            symbol: AAVE
+            address: "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9"
+            block_number: 1
+        protocol:
+          type: string
+          example: aave_v3
+        type:
+          type: string
+          example: borrow | supply | withdraw | repay | flash_loan
+    TransactionActionAaveV3EnableDisableCollateral:
+      required:
+        - data
+        - protocol
+        - type
+      properties:
+        data:
+          type: object
+          example:
+            symbol: AAVE
+            address: "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9"
+            block_number: 1
+        protocol:
+          type: string
+          example: aave_v3
+        type:
+          type: string
+          example: enable_collateral | disable_collateral
+    TransactionActionUniswapV3MintNFT:
+      required:
+        - data
+        - protocol
+        - type
+      properties:
+        data:
+          type: object
+          example:
+            name: "Uniswap V3: Positions NFT"
+            symbol: UNI-V3-POS
+            address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+            to: "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9"
+            ids:
+              - "1"
+              - "2"
+            block_number: 1
+        protocol:
+          type: string
+          example: uniswap_v3
+        type:
+          type: string
+          example: mint_nft
+    TransactionActionUniswapV3BCS:
+      required:
+        - data
+        - protocol
+        - type
+      properties:
+        data:
+          type: object
+          example:
+            address0: "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9"
+            address1: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+            amount0: "1.289548595490270429"
+            amount1: "110.824768"
+            symbol0: AAVE
+            symbol1: USDC
+        protocol:
+          type: string
+          example: uniswap_v3
+        type:
+          type: string
+          example: burn | collect | swap
+    v1IndexerStatus:
+      properties:
+        finished_past_indexing:
+          type: boolean
+        v06:
+          $ref: "#/components/schemas/v1EntryPointIndexerStatus"
+        v07:
+          $ref: "#/components/schemas/v1EntryPointIndexerStatus"
+    v1EntryPointIndexerStatus:
+      properties:
+        enabled:
+          type: boolean
+        live:
+          type: boolean
+        past_db_logs_indexing_finished:
+          type: boolean
+        past_rpc_logs_indexing_finished:
+          type: boolean
+    HealthCheckResponseServingStatus:
+      type: string
+      enum:
+        - UNKNOWN
+        - SERVING
+        - NOT_SERVING
+        - SERVICE_UNKNOWN
+      default: UNKNOWN
+      description: " - SERVICE_UNKNOWN: Used only by the Watch method."
+    protobufAny:
+      type: object
+      properties:
+        "@type":
+          type: string
+      additionalProperties: {}
+    rpcStatus:
+      type: object
+      properties:
+        code:
+          type: integer
+          format: int32
+        message:
+          type: string
+        details:
+          type: array
+          items:
+            type: object
+            $ref: "#/components/schemas/protobufAny"
+    v1CelestiaBlob:
+      type: object
+      properties:
+        height:
+          type: string
+          format: uint64
+        namespace:
+          type: string
+        commitment:
+          type: string
+        timestamp:
+          type: string
+          format: uint64
+        size:
+          type: string
+          format: uint64
+        data:
+          type: string
+    v1CelestiaBlobId:
+      type: object
+      properties:
+        height:
+          type: string
+          format: uint64
+        namespace:
+          type: string
+        commitment:
+          type: string
+    v1CelestiaL2BatchMetadata:
+      type: object
+      properties:
+        l2ChainId:
+          type: integer
+          format: int64
+        l2BatchId:
+          type: string
+        l2StartBlock:
+          type: string
+          format: uint64
+        l2EndBlock:
+          type: string
+          format: uint64
+        l2BatchTxCount:
+          type: integer
+          format: int64
+        l2BlockscoutUrl:
+          type: string
+        l1TxHash:
+          type: string
+        l1TxTimestamp:
+          type: string
+          format: uint64
+        l1ChainId:
+          type: integer
+          format: int64
+        relatedBlobs:
+          type: array
+          items:
+            type: object
+            $ref: "#/components/schemas/v1CelestiaBlobId"
+    v1HealthCheckResponse:
+      type: object
+      properties:
+        status:
+          $ref: "#/components/schemas/HealthCheckResponseServingStatus"
+        healthy:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/v1Data"
+    LatestBlock:
+      type: object
+      properties:
+        cache:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+            mber:
+              type: string
+        db:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+            number:
+              type: string
+    HealthCheckResponse:
+      type: object
+      properties:
+        healthy:
+          type: boolean
+        metadata:
+          type: object
+          properties:
+            latest_block:
+              $ref: "#/components/schemas/LatestBlock"
+    v1Data:
+      type: object
+      properties:
+        cache_latest_block_inserted_at:
+          type: string
+        cache_latest_block_number:
+          type: string
+        latest_block_inserted_at:
+          type: string
+        latest_block_number:
+          type: string
+  examples:
+    TokenTransferLarge1155Batch:
+      value:
+        items:
+          - block_hash: "0xf569ec751152b2f814001fc730f7797aa155e4bc3ba9cb6ba24bc2c8c9468c1a"
+            from:
+              hash: "0xcc4e74EB7F0D2F3e8c86Ac08A6B70689F564b226"
+              implementation_name: null
+              is_contract: false
+              is_verified: false
+              name: null
+              private_tags: []
+              public_tags: []
+              watchlist_names: []
+            log_index: "243"
+            method: null
+            timestamp: null
+            to:
+              hash: "0xEf8801eaf234ff82801821FFe2d78D60a0237F97"
+              implementation_name: null
+              is_contract: false
+              is_verified: false
+              name: null
+              private_tags: []
+              public_tags: []
+              watchlist_names: []
+            token:
+              address_hash: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+              circulating_market_cap: "83606435600.3635"
+              decimals: "6"
+              exchange_rate: "0.999487"
+              holders_count: "1149"
+              icon_url: null
+              name: Tether USD
+              symbol: USDT
+              total_supply: "39030615894320966"
+              type: ERC-20
+            total:
+              decimals: "6"
+              value: "830000000"
+            transaction_hash: "0x6662ad1ad2ea899e9e27832dc202fd2ef915a5d2816c1142e6933cff93\
+              f7c592"
+            type: token_transfer
+        next_page_params:
+          batch_block_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
+          batch_log_index: 0
+          batch_transaction_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
+          index_in_batch: 1
+    TokenTransferSomeBatchesOnTheFirstPageAndOneOnTheSecond:
+      value:
+        items:
+          - block_hash: "0xf569ec751152b2f814001fc730f7797aa155e4bc3ba9cb6ba24bc2c8c9468c1a"
+            from:
+              hash: "0xcc4e74EB7F0D2F3e8c86Ac08A6B70689F564b226"
+              implementation_name: null
+              is_contract: false
+              is_verified: false
+              name: null
+              private_tags: []
+              public_tags: []
+              watchlist_names: []
+            log_index: "243"
+            method: null
+            timestamp: null
+            to:
+              hash: "0xEf8801eaf234ff82801821FFe2d78D60a0237F97"
+              implementation_name: null
+              is_contract: false
+              is_verified: false
+              name: null
+              private_tags: []
+              public_tags: []
+              watchlist_names: []
+            token:
+              address_hash: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+              circulating_market_cap: "83606435600.3635"
+              decimals: "6"
+              exchange_rate: "0.999487"
+              holders_count: "1149"
+              icon_url: null
+              name: Tether USD
+              symbol: USDT
+              total_supply: "39030615894320966"
+              type: ERC-20
+            total:
+              decimals: "6"
+              value: "830000000"
+            transaction_hash: "0x6662ad1ad2ea899e9e27832dc202fd2ef915a5d2816c1142e6933cff93\
+              f7c592"
+            type: token_transfer
+        next_page_params:
+          block_number: 4
+          index: 2
+    TokenTransferALotOfBatches:
+      value:
+        items:
+          - block_hash: "0xf569ec751152b2f814001fc730f7797aa155e4bc3ba9cb6ba24bc2c8c9468c1a"
+            from:
+              hash: "0xcc4e74EB7F0D2F3e8c86Ac08A6B70689F564b226"
+              implementation_name: null
+              is_contract: false
+              is_verified: false
+              name: null
+              private_tags: []
+              public_tags: []
+              watchlist_names: []
+            log_index: "243"
+            method: null
+            timestamp: null
+            to:
+              hash: "0xEf8801eaf234ff82801821FFe2d78D60a0237F97"
+              implementation_name: null
+              is_contract: false
+              is_verified: false
+              name: null
+              private_tags: []
+              public_tags: []
+              watchlist_names: []
+            token:
+              address_hash: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+              circulating_market_cap: "83606435600.3635"
+              decimals: "6"
+              exchange_rate: "0.999487"
+              holders_count: "1149"
+              icon_url: null
+              name: Tether USD
+              symbol: USDT
+              total_supply: "39030615894320966"
+              type: ERC-20
+            total:
+              decimals: "6"
+              value: "830000000"
+            transaction_hash: "0x6662ad1ad2ea899e9e27832dc202fd2ef915a5d2816c1142e6933cff93\
+              f7c592"
+            type: token_transfer
+        next_page_params:
+          batch_block_hash: "0x0000000000000000000000000000000000000000000000000000000000000014"
+          batch_log_index: 5
+          batch_transaction_hash: "0x000000000000000000000000000000000000000000000000000000000000000a"
+          block_number: 14
+          index: 4
+          index_in_batch: 1

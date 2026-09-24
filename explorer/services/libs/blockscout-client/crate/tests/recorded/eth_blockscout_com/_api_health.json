@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/health"
+  },
+  "response": {
+    "status": 200,
+    "body": "{\"error\":null,\"metadata\":{\"blocks\":{\"healthy\":true,\"latest_block\":{\"node\":{\"number\":\"23116935\"},\"cache\":{\"timestamp\":\"2025-08-11 09:32:59Z\",\"number\":\"23116935\"},\"db\":{\"timestamp\":\"2025-08-11 09:32:59Z\",\"number\":\"23116935\"}}},\"latest_block\":{\"cache\":{\"timestamp\":\"2025-08-11 09:32:59Z\",\"number\":\"23116935\"},\"db\":{\"timestamp\":\"2025-08-11 09:32:59Z\",\"number\":\"23116935\"}}},\"healthy\":true}",
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}

@@ -1,0 +1,39 @@
+environments:
+  {{ .Environment.Name }}:
+---
+helmDefaults:
+  timeout: 600
+  kubeContext: k8s-dev
+  wait: true
+  recreatePods: false
+
+repositories:
+  - name: blockscout
+    url: https://blockscout.github.io/helm-charts
+  - name: bedag
+    url: https://bedag.github.io/helm-charts
+
+---
+releases:
+  # Deploy review L2
+  - name: bs-stack
+    chart: blockscout/blockscout-stack
+    version: 1.*.*
+    namespace: review-l2-{{ requiredEnv "GITHUB_REF_NAME_SLUG" }}
+    labels:
+      app: review-l2-{{ requiredEnv "GITHUB_REF_NAME_SLUG" }}
+    values:
+    - values/review-l2/values.yaml.gotmpl
+    - global:
+        env: "review"
+  # Deploy review
+  - name: bs-stack
+    chart: blockscout/blockscout-stack
+    version: 1.*.*
+    namespace: review-{{ requiredEnv "GITHUB_REF_NAME_SLUG" }}
+    labels:
+      app: review-{{ requiredEnv "GITHUB_REF_NAME_SLUG" }}
+    values:
+    - values/review/values.yaml.gotmpl
+    - global:
+        env: "review"

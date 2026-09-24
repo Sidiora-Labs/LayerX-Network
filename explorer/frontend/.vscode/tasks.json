@@ -1,0 +1,382 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        // DEV SERVER
+        {
+            "type": "shell",
+            "command": "yarn dev:preset ${input:dev_config_preset}",
+            "problemMatcher": [],
+            "label": "dev server",
+            "detail": "start local dev server",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true,
+                "close": false,
+                "revealProblems": "onProblem",
+            },
+            "icon": {
+                "color": "terminal.ansiMagenta",
+                "id": "server-process"
+            },
+            "runOptions": {
+                "instanceLimit": 1
+            }
+        },
+        {
+            "type": "shell",
+            "command": "yarn dev:preset:sync --name=${input:dev_config_preset}",
+            "problemMatcher": [],
+            "label": "dev preset sync",
+            "detail": "synchronize dev preset",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true,
+                "close": false,
+                "revealProblems": "onProblem",
+            },
+            "icon": {
+                "color": "terminal.ansiMagenta",
+                "id": "repo-sync"
+            },
+            "runOptions": {
+                "instanceLimit": 1
+            }
+        },
+
+        // CODE CHECKS
+        {
+            "type": "typescript",
+            "label": "tsc build",
+            "detail": "compile typescript",
+            "tsconfig": "tsconfig.json",
+            "problemMatcher": [
+                "$tsc"
+            ],
+            "icon": {
+                "color": "terminal.ansiCyan",
+                "id": "symbol-type-parameter"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true,
+                "close": false,
+                "revealProblems": "onProblem",
+            },
+            "group": "build",
+        },
+        {
+            "type": "npm",
+            "script": "lint:eslint:fix",
+            "problemMatcher": [],
+            "label": "eslint",
+            "detail": "run eslint",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true,
+                "close": false,
+                "revealProblems": "onProblem",
+            },
+            "icon": {
+                "color": "terminal.ansiYellow",
+                "id": "zap"
+            },
+            "runOptions": {
+                "instanceLimit": 1
+            }
+        },
+
+        // PW TESTS
+        {
+            "type": "shell",
+            "command": "${input:pwDebugFlag} yarn test:pw:local ${relativeFileDirname}/${fileBasename} ${input:pwArgs}",
+            "problemMatcher": [],
+            "label": "pw: local",
+            "detail": "run visual components tests for current file",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true,
+                "close": false,
+                "revealProblems": "onProblem",
+            },
+            "icon": {
+                "color": "terminal.ansiBlue",
+                "id": "beaker"
+            },
+            "runOptions": {
+                "instanceLimit": 1
+            },
+        },
+        {
+            "type": "shell",
+            "command": "yarn test:pw:docker ${relativeFileDirname}/${fileBasename} ${input:pwArgs}",
+            "problemMatcher": [],
+            "label": "pw: docker",
+            "detail": "run visual components tests for current file",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true,
+                "close": false,
+                "revealProblems": "onProblem",
+            },
+            "icon": {
+                "color": "terminal.ansiBlue",
+                "id": "beaker"
+            },
+            "runOptions": {
+                "instanceLimit": 1
+            },
+        },
+        {
+            "type": "shell",
+            "command": "yarn test:pw:docker ${input:pwArgs}",
+            "problemMatcher": [],
+            "label": "pw: docker all",
+            "detail": "run visual components tests",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true,
+                "close": false,
+                "revealProblems": "onProblem",
+            },
+            "icon": {
+                "color": "terminal.ansiBlue",
+                "id": "beaker"
+            },
+            "runOptions": {
+                "instanceLimit": 1
+            }
+        },
+        {
+            "type": "shell",
+            "command": "npx playwright show-report",
+            "problemMatcher": [],
+            "label": "pw: report",
+            "detail": "serve test report",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true,
+                "close": false,
+                "revealProblems": "onProblem",
+            },
+            "icon": {
+                "color": "terminal.ansiBlue",
+                "id": "output"
+            },
+            "runOptions": {
+                "instanceLimit": 1
+            }
+        },
+        {
+            "type": "shell",
+            "command": "yarn test:pw:detect-affected",
+            "problemMatcher": [],
+            "label": "pw: detect affected",
+            "detail": "detect PW tests affected by changes in current branch",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true,
+                "close": false,
+                "revealProblems": "onProblem",
+            },
+            "icon": {
+                "color": "terminal.ansiBlue",
+                "id": "diff"
+            },
+            "runOptions": {
+                "instanceLimit": 1
+            },
+        },
+
+        // VITEST TESTS
+        {
+            "type": "npm",
+            "script": "test:vitest",
+            "problemMatcher": [],
+            "label": "vitest",
+            "detail": "run unit tests",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true,
+                "close": false,
+                "revealProblems": "onProblem",
+            },
+            "icon": {
+                "color": "terminal.ansiBlue",
+                "id": "beaker"
+            },
+            "runOptions": {
+                "instanceLimit": 1
+            }
+        },
+        {
+            "type": "shell",
+            "command": "yarn test:vitest ${relativeFileDirname}/${fileBasename}",
+            "problemMatcher": [],
+            "label": "vitest: file",
+            "detail": "run unit tests for current file",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true,
+                "close": false,
+                "revealProblems": "onProblem",
+            },
+            "icon": {
+                "color": "terminal.ansiBlue",
+                "id": "beaker"
+            },
+            "runOptions": {
+                "instanceLimit": 1
+            },
+        },
+
+        {
+            "type": "npm",
+            "script": "build:docker",
+            "problemMatcher": [],
+            "label": "docker: build",
+            "detail": "build docker image",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true,
+                "close": false,
+                "revealProblems": "onProblem",
+            },
+            "icon": {
+                "color": "terminal.ansiRed",
+                "id": "symbol-structure"
+            },
+            "runOptions": {
+                "instanceLimit": 1
+            }
+        },
+        {
+            "type": "shell",
+            "command": "yarn start:docker:preset ${input:dev_config_preset}",
+            "problemMatcher": [],
+            "label": "docker: run",
+            "detail": "run docker container with env preset",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true,
+                "close": false,
+                "revealProblems": "onProblem",
+            },
+            "icon": {
+                "color": "terminal.ansiRed",
+                "id": "browser"
+            },
+            "runOptions": {
+                "instanceLimit": 1
+            }
+        },
+        {
+            "type": "npm",
+            "script": "svg:format",
+            "problemMatcher": [],
+            "label": "format svg",
+            "detail": "format svg files with svgo",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true,
+                "close": false,
+                "revealProblems": "onProblem",
+            },
+            "icon": {
+                "color": "terminal.ansiCyan",
+                "id": "combine"
+            },
+            "runOptions": {
+                "instanceLimit": 1
+            }
+        },
+    ],
+    "inputs": [
+        {
+            "type": "pickString",
+            "id": "pwDebugFlag",
+            "description": "What debug flag you want to use?",
+            "options": [
+              "",
+              "PWDEBUG=1",
+              "DEBUG=pw:browser,pw:api",
+              "DEBUG=*",
+            ],
+            "default": ""
+        },
+        {
+            "type": "pickString",
+            "id": "pwArgs",
+            "description": "What args you want to pass?",
+            "options": [
+              "",
+              "--update-snapshots",
+              "--update-snapshots --affected",
+              "--ui",
+            ],
+            "default": ""
+        },
+        {
+            "type": "pickString",
+            "id": "dev_config_preset",
+            "description": "Choose dev server config preset:",
+            "options": [
+              "all",
+              "main",
+              "localhost",
+              "arbitrum",
+              "arbitrum_sepolia",
+              "arbitrum_nova",
+              "base",
+              "blackfort_testnet",
+              "celo",
+              "celo_sepolia",
+              "garnet",
+              "gnosis",
+              "immutable",
+              "eth",
+              "eth_sepolia",
+              "filecoin",
+              "mega_eth",
+              "mekong",
+              "multichain_dev",
+              "multichain_prod",
+              "neon_devnet",
+              "numine",
+              "optimism",
+              "optimism_sepolia",
+              "polygon",
+              "rari_testnet",
+              "rootstock",
+              "rootstock_testnet",
+              "scroll_sepolia",
+              "shibarium",
+              "stability_testnet",
+              "tac",
+              "tac_spb",
+              "zetachain",
+              "zetachain_testnet",
+              "zkevm",
+              "zilliqa",
+              "zksync",
+              "zora",
+            ],
+            "default": "main"
+        },
+    ],
+}

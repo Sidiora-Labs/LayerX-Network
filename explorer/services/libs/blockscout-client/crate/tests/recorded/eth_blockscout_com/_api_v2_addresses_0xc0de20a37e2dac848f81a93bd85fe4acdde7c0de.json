@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/v2/addresses/0xc0De20A37E2dAC848F81A93BD85FE4ACDdE7C0DE"
+  },
+  "response": {
+    "status": 200,
+    "body": "{\"block_number_balance_updated_at\":22694719,\"coin_balance\":\"55237013765083938\",\"creation_transaction_hash\":null,\"creator_address_hash\":null,\"ens_domain_name\":\"levvv.eth\",\"exchange_rate\":\"4273.59\",\"has_beacon_chain_withdrawals\":false,\"has_logs\":false,\"has_token_transfers\":true,\"has_tokens\":true,\"has_validated_blocks\":false,\"hash\":\"0xc0De20A37E2dAC848F81A93BD85FE4ACDdE7C0DE\",\"implementations\":[],\"is_contract\":false,\"is_scam\":false,\"is_verified\":false,\"metadata\":null,\"name\":null,\"private_tags\":[],\"proxy_type\":null,\"public_tags\":[],\"token\":null,\"watchlist_address_id\":null,\"watchlist_names\":[]}",
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}

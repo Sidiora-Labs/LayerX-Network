@@ -1,0 +1,22 @@
+type: google.api.Service
+config_version: 3
+
+http:
+  rules:
+    - selector: blockscout.sig_provider.v1.SignatureService.CreateSignatures
+      post: /api/v1/signatures
+      body: "*"
+    - selector: blockscout.sig_provider.v1.AbiService.GetFunctionAbi
+      get: /api/v1/abi/function
+      response_body: "abi"
+    - selector: blockscout.sig_provider.v1.AbiService.GetEventAbi
+      get: /api/v1/abi/event
+      response_body: "abi"
+
+    - selector: blockscout.sig_provider.v1.AbiService.BatchGetEventAbis
+      post: /api/v1/abi/events:batch-get
+      body: "*"
+      response_body: "responses"
+
+    - selector: blockscout.sig_provider.v1.Health.Check
+      get: /health

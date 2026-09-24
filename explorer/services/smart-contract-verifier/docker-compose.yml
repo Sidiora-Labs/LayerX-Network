@@ -1,0 +1,22 @@
+version: "3"
+services:
+  smart-contract-verifier:
+    ## you can build an image locally, or use pre-built images from registry
+#    image: ghcr.io/blockscout/smart-contract-verifier:main
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    ports:
+      - "8050:8050"
+      - "8051:8051"
+    environment:
+      ## optional: if provided, would be used as a configuration file
+      - SMART_CONTRACT_VERIFIER__CONFIG=/app/config.toml
+    env_file:
+      ## optional: if provided, would overwrite values from configuration file
+      - ./smart-contract-verifier-server/config/base.env
+    volumes:
+      ## optional: you can use default config or provide custom via file
+      - ./smart-contract-verifier-server/config/base.toml:/app/config.toml
+      ## optional: provide volume or folder to store compilers between launches
+      - /tmp/compilers:/tmp/compilers

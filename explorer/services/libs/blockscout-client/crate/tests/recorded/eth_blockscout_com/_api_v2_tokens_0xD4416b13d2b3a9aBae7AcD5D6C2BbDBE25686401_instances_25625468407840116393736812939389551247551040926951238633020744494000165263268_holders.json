@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/v2/tokens/0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401/instances/25625468407840116393736812939389551247551040926951238633020744494000165263268/holders"
+  },
+  "response": {
+    "status": 200,
+    "body": "{\"items\":[{\"address\":{\"ens_domain_name\":\"levvv.eth\",\"hash\":\"0xc0De20A37E2dAC848F81A93BD85FE4ACDdE7C0DE\",\"implementations\":[],\"is_contract\":false,\"is_scam\":false,\"is_verified\":false,\"metadata\":null,\"name\":null,\"private_tags\":[],\"proxy_type\":null,\"public_tags\":[],\"watchlist_names\":[]},\"token_id\":\"25625468407840116393736812939389551247551040926951238633020744494000165263268\",\"value\":\"1\"}],\"next_page_params\":null}",
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}

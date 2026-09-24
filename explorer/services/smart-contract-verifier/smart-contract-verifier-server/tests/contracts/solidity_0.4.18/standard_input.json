@@ -1,0 +1,13 @@
+{
+    "language": "Solidity",
+    "sources": {
+        "MainCombined.sol": {
+            "content": "pragma solidity ^0.4.11; contract A { function get_a() public returns (uint256) { return 88888888888; } } contract B { function get_b() public returns (uint256) { return 7777777777777; } } contract Main is A, B { function get() public returns (uint256) { return get_a() + get_b(); } }"
+        }
+    },
+    "settings": {
+        "optimizer": {
+            "enabled": false
+        }
+    }
+}

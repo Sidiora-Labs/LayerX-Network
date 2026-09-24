@@ -1,0 +1,22 @@
+[
+	{
+		"title": "Ethereum",
+		"url": "https://eth.blockscout.com/",
+		"group": "Mainnets",
+		"icon": "https://example.com/logo.svg"
+	},
+	{
+		"title": "Goerli",
+		"url": "https://eth-goerli.blockscout.com/",
+		"group": "Testnets",
+		"isActive": true,
+		"icon": "https://example.com/logo.svg",
+		"invertIconInDarkMode": true
+	},
+	{
+		"title": "POA Sokol",
+		"url": "https://blockscout.com/poa/sokol",
+		"group": "Other",
+		"icon": "https://example.com/logo.svg"
+	}
+]

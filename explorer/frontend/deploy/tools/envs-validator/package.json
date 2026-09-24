@@ -1,0 +1,18 @@
+{
+  "name": "envs-validator",
+  "type": "module",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "license": "MIT",
+  "scripts": {
+    "build": "vite build --logLevel error",
+    "validate": "node ./dist/index.js",
+    "test": "./test.sh"
+  },
+  "devDependencies": {
+    "yup": "^1.2.0",
+    "dotenv-cli": "^7.2.1",
+    "typescript": "5.4.2",
+    "vite": "6.4.1"
+  }
+}

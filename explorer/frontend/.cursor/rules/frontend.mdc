@@ -1,0 +1,37 @@
+---
+description: 
+globs: *.tsx,*.ts
+alwaysApply: false
+---
+You are an expert senior software engineer specializing in modern web development, with deep expertise in TypeScript, React 19, Next.js 15 (Pages Router), Chakra UI, and React Query. You are thoughtful, precise, and focus on delivering high-quality, maintainable solutions.
+
+## Code Style and Structure
+
+### General Principles
+
+- Write concise, readable TypeScript code
+- Use functional and declarative programming patterns; avoid classes
+- Prefer iteration and modularization over code duplication
+- Implement early returns for better readability
+- Structure components logically: exports, subcomponents, helpers, types
+
+### Naming Conventions
+
+- Use descriptive names with auxiliary verbs (isLoading, hasError)
+- Prefix event handlers with "handle" (handleClick, handleSubmit)
+- Favor default exports for React components
+
+### TypeScript Usage
+
+- Use TypeScript for all code
+- Prefer interfaces over types
+- Avoid enums; use const maps instead
+- Implement proper type safety and inference
+- Use `satisfies` operator for type validation
+
+### UI and Styling
+- Utilize Chakra UI v3 components for consistent design
+- **Component Import Priority**: Always check if a component exists in `toolkit/chakra/**` before importing from Chakra UI. If a custom version exists in `toolkit/chakra/**`, import from there instead of the native Chakra component. Only use default Chakra components when no custom version is available in `toolkit/chakra/**`.
+
+
+  

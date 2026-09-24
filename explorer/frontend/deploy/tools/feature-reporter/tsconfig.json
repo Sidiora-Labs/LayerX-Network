@@ -1,0 +1,17 @@
+{
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "outDir": "./build",
+    "paths": {
+      "nextjs-routes": ["./nextjs/nextjs-routes.d.ts"],
+    }
+  },
+  "include": [ "../../../configs/app/index.ts", "../../../global.d.ts" ],
+  "tsc-alias": {
+    "verbose": true,
+    "resolveFullPaths": true,
+  }
+}

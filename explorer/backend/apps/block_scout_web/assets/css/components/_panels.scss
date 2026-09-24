@@ -1,0 +1,14 @@
+.panels {
+  &__container {
+    padding: 20px;
+  }
+}
+
+.pagination {
+  text-align: right;
+  margin: 10px;
+}
+
+.monospace {
+  font-family: $font-family-monospace;
+}
