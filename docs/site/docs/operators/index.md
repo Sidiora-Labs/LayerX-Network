@@ -13,7 +13,7 @@ Bring-up, hosted internals, qualification, and settlement operators.
 | Program porting kits | [Porting](porting.md) |
 | Independent relay / archive | [Relay and archive](../platform/relay-archive.md) |
 
-The public network exposes a gateway API and a faucet. There is no LayerX
+The limited beta has not opened yet. The gateway API becomes available when it does. This is a mainnet beta on real value, so the team does not run a faucet for general use; approved developers receive test allocations directly from the team through this service. There is no LayerX
 mainnet. A local `make ci` pass is not authorization to deploy contracts,
 move custody, or handle real assets
 ([Qualification](qualification.md)).

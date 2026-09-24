@@ -3,9 +3,11 @@
 An exact successful claim and the resulting JSON-RPC payment flow are in
 [Public payment API](PublicAPI.md).
 
-`layerx-faucet` is the public claim surface for hosted beta funds
+`layerx-faucet` is the claim surface for hosted beta funds
 (`platform/hosted/faucet/Cargo.toml:8-10`;
-`platform/hosted/faucet/src/main.rs:1025`). The crate is
+`platform/hosted/faucet/src/main.rs:1025`). This is a mainnet beta on
+real value, so the team does not run this faucet for general use;
+approved developers receive test allocations directly from the team through this service. The crate is
 `layerx-platform-faucet`; the binary path is `src/main.rs`. A
 developer or agent with a hosted session Bearer posts
 `POST /v1/faucet/claims` and receives either a funded body or a typed

@@ -1,6 +1,6 @@
 # Getting started
 
-This checklist uses the public gateway and faucet contracts; access still requires credentials
+This checklist uses the gateway and faucet contracts available to approved developers; access still requires credentials
 and independently supplied verification policy.
 
 ## Endpoints and trust

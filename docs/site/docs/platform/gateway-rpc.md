@@ -1,6 +1,7 @@
 # Public JSON-RPC
 
-The public JSON-RPC gateway provides 17
+The limited beta has not opened yet; the gateway API becomes available
+when it does. Once available, the JSON-RPC gateway provides 17
 `lx_*` methods: self-service onboarding, authenticated canonical submission,
 unauthenticated committed reads, fee estimation, and scoped live
 subscriptions. The source contract is
