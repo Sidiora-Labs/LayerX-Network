@@ -1,11 +1,8 @@
-import { Flex } from '@chakra-ui/react';
+import { Flex, Text } from '@chakra-ui/react';
 import React from 'react';
 
 import type { PaxeerXReceiptsItem } from 'types/api/paxeerXLists';
 
-import { route } from 'nextjs/routes';
-
-import { Link } from 'toolkit/chakra/link';
 import { Skeleton } from 'toolkit/chakra/skeleton';
 import { TableCell, TableRow } from 'toolkit/chakra/table';
 import CopyToClipboard from 'ui/shared/CopyToClipboard';
@@ -30,11 +27,16 @@ const PaxeerXReceiptsTableItem = ({ item, isLoading }: Props) => {
         </Flex>
       </TableCell>
       <TableCell verticalAlign="middle">
-        <Skeleton loading={ isLoading } overflow="hidden">
-          <Link href={ route({ pathname: '/paxeer-x/account/[hash]', query: { hash: item.account } }) }>
-            <HashStringShorten hash={ item.account } type="long"/>
-          </Link>
-        </Skeleton>
+        { item.account === null ? (
+          <Text color="text.secondary">—</Text>
+        ) : (
+          <Flex overflow="hidden" w="100%" alignItems="center">
+            <Skeleton loading={ isLoading }>
+              <HashStringShorten hash={ item.account } type="long"/>
+            </Skeleton>
+            <CopyToClipboard text={ item.account } ml={ 2 } isLoading={ isLoading }/>
+          </Flex>
+        ) }
       </TableCell>
       <TableCell verticalAlign="middle">
         <StatusLadderBadge rung={ item.status } isLoading={ isLoading }/>

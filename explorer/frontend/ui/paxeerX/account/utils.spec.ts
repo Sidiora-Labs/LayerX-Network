@@ -18,7 +18,11 @@ describe('listIdentities', () => {
 describe('formatAmount', () => {
   it('scales by the asset decimals', () => {
     expect(formatAmount('1500000000000000000', paxeerXMock.nativeAsset)).toBe('1.5');
-    expect(formatAmount('2500000', paxeerXMock.pointerAsset)).toBe('2.5');
+    expect(formatAmount('2500000', paxeerXMock.tokenAsset)).toBe('2.5');
+  });
+
+  it('leaves the amount unscaled when the asset carries no scale', () => {
+    expect(formatAmount('1200', paxeerXMock.custodyAsset)).toBe('1,200');
   });
 
   it('leaves the amount unscaled when the asset is unknown', () => {
@@ -33,16 +37,17 @@ describe('formatAmount', () => {
 describe('assetLabel', () => {
   it('prefers the symbol, then the denom', () => {
     expect(assetLabel(paxeerXMock.nativeAsset)).toBe('HPX');
-    expect(assetLabel({ ...paxeerXMock.nativeAsset, symbol: null })).toBe('uhpx');
+    expect(assetLabel(paxeerXMock.custodyAsset)).toBe(paxeerXMock.custodyAsset.denom);
     expect(assetLabel(null)).toBe('Unknown asset');
   });
 });
 
 describe('activityKindLabel', () => {
-  it('names the custody and binding events', () => {
-    expect(activityKindLabel('custody-deposit')).toBe('Custody deposit');
-    expect(activityKindLabel('claim-finalised')).toBe('Claim finalised');
-    expect(activityKindLabel('unbound')).toBe('Account unbound');
+  it('names the kernel events and the chain-side rows', () => {
+    expect(activityKindLabel('custody_deposit')).toBe('Custody deposit');
+    expect(activityKindLabel('claim_finalised')).toBe('Claim finalised');
+    expect(activityKindLabel('token_transfer')).toBe('Token transfer');
+    expect(activityKindLabel('transaction')).toBe('Transaction');
   });
 
   it('humanizes a kind it does not know', () => {

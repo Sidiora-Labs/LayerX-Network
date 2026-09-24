@@ -13,7 +13,7 @@ export const UNIFIED_ACCOUNT_PLACEHOLDER: PaxeerXUnifiedAccount = {
   balances: Array.from({ length: 3 }, (_, index) => ({
     asset: {
       id: `placeholder-${ index }`,
-      denom: 'uhpx',
+      denom: 'HPX',
       symbol: 'HPX',
       decimals: 18,
     },
@@ -25,11 +25,11 @@ export const UNIFIED_ACCOUNT_PLACEHOLDER: PaxeerXUnifiedAccount = {
     },
   })),
   activity: Array.from({ length: 5 }, (_, index) => ({
-    kind: 'custody-deposit',
+    kind: 'custody_deposit',
     hash: PLACEHOLDER_HASH,
     block_number: index,
     status: 'instant' as const,
-    side: 'chain' as const,
+    side: 'kernel' as const,
     timestamp: null,
     asset: null,
     amount: null,
