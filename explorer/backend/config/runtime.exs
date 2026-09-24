@@ -1187,7 +1187,9 @@ config :indexer, Indexer.Fetcher.EmptyBlocksSanitizer,
 
 config :indexer, Indexer.Block.Realtime.Fetcher,
   max_gap: ConfigHelper.parse_integer_env_var("INDEXER_REALTIME_FETCHER_MAX_GAP", 1_000),
-  polling_period: ConfigHelper.parse_time_env_var("INDEXER_REALTIME_FETCHER_POLLING_PERIOD")
+  polling_period: ConfigHelper.parse_time_env_var("INDEXER_REALTIME_FETCHER_POLLING_PERIOD"),
+  batch_size: ConfigHelper.parse_integer_env_var("INDEXER_REALTIME_BATCH_SIZE", 64),
+  max_lag: ConfigHelper.parse_integer_env_var("INDEXER_REALTIME_MAX_LAG", 5_000)
 
 config :indexer, Indexer.Block.Catchup.MissingRangesCollector,
   batch_size: ConfigHelper.parse_integer_env_var("INDEXER_CATCHUP_MISSING_RANGES_BATCH_SIZE", 100_000)
