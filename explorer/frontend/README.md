@@ -27,7 +27,7 @@ This tree is deployed as the Paxeer X Network explorer. Two run-time ENV presets
 - `paxeer-x.env` — the public deployment (https, wss).
 - `paxeer-x-dev.env` — the development deployment (http, ws).
 
-Both describe network `Paxeer X Network` (short name `Paxeer X`, network id `125`, native coin `PAX`, 18 decimals), carry the Paxeer X marks from [`public/static/paxeer-x`](./public/static/paxeer-x), and link out to nothing except `https://paxeer.app` and the monorepo on GitHub. Marketplace, ads and third-party analytics are off.
+Both describe network `Paxeer X Network` (short name `Paxeer X`, network id `125`, native coin `Paxeer` (`PAX`), 18 decimals), carry the Paxeer X marks from [`public/static/paxeer-x`](./public/static/paxeer-x), and link out to nothing except `https://paxeer.app` and the monorepo on GitHub. Marketplace, ads and third-party analytics are off.
 
 Using a preset:
 
