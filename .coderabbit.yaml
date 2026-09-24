@@ -1,0 +1,169 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+early_access: false
+tone_instructions: >-
+  Be concise and concrete. Report only findings that would change the code:
+  correctness, security, data loss, consensus or state-machine determinism,
+  and contract violations. Skip style remarks that a formatter or linter covers.
+
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  high_level_summary: true
+  high_level_summary_placeholder: "@coderabbitai summary"
+  review_status: true
+  commit_status: true
+  fail_commit_status: true
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: false
+  poem: false
+  suggested_labels: false
+  suggested_reviewers: false
+  auto_apply_labels: false
+  abort_on_close: true
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    ignore_title_keywords:
+      - "WIP"
+      - "Specgen re-render"
+    base_branches:
+      - main
+  path_filters:
+    - "!**/node_modules/**"
+    - "!**/dist/**"
+    - "!**/.next/**"
+    - "!**/vendor/**"
+    - "!**/testdata/**"
+    - "!**/*.pb.go"
+    - "!**/*.pb.gw.go"
+    - "!**/*.min.js"
+    - "!**/*.lock"
+    - "!**/yarn.lock"
+    - "!**/package-lock.json"
+    - "!**/go.sum"
+    - "!**/Cargo.lock"
+    - "!**/mix.lock"
+    - "!explorer/backend/deps/**"
+    - "!explorer/frontend/public/**"
+    - "!CHANGELOG.md"
+  path_instructions:
+    - path: "**"
+      instructions: >-
+        Public repository. Flag any hostname, IP address, port of an internal
+        host, validator moniker, private key, mnemonic, node key, access token
+        or internal URL. Flag dates, deadlines and internal memos in code
+        comments, docs and commit-facing text. The product name is
+        "Paxeer X Network"; "LayerX" is only the name of the kernel domain, so
+        flag "LayerX Protocol", "LayerX network", "LayerX token" or LayerX used
+        as the product or brand. Flag stubs, mocks, fakes or placeholders on
+        production paths, and any test that was weakened, skipped or deleted to
+        make a check pass.
+    - path: "{src,include,cmd,daemon,engine,programs,custodyproof,layerxproof}/**/*.{c,h}"
+      instructions: >-
+        C17 kernel code. Look for undefined behaviour, integer overflow,
+        unchecked lengths, missing bounds checks on network or file input,
+        use after free, uninitialised memory, non-deterministic behaviour in
+        state transitions, and error paths that skip cleanup.
+    - path: "**/*.go"
+      instructions: >-
+        Cosmos SDK / Tendermint style chain code. Consensus-critical paths must
+        be deterministic: flag map iteration order, time.Now, randomness,
+        floating point, and goroutine races in ABCI or module keeper code.
+        Flag panics reachable from user input, unchecked errors, and state
+        writes that are not covered by the transaction's gas or checks.
+    - path: "precompiles/**"
+      instructions: >-
+        Native EVM precompiles. Check gas accounting, input decoding bounds,
+        reentrancy through the EVM, and that every state change is validated
+        against the proof or calldata rather than external queries.
+    - path: "contracts/**/*.sol"
+      instructions: >-
+        Solidity. Check access control, reentrancy, unchecked external calls,
+        integer handling, upgrade safety and event coverage.
+    - path: "explorer/backend/**/*.{ex,exs}"
+      instructions: >-
+        Elixir Blockscout fork. Keep upstream style; check Ecto query safety,
+        N+1 queries, migrations that lock hot tables, and JSON API shapes
+        matching the frontend types.
+    - path: "explorer/frontend/**/*.{ts,tsx}"
+      instructions: >-
+        Next.js Blockscout fork with Chakra v3. Check that API types match the
+        backend JSON, that feature flags gate Paxeer X surfaces, and that no
+        product-specific value is hard-coded outside configs/envs presets.
+    - path: "human/**/*.{ts,tsx}"
+      instructions: >-
+        Human-facing apps. Check accessibility basics, error handling on
+        network calls, and that no secret or internal URL is bundled.
+    - path: "**/*.rs"
+      instructions: >-
+        Rust. Flag unwrap or expect on external input, unsafe blocks without a
+        safety comment, and blocking calls inside async code.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Check least-privilege permissions, pinned actions, no secrets echoed to
+        logs, and no script injection through untrusted expressions.
+  tools:
+    ast-grep:
+      essential_rules: true
+    shellcheck:
+      enabled: true
+    ruff:
+      enabled: true
+    markdownlint:
+      enabled: false
+    github-checks:
+      enabled: true
+      timeout_ms: 90000
+    languagetool:
+      enabled: false
+    biome:
+      enabled: false
+    eslint:
+      enabled: true
+    hadolint:
+      enabled: true
+    golangci-lint:
+      enabled: true
+    yamllint:
+      enabled: true
+    gitleaks:
+      enabled: true
+    semgrep:
+      enabled: true
+    actionlint:
+      enabled: true
+    buf:
+      enabled: true
+    regal:
+      enabled: false
+    swiftlint:
+      enabled: false
+    phpstan:
+      enabled: false
+    rubocop:
+      enabled: false
+    detekt:
+      enabled: false
+    pmd:
+      enabled: false
+    cppcheck:
+      enabled: true
+    checkov:
+      enabled: true
+    circleci:
+      enabled: false
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  opt_out: false
+  learnings:
+    scope: local
+  issues:
+    scope: local
+  pull_requests:
+    scope: local

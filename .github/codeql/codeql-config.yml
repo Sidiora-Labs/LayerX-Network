@@ -1,0 +1,24 @@
+name: Paxeer X Network CodeQL config
+
+queries:
+  - uses: security-extended
+
+paths-ignore:
+  - "**/node_modules/**"
+  - "**/dist/**"
+  - "**/build/**"
+  - "**/.next/**"
+  - "**/coverage/**"
+  - "**/vendor/**"
+  - "**/third_party/**"
+  - "**/testdata/**"
+  - "**/*.min.js"
+  - "**/*.pb.go"
+  - "**/*.pb.gw.go"
+  - "**/*_pb2.py"
+  - "**/*.generated.*"
+  - "explorer/backend/deps/**"
+  - "explorer/backend/_build/**"
+  - "explorer/frontend/public/**"
+  - "docs/**"
+  - "assets/**"
