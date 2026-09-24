@@ -1,12 +1,12 @@
 # Modules
 
-Eight economic modules (`0x01`–`0x08`) plus Programs (`0x09`) on a kernel that owns identity and authority.
+Nine economic modules (`0x01`–`0x08`, `0x0A`) plus Programs (`0x09`) on a kernel that owns identity and authority.
 
 Oracle intake remains an outside adapter, not a module ID. Programs is module ID `9` (`LXP_MODULE_PROGRAMS`); it is the guest-execution module, not a ninth `402LXP` writer. See [Programs](Programs.md).
 
 ---
 
-## The registered set (0x01–0x09)
+## The registered set (0x01–0x0A)
 
 | ID | Module | Page | What it does |
 | --- | --- | --- | --- |
@@ -19,10 +19,11 @@ Oracle intake remains an outside adapter, not a module ID. Programs is module ID
 | `0x07` | governance | [Governance](Governance.md) | Identity, grants, parameter changes, handover |
 | `0x08` | bridge | [Bridge](Bridge.md) | Custody credit on Paxeer, and withdrawal claims |
 | `0x09` | programs | [Programs](Programs.md) | Guest WASM execution. Emits transfer sets; does not write balances. |
+| `0x0A` | spot | [Spot](Spot.md) | Two-asset limit/market order matching, settling both legs immediately |
 
 Module IDs are stable and never reused. They occupy the high 16 bits of `activity_type` (`include/layerx/lxp_module.h`). An unknown or epoch-disabled module is refused - not best-effort decoded.
 
-Runtime sources live under `src/modules/` (`asset`, `escrow`, `budget`, `stream`, `service`, `perps`, `governance`, `bridge`, `programs`). Genesis registers Programs v4 for every accepted protocol version; Asset v1 is protocol-3-conditional (`src/protocol/lxp_genesis.c:594-598`). Since the monorepo integration, the Paxeer settlement stack these modules checkpoint to lives in the same repository under the repository root (`go.mod`, `chain.mk`, `daemon/`, `node/`, `modules/`, `consensus/`, `sdk/`, `rpc/`) (EVM chain ID `125`).
+Runtime sources live under `src/modules/` (`asset`, `escrow`, `budget`, `stream`, `service`, `perps`, `governance`, `bridge`, `programs`, `spot`). Genesis registers Programs v4 for every accepted protocol version; Asset v1 is protocol-3-conditional (`src/protocol/lxp_genesis.c:594-598`). Since the monorepo integration, the Paxeer settlement stack these modules checkpoint to lives in the same repository under the repository root (`go.mod`, `chain.mk`, `daemon/`, `node/`, `modules/`, `consensus/`, `sdk/`, `rpc/`) (EVM chain ID `125`).
 
 ---
 
@@ -84,7 +85,9 @@ See Payments and Fees.
 
 **governance.** Parameter changes on a timelock. Emergency freezes are named, narrow, and themselves activities.
 
-**bridge.** Deposits and withdrawals against Paxeer custody. The reserve mirror is an ordinary account so conservation still holds.
+**bridge.** Deposits and withdrawals against Paxeer custody. The reserve mirror is an ordinary account so conservation still holds. This is a different surface from the Paxeer-side `layerxexchange`/`layerxbridge`/`launchpad` precompiles described in [Unified Network Architecture](UnifiedNetwork.md).
+
+**spot.** Two-asset limit and market orders on the perps price-time book; every fill settles both legs immediately through the asset module. See [Spot](Spot.md).
 
 The opt-in [authenticated custody credit profile](Custody.md) binds real external
 deposits to atomic issuance and beneficiary credit while keeping fresh genesis empty.
@@ -120,7 +123,7 @@ layerxd and the guarantor bind the module host runtimes beside the ASSET and PRO
 
 - [Home](Home.md)
 - [Protocol](Protocol.md): LXC envelope, protocol 3, and the three rules
-- [Asset](Asset.md) · [Escrow](Escrow.md) · [Budget](Budget.md) · [Stream](Stream.md) · [Service](Service.md) · [Perps](Perps.md) · [Governance](Governance.md) · [Bridge](Bridge.md)
+- [Asset](Asset.md) · [Escrow](Escrow.md) · [Budget](Budget.md) · [Stream](Stream.md) · [Service](Service.md) · [Perps](Perps.md) · [Governance](Governance.md) · [Bridge](Bridge.md) · [Spot](Spot.md)
 - [Programs](Programs.md): module `0x09`, CALL vs simulate, guest ABI 2
 - [Fees](Fees.md)
 - [Finality](Finality.md): L0 → L4

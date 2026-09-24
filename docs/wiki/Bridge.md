@@ -9,6 +9,11 @@ Paxeer holds custody. LayerX credits and debits the reserve mirror so
 conservation still holds (`spec/layerx-protocol/spec.kvx` requirements 1
 and 24).
 
+This module is the LayerX↔Paxeer custody path. It is a different surface
+from the Paxeer-side `layerxbridge` module and `LayerXBridge` precompile
+(EVM address `0x1016`) that bridges Paxeer to external chains such as
+Ethereum; see [Unified Network Architecture](UnifiedNetwork.md).
+
 Sources: `include/layerx/lxp_bridge.h`, `include/layerx/lxp_bridge_credit.h`,
 `src/modules/bridge/`, `spec/layerx-protocol/spec.kvx` requirement 24.
 
