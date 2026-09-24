@@ -32,6 +32,7 @@ export { default as mudFramework } from './mudFramework';
 export { default as multichain } from './multichain';
 export { default as multichainButton } from './multichainButton';
 export { default as nameServices } from './nameServices';
+export { default as paxeerXLists } from './paxeerXLists';
 export { default as pools } from './pools';
 export { default as publicTagsSubmission } from './publicTagsSubmission';
 export { default as rewards } from './rewards';

@@ -359,3 +359,11 @@ export const megaEth: Guard = () => async() => {
     };
   }
 };
+
+export const paxeerXLists: Guard = (chainConfig: typeof config) => async() => {
+  if (!chainConfig.features.paxeerXLists.isEnabled) {
+    return {
+      notFound: true,
+    };
+  }
+};

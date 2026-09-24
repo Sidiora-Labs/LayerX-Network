@@ -75,6 +75,9 @@ declare module "nextjs-routes" {
     | StaticRoute<"/operations">
     | StaticRoute<"/ops">
     | StaticRoute<"/output-roots">
+    | DynamicRoute<"/paxeer-x/account/[hash]", { "hash": string }>
+    | StaticRoute<"/paxeer-x/anchors">
+    | StaticRoute<"/paxeer-x/receipts">
     | DynamicRoute<"/pools/[hash]", { "hash": string }>
     | StaticRoute<"/pools">
     | StaticRoute<"/public-tags/submit">

@@ -7,6 +7,7 @@ import React from 'react';
 import type { Route } from 'nextjs-routes';
 import { route } from 'nextjs-routes';
 
+import config from 'configs/app';
 import useIsMobile from 'lib/hooks/useIsMobile';
 import * as mixpanel from 'lib/mixpanel/index';
 import { getRecentSearchKeywords, saveToRecentKeywords } from 'lib/recentSearchKeywords';
@@ -19,6 +20,9 @@ import SearchBarInput from './SearchBarInput';
 import SearchBarRecentKeywords from './SearchBarRecentKeywords';
 import SearchBarSuggest from './SearchBarSuggest/SearchBarSuggest';
 import useSearchWithClusters from './useSearchWithClusters';
+import { getSearchRedirectRoute } from './utils';
+
+const paxeerXFeature = config.features.paxeerXLists;
 
 type Props = {
   isHeroBanner?: boolean;
@@ -38,7 +42,9 @@ const SearchBarDesktop = ({ isHeroBanner }: Props) => {
 
   const navigateToResults = React.useCallback((redirect: boolean) => {
     if (searchTerm) {
-      const resultRoute: Route = { pathname: '/search-results', query: { q: searchTerm, redirect: redirect ? 'true' : 'false' } };
+      const paxeerXRoute = paxeerXFeature.isEnabled ? getSearchRedirectRoute(searchTerm) : undefined;
+      const resultRoute: Route = paxeerXRoute ??
+        { pathname: '/search-results', query: { q: searchTerm, redirect: redirect ? 'true' : 'false' } };
       const url = route(resultRoute);
       mixpanel.logEvent(mixpanel.EventTypes.SEARCH_QUERY, {
         'Search query': searchTerm,
@@ -46,7 +52,7 @@ const SearchBarDesktop = ({ isHeroBanner }: Props) => {
         'Result URL': url,
       });
       saveToRecentKeywords(searchTerm);
-      router.push(resultRoute, undefined, { shallow: true });
+      router.push(resultRoute, undefined, { shallow: !paxeerXRoute });
     }
   }, [ searchTerm, router ]);
 
