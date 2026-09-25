@@ -172,7 +172,7 @@
     - Add explorer/backend/apps/explorer/test/explorer/chain/paxeer_x/capabilities_boot_test.exs starting the process against a JSON-RPC endpoint that never answers, asserting it reaches its started state within a bounded time, that its state reports the probe unavailable rather than raising, and that a later successful probe fills the state.
     - Record in explorer/deploy/env/backend.example.env the variables the reproduction needed, with names only.
     - _Requirements: 14.1, 14.2, 14.3, 14.4_
-  - [ ] 2.12 Leave one explorer surface and link to it
+  - [x] 2.12 Leave one explorer surface and link to it
     - Add a documented explorer base-URL variable to the control plane's server configuration and a helper in human/apps/web/src/explorer/client.ts that builds an explorer link for an anchor, a batch, a checkpoint, a receipt, a transaction and an address from it, carrying no literal host and failing closed with the unavailable state when the variable is unset.
     - Replace the batch and checkpoint listing and detail pages under human/apps/web/src/app/explorer with a panel that links into the explorer's anchor surfaces through that helper, removing the client calls those pages made and the components that existed only for them.
     - Keep the explorer landing page with its lookup forms, the receipt lookup route, the account journey and the verification page with its overload, refusal and retry states exactly as spec/layerx-beta requires them, and keep the programs page, which the explorer has no counterpart for.

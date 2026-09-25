@@ -81,6 +81,22 @@ export function ExplorerLink({ href, children }: Readonly<{ href: string; childr
   return <Link href={href} prefetch={false} className="font-semibold text-accent hover:underline">{children}</Link>;
 }
 
+export function ExplorerExternalLink({
+  href,
+  children,
+}: Readonly<{ href: string; children: ReactNode }>) {
+  return (
+    <a
+      href={href}
+      rel="noreferrer"
+      data-explorer-link="external"
+      className="inline-flex min-h-11 items-center font-semibold text-accent hover:underline"
+    >
+      {children}
+    </a>
+  );
+}
+
 export function ExplorerVerificationBadge({
   label,
   unverified = false,
@@ -117,7 +133,7 @@ export function ExplorerLookupForm({
   submitLabel,
 }: Readonly<{
   action: string;
-  kind: "receipt" | "account" | "checkpoint" | "batch" | "program";
+  kind: "receipt" | "account" | "program";
   label: string;
   placeholder: string;
   submitLabel: string;

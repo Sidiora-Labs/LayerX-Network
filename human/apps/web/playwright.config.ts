@@ -9,7 +9,6 @@ export default defineConfig({
   testMatch: [
     "browser/**/*.spec.ts",
     "approvals.spec.ts",
-    "explorer.spec.ts",
     "move.spec.ts",
     "onboarding.spec.ts",
     "support.spec.ts",

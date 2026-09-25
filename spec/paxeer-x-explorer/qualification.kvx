@@ -91,3 +91,43 @@ symbol = "definitions/0"
 observed = "req.9 ac_4 asks for twenty-eight kernel precompile events, while the committed ABI definitions of the six kernel precompiles carry thirty-seven events in total: twenty-six were already decoded and this task adds the remaining eleven."
 assumption = "The intent is every event of the committed ABI set, so all thirty-seven now have a definition and the count in the criterion is stale rather than a bound on what is decoded."
 severity = "note"
+
+[observation.2.12.1]
+task = "2.12"
+file = "human/apps/web/src/states/matrix.ts, human/apps/web/e2e/state-matrix.test.ts, human/apps/web/e2e/states.spec.ts"
+symbol = "CURRENT_ROUTES"
+observed = "The screen-state matrix and the consistency check that reads it still name /explorer/checkpoints, /explorer/checkpoints/[checkpointId], /explorer/batches and /explorer/batches/[batchNumber], four routes this task retires in favour of the explorer's anchor surface; none of those files is in this task's touched set, so the contract was left exactly as written."
+assumption = "The owner of the beta screen-state contract removes the four retired routes from CURRENT_ROUTES, so the matrix stops requiring six screen states for routes the control plane no longer serves."
+severity = "blocker"
+
+[observation.2.12.2]
+task = "2.12"
+file = "human/apps/web/src/journeys/activity/model.ts, human/apps/web/e2e/activity.spec.ts, human/crates/layerx-human-service/src/activity/detail.rs, human/crates/layerx-human-service/tests/detail.rs"
+symbol = "explorerPath"
+observed = "The activity journey routes checkpoint-proof evidence to /explorer/checkpoints/<evidence id> in both the web model and the human service, and both carry a test asserting that exact path, so the journey's evidence link now names a route the control plane no longer serves."
+assumption = "The activity journey's owner repoints checkpoint-proof evidence at the explorer link helper added here, since this task's touched set covers neither the journey model nor the human service."
+severity = "blocker"
+
+[observation.2.12.3]
+task = "2.12"
+file = "human/apps/web/playwright.config.ts, human/apps/web/package.json"
+symbol = "testMatch"
+observed = "The task's verify_cmd runs e2e/explorer.spec.ts under node --test, so the file was converted from a Playwright browser spec to a node:test suite; the Playwright configuration that matched it and the npm script that grepped for its @explorer tag had to be repointed even though neither file is in this task's touched set."
+assumption = "Browser coverage of the kept explorer routes is carried by the browser suites under e2e/browser, and no gate outside this feature greps for the @explorer tag."
+severity = "note"
+
+[observation.2.12.4]
+task = "2.12"
+file = "Makefile, human/apps/web/src/api/sdk.ts, agent/sdk/typescript/package.json"
+symbol = "human-js-install"
+observed = "human/apps/web/src/api/sdk.ts imports the TypeScript agent SDK by relative path, which pulls agent/sdk/typescript into the web type-check graph, but human-js-install installs only human/apps/web, so npm run typecheck fails with TS2307 on @noble/curves, @noble/hashes, @scure/bip32 and @scure/bip39 until the agent SDK's own locked dependencies are installed."
+assumption = "The install target's owner adds the agent SDK workspace install ahead of the human type check, since the Makefile is in no task's touched set and this task installed those dependencies in its lane only to let its verify_cmd run."
+severity = "blocker"
+
+[observation.2.12.5]
+task = "2.12"
+file = "human/apps/web/src/app/explorer/layout.tsx, human/apps/web/src/explorer/client.ts"
+symbol = "PAXEER_X_EXPLORER_BASE_URL"
+observed = "The explorer layout is force-static with a sixty-second revalidation, so the first prerender of /explorer reads the explorer base URL from the build environment and a container that learns the value only at start-up serves the unavailable state until the first regeneration."
+assumption = "The owner of the control plane's image build passes the explorer base URL as a build argument as well as a runtime variable, since the image definition is in no task's touched set here."
+severity = "note"

@@ -1,295 +1,209 @@
-import { expect, test } from "@playwright/test";
+import assert from "node:assert/strict";
+import test from "node:test";
 
-test.describe("Public Explorer Plane", () => {
-  test("@explorer renders the explorer overview page with freshness display", async ({ page }) => {
-    await page.goto("/explorer", { waitUntil: "networkidle" });
-    
-    await expect(page.locator("main")).toHaveCount(1);
-    await expect(page.getByRole("heading", { level: 1 })).toContainText(/Explorer|Overview/i);
-    
-    const freshnessDisplay = page.locator('[data-application="explorer"]').first();
-    await expect(freshnessDisplay).toBeVisible();
-    
-    await expect(page.getByText(/lookup/i)).toBeVisible();
-  });
+import { copyEntries } from "../copy/catalog.ts";
+import { copyEntry } from "../copy/runtime.ts";
+import {
+  EXPLORER_ANCHOR_PATH,
+  EXPLORER_LINK_KINDS,
+  EXPLORER_NAVIGATION,
+  explorerLinkPath,
+  parseExplorerBaseUrl,
+  type ExplorerLinkTarget,
+} from "../src/explorer/links.ts";
+import { ROUTE_SCRIPT_BUDGETS } from "../src/perf/budgets.ts";
 
-  test("@explorer renders the checkpoints list page with verification levels", async ({ page }) => {
-    await page.goto("/explorer/checkpoints", { waitUntil: "networkidle" });
-    
-    await expect(page.locator("main")).toHaveCount(1);
-    await expect(page.locator('[data-application="explorer"]')).toBeVisible();
-    
-    const table = page.locator("table").first();
-    await expect(table).toBeVisible();
-    
-    const verificationBadges = page.locator('[data-verification]');
-    if (await verificationBadges.count() > 0) {
-      await expect(verificationBadges.first()).toBeVisible();
-    }
-  });
+const RECEIPT = "a".repeat(64);
+const TRANSACTION = `0x${"b".repeat(64)}`;
+const ADDRESS = `0x${"1".repeat(40)}`;
 
-  test("@explorer renders the batches list page with verification levels", async ({ page }) => {
-    await page.goto("/explorer/batches", { waitUntil: "networkidle" });
-    
-    await expect(page.locator("main")).toHaveCount(1);
-    await expect(page.locator('[data-application="explorer"]')).toBeVisible();
-    
-    const table = page.locator("table").first();
-    await expect(table).toBeVisible();
-    
-    const verificationBadges = page.locator('[data-verification]');
-    if (await verificationBadges.count() > 0) {
-      await expect(verificationBadges.first()).toBeVisible();
-    }
-  });
+const RETIRED_ROUTES = [
+  "/explorer/batches",
+  "/explorer/batches/[batchNumber]",
+  "/explorer/checkpoints",
+  "/explorer/checkpoints/[checkpointId]",
+] as const;
 
-  test("@explorer checkpoint detail page displays verification level on every fact", async ({ page, request }) => {
-    const checkpointsResponse = await request.get("/explorer/checkpoints");
-    if (!checkpointsResponse.ok()) {
-      test.skip();
-    }
+const KEPT_EXPLORER_ROUTES = [
+  "/explorer",
+  "/explorer/accounts/[accountId]",
+  "/explorer/programs/[programId]",
+  "/explorer/receipts/[receiptId]",
+  "/explorer/verify",
+] as const;
 
-    await page.goto("/explorer/checkpoints", { waitUntil: "networkidle" });
-    
-    const firstCheckpointLink = page.locator('table a[href^="/explorer/checkpoints/"]').first();
-    if (await firstCheckpointLink.count() === 0) {
-      test.skip();
-    }
-    
-    await firstCheckpointLink.click();
-    await page.waitForLoadState("networkidle");
-    
-    await expect(page.locator('[data-application="explorer"]')).toBeVisible();
-    
-    const factTable = page.locator("table").first();
-    await expect(factTable).toBeVisible();
-    
-    const factRows = factTable.locator("tbody tr");
-    const factRowCount = await factRows.count();
-    expect(factRowCount).toBeGreaterThan(0);
-    
-    for (let i = 0; i < factRowCount; i++) {
-      const row = factRows.nth(i);
-      const cells = row.locator("td");
-      const cellCount = await cells.count();
-      expect(cellCount).toBeGreaterThanOrEqual(3);
-      
-      const verificationCell = cells.last();
-      await expect(verificationCell).toBeVisible();
-    }
-  });
+function budgetedRoutes(): readonly string[] {
+  return Object.keys(ROUTE_SCRIPT_BUDGETS);
+}
 
-  test("@explorer batch detail page displays verification level on every fact", async ({ page, request }) => {
-    const batchesResponse = await request.get("/explorer/batches");
-    if (!batchesResponse.ok()) {
-      test.skip();
-    }
+test("every anchor target resolves to the explorer's one anchor surface", () => {
+  for (const target of [{ kind: "anchor" }, { kind: "batch" }, { kind: "checkpoint" }] as const) {
+    assert.equal(explorerLinkPath(target), EXPLORER_ANCHOR_PATH);
+  }
+  assert.equal(EXPLORER_ANCHOR_PATH, "/paxeer-x/anchors");
+});
 
-    await page.goto("/explorer/batches", { waitUntil: "networkidle" });
-    
-    const firstBatchLink = page.locator('table a[href^="/explorer/batches/"]').first();
-    if (await firstBatchLink.count() === 0) {
-      test.skip();
-    }
-    
-    await firstBatchLink.click();
-    await page.waitForLoadState("networkidle");
-    
-    await expect(page.locator('[data-application="explorer"]')).toBeVisible();
-    
-    const factTable = page.locator("table").first();
-    await expect(factTable).toBeVisible();
-    
-    const factRows = factTable.locator("tbody tr");
-    const factRowCount = await factRows.count();
-    expect(factRowCount).toBeGreaterThan(0);
-    
-    for (let i = 0; i < factRowCount; i++) {
-      const row = factRows.nth(i);
-      const cells = row.locator("td");
-      const cellCount = await cells.count();
-      expect(cellCount).toBeGreaterThanOrEqual(3);
-      
-      const verificationCell = cells.last();
-      await expect(verificationCell).toBeVisible();
-    }
-  });
+test("the identified targets carry their identifier into the explorer's own route", () => {
+  assert.equal(
+    explorerLinkPath({ kind: "receipt", receiptId: RECEIPT.toUpperCase() }),
+    `/paxeer-x/receipts/${RECEIPT}`,
+  );
+  assert.equal(
+    explorerLinkPath({ kind: "transaction", transactionHash: `0x${"B".repeat(64)}` }),
+    `/tx/${TRANSACTION}`,
+  );
+  assert.equal(explorerLinkPath({ kind: "address", address: ADDRESS }), `/address/${ADDRESS}`);
+});
 
-  test("@explorer receipt lookup redirects to receipt detail page", async ({ page }) => {
-    await page.goto("/explorer", { waitUntil: "networkidle" });
-    
-    const receiptInput = page.locator('input[name="identifier"][type="text"]').first();
-    const lookupForm = receiptInput.locator("xpath=ancestor::form");
-    
-    const validReceiptId = "a".repeat(64);
-    await receiptInput.fill(validReceiptId);
-    
-    await lookupForm.locator('button[type="submit"]').click();
-    
-    await page.waitForURL(/\/explorer\/receipts\//);
-    await expect(page.locator('[data-application="explorer"]')).toBeVisible();
-  });
+test("the link surface covers every explorer link kind and refuses identifiers it cannot address", () => {
+  assert.deepEqual([...EXPLORER_LINK_KINDS], [
+    "anchor",
+    "batch",
+    "checkpoint",
+    "receipt",
+    "transaction",
+    "address",
+  ]);
+  const refused: readonly ExplorerLinkTarget[] = [
+    { kind: "receipt", receiptId: "" },
+    { kind: "receipt", receiptId: RECEIPT.slice(1) },
+    { kind: "receipt", receiptId: `${RECEIPT}f` },
+    { kind: "transaction", transactionHash: RECEIPT },
+    { kind: "transaction", transactionHash: `0x${"b".repeat(63)}` },
+    { kind: "address", address: `0x${"1".repeat(39)}` },
+    { kind: "address", address: ADDRESS.slice(2) },
+  ];
+  for (const target of refused) {
+    assert.throws(() => explorerLinkPath(target), TypeError, JSON.stringify(target));
+  }
+});
 
-  test("@explorer account lookup redirects to account activity page", async ({ page }) => {
-    await page.goto("/explorer", { waitUntil: "networkidle" });
-    
-    const accountInput = page.locator('input[name="identifier"][type="text"]').last();
-    const lookupForm = accountInput.locator("xpath=ancestor::form");
-    
-    const validAccountId = "b".repeat(64);
-    await accountInput.fill(validAccountId);
-    
-    await lookupForm.locator('button[type="submit"]').click();
-    
-    await page.waitForURL(/\/explorer\/accounts\//);
-    await expect(page.locator('[data-application="explorer"]')).toBeVisible();
-  });
+test("a link path never carries a host of its own", () => {
+  const targets: readonly ExplorerLinkTarget[] = [
+    { kind: "anchor" },
+    { kind: "batch" },
+    { kind: "checkpoint" },
+    { kind: "receipt", receiptId: RECEIPT },
+    { kind: "transaction", transactionHash: TRANSACTION },
+    { kind: "address", address: ADDRESS },
+  ];
+  for (const target of targets) {
+    const path = explorerLinkPath(target);
+    assert.ok(path.startsWith("/"), path);
+    assert.doesNotMatch(path, /^\/\//u, path);
+    assert.doesNotMatch(path, /:\/\//u, path);
+  }
+});
 
-  test("@explorer evidence verifier renders and accepts input", async ({ page }) => {
-    await page.goto("/explorer/verify", { waitUntil: "networkidle" });
-    
-    await expect(page.locator("main")).toHaveCount(1);
-    await expect(page.locator('[data-application="explorer"]')).toBeVisible();
-    
-    const evidenceInput = page.locator("textarea");
-    await expect(evidenceInput).toBeVisible();
-    
-    const kindSelector = page.locator('[role="radiogroup"]');
-    await expect(kindSelector).toBeVisible();
-    
-    const submitButton = page.locator('button[type="submit"]');
-    await expect(submitButton).toBeVisible();
-  });
+test("a base URL is accepted only when it is an origin the explorer can be reached at", () => {
+  const accepted = parseExplorerBaseUrl("https://explorer.example/");
+  assert.equal(accepted?.origin, "https://explorer.example");
+  assert.equal(parseExplorerBaseUrl("http://127.0.0.1:3000/")?.origin, "http://127.0.0.1:3000");
+  assert.equal(parseExplorerBaseUrl("http://localhost:3000")?.origin, "http://localhost:3000");
+});
 
-  test("@explorer evidence verifier validates with receipt evidence", async ({ page }) => {
-    await page.goto("/explorer/verify", { waitUntil: "networkidle" });
-    
-    const evidenceInput = page.locator("textarea");
-    const submitButton = page.locator('button[type="submit"]');
-    
-    const validReceiptEvidence = "dGVzdF9ldmlkZW5jZV9kYXRhX2Zvcl9yZWNlaXB0X3ZlcmlmaWNhdGlvbg";
-    await evidenceInput.fill(validReceiptEvidence);
-    
-    await submitButton.click();
-    
-    await page.waitForTimeout(1000);
-  });
+test("a base URL the explorer cannot be trusted at yields no origin at all", () => {
+  for (const refused of [
+    undefined,
+    "",
+    "explorer.example",
+    "http://explorer.example/",
+    "ftp://explorer.example/",
+    "https://user:secret@explorer.example/",
+    "https://explorer.example/paxeer-x",
+    "https://explorer.example/?tab=anchors",
+    "https://explorer.example/#anchors",
+  ]) {
+    assert.equal(parseExplorerBaseUrl(refused), undefined, String(refused));
+  }
+});
 
-  test("@explorer evidence verifier handles altered evidence", async ({ page }) => {
-    await page.goto("/explorer/verify", { waitUntil: "networkidle" });
-    
-    const evidenceInput = page.locator("textarea");
-    const submitButton = page.locator('button[type="submit"]');
-    
-    const alteredEvidence = "YWx0ZXJlZF9ldmlkZW5jZV90aGF0X3Nob3VsZF9mYWlsX3ZlcmlmaWNhdGlvbg";
-    await evidenceInput.fill(alteredEvidence);
-    
-    await submitButton.click();
-    
-    await page.waitForTimeout(1000);
-    
-    const errorNotice = page.locator('[role="alert"]');
-    if (await errorNotice.count() > 0) {
-      await expect(errorNotice).toBeVisible();
-    }
-  });
+test("an absolute link joins the configured origin to the path of its target", () => {
+  const base = parseExplorerBaseUrl("https://explorer.example/");
+  if (base === undefined) {
+    throw new Error("the explorer base URL fixture must parse");
+  }
+  for (const target of [
+    { kind: "anchor" },
+    { kind: "receipt", receiptId: RECEIPT },
+    { kind: "transaction", transactionHash: TRANSACTION },
+    { kind: "address", address: ADDRESS },
+  ] as const) {
+    const link: URL = new URL(explorerLinkPath(target), base);
+    assert.equal(link.origin, "https://explorer.example");
+    assert.equal(link.pathname, explorerLinkPath(target));
+  }
+});
 
-  test("@explorer all pages are accessible without authentication", async ({ page, context }) => {
-    await context.clearCookies();
-    
-    const explorerPages = [
-      "/explorer",
-      "/explorer/checkpoints",
-      "/explorer/batches",
-      "/explorer/verify",
-    ];
-    
-    for (const path of explorerPages) {
-      await page.goto(path, { waitUntil: "networkidle" });
-      
-      await expect(page.locator("main")).toHaveCount(1);
-      await expect(page.locator('[data-application="explorer"]')).toBeVisible();
-      
-      const authWall = page.locator('[data-auth-required]');
-      await expect(authWall).toHaveCount(0);
-    }
-  });
+test("the explorer navigation names only routes the control plane still serves", () => {
+  const navigation: readonly string[] = EXPLORER_NAVIGATION.map((item) => item.href);
+  assert.deepEqual(navigation, ["/explorer", "/explorer/verify"]);
+  for (const item of EXPLORER_NAVIGATION) {
+    assert.ok(budgetedRoutes().includes(item.href), item.href);
+    assert.equal(copyEntry(item.copyKey).key, item.copyKey);
+    assert.ok(copyEntry(item.copyKey).message.length > 0, item.copyKey);
+  }
+  for (const retired of RETIRED_ROUTES) {
+    assert.ok(!navigation.includes(retired), `navigation still names ${retired}`);
+  }
+});
 
-  test("@explorer pages show index freshness on every page", async ({ page }) => {
-    const explorerPages = [
-      "/explorer",
-      "/explorer/checkpoints",
-      "/explorer/batches",
-    ];
-    
-    for (const path of explorerPages) {
-      await page.goto(path, { waitUntil: "networkidle" });
-      
-      const explorerFrame = page.locator('[data-application="explorer"]');
-      await expect(explorerFrame).toBeVisible();
-      
-      const freshnessIndicator = explorerFrame.locator('text=/current|behind|indexed|batch/i').first();
-      await expect(freshnessIndicator).toBeVisible();
-    }
-  });
+test("the route performance budgets name the routes that remain and no retired one", () => {
+  const routes = budgetedRoutes();
+  for (const retired of RETIRED_ROUTES) {
+    assert.ok(!routes.includes(retired), `budgets still name ${retired}`);
+  }
+  assert.deepEqual(routes.filter((route) => route.startsWith("/explorer")), [...KEPT_EXPLORER_ROUTES]);
+});
 
-  test("@explorer navigation is present on all explorer pages", async ({ page }) => {
-    const explorerPages = [
-      "/explorer",
-      "/explorer/checkpoints",
-      "/explorer/batches",
-      "/explorer/verify",
-    ];
-    
-    for (const path of explorerPages) {
-      await page.goto(path, { waitUntil: "networkidle" });
-      
-      const navigation = page.locator("nav");
-      await expect(navigation).toBeVisible();
-      
-      const overviewLink = page.locator('a[href="/explorer"]');
-      await expect(overviewLink).toBeVisible();
-    }
-  });
+test("the copy catalogue carries the link panel and nothing written for a retired page", () => {
+  for (const key of ["explorer.anchors.title", "explorer.anchors.body", "explorer.anchors.action"]) {
+    assert.ok(copyEntry(key).message.length > 0, key);
+  }
+  const retiredKeys = [
+    "explorer.navigation.batches",
+    "explorer.navigation.checkpoints",
+    "explorer.batches.title",
+    "explorer.batches.body",
+    "explorer.batches.recent",
+    "explorer.batches.table",
+    "explorer.batch.title",
+    "explorer.batch.facts",
+    "explorer.checkpoints.title",
+    "explorer.checkpoints.body",
+    "explorer.checkpoints.recent",
+    "explorer.checkpoints.table",
+    "explorer.checkpoint.title",
+    "explorer.checkpoint.facts",
+    "explorer.fact.first_sequence",
+    "explorer.fact.last_sequence",
+    "explorer.column.activities",
+    "explorer.column.bytes",
+    "explorer.column.checkpoint",
+    "explorer.column.sequences",
+    "explorer.column.signatures",
+  ];
+  for (const key of retiredKeys) {
+    assert.ok(copyEntries.every((entry) => entry.key !== key), `the catalogue still carries ${key}`);
+    assert.throws(() => copyEntry(key), /Unknown copy key/u, key);
+  }
+});
 
-  test("@explorer pages use table-first layout for data scanning", async ({ page }) => {
-    const tablePages = [
-      "/explorer/checkpoints",
-      "/explorer/batches",
-    ];
-    
-    for (const path of tablePages) {
-      await page.goto(path, { waitUntil: "networkidle" });
-      
-      const table = page.locator("table").first();
-      await expect(table).toBeVisible();
-      
-      const tableCaption = table.locator("caption");
-      await expect(tableCaption).toBeVisible();
-      
-      const thead = table.locator("thead");
-      await expect(thead).toBeVisible();
-    }
-  });
-
-  test("@explorer deep links resolve correctly", async ({ page }) => {
-    const validCheckpointId = "c".repeat(64);
-    const validBatchNumber = "12345";
-    const validReceiptId = "d".repeat(64);
-    const validAccountId = "e".repeat(64);
-    
-    const deepLinks = [
-      `/explorer/checkpoints/${validCheckpointId}`,
-      `/explorer/batches/${validBatchNumber}`,
-      `/explorer/receipts/${validReceiptId}`,
-      `/explorer/accounts/${validAccountId}`,
-    ];
-    
-    for (const path of deepLinks) {
-      await page.goto(path, { waitUntil: "networkidle" });
-      
-      await expect(page.locator("main")).toHaveCount(1);
-      await expect(page.locator('[data-application="explorer"]')).toBeVisible();
-    }
-  });
+test("the surfaces the beta contract requires of the control plane are kept", () => {
+  const routes = budgetedRoutes();
+  for (const required of KEPT_EXPLORER_ROUTES) {
+    assert.ok(routes.includes(required), required);
+  }
+  for (const key of [
+    "explorer.lookup.receipt.title",
+    "explorer.lookup.account.title",
+    "explorer.lookup.program.title",
+    "explorer.lookup.action",
+    "explorer.verify.title",
+    "explorer.account.title",
+    "explorer.receipt.title",
+    "explorer.program.title",
+  ]) {
+    assert.ok(copyEntry(key).message.length > 0, key);
+  }
 });

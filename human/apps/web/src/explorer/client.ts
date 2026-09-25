@@ -1,9 +1,8 @@
 import "server-only";
 
+import { explorerLinkPath, parseExplorerBaseUrl, type ExplorerLinkTarget } from "./links";
 import {
   decodeAccountActivity,
-  decodeBatch,
-  decodeCheckpoint,
   decodeNameResolution,
   decodePage,
   decodeProgram,
@@ -16,8 +15,6 @@ import {
   validExplorerIdentifier,
   validExplorerName,
   type AccountActivityRecord,
-  type BatchRecord,
-  type CheckpointRecord,
   type EvidenceVerificationReport,
   type ExplorerPage,
   type ExplorerRecord,
@@ -73,6 +70,22 @@ function explorerOrigin(): URL {
   return origin;
 }
 
+/// PAXEER_X_EXPLORER_BASE_URL names the public base URL of the Paxeer X Network explorer, the
+/// one surface that renders anchors, receipts, transactions and addresses. It is the only place
+/// the explorer's host is configured: no host is written into this repository, and an unset or
+/// malformed value fails closed with the unavailable state rather than guessing an origin.
+function explorerBaseUrl(): URL {
+  const base = parseExplorerBaseUrl(process.env.PAXEER_X_EXPLORER_BASE_URL);
+  if (base === undefined) {
+    throw new ExplorerUnavailableError();
+  }
+  return base;
+}
+
+export function explorerLink(target: ExplorerLinkTarget): string {
+  return new URL(explorerLinkPath(target), explorerBaseUrl()).toString();
+}
+
 async function get(path: string, query?: Readonly<Record<string, string>>): Promise<unknown> {
   const url = new URL(path, explorerOrigin());
   for (const [name, value] of Object.entries(query ?? {})) {
@@ -104,54 +117,6 @@ async function get(path: string, query?: Readonly<Record<string, string>>): Prom
   } catch {
     throw new ExplorerUnavailableError();
   }
-}
-
-export async function checkpointPage(
-  before?: string,
-  limit = "25",
-): Promise<ExplorerPage<CheckpointRecord>> {
-  if ((before !== undefined && !validExplorerCoordinate(before)) || !validExplorerCoordinate(limit)) {
-    throw new TypeError("Invalid checkpoint page coordinate");
-  }
-  return decodePage(
-    await get("/v1/explorer/checkpoints", { ...(before === undefined ? {} : { before }), limit }),
-    decodeCheckpoint,
-    "checkpoint page",
-  );
-}
-
-export async function batchPage(
-  before?: string,
-  limit = "25",
-): Promise<ExplorerPage<BatchRecord>> {
-  if ((before !== undefined && !validExplorerCoordinate(before)) || !validExplorerCoordinate(limit)) {
-    throw new TypeError("Invalid batch page coordinate");
-  }
-  return decodePage(
-    await get("/v1/explorer/batches", { ...(before === undefined ? {} : { before }), limit }),
-    decodeBatch,
-    "batch page",
-  );
-}
-
-export async function checkpointRecord(
-  identifier: string,
-): Promise<ExplorerRecord<CheckpointRecord>> {
-  if (!validExplorerIdentifier(identifier)) {
-    throw new TypeError("Invalid checkpoint identifier");
-  }
-  return decodeRecord(
-    await get(`/v1/explorer/checkpoints/${encodeURIComponent(identifier.toLowerCase())}`),
-    decodeCheckpoint,
-    "checkpoint record",
-  );
-}
-
-export async function batchRecord(batch: string): Promise<ExplorerRecord<BatchRecord>> {
-  if (!validExplorerCoordinate(batch)) {
-    throw new TypeError("Invalid batch number");
-  }
-  return decodeRecord(await get(`/v1/explorer/batches/${encodeURIComponent(batch)}`), decodeBatch, "batch record");
 }
 
 export async function receiptRecord(
