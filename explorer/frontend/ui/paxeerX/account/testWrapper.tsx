@@ -1,9 +1,9 @@
 import type { RenderOptions } from '@testing-library/react';
 import { cleanup, render as baseRender } from '@testing-library/react';
 import React from 'react';
-import { afterEach } from 'vitest';
 
 import { Provider as ChakraProvider } from 'toolkit/chakra/provider';
+import { afterEach } from 'vitest';
 import { wrapper as TestApp } from 'vitest/lib';
 
 // jsdom implements no CSS media queries, and both the Chakra provider and the breakpoint hooks

@@ -20,10 +20,8 @@ export const GENERAL_API_PAXEER_X_LISTS_RESOURCES = {
 
 export type GeneralApiPaxeerXListsResourceName = `general:${ keyof typeof GENERAL_API_PAXEER_X_LISTS_RESOURCES }`;
 
-/* eslint-disable @stylistic/indent */
 export type GeneralApiPaxeerXListsResourcePayload<R extends GeneralApiPaxeerXListsResourceName> =
-R extends 'general:paxeer_x_tx_status' ? PaxeerXTxStatus :
-R extends 'general:paxeer_x_anchors' ? PaxeerXAnchorsResponse :
-R extends 'general:paxeer_x_receipts' ? PaxeerXReceiptsResponse :
-never;
-/* eslint-enable @stylistic/indent */
+  R extends 'general:paxeer_x_tx_status' ? PaxeerXTxStatus :
+    R extends 'general:paxeer_x_anchors' ? PaxeerXAnchorsResponse :
+      R extends 'general:paxeer_x_receipts' ? PaxeerXReceiptsResponse :
+        never;

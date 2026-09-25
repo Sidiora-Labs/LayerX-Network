@@ -34,7 +34,7 @@ export const RUNGS: Record<PaxeerXStatusRung, RungDescriptor> = {
     icon: 'lock',
     colorPalette: 'purple',
   },
-  final: {
+  'final': {
     rung: 'final',
     label: 'Final',
     description: 'A finalized anchor checkpoint covers the block, which is past the finality height.',
