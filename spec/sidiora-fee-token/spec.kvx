@@ -358,7 +358,11 @@ reqs = ["7.1","7.2","7.3","7.4","7.5"]
 
 [task.2.4]
 title = "Add the fee-token parameters to x/evm"
-status = "pending"
+status = "done"
+revision = "pending"
+command = "timeout 20m sh -c 'go test -count=1 ./modules/evm/types/... && go test -count=1 -run FeeTokenParams ./modules/evm/keeper/...'"
+exit_code = 0
+log_path = "/root/lx-lanes/sid-t2-4/.logs/verify.log"
 wave = 2
 requires = []
 do_1 = "In api/evm/params.proto add to the Params message, at field numbers no existing field uses and leaving every existing field exactly as it is, the repeated allowed fee denom entries carrying a denom and its oracle pair, the maximum conversion spread as a Dec with the customtype the other Dec fields use, and the boolean that turns the fee-token path off; regenerate modules/evm/types/params.pb.go through the repository's Protocol Buffer pipeline rather than editing it."

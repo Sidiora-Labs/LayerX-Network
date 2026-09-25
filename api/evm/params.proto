@@ -73,6 +73,21 @@ message Params {
     (gogoproto.jsontag) = "register_pointer_disabled"
   ];
   uint64 pax_sstore_set_gas_eip2200 = 15;
+  repeated AllowedFeeDenom allowed_fee_denoms = 16 [
+    (gogoproto.moretags) = "yaml:\"allowed_fee_denoms\"",
+    (gogoproto.nullable) = false,
+    (gogoproto.jsontag) = "allowed_fee_denoms"
+  ];
+  string max_fee_token_spread = 17 [
+    (gogoproto.moretags) = "yaml:\"max_fee_token_spread\"",
+    (gogoproto.customtype) = "github.com/sidiora-labs/paxeer-network/sdk/types.Dec",
+    (gogoproto.nullable) = false,
+    (gogoproto.jsontag) = "max_fee_token_spread"
+  ];
+  bool fee_token_enabled = 18 [
+    (gogoproto.moretags) = "yaml:\"fee_token_enabled\"",
+    (gogoproto.jsontag) = "fee_token_enabled"
+  ];
 }
 
 message ParamsPreV580 {
@@ -280,4 +295,9 @@ message ParamsPreV606 {
     (gogoproto.nullable) = false,
     (gogoproto.jsontag) = "maximum_fee_per_gas"
   ];
+}
+
+message AllowedFeeDenom {
+  string denom = 1 [(gogoproto.moretags) = "yaml:\"denom\"", (gogoproto.jsontag) = "denom"];
+  string oracle_pair = 2 [(gogoproto.moretags) = "yaml:\"oracle_pair\"", (gogoproto.jsontag) = "oracle_pair"];
 }

@@ -36,3 +36,19 @@ command = "cat precompiles/oracle/oracle.go"; exit_code = 0
 log_path = ".logs/context.log"
 observed = "The oracle precompile returns ErrOraclePrecompileRetired for every rate query."
 assumption = "Sponsorship must fail closed until an independently authorized change supplies oracle rates; this task does not alter the precompile."
+
+[observation.2.4.1]
+revision = "17c8ed319f18cbe5a003614c4ee082c2c3c0b122"
+command = "go run github.com/bufbuild/buf/cmd/buf@v1.58.0 --version"
+exit_code = 1
+log_path = ".logs/proto-toolchain.log"
+observed = "The pinned Buf executable is absent and its Go invocation cannot write to the shared module cache."
+assumption = "The authorized manual protobuf update is required in this environment."
+
+[observation.2.4.2]
+revision = "17c8ed319f18cbe5a003614c4ee082c2c3c0b122"
+command = "cortex_guard"
+exit_code = 127
+log_path = ".logs/guard.log"
+observed = "The required guard executable is unavailable."
+assumption = "Publication remains restricted to the requested branch with no chain interaction."
