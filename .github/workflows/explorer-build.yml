@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'explorer/**'
+      - 'tools/explorer/**'
       - '.github/workflows/explorer-build.yml'
 
 permissions:

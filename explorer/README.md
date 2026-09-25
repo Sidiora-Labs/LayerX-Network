@@ -144,8 +144,9 @@ which columns each table would gain and lose.
 
 ## Test ratio and lint scripts
 
-Every pull request that touches this directory runs two gates besides the
-builds: `explorer-lint`, one leg per language, and `explorer-test-ratio`.
+Every pull request that touches this directory, or the gate scripts under
+`tools/explorer/`, runs two gates besides the builds: `explorer-lint`, one leg
+per language, and `explorer-test-ratio`.
 Neither is marked `continue-on-error` and neither is skipped by a condition, so
 a red leg is a red pull request.
 
