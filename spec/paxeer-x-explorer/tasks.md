@@ -139,7 +139,7 @@
     - Count and log by name any log from a kernel precompile address whose topic matches no decoder, and expose that count in the parse result so a caller can assert it.
     - Extend explorer/backend/apps/indexer/test/indexer/transform/paxeer_x_logs_test.exs with a real log fixture per newly handled event, asserting every decoded column and the topic-against-signature proof for each new constant, and add a case asserting the unmatched count is zero for the committed ABI set.
     - _Requirements: 9.4, 9.5, 9.6_
-  - [ ] 2.7 Repair the upstream test isolation defects
+  - [x] 2.7 Repair the upstream test isolation defects
     - In explorer/backend/apps/explorer/test/support/factory.ex make the block number sequence start above the configured first traceable block so an inserted block is never the genesis block the internal-transaction fetcher filters, and leave every other factory field as it is.
     - Leave the genesis filter in explorer/backend/apps/indexer/lib/indexer/fetcher/internal_transaction.ex exactly as written - it still drops the first traceable block when the node reports no transactions for it - and add no environment condition or flag to it.
     - Make the heavy primary-key migration record its completion through the migration status module as its own contract requires, so a second run against an already migrated database does not attempt a conflict resolution the replaced constraint no longer supports.

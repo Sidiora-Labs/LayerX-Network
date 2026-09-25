@@ -697,7 +697,9 @@ defmodule Explorer.Factory do
   end
 
   def block_number do
-    sequence("block_number", & &1)
+    lowest_block_number = Kernel.+(Application.get_env(:indexer, :trace_first_block, 0), 1)
+
+    sequence("block_number", &Kernel.+(&1, lowest_block_number))
   end
 
   def block_second_degree_relation_factory do

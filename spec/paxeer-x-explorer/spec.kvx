@@ -509,7 +509,11 @@ reqs = ["9.4","9.5","9.6"]
 
 [task.2.7]
 title = "Repair the upstream test isolation defects"
-status = "pending"
+status = "done"
+verified_revision = "40e4d3cedaa4e82a8698de272a85106d9ef8697d"
+verified_command = "timeout 20m sh -c 'explorer/deploy/tools/mix-in-builder.sh test apps/indexer/test/indexer/fetcher/internal_transaction_test.exs && explorer/deploy/tools/mix-in-builder.sh --reuse-db test apps/indexer/test/indexer/fetcher/internal_transaction_test.exs'"
+verified_exit_code = "0"
+verified_log = "the captured output of that command, kept with the qualification run outside the repository"
 wave = 2
 requires = ["1.1"]
 do_1 = "In explorer/backend/apps/explorer/test/support/factory.ex make the block number sequence start above the configured first traceable block so an inserted block is never the genesis block the internal-transaction fetcher filters, and leave every other factory field as it is."
