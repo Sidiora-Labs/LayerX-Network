@@ -94,3 +94,32 @@ revision = "92d9139d9bdc4cae205b19744f48715e6ef6f56d"
 observed = "Review comment 4107298026 identifies existing records that follow requirement 15.3 evidence fields but omit metadata required by this file's header."
 assumption = "The append-only rule and conflicting schema declarations require preserving both existing records and declarations until the feature owner reconciles them."
 severity = "suspect"
+
+[observation.2.4.2]
+revision = "17c8ed319f18cbe5a003614c4ee082c2c3c0b122"
+command = "cortex_guard"
+exit_code = 127
+log_path = ".logs/guard.log"
+observed = "The required guard executable is unavailable."
+assumption = "Publication remains restricted to the requested branch with no chain interaction."; severity = "assumption"
+
+[observation.2.8.1]
+task = "2.8"; file = "modules/evm/types/params.pb.go"; symbol = "Params"; severity = "blocker"
+revision = "5241cfaeda1a9536e3bf2cde20e3125a5f5a1112"
+command = "gh pr view 530 --json body -q .body"; exit_code = 0; log_path = "https://github.com/Sidiora-Labs/Paxeer-X-Network/pull/530#discussion_r4107607635"
+observed = "The pull request reports manual protobuf edits despite the generation contract, and regenerating params.pb.go would modify a file outside task 2.8 touches."
+assumption = "Regeneration requires separately authorized scope; the existing toolchain observation 2.4.1 is not rerun or re-investigated."
+
+[observation.2.8.2]
+task = "2.8"; file = "contracts/src/BatchCallAndSponsor.sol"; symbol = "_readRate"; severity = "blocker"
+revision = "5241cfaeda1a9536e3bf2cde20e3125a5f5a1112"
+command = "sed -n '135,178p' contracts/src/BatchCallAndSponsor.sol"; exit_code = 0; log_path = "https://github.com/Sidiora-Labs/Paxeer-X-Network/pull/530#discussion_r4107607647"
+observed = "The digit accumulation adds the ASCII digit before subtracting 48, allowing an intermediate overflow after the numeric-digit overflow guard passes."
+assumption = "The parser and its behavior tests require a separately scoped correction because the contract is outside task 2.8 touches."
+
+[observation.2.8.3]
+task = "2.8"; file = "modules/evm/types/params_test.go"; symbol = "TestFeeTokenParamsProtoDescriptor"; severity = "blocker"
+revision = "5241cfaeda1a9536e3bf2cde20e3125a5f5a1112"
+command = "sed -n '245,292p' modules/evm/types/params_test.go"; exit_code = 0; log_path = "https://github.com/Sidiora-Labs/Paxeer-X-Network/pull/530#discussion_r4107607672"
+observed = "The descriptor test selects the last three fields as fields 16 through 18, contradicting the addition of field 19."
+assumption = "The code and assertions remain intact because this test is outside task 2.8 touches; a separate correction must preserve all field-name, number and type assertions."
