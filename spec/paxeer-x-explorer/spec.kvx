@@ -508,7 +508,7 @@ reqs = ["10.1","10.2","10.3","10.4","10.5"]
 
 [task.2.8]
 title = "Name the wrapped coin for the coin"
-status = "pending"
+status = "implemented"
 wave = 2
 requires = []
 do_1 = "In contracts/src/WPAX.sol change the public name to the wrapped Paxeer display name, leaving the symbol, the decimals, every storage slot, every function and every event exactly as they are."

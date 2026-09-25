@@ -146,7 +146,7 @@
     - Add explorer/backend/apps/explorer/test/explorer/migrator/heavy_db_index_operation/update_internal_transactions_primary_key_test.exs asserting that after the operation completes the migration status records it and that running it again is a no-op.
     - Leave every assertion in the internal-transaction fetcher suite unchanged; if the suite and the fetcher genuinely disagree, record the contradiction in spec/paxeer-x-explorer/qualification.kvx with both intact.
     - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5_
-  - [ ] 2.8 Name the wrapped coin for the coin
+  - [ ] 2.8 Name the wrapped coin for the coin — **Implemented - qualification pending**
     - In contracts/src/WPAX.sol change the public name to the wrapped Paxeer display name, leaving the symbol, the decimals, every storage slot, every function and every event exactly as they are.
     - Add contracts/test/WPAXTest.t.sol asserting the display name, the symbol and the decimals, a deposit crediting the sender's balance and emitting its event, a withdrawal debiting the sender and paying out, a transfer between accounts and an approved transfer, so the rename is proven to have moved nothing else.
     - Record in spec/paxeer-x-explorer/qualification.kvx that the wrapped-coin fixtures under the JSON-RPC test trees carry the same old display name and are deliberately out of scope for this task.

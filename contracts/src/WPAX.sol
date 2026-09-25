@@ -2,7 +2,7 @@
 pragma solidity ^0.8.0;
 
 contract WPAX {
-    string public name     = "Wrapped Pax";
+    string public name     = "Wrapped Paxeer";
     string public symbol   = "WPAX";
     uint8  public decimals = 18;
 
