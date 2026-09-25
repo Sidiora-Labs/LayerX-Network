@@ -52,3 +52,10 @@ exit_code = 127
 log_path = ".logs/guard.log"
 observed = "The required guard executable is unavailable."
 assumption = "Publication remains restricted to the requested branch with no chain interaction."
+
+[observation.2.4.3]
+task = "2.4"
+file = "contracts/src/BatchCallAndSponsor.sol"
+observed = "The oracle keeper stores LastUpdateTimestamp in milliseconds, but _readRate compares it directly with block.timestamp in seconds and rejects a current keeper-produced timestamp with StaleOracleRate."
+assumption = "The contract owner must align timestamp units and add behavior coverage; this contract is outside task 2.4 touches, and the separate oracle availability blocker is already recorded."
+severity = "note"
