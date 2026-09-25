@@ -77,7 +77,7 @@
     - Where a clippy lint is inherited from vendored upstream code and cannot be fixed without a mass edit, add the allow at the narrowest scope that covers it with a one-line reason beside it; never add a crate-wide allow and never pass an allow flag from the script.
     - Install the protocol-buffer compiler the services need in the script when it is absent from the environment, exactly as the explorer build workflow does, so the script runs the same way locally and in continuous integration.
     - _Requirements: 2.3, 2.5_
-  - [ ] 1.12 Enforce the test ratio and wire both explorer gates into continuous integration
+  - [x] 1.12 Enforce the test ratio and wire both explorer gates into continuous integration
     - Write tools/explorer/test-ratio.sh taking a git range, listing the files changed under explorer/ in that range, classifying each as source, test or neither by the rules in the test-ratio decision, and failing when the count of changed or added test files is lower than the count of changed source files.
     - Require every counted test file to reference at least one changed source file by module name, exported component name or path fragment, and make the failure output name each source file that no changed test references; exit zero when the range changes no explorer source file.
     - Write tools/explorer/tests/test-ratio-test.sh that builds a throwaway git repository in a temporary directory with commits covering a satisfied ratio, an unsatisfied ratio, a test that references nothing changed, a shell-and-documentation-only change and an empty range, asserting the script's exit code and the named files for each case.
