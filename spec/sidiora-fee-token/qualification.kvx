@@ -80,3 +80,17 @@ command = "timeout 2m go vet ./modules/layerxbridge/types ./modules/layerxbridge
 log_path = ".logs/vet.log"
 observed = "Touched-package go vet exceeded its bounded run without emitting diagnostics."
 assumption = "Lint qualification remains incomplete; no unchanged lint rerun is performed."
+
+[observation.2.3.1]
+task = "2.3"; file = "contracts/test/BatchCallAndSponsorTest.t.sol"; symbol = "testDigestsBindEveryQuoteFieldAndChain"
+revision = "92d9139d9bdc4cae205b19744f48715e6ef6f56d"
+observed = "Review comment 4107298019 identifies missing account-signature rejection coverage after a chain ID change; the test checks only quoteDigest after that change."
+assumption = "Task 1.1 owns this test outside task 2.3 touches; its owner must add the regression coverage."
+severity = "note"
+
+[observation.2.3.2]
+task = "2.3"; file = "spec/sidiora-fee-token/qualification.kvx"; symbol = "observation schema"
+revision = "92d9139d9bdc4cae205b19744f48715e6ef6f56d"
+observed = "Review comment 4107298026 identifies existing records that follow requirement 15.3 evidence fields but omit metadata required by this file's header."
+assumption = "The append-only rule and conflicting schema declarations require preserving both existing records and declarations until the feature owner reconciles them."
+severity = "suspect"

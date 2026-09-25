@@ -67,8 +67,11 @@ contract SidioraProxyGovernanceTest {
         proxy = address(new ERC1967Proxy(address(original), abi.encodeCall(original.initialize, (FOUNDATION))));
         runner = new SidioraProxyGovernance();
         timelock = runner.deploy(FOUNDATION, _parameters());
-        runner.handover(FOUNDATION, timelock, _parameters());
         data = abi.encodeCall(ISidioraProxyUpgrade.upgradeToAndCall, (address(replacement), bytes("")));
+        bytes32 preflight = _schedule(data);
+        vm.prank(GUARDIAN);
+        timelock.cancel(preflight);
+        runner.handover(FOUNDATION, timelock, _parameters());
     }
 
     function testScriptHandsOwnershipToGovernanceTimelock() public view {
@@ -82,13 +85,13 @@ contract SidioraProxyGovernanceTest {
     }
 
     function testScriptSchedulesAndUpgradeExecutesAtReadyTime() public {
-        bytes32 expected = timelock.operationId(proxy, 0, data, SALT, 0);
+        bytes32 expected = timelock.operationId(proxy, 0, data, SALT, 1);
         vm.expectEmit(true, true, false, true, address(timelock));
         emit OperationScheduled(expected, proxy, 0, sha256(data), uint64(block.timestamp + DELAY));
         (bytes32 id, uint256 nonce) =
             runner.scheduleUpgrade(timelock, _parameters(), address(replacement), "", SALT, DELAY);
-        require(id == expected && nonce == 0, "script operation mismatch");
-        require(timelock.operationNonce() == 1, "nonce absent");
+        require(id == expected && nonce == 1, "script operation mismatch");
+        require(timelock.operationNonce() == 2, "nonce absent");
         vm.warp(timelock.readyAt(id) - 1);
         vm.expectRevert(SidioraProxyTimelock.OperationNotReady.selector);
         _execute(data, SALT, nonce);
@@ -105,7 +108,7 @@ contract SidioraProxyGovernanceTest {
     function testGraceBoundaryIsInclusive() public {
         bytes32 id = _schedule(data);
         vm.warp(uint256(timelock.readyAt(id)) + GRACE);
-        _execute(data, SALT, 0);
+        _execute(data, SALT, 1);
         require(_implementation() == address(replacement), "last eligible execution refused");
     }
 
@@ -113,7 +116,7 @@ contract SidioraProxyGovernanceTest {
         bytes32 id = _schedule(data);
         vm.warp(uint256(timelock.readyAt(id)) + GRACE + 1);
         vm.expectRevert(SidioraProxyTimelock.OperationNotReady.selector);
-        _execute(data, SALT, 0);
+        _execute(data, SALT, 1);
         require(_implementation() == address(original) && !timelock.completed(id), "expired operation executed");
     }
 
@@ -128,7 +131,7 @@ contract SidioraProxyGovernanceTest {
         require(timelock.readyAt(id) == 0, "cancellation absent");
         vm.warp(ready);
         vm.expectRevert(SidioraProxyTimelock.OperationNotReady.selector);
-        _execute(data, SALT, 0);
+        _execute(data, SALT, 1);
     }
 
     function testGuardianCannotCancelReadyOperation() public {
@@ -137,7 +140,7 @@ contract SidioraProxyGovernanceTest {
         vm.expectRevert(SidioraProxyTimelock.OperationNotReady.selector);
         vm.prank(GUARDIAN);
         timelock.cancel(id);
-        _execute(data, SALT, 0);
+        _execute(data, SALT, 1);
     }
 
     function testGuardianCannotCancelUnknownOrAlreadyCancelledOperation() public {
@@ -171,7 +174,7 @@ contract SidioraProxyGovernanceTest {
         for (uint256 i; i < accounts.length; ++i) {
             vm.expectRevert(SidioraProxyTimelock.Unauthorized.selector);
             vm.prank(accounts[i]);
-            timelock.execute(proxy, 0, data, SALT, 0);
+            timelock.execute(proxy, 0, data, SALT, 1);
         }
     }
 
@@ -218,15 +221,15 @@ contract SidioraProxyGovernanceTest {
         require(timelock.readyAt(id) == block.timestamp + DELAY + FLOOR, "requested delay lost");
         vm.warp(block.timestamp + DELAY);
         vm.expectRevert(SidioraProxyTimelock.OperationNotReady.selector);
-        _execute(data, SALT, 0);
+        _execute(data, SALT, 1);
     }
 
     function testCompletedOperationCannotReplayOrBeCancelled() public {
         bytes32 id = _schedule(data);
         vm.warp(timelock.readyAt(id));
-        _execute(data, SALT, 0);
+        _execute(data, SALT, 1);
         vm.expectRevert(SidioraProxyTimelock.OperationNotReady.selector);
-        _execute(data, SALT, 0);
+        _execute(data, SALT, 1);
         vm.expectRevert(SidioraProxyTimelock.OperationNotReady.selector);
         vm.prank(GUARDIAN);
         timelock.cancel(id);
@@ -243,8 +246,8 @@ contract SidioraProxyGovernanceTest {
         );
         vm.warp(timelock.readyAt(second));
         vm.expectRevert(SidioraProxyTimelock.OperationNotReady.selector);
-        _execute(data, SALT, 0);
         _execute(data, SALT, 1);
+        _execute(data, SALT, 2);
     }
 
     function testOperationBindsChainTimelockTargetValueDataSaltAndNonce() public {
@@ -252,22 +255,22 @@ contract SidioraProxyGovernanceTest {
         vm.warp(timelock.readyAt(id));
         bytes memory changed = abi.encodeCall(ISidioraProxyUpgrade.upgradeToAndCall, (address(original), bytes("")));
         vm.expectRevert(SidioraProxyTimelock.OperationNotReady.selector);
-        _execute(changed, SALT, 0);
+        _execute(changed, SALT, 1);
         vm.expectRevert(SidioraProxyTimelock.OperationNotReady.selector);
-        _execute(data, bytes32(0), 0);
+        _execute(data, bytes32(0), 1);
         vm.expectRevert(SidioraProxyTimelock.OperationNotReady.selector);
-        _execute(data, SALT, 1);
-        vm.expectRevert(SidioraProxyTimelock.OperationNotReady.selector);
-        vm.prank(EXECUTOR);
-        timelock.execute(address(original), 0, data, SALT, 0);
+        _execute(data, SALT, 2);
         vm.expectRevert(SidioraProxyTimelock.OperationNotReady.selector);
         vm.prank(EXECUTOR);
-        timelock.execute(proxy, 1, data, SALT, 0);
+        timelock.execute(address(original), 0, data, SALT, 1);
+        vm.expectRevert(SidioraProxyTimelock.OperationNotReady.selector);
+        vm.prank(EXECUTOR);
+        timelock.execute(proxy, 1, data, SALT, 1);
         SidioraProxyTimelock other = runner.deploy(FOUNDATION, _parameters());
-        require(id != other.operationId(proxy, 0, data, SALT, 0), "timelock not bound");
+        require(id != other.operationId(proxy, 0, data, SALT, 1), "timelock not bound");
         vm.chainId(block.chainid + 1);
         vm.expectRevert(SidioraProxyTimelock.OperationNotReady.selector);
-        _execute(data, SALT, 0);
+        _execute(data, SALT, 1);
     }
 
     function testRevertedUpgradeDoesNotCompleteOrChangeImplementation() public {
@@ -278,7 +281,7 @@ contract SidioraProxyGovernanceTest {
         bytes32 id = _schedule(failing);
         vm.warp(timelock.readyAt(id));
         vm.expectPartialRevert(SidioraProxyTimelock.CallFailed.selector);
-        _execute(failing, SALT, 0);
+        _execute(failing, SALT, 1);
         require(!timelock.completed(id), "failed operation completed");
         require(_implementation() == address(original), "failed initialization changed implementation");
         require(GovernedProxyImplementation(proxy).owner() == address(timelock), "failed initialization changed owner");
@@ -319,6 +322,43 @@ contract SidioraProxyGovernanceTest {
         p = _parameters();
         p.guardian = address(0);
         _expectInvalidDeployment(p);
+    }
+
+    function testHandoverRequiresScheduleOnTheConfiguredTimelock() public {
+        SidioraProxyGovernance.Parameters memory p = _parameters();
+        p.proxy = address(new ERC1967Proxy(address(original), abi.encodeCall(original.initialize, (FOUNDATION))));
+        SidioraProxyTimelock unconfirmed = runner.deploy(FOUNDATION, p);
+        vm.expectRevert(SidioraProxyGovernance.GovernanceScheduleUnconfirmed.selector);
+        runner.handover(FOUNDATION, unconfirmed, p);
+        require(GovernedProxyImplementation(p.proxy).owner() == FOUNDATION, "unconfirmed handover changed owner");
+        vm.expectRevert(SidioraProxyTimelock.Unauthorized.selector);
+        vm.prank(OUTSIDER);
+        unconfirmed.schedule(p.proxy, 0, data, SALT, DELAY);
+        vm.expectRevert(SidioraProxyGovernance.GovernanceScheduleUnconfirmed.selector);
+        runner.handover(FOUNDATION, unconfirmed, p);
+        require(unconfirmed.operationNonce() == 0, "unauthorized schedule confirmed governance");
+        require(GovernedProxyImplementation(p.proxy).owner() == FOUNDATION, "failed preflight changed owner");
+        vm.prank(GOVERNANCE);
+        bytes32 id = unconfirmed.schedule(p.proxy, 0, data, SALT, DELAY);
+        runner.handover(FOUNDATION, unconfirmed, p);
+        require(GovernedProxyImplementation(p.proxy).owner() == address(unconfirmed), "confirmed handover absent");
+        vm.warp(unconfirmed.readyAt(id));
+        vm.prank(EXECUTOR);
+        unconfirmed.execute(p.proxy, 0, data, SALT, 0);
+        require(
+            address(uint160(uint256(vm.load(p.proxy, ERC1967Utils.IMPLEMENTATION_SLOT)))) == address(replacement),
+            "confirmed governance upgrade absent"
+        );
+    }
+
+    function testHandoverDoesNotTreatAuthorityCodeAsConfirmation() public {
+        SidioraProxyGovernance.Parameters memory p = _parameters();
+        p.proxy = address(new ERC1967Proxy(address(original), abi.encodeCall(original.initialize, (FOUNDATION))));
+        p.governanceAuthority = address(original);
+        SidioraProxyTimelock unconfirmed = runner.deploy(FOUNDATION, p);
+        vm.expectRevert(SidioraProxyGovernance.GovernanceScheduleUnconfirmed.selector);
+        runner.handover(FOUNDATION, unconfirmed, p);
+        require(GovernedProxyImplementation(p.proxy).owner() == FOUNDATION, "authority code permitted handover");
     }
 
     function testScriptRejectsMismatchedTimelockConfiguration() public {

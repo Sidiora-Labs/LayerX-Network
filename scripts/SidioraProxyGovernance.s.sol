@@ -21,6 +21,7 @@ contract SidioraProxyGovernance {
         SidioraGovernanceVm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
     error InvalidConfiguration();
+    error GovernanceScheduleUnconfirmed();
 
     struct Parameters {
         address proxy;
@@ -53,6 +54,7 @@ contract SidioraProxyGovernance {
         if (currentOwner == address(0) || currentOwner == address(timelock) || proxy.owner() != currentOwner) {
             revert InvalidConfiguration();
         }
+        if (timelock.operationNonce() == 0) revert GovernanceScheduleUnconfirmed();
         vm.startBroadcast(currentOwner);
         proxy.transferOwnership(address(timelock));
         vm.stopBroadcast();
