@@ -84,7 +84,7 @@
     - Add to .github/workflows/explorer-build.yml an explorer-lint job with one leg per language calling tools/explorer/lint-backend.sh, tools/explorer/lint-frontend.sh and tools/explorer/lint-services.sh, and an explorer-test-ratio job running tools/explorer/test-ratio.sh over the range from the merge base to the head commit on pull requests; give neither job a continue-on-error and no conditional skip, and leave the existing build jobs untouched.
     - Document in explorer/README.md the ratio rule, the file classifications, how to run the ratio script and the three lint scripts locally, and what a scoped upstream exemption must carry.
     - _Requirements: 2.4, 3.1, 3.2, 3.3, 3.4, 3.5_
-  - [ ] 1.13 Write the two bounded fleet gates
+  - [x] 1.13 Write the two bounded fleet gates
     - Write tools/explorer/gate-test.sh, the test gate the workflow contract names: run the backend Paxeer X suites through explorer/deploy/tools/mix-in-builder.sh with a fresh database sidecar, then the frontend type check and vitest suite from explorer/frontend, and return non-zero on the first failure with its command, exit code and log path.
     - Write tools/explorer/gate-lint.sh, the lint gate: run tools/explorer/lint-backend.sh, tools/explorer/lint-frontend.sh and tools/explorer/lint-services.sh in that order with the same reporting.
     - Bound both gates by EXPLORER_GATE_BUDGET_SECONDS, defaulting to 1500, applied per leg through the shell timeout utility; on expiry stop and report the leg, its command and its log path as a timeout rather than continuing to the next leg.

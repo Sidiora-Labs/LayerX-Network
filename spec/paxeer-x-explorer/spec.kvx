@@ -401,7 +401,11 @@ done_log = ".logs/verify.log"
 
 [task.1.13]
 title = "Write the two bounded fleet gates"
-status = "pending"
+status = "done"
+done_revision = "778fafaec17d6a97057cf45cee309dcd8c9525bd"
+done_command = "timeout 20m sh -c 'shellcheck tools/explorer/gate-test.sh tools/explorer/gate-lint.sh && tools/explorer/gate-lint.sh --check && tools/explorer/gate-test.sh --check'"
+done_exit_code = 0
+done_log = ".logs/verify.log"
 wave = 1
 requires = ["1.1","1.9","1.10","1.11"]
 do_1 = "Write tools/explorer/gate-test.sh, the test gate the workflow contract names: run the backend Paxeer X suites through explorer/deploy/tools/mix-in-builder.sh with a fresh database sidecar, then the frontend type check and vitest suite from explorer/frontend, and return non-zero on the first failure with its command, exit code and log path."
