@@ -7,9 +7,13 @@ import config from 'configs/app';
 export const BODY_TYPEFACE = config.UI.fonts.body?.name ?? 'Inter, InterFallback';
 export const HEADING_TYPEFACE = config.UI.fonts.heading?.name ?? 'Poppins';
 
+// The product fallback stack, so a deployment keeps the same metrics while the
+// configured typeface loads.
+export const FALLBACK_TYPEFACES = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
+
 export const fonts: ExcludeUndefined<ThemingConfig['tokens']>['fonts'] = {
-  heading: { value: `${ HEADING_TYPEFACE }, sans-serif` },
-  body: { value: `${ BODY_TYPEFACE }, sans-serif` },
+  heading: { value: `${ HEADING_TYPEFACE }, ${ FALLBACK_TYPEFACES }` },
+  body: { value: `${ BODY_TYPEFACE }, ${ FALLBACK_TYPEFACES }` },
 };
 
 export const textStyles: ThemingConfig['textStyles'] = {
@@ -18,7 +22,7 @@ export const textStyles: ThemingConfig['textStyles'] = {
       value: {
         fontSize: '32px',
         lineHeight: '40px',
-        fontWeight: '500',
+        fontWeight: '700',
         letterSpacing: '-0.5px',
         fontFamily: 'heading',
       },
@@ -27,7 +31,7 @@ export const textStyles: ThemingConfig['textStyles'] = {
       value: {
         fontSize: '24px',
         lineHeight: '32px',
-        fontWeight: '500',
+        fontWeight: '700',
         fontFamily: 'heading',
       },
     },
@@ -35,7 +39,7 @@ export const textStyles: ThemingConfig['textStyles'] = {
       value: {
         fontSize: '18px',
         lineHeight: '24px',
-        fontWeight: '500',
+        fontWeight: '600',
         fontFamily: 'heading',
       },
     },
@@ -43,7 +47,7 @@ export const textStyles: ThemingConfig['textStyles'] = {
       value: {
         fontSize: '16px',
         lineHeight: '24px',
-        fontWeight: '500',
+        fontWeight: '600',
         fontFamily: 'heading',
       },
     },

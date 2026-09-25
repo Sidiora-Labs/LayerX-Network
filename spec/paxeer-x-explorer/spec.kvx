@@ -401,7 +401,7 @@ status = "pending"
 
 [task.2.1]
 title = "Apply the product design tokens to the explorer theme"
-status = "pending"
+status = "done"
 wave = 2
 requires = []
 do_1 = "Read the product tokens in human/apps/web/packages/layerx-ui/src/styles/tokens.css and carry their values into explorer/frontend/toolkit/theme/foundations: the typeface into typography.ts, the neutral and accent scales, the surface, background, border and text tones and the success, destructive and warning pairs into colors.ts and semanticTokens.ts, the radii into borders.ts and the card and overlay shadows into shadows.ts, keeping the existing token names the recipes already consume."

@@ -68,7 +68,7 @@ export const recipe = defineRecipe({
         },
         _focus: {
           borderColor: 'input.border.focus',
-          boxShadow: 'size.md',
+          boxShadow: 'card',
           _hover: {
             borderColor: 'input.border.focus',
           },

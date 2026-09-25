@@ -4,6 +4,9 @@ import type { ExcludeUndefined } from 'types/utils';
 
 const shadows: ExcludeUndefined<ThemingConfig['tokens']>['shadows'] = {
   action_bar: { value: '0 4px 4px -4px rgb(0 0 0 / 10%), 0 2px 4px -4px rgb(0 0 0 / 6%)' },
+  // The product elevation pair: cards rest, overlays lift.
+  card: { value: '0 1px 2px rgb(0 0 0 / 0.04), 0 4px 16px rgb(0 0 0 / 0.05)' },
+  overlay: { value: '0 8px 40px rgb(0 0 0 / 0.14)' },
   size: {
     xs: { value: '0px 0px 0px 1px rgba(0, 0, 0, 0.05)' },
     sm: { value: '0px 1px 2px 0px rgba(0, 0, 0, 0.05)' },
