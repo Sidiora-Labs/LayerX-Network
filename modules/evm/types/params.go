@@ -3,7 +3,6 @@ package types
 import (
 	"errors"
 	fmt "fmt"
-	"strings"
 
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	paramtypes "github.com/sidiora-labs/paxeer-network/sdk/x/params/types"
@@ -14,6 +13,7 @@ const FeeTokenHoldingAccount = "fee_token_holding"
 
 var (
 	KeyFeeTokenDistribution                = []byte("KeyFeeTokenDistribution")
+	KeyMaxFeeTokenRateAge                  = []byte("KeyMaxFeeTokenRateAge")
 	KeyAllowedFeeDenoms                    = []byte("KeyAllowedFeeDenoms")
 	KeyMaxFeeTokenSpread                   = []byte("KeyMaxFeeTokenSpread")
 	KeyFeeTokenEnabled                     = []byte("KeyFeeTokenEnabled")
@@ -30,6 +30,13 @@ var (
 	KeyWhitelistedCwCodeHashesForDelegateCall = []byte("KeyWhitelistedCwCodeHashesForDelegateCall")
 	KeyRegisterPointerDisabled                = []byte("KeyRegisterPointerDisabled")
 )
+
+// InitialSidioraBaseUnitsPerPax is 3.114 SID per PAX at six SID decimals.
+// Governance may set this rate; it does not enable or populate the default list.
+const InitialSidioraBaseUnitsPerPax int64 = 3_114_000
+
+// DefaultMaxFeeTokenRateAge permits a governed rate for at most 1000 blocks.
+const DefaultMaxFeeTokenRateAge int64 = 1000
 
 var DefaultAllowedFeeDenoms = []AllowedFeeDenom(nil)
 var DefaultMaxFeeTokenSpread = sdk.NewDecWithPrec(5, 2)
@@ -63,6 +70,7 @@ func ParamKeyTable() paramtypes.KeyTable {
 func DefaultParams() Params {
 	return Params{
 		FeeTokenDistribution:                   DefaultFeeTokenDistribution,
+		MaxFeeTokenRateAge:                     DefaultMaxFeeTokenRateAge,
 		AllowedFeeDenoms:                       append([]AllowedFeeDenom(nil), DefaultAllowedFeeDenoms...),
 		MaxFeeTokenSpread:                      DefaultMaxFeeTokenSpread,
 		FeeTokenEnabled:                        DefaultFeeTokenEnabled,
@@ -83,6 +91,7 @@ func DefaultParams() Params {
 func (p *Params) ParamSetPairs() paramtypes.ParamSetPairs {
 	return paramtypes.ParamSetPairs{
 		paramtypes.NewParamSetPair(KeyFeeTokenDistribution, &p.FeeTokenDistribution, validateFeeTokenDistribution),
+		paramtypes.NewParamSetPair(KeyMaxFeeTokenRateAge, &p.MaxFeeTokenRateAge, validateMaxFeeTokenRateAge),
 		paramtypes.NewParamSetPair(KeyAllowedFeeDenoms, &p.AllowedFeeDenoms, validateAllowedFeeDenoms),
 		paramtypes.NewParamSetPair(KeyMaxFeeTokenSpread, &p.MaxFeeTokenSpread, validateMaxFeeTokenSpread),
 		paramtypes.NewParamSetPair(KeyFeeTokenEnabled, &p.FeeTokenEnabled, validateFeeTokenEnabled),
@@ -148,6 +157,9 @@ func (ppre606 *ParamsPreV606) ParamSetPairs() paramtypes.ParamSetPairs {
 
 func (p Params) Validate() error {
 	if err := validateFeeTokenDistribution(p.FeeTokenDistribution); err != nil {
+		return err
+	}
+	if err := validateMaxFeeTokenRateAge(p.MaxFeeTokenRateAge); err != nil {
 		return err
 	}
 	if err := validateAllowedFeeDenoms(p.AllowedFeeDenoms); err != nil {
@@ -340,8 +352,11 @@ func validateAllowedFeeDenoms(i interface{}) error {
 		if _, exists := seen[entry.Denom]; exists {
 			return fmt.Errorf("invalid allowed_fee_denoms duplicate denom %q", entry.Denom)
 		}
-		if strings.TrimSpace(entry.OraclePair) == "" {
-			return fmt.Errorf("invalid allowed_fee_denoms oracle_pair %q for denom %q: pair is required", entry.OraclePair, entry.Denom)
+		if entry.Rate.IsNil() || !entry.Rate.IsPositive() {
+			return fmt.Errorf("invalid allowed_fee_denoms rate %v for denom %q: must be set and positive", entry.Rate, entry.Denom)
+		}
+		if entry.RateUpdateHeight < 0 {
+			return fmt.Errorf("invalid allowed_fee_denoms rate_update_height %d for denom %q: must be nonnegative", entry.RateUpdateHeight, entry.Denom)
 		}
 		seen[entry.Denom] = struct{}{}
 	}
@@ -372,6 +387,17 @@ func validateFeeTokenEnabled(i interface{}) error {
 func validateFeeTokenDistribution(i interface{}) error {
 	if _, ok := i.(bool); !ok {
 		return fmt.Errorf("invalid fee_token_distribution type %T: %v", i, i)
+	}
+	return nil
+}
+
+func validateMaxFeeTokenRateAge(i interface{}) error {
+	age, ok := i.(int64)
+	if !ok {
+		return fmt.Errorf("invalid max_fee_token_rate_age type %T: %v", i, i)
+	}
+	if age <= 0 {
+		return fmt.Errorf("invalid max_fee_token_rate_age %d: must be positive", age)
 	}
 	return nil
 }

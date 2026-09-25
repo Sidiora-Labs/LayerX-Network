@@ -20,7 +20,7 @@ func TestAccountFeeDenomStoreRoundTrip(t *testing.T) {
 	require.Equal(t, k.GetBaseDenom(ctx), k.GetAccountFeeDenom(ctx, account))
 	params := types.DefaultParams()
 	params.FeeTokenEnabled = true
-	params.AllowedFeeDenoms = []types.AllowedFeeDenom{{Denom: "usid", OraclePair: "SID/PAX"}, {Denom: "uasset", OraclePair: "ASSET/PAX"}}
+	params.AllowedFeeDenoms = []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.NewDec(types.InitialSidioraBaseUnitsPerPax), RateUpdateHeight: ctx.BlockHeight()}, {Denom: "uasset", Rate: sdk.NewDec(1_000_000), RateUpdateHeight: ctx.BlockHeight()}}
 	k.SetParams(ctx, params)
 	require.NoError(t, k.SetAccountFeeDenom(ctx, account, "usid"))
 	require.Equal(t, []byte("usid"), ctx.KVStore(app.GetKey(types.StoreKey)).Get(types.AccountFeeDenomKey(account)))
