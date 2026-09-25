@@ -1,7 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
-
 import decodeJWT from 'lib/decodeJWT';
 import * as profileMock from 'mocks/user/profile';
+import { describe, expect, it, vi } from 'vitest';
 
 import { buildRewardsApiToken, REGISTERED_ADDRESS } from './rewards';
 
@@ -9,8 +8,8 @@ vi.mock('configs/app', () => {
   return {
     'default': {
       app: {
-        host: 'localhost',
-        protocol: 'http',
+        host: 'explorer.example.com',
+        protocol: 'https',
       },
     },
   };

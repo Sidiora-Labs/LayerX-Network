@@ -692,18 +692,18 @@ defmodule BlockScoutWeb.Account.API.V2.AuthenticateControllerTest do
 
   defp dynamic_claims do
     issued_at = System.system_time(:second)
+    env_id = Application.get_env(:explorer, Dynamic)[:env_id]
     wallet_address = "0x03c363f48c4FE0F2Ec6efbD49F7b114b8A61c14b"
 
     %{
       "alias" => "alias",
-      "aud" => "https://example.com",
       "email" => "test@example.com",
-      "environment_id" => "test_env",
+      "environment_id" => env_id,
       "exp" => issued_at + 300,
       "family_name" => "ln",
       "given_name" => "fn",
       "iat" => issued_at,
-      "iss" => "app.dynamicauth.com/test_env",
+      "iss" => "app.dynamicauth.com/#{env_id}",
       "lists" => [],
       "metadata" => %{},
       "missing_fields" => [],
