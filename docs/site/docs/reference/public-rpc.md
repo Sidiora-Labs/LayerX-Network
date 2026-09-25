@@ -68,5 +68,5 @@ take one URL can use `wss://api1.mainnet-beta.paxeer.network`.
 - Certificates are issued by Let's Encrypt and renew automatically.
 
 The unsupported subset of the EVM JSON-RPC surface is listed in
-[EVM JSON-RPC differences](../../../evm_jsonrpc_unsupported.md) and the
+[EVM JSON-RPC differences](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/docs/evm_jsonrpc_unsupported.md) and the
 unified interface is described in [Unified network](../overview/unified-network.md).
