@@ -26,6 +26,7 @@ export * from "./x402/draw.js";
 export * from "./x402/grant.js";
 export * from "./x402/receive.js";
 export * from "./exchange.js";
+export * from "./gas-station.js";
 export * from "./bridge.js";
 export * from "./launchpad.js";
 export * from "./perps.js";
