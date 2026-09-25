@@ -14,7 +14,7 @@ vi.hoisted(() => {
   };
 });
 
-import { useSearchRedirect } from './utils';
+import { useSearchRedirect, useSearchRequestGuard } from './utils';
 
 const PAX_ADDRESS = 'pax1zg69v7ys40x77y352eufp27daufrg4nc0aa6dg';
 const KERNEL_ACCOUNT = 'b5c3f1a0d29e4867b1f0a4c73d5e9182ac6b70d34f81e2905c7ab6134de8f072';
@@ -99,5 +99,75 @@ describe('useSearchRedirect', () => {
       .resolves.toEqual({ pathname: '/search-results', query: { q: 'vitalik.eth', redirect: 'false' } });
 
     expect(fetchMock.mock.calls).toHaveLength(0);
+  });
+});
+
+describe('useSearchRequestGuard', () => {
+  it('accepts the resolution of the current request while the search term is unchanged', () => {
+    const { result } = renderHook(() => useSearchRequestGuard());
+    const isCurrentRequest = result.current.start(PAX_ADDRESS);
+
+    expect(isCurrentRequest(PAX_ADDRESS)).toBe(true);
+  });
+
+  it('rejects the resolution of a request superseded by a later submission', () => {
+    const { result } = renderHook(() => useSearchRequestGuard());
+    const isFirstRequestCurrent = result.current.start(PAX_ADDRESS);
+    const isSecondRequestCurrent = result.current.start(LAYERX_DID);
+
+    expect(isFirstRequestCurrent(LAYERX_DID)).toBe(false);
+    expect(isSecondRequestCurrent(LAYERX_DID)).toBe(true);
+  });
+
+  it('rejects the resolution of a request discarded by an edit or a dismissal', () => {
+    const { result } = renderHook(() => useSearchRequestGuard());
+    const isCurrentRequest = result.current.start(PAX_ADDRESS);
+
+    result.current.discard();
+
+    expect(isCurrentRequest(PAX_ADDRESS)).toBe(false);
+  });
+
+  it('rejects the resolution of a request whose term no longer matches the search bar', () => {
+    const { result } = renderHook(() => useSearchRequestGuard());
+    const isCurrentRequest = result.current.start(PAX_ADDRESS);
+
+    expect(isCurrentRequest(LAYERX_DID)).toBe(false);
+  });
+
+  it('keeps the same guard across re-renders', () => {
+    const { result, rerender } = renderHook(() => useSearchRequestGuard());
+    const guard = result.current;
+
+    rerender();
+
+    expect(result.current).toBe(guard);
+  });
+
+  it('rejects a kernel identity resolution that lands after the search term changed', async() => {
+    let releaseSearch: (() => void) | undefined;
+    const searchPending = new Promise<void>((resolve) => {
+      releaseSearch = resolve;
+    });
+
+    fetchMock.mockResponse(async() => {
+      await searchPending;
+
+      return { body: JSON.stringify(boundAccount), ...responseInit };
+    });
+
+    const { result } = renderHook(() => ({
+      guard: useSearchRequestGuard(),
+      resolveSearchRoute: useSearchRedirect(),
+    }), { wrapper });
+
+    const isCurrentRequest = result.current.guard.start(PAX_ADDRESS);
+    const pendingRoute = result.current.resolveSearchRoute(PAX_ADDRESS, true);
+
+    result.current.guard.discard();
+    releaseSearch?.();
+
+    await expect(pendingRoute).resolves.toEqual(accountRoute);
+    expect(isCurrentRequest(PAX_ADDRESS)).toBe(false);
   });
 });

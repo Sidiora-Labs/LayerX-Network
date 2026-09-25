@@ -101,6 +101,27 @@ export function getSearchRedirectRoute(term: string, redirect: boolean, resolved
   return { pathname: '/search-results', query: { q: term, redirect: redirect ? 'true' : 'false' } };
 }
 
+export interface SearchRequestGuard {
+  discard: () => void;
+  start: (term: string) => (currentTerm: string) => boolean;
+}
+
+export function useSearchRequestGuard(): SearchRequestGuard {
+  const requestRef = React.useRef(0);
+
+  const discard = React.useCallback(() => {
+    requestRef.current++;
+  }, []);
+
+  const start = React.useCallback((term: string) => {
+    const requestId = ++requestRef.current;
+
+    return (currentTerm: string) => requestId === requestRef.current && currentTerm === term;
+  }, []);
+
+  return React.useMemo(() => ({ discard, start }), [ discard, start ]);
+}
+
 export function useSearchRedirect() {
   const apiFetch = useApiFetch();
 

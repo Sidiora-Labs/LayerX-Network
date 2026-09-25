@@ -27,7 +27,7 @@ import SearchBarInput from 'ui/snippets/searchBar/SearchBarInput';
 import SearchBarRecentKeywords from './SearchBarRecentKeywords';
 import SearchBarSuggest from './SearchBarSuggest/SearchBarSuggest';
 import useQuickSearchQuery from './useQuickSearchQuery';
-import { getSearchRedirectRoute, useSearchRedirect } from './utils';
+import { getSearchRedirectRoute, useSearchRedirect, useSearchRequestGuard } from './utils';
 
 const paxeerXFeature = config.features.paxeerXLists;
 
@@ -44,32 +44,34 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
   const { searchTerm, debouncedSearchTerm, handleSearchTermChange, query, zetaChainCCTXQuery, externalSearchItem } = useQuickSearchQuery();
   const recentSearchKeywords = getRecentSearchKeywords();
   const resolveSearchRoute = useSearchRedirect();
-  const pendingSearchRef = React.useRef(0);
+  const searchGuard = useSearchRequestGuard();
+  const searchTermRef = React.useRef(searchTerm);
 
-  const discardPendingSearch = React.useCallback(() => {
-    pendingSearchRef.current++;
-  }, []);
+  React.useEffect(() => {
+    searchTermRef.current = searchTerm;
+  }, [ searchTerm ]);
 
   const handleTermChange = React.useCallback((value: string) => {
-    discardPendingSearch();
+    searchGuard.discard();
+    searchTermRef.current = value;
     handleSearchTermChange(value);
-  }, [ discardPendingSearch, handleSearchTermChange ]);
+  }, [ searchGuard, handleSearchTermChange ]);
 
   const handleOpenChange = React.useCallback((details: { open: boolean }) => {
     if (!details.open) {
-      discardPendingSearch();
+      searchGuard.discard();
     }
     onOpenChange(details);
-  }, [ discardPendingSearch, onOpenChange ]);
+  }, [ searchGuard, onOpenChange ]);
 
   const navigateToResults = React.useCallback(async(redirect: boolean) => {
     if (searchTerm) {
-      const requestId = ++pendingSearchRef.current;
+      const isCurrentRequest = searchGuard.start(searchTerm);
       const resultRoute = paxeerXFeature.isEnabled ?
         await resolveSearchRoute(searchTerm, redirect) :
         getSearchRedirectRoute(searchTerm, redirect);
 
-      if (requestId !== pendingSearchRef.current) {
+      if (!isCurrentRequest(searchTermRef.current)) {
         return;
       }
 
@@ -84,7 +86,7 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
       onGoToSearchResults?.(searchTerm);
       onClose();
     }
-  }, [ searchTerm, router, onGoToSearchResults, onClose, resolveSearchRoute ]);
+  }, [ searchTerm, router, onGoToSearchResults, onClose, resolveSearchRoute, searchGuard ]);
 
   const handleSubmit = React.useCallback((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -102,7 +104,7 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
   }, [ onOpen ]);
 
   const handleItemClick = React.useCallback((event: React.MouseEvent<HTMLAnchorElement>) => {
-    discardPendingSearch();
+    searchGuard.discard();
     onClose();
     mixpanel.logEvent(mixpanel.EventTypes.SEARCH_QUERY, {
       'Search query': searchTerm,
@@ -110,7 +112,7 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
       'Result URL': event.currentTarget.href,
     });
     saveToRecentKeywords(searchTerm);
-  }, [ discardPendingSearch, router.pathname, searchTerm, onClose ]);
+  }, [ searchGuard, router.pathname, searchTerm, onClose ]);
 
   const handleClear = React.useCallback(() => {
     handleTermChange('');
