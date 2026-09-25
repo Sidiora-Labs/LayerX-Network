@@ -1,6 +1,8 @@
 package keeper
 
 import (
+	"errors"
+	"fmt"
 	"math/big"
 
 	"github.com/sidiora-labs/paxeer-network/modules/evm/config"
@@ -8,6 +10,12 @@ import (
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	"github.com/sidiora-labs/paxeer-network/utils"
 	"golang.org/x/mod/semver"
+)
+
+var (
+	ErrFeeTokenRateStale       = errors.New("fee-token rate is stale")
+	ErrFeeTokenRateUnavailable = errors.New("fee-token rate is unavailable")
+	ErrFeeTokenRateInvalid     = errors.New("fee-token rate is invalid")
 )
 
 const BaseDenom = "uhpx"
@@ -38,9 +46,10 @@ func (k *Keeper) GetParamsPreV606(ctx sdk.Context) (params types.ParamsPreV606) 
 
 func (k *Keeper) GetParamsIfExists(ctx sdk.Context) types.Params {
 	params := types.Params{
-		AllowedFeeDenoms:  append([]types.AllowedFeeDenom(nil), types.DefaultAllowedFeeDenoms...),
-		MaxFeeTokenSpread: types.DefaultMaxFeeTokenSpread,
-		FeeTokenEnabled:   types.DefaultFeeTokenEnabled,
+		MaxFeeTokenRateAge: types.DefaultMaxFeeTokenRateAge,
+		AllowedFeeDenoms:   append([]types.AllowedFeeDenom(nil), types.DefaultAllowedFeeDenoms...),
+		MaxFeeTokenSpread:  types.DefaultMaxFeeTokenSpread,
+		FeeTokenEnabled:    types.DefaultFeeTokenEnabled,
 	}
 	k.Paramstore.GetParamSetIfExists(ctx, &params)
 	return params
@@ -288,11 +297,43 @@ func (k *Keeper) GetFeeTokenEnabled(ctx sdk.Context) bool {
 	return enabled
 }
 
-func (k *Keeper) IsAllowedFeeDenom(ctx sdk.Context, denom string) (bool, string) {
+func (k *Keeper) IsAllowedFeeDenom(ctx sdk.Context, denom string) (bool, sdk.Dec) {
 	for _, entry := range k.GetAllowedFeeDenoms(ctx) {
 		if entry.Denom == denom {
-			return true, entry.OraclePair
+			return true, entry.Rate
 		}
 	}
-	return false, ""
+	return false, sdk.Dec{}
+}
+
+func (k *Keeper) GetMaxFeeTokenRateAge(ctx sdk.Context) int64 {
+	age := types.DefaultMaxFeeTokenRateAge
+	k.Paramstore.GetIfExists(ctx, types.KeyMaxFeeTokenRateAge, &age)
+	return age
+}
+
+// GetFeeTokenRate returns base units per Paxeer coin only within the governed age.
+// An unset allowed list has no rate: the reader returns ErrFeeTokenRateUnavailable.
+func (k *Keeper) GetFeeTokenRate(ctx sdk.Context, denom string) (sdk.Dec, error) {
+	for _, entry := range k.GetAllowedFeeDenoms(ctx) {
+		if entry.Denom != denom {
+			continue
+		}
+		if entry.Rate.IsNil() || !entry.Rate.IsPositive() {
+			return sdk.Dec{}, fmt.Errorf("%w: rate %v for denom %q", ErrFeeTokenRateInvalid, entry.Rate, denom)
+		}
+		height := ctx.BlockHeight()
+		if entry.RateUpdateHeight < 0 || entry.RateUpdateHeight > height {
+			return sdk.Dec{}, fmt.Errorf("%w: rate_update_height %d at block_height %d for denom %q", ErrFeeTokenRateInvalid, entry.RateUpdateHeight, height, denom)
+		}
+		maxAge := k.GetMaxFeeTokenRateAge(ctx)
+		if maxAge <= 0 {
+			return sdk.Dec{}, fmt.Errorf("%w: max_fee_token_rate_age %d", ErrFeeTokenRateInvalid, maxAge)
+		}
+		if height-entry.RateUpdateHeight > maxAge {
+			return sdk.Dec{}, fmt.Errorf("%w: rate_update_height %d at block_height %d exceeds max_fee_token_rate_age %d for denom %q", ErrFeeTokenRateStale, entry.RateUpdateHeight, height, maxAge, denom)
+		}
+		return entry.Rate, nil
+	}
+	return sdk.Dec{}, fmt.Errorf("%w: denom %q", ErrFeeTokenRateUnavailable, denom)
 }

@@ -31,8 +31,8 @@ func TestSidioraFeeCollectionBlock(t *testing.T) {
 			k := &testApp.EvmKeeper
 			params := types.DefaultParams()
 			params.AllowedFeeDenoms = []types.AllowedFeeDenom{
-				{Denom: "usid", OraclePair: "SID/PAX"},
-				{Denom: "uasset", OraclePair: "ASSET/PAX"},
+				{Denom: "usid", Rate: sdk.NewDec(types.InitialSidioraBaseUnitsPerPax), RateUpdateHeight: ctx.BlockHeight()},
+				{Denom: "uasset", Rate: sdk.NewDec(1_000_000), RateUpdateHeight: ctx.BlockHeight()},
 			}
 			params.FeeTokenEnabled = true
 			params.FeeTokenDistribution = distribute
@@ -92,7 +92,7 @@ func TestSidioraFeeCollectionParams(t *testing.T) {
 		params := types.DefaultParams()
 		params.FeeTokenDistribution = distribute
 		params.FeeTokenEnabled = true
-		params.AllowedFeeDenoms = []types.AllowedFeeDenom{{Denom: "usid", OraclePair: "SID/PAX"}}
+		params.AllowedFeeDenoms = []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.NewDec(types.InitialSidioraBaseUnitsPerPax), RateUpdateHeight: ctx.BlockHeight()}}
 		require.NoError(t, params.Validate())
 		k.SetParams(ctx, params)
 		require.Equal(t, params, k.GetParams(ctx))

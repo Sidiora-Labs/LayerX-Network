@@ -435,12 +435,12 @@ touches = ["precompiles/feetoken/FeeToken.sol","precompiles/feetoken/abi.json","
 reqs = ["9.1","9.2","9.3","9.4","9.5"]
 
 [task.2.6]
-title = "Debit and refund gas in the account's fee denom at an oracle price"
+title = "Debit and refund gas in the account's fee denom at a governed rate"
 status = "pending"
 wave = 2
-requires = ["2.4","2.5"]
-do_1 = "In modules/evm/ante/fee.go, inside EVMFeeCheckDecorator.AnteHandle and after the existing fee cap, minimum fee, tip cap and blob fee cap checks have run unchanged, read the sender's fee denom through the x/evm keeper; when the fee-token path is on and that denom is an allowed fee denom, convert the transaction's maximum fee from Paxeer terms into that denom at the x/oracle rate for its configured pair before geth's BuyGas runs, and debit that denom."
-do_2 = "Refuse the transaction when the oracle reports no rate for the pair, when the rate lies outside the governed maximum spread, or when the conversion overflows; return the error the refusal names and add no fallback to the network coin, to a zero charge or to an unbounded stale rate."
+requires = ["2.4","2.5","2.12"]
+do_1 = "In modules/evm/ante/fee.go, inside EVMFeeCheckDecorator.AnteHandle and after the existing fee cap, minimum fee, tip cap and blob fee cap checks have run unchanged, read the sender's fee denom through the x/evm keeper; when the fee-token path is on and that denom is an allowed fee denom, convert the transaction's maximum fee from Paxeer terms into that denom through GetFeeTokenRate before geth's BuyGas runs, and debit that denom."
+do_2 = "Refuse the transaction when GetFeeTokenRate reports a missing, invalid, future or stale rate, when the rate lies outside the governed maximum spread, or when the conversion overflows; return the named refusal error and add no fallback to the network coin, to a zero charge or to an unbounded stale rate."
 do_3 = "Do the conversion in integer arithmetic over sdk.Dec throughout, six decimals on the Sidiora side and eighteen on the Paxeer side, rounding in the network's favour at the charge; record the rate the charge used so the refund can use the same one."
 do_4 = "Refund unused gas in the denom that was debited, at the rate the debit recorded, rounding in the payer's favour, and leave the ante surplus accounting and the deferred info that carries it exactly as they are; compute the priority from the effective gas price in Paxeer terms through CalculatePriority so a Sidiora payer and a Paxeer payer at the same real price sort identically."
 do_5 = "Leave the path byte for byte as it is today when the fee-token switch is off, when the sender has no preference, or when the sender's preference is the network coin."
@@ -454,8 +454,8 @@ reqs = ["10.1","10.2","10.3","10.4","10.5","10.6"]
 title = "Accept the same fee denoms on the Cosmos path"
 status = "pending"
 wave = 2
-requires = ["2.4"]
-do_1 = "Add a fee-denom conversion to the Cosmos fee path so a fee offered in a denom the x/evm fee-token parameters allow is converted to Paxeer terms through the same oracle reading and the same spread bound the EVM path uses, and a denom the parameters do not allow is refused."
+requires = ["2.4","2.12"]
+do_1 = "Add a fee-denom conversion to the Cosmos fee path so a fee offered in a denom the x/evm fee-token parameters allow is converted to Paxeer terms through GetFeeTokenRate and the same spread bound the EVM path uses, and a denom the parameters do not allow is refused; propagate the named refusal error for a missing, invalid, future or stale rate without falling back to the network coin, a zero charge or an unbounded stale rate."
 do_2 = "Make the minimum-fee check run against the converted Paxeer-terms amount, so a Sidiora fee and a Paxeer fee of the same real value are accepted or refused together, and leave the priority assignment computed from that same converted amount."
 do_3 = "Keep node/ante.go's decorator ordering exactly as it is - the gasless decorator wrapping the deduct-fee decorator, the oracle spamming and vote-alone decorators, and the priority decorator after fee deduction - and change no decorator's construction beyond passing what the conversion needs."
 do_4 = "Leave the path behaving exactly as it behaves now when the fee-token switch is off."
@@ -530,6 +530,25 @@ symbols = ["docs-site"]
 touches = ["docs/site/docs/protocol/sidiora.md","docs/site/mkdocs.yml"]
 reqs = ["14.1","14.2","14.3","14.4","14.5"]
 
+[task.2.12]
+title = "Replace the oracle pair with a governed fee-token rate"
+status = "done"
+revision = "dc466e5334b978a8d89330e4c23b80b22c835024"
+command = "timeout 20m sh -c 'go test -count=1 ./modules/evm/types/... && go test -count=1 -run FeeTokenParams ./modules/evm/keeper/...'"
+exit_code = 0
+log_path = "/root/lx-lanes/sid-t2-12/.logs/verify.log"
+wave = 2
+requires = ["2.4"]
+do_1 = "In api/evm/params.proto replace AllowedFeeDenom.oracle_pair with a Dec rate in Sidiora base units per Paxeer coin and its update height, add Params.max_fee_token_rate_age at an unused field number, and update modules/evm/types/params.pb.go through the repository tooling or the authorized manual update when the tooling cannot run."
+do_2 = "In modules/evm/types/params.go register KeyMaxFeeTokenRateAge with its default and validator, validate positive rates and nonnegative update heights beside the existing denom and spread refusals, and leave every ParamsPreV* set untouched."
+do_3 = "Keep the fee-token path disabled and the allowed list empty by default, and document InitialSidioraBaseUnitsPerPax as the six-decimal rate a governance proposal would set."
+do_4 = "In modules/evm/keeper/params.go return governed rates from IsAllowedFeeDenom, expose GetMaxFeeTokenRateAge with its unset default, and add GetFeeTokenRate refusing missing, invalid, future or stale rates with named errors and no fallback."
+do_5 = "Extend modules/evm/types/params_test.go with validator refusals and acceptances, defaults, the initial-rate scale, parameter-store and protobuf round trips, and extend modules/evm/keeper/params_test.go under the FeeTokenParams prefix with fresh, boundary, stale and unset reads through a real parameter store."
+verify_cmd = "timeout 20m sh -c 'go test -count=1 ./modules/evm/types/... && go test -count=1 -run FeeTokenParams ./modules/evm/keeper/...'"
+symbols = ["KeyMaxFeeTokenRateAge","DefaultMaxFeeTokenRateAge","InitialSidioraBaseUnitsPerPax","validateMaxFeeTokenRateAge","GetMaxFeeTokenRateAge","GetFeeTokenRate","ErrFeeTokenRateStale","ErrFeeTokenRateUnavailable","ErrFeeTokenRateInvalid"]
+touches = ["api/evm/params.proto","modules/evm/types/params.go","modules/evm/types/params.pb.go","modules/evm/types/params_test.go","modules/evm/keeper/params.go","modules/evm/keeper/params_test.go","precompiles/feetoken/feetoken_test.go","modules/evm/keeper/feetoken_test.go","modules/evm/keeper/feecollect_test.go"]
+reqs = ["8.1","8.2","8.3","8.4","8.5"]
+
 [task.3]
 section = "Wave 3 - One Aggregate Run, Recorded"
 title = "Qualify the merged waves once and write down what ran"
@@ -539,7 +558,7 @@ status = "pending"
 title = "Run the aggregate suites once on the merged revision and record the evidence"
 status = "pending"
 wave = 3
-requires = ["1.1","1.2","1.3","1.4","1.5","1.6","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11"]
+requires = ["1.1","1.2","1.3","1.4","1.5","1.6","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12"]
 do_1 = "On the revision that merges waves 1 and 2, run the three legs of the gate once, in order - the Go packages under modules/evm, modules/layerxbridge, precompiles and node/antedecorators, then the gas-station crate, then the Paxeer Foundry project - writing each leg's output to its own log under build/sidiora-gates/."
 do_2 = "Append one gate record per leg to spec/sidiora-fee-token/qualification.kvx carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code and the log path, written only from a command that actually ran."
 do_3 = "Append one observation per failure the run exposes that belongs to no task in this feature: revision, command, exit code, log path, one sentence of what was observed and one sentence of what is assumed; do not investigate it further and do not rerun it."

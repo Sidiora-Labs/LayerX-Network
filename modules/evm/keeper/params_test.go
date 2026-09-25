@@ -125,15 +125,17 @@ func TestFeeTokenParamsUnset(t *testing.T) {
 	k, ctx := feeTokenParamsKeeper(t)
 	require.Equal(t, types.DefaultAllowedFeeDenoms, k.GetAllowedFeeDenoms(ctx))
 	require.Equal(t, types.DefaultMaxFeeTokenSpread, k.GetMaxFeeTokenSpread(ctx))
+	require.Equal(t, types.DefaultMaxFeeTokenRateAge, k.GetMaxFeeTokenRateAge(ctx))
 	require.Equal(t, types.DefaultFeeTokenEnabled, k.GetFeeTokenEnabled(ctx))
 	params := k.GetParams(ctx)
 	require.Equal(t, types.DefaultAllowedFeeDenoms, params.AllowedFeeDenoms)
 	require.Equal(t, types.DefaultMaxFeeTokenSpread, params.MaxFeeTokenSpread)
 	require.Equal(t, types.DefaultFeeTokenEnabled, params.FeeTokenEnabled)
-	allowed, pair := k.IsAllowedFeeDenom(ctx, "usid")
+	require.Equal(t, types.DefaultMaxFeeTokenRateAge, params.MaxFeeTokenRateAge)
+	allowed, rate := k.IsAllowedFeeDenom(ctx, "usid")
 	require.False(t, allowed)
-	require.Empty(t, pair)
-	for _, key := range [][]byte{types.KeyAllowedFeeDenoms, types.KeyMaxFeeTokenSpread, types.KeyFeeTokenEnabled} {
+	require.True(t, rate.IsNil())
+	for _, key := range [][]byte{types.KeyAllowedFeeDenoms, types.KeyMaxFeeTokenSpread, types.KeyFeeTokenEnabled, types.KeyMaxFeeTokenRateAge} {
 		require.False(t, k.Paramstore.Has(ctx, key))
 	}
 }
@@ -141,32 +143,34 @@ func TestFeeTokenParamsUnset(t *testing.T) {
 func TestFeeTokenParamsReadersAndAllowedDenom(t *testing.T) {
 	k, ctx := feeTokenParamsKeeper(t)
 	params := types.DefaultParams()
-	params.AllowedFeeDenoms = []types.AllowedFeeDenom{{Denom: "usid", OraclePair: "SID/PAX"}, {Denom: "uasset", OraclePair: "ASSET/PAX"}}
+	params.AllowedFeeDenoms = []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.NewDec(types.InitialSidioraBaseUnitsPerPax), RateUpdateHeight: 7}, {Denom: "uasset", Rate: sdk.NewDec(2), RateUpdateHeight: 7}}
 	params.MaxFeeTokenSpread = sdk.ZeroDec()
 	params.FeeTokenEnabled = true
+	params.MaxFeeTokenRateAge = 42
 	k.SetParams(ctx, params)
 	require.Equal(t, params, k.GetParams(ctx))
 	require.Equal(t, params.AllowedFeeDenoms, k.GetAllowedFeeDenoms(ctx))
 	require.Equal(t, sdk.ZeroDec(), k.GetMaxFeeTokenSpread(ctx))
 	require.True(t, k.GetFeeTokenEnabled(ctx))
+	require.Equal(t, int64(42), k.GetMaxFeeTokenRateAge(ctx))
 	for _, entry := range params.AllowedFeeDenoms {
-		allowed, pair := k.IsAllowedFeeDenom(ctx, entry.Denom)
+		allowed, rate := k.IsAllowedFeeDenom(ctx, entry.Denom)
 		require.True(t, allowed)
-		require.Equal(t, entry.OraclePair, pair)
+		require.Equal(t, entry.Rate, rate)
 	}
 	for _, denom := range []string{"", k.GetBaseDenom(ctx), "unknown"} {
-		allowed, pair := k.IsAllowedFeeDenom(ctx, denom)
+		allowed, rate := k.IsAllowedFeeDenom(ctx, denom)
 		require.False(t, allowed)
-		require.Empty(t, pair)
+		require.True(t, rate.IsNil())
 	}
 	denoms := k.GetAllowedFeeDenoms(ctx)
-	denoms[0].OraclePair = "CHANGED/PAX"
+	denoms[0].Rate = sdk.NewDec(9)
 	require.Equal(t, params.AllowedFeeDenoms, k.GetAllowedFeeDenoms(ctx))
 	k.Paramstore.Set(ctx, types.KeyFeeTokenEnabled, false)
 	require.False(t, k.GetFeeTokenEnabled(ctx))
-	allowed, pair := k.IsAllowedFeeDenom(ctx, "usid")
+	allowed, rate := k.IsAllowedFeeDenom(ctx, "usid")
 	require.True(t, allowed)
-	require.Equal(t, "SID/PAX", pair)
+	require.Equal(t, sdk.NewDec(types.InitialSidioraBaseUnitsPerPax), rate)
 }
 
 func feeTokenParamsKeeper(t *testing.T) (*evmkeeper.Keeper, sdk.Context) {
@@ -181,4 +185,89 @@ func feeTokenParamsKeeper(t *testing.T) (*evmkeeper.Keeper, sdk.Context) {
 	ctx := sdk.NewContext(ms, tmproto.Header{}, false)
 	ss := paramtypes.NewSubspace(codec.NewProtoCodec(codectypes.NewInterfaceRegistry()), codec.NewLegacyAmino(), key, tkey, types.ModuleName).WithKeyTable(types.ParamKeyTable())
 	return &evmkeeper.Keeper{Paramstore: ss}, ctx
+}
+
+func TestFeeTokenParamsRateFreshness(t *testing.T) {
+	k, ctx := feeTokenParamsKeeper(t)
+	params := types.DefaultParams()
+	params.AllowedFeeDenoms = []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.NewDec(types.InitialSidioraBaseUnitsPerPax), RateUpdateHeight: 100}}
+	params.MaxFeeTokenRateAge = 10
+	k.SetParams(ctx, params)
+	for _, tc := range []struct {
+		name     string
+		height   int64
+		expected error
+	}{
+		{"fresh", 100, nil},
+		{"within bound", 109, nil},
+		{"exact bound", 110, nil},
+		{"beyond bound", 111, evmkeeper.ErrFeeTokenRateStale},
+		{"maximum height", 1<<63 - 1, evmkeeper.ErrFeeTokenRateStale},
+		{"future update", 99, evmkeeper.ErrFeeTokenRateInvalid},
+		{"negative current height", -1, evmkeeper.ErrFeeTokenRateInvalid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rate, err := k.GetFeeTokenRate(ctx.WithBlockHeight(tc.height), "usid")
+			if tc.expected == nil {
+				require.NoError(t, err)
+				require.Equal(t, params.AllowedFeeDenoms[0].Rate, rate)
+			} else {
+				require.ErrorIs(t, err, tc.expected)
+				require.True(t, rate.IsNil())
+			}
+		})
+	}
+	for _, denom := range []string{"", "unknown", k.GetBaseDenom(ctx)} {
+		rate, err := k.GetFeeTokenRate(ctx.WithBlockHeight(100), denom)
+		require.ErrorIs(t, err, evmkeeper.ErrFeeTokenRateUnavailable)
+		require.True(t, rate.IsNil())
+	}
+	params.AllowedFeeDenoms[0].RateUpdateHeight = 1<<63 - 1
+	k.SetParams(ctx, params)
+	rate, err := k.GetFeeTokenRate(ctx.WithBlockHeight(1<<63-1), "usid")
+	require.NoError(t, err)
+	require.Equal(t, params.AllowedFeeDenoms[0].Rate, rate)
+}
+
+func TestFeeTokenParamsRateUnset(t *testing.T) {
+	k, ctx := feeTokenParamsKeeper(t)
+	rate, err := k.GetFeeTokenRate(ctx, "usid")
+	require.ErrorIs(t, err, evmkeeper.ErrFeeTokenRateUnavailable)
+	require.True(t, rate.IsNil())
+	entry := types.AllowedFeeDenom{Denom: "usid", Rate: sdk.NewDec(types.InitialSidioraBaseUnitsPerPax)}
+	k.Paramstore.Set(ctx, types.KeyAllowedFeeDenoms, []types.AllowedFeeDenom{entry})
+	require.False(t, k.Paramstore.Has(ctx, types.KeyMaxFeeTokenRateAge))
+	rate, err = k.GetFeeTokenRate(ctx.WithBlockHeight(types.DefaultMaxFeeTokenRateAge), "usid")
+	require.NoError(t, err)
+	require.Equal(t, entry.Rate, rate)
+	rate, err = k.GetFeeTokenRate(ctx.WithBlockHeight(types.DefaultMaxFeeTokenRateAge+1), "usid")
+	require.ErrorIs(t, err, evmkeeper.ErrFeeTokenRateStale)
+	require.True(t, rate.IsNil())
+	require.False(t, k.Paramstore.Has(ctx, types.KeyMaxFeeTokenRateAge))
+}
+
+func TestFeeTokenParamsRateInvalidStoredValues(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		rate   sdk.Dec
+		height int64
+		age    int64
+		field  string
+	}{
+		{"zero rate", sdk.ZeroDec(), 0, 10, "rate 0.000000000000000000"},
+		{"negative rate", sdk.NewDec(-1), 0, 10, "rate -1.000000000000000000"},
+		{"negative update height", sdk.OneDec(), -1, 10, "rate_update_height -1"},
+		{"zero age", sdk.OneDec(), 0, 0, "max_fee_token_rate_age 0"},
+		{"negative age", sdk.OneDec(), 0, -1, "max_fee_token_rate_age -1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k, ctx := feeTokenParamsKeeper(t)
+			k.Paramstore.Set(ctx, types.KeyAllowedFeeDenoms, []types.AllowedFeeDenom{{Denom: "usid", Rate: tc.rate, RateUpdateHeight: tc.height}})
+			k.Paramstore.Set(ctx, types.KeyMaxFeeTokenRateAge, tc.age)
+			rate, err := k.GetFeeTokenRate(ctx, "usid")
+			require.ErrorIs(t, err, evmkeeper.ErrFeeTokenRateInvalid)
+			require.ErrorContains(t, err, tc.field)
+			require.True(t, rate.IsNil())
+		})
+	}
 }

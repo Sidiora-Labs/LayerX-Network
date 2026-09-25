@@ -33,7 +33,7 @@ func newHarness(t *testing.T) *harness {
 	ctx, _ := app.NewContext(false, tmtypes.Header{}).WithBlockHeight(11).CacheContext()
 	params := types.DefaultParams()
 	params.FeeTokenEnabled = true
-	params.AllowedFeeDenoms = []types.AllowedFeeDenom{{Denom: "usid", OraclePair: "SID/PAX"}, {Denom: "uasset", OraclePair: "ASSET/PAX"}}
+	params.AllowedFeeDenoms = []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.NewDec(types.InitialSidioraBaseUnitsPerPax), RateUpdateHeight: ctx.BlockHeight()}, {Denom: "uasset", Rate: sdk.NewDec(1_000_000), RateUpdateHeight: ctx.BlockHeight()}}
 	app.EvmKeeper.SetParams(ctx, params)
 	p, err := feetoken.NewPrecompile(app.GetPrecompileKeepers())
 	require.NoError(t, err)

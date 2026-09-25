@@ -92,6 +92,10 @@ message Params {
     (gogoproto.moretags) = "yaml:\"fee_token_distribution\"",
     (gogoproto.jsontag) = "fee_token_distribution"
   ];
+  int64 max_fee_token_rate_age = 20 [
+    (gogoproto.moretags) = "yaml:\"max_fee_token_rate_age\"",
+    (gogoproto.jsontag) = "max_fee_token_rate_age"
+  ];
 }
 
 message ParamsPreV580 {
@@ -303,5 +307,17 @@ message ParamsPreV606 {
 
 message AllowedFeeDenom {
   string denom = 1 [(gogoproto.moretags) = "yaml:\"denom\"", (gogoproto.jsontag) = "denom"];
-  string oracle_pair = 2 [(gogoproto.moretags) = "yaml:\"oracle_pair\"", (gogoproto.jsontag) = "oracle_pair"];
+  reserved 2;
+  reserved "oracle_pair";
+  // Fee-token base units per whole Paxeer coin; Sidiora uses six decimals.
+  string rate = 3 [
+    (gogoproto.moretags) = "yaml:\"rate\"",
+    (gogoproto.customtype) = "github.com/sidiora-labs/paxeer-network/sdk/types.Dec",
+    (gogoproto.nullable) = false,
+    (gogoproto.jsontag) = "rate"
+  ];
+  int64 rate_update_height = 4 [
+    (gogoproto.moretags) = "yaml:\"rate_update_height\"",
+    (gogoproto.jsontag) = "rate_update_height"
+  ];
 }

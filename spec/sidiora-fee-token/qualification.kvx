@@ -322,3 +322,17 @@ task = "1.7"; file = "spec/sidiora-fee-token/spec.kvx"; symbol = "task.1.7.log_p
 severity = "blocker"
 observed = "The review requests a relative evidence path, but the explicit follow-up instructions require the exact absolute log_path, conflicting with the naming rule."
 assumption = "Preserve the explicitly required evidence path and the unchanged existing pull request body; an authorized publication-policy resolution is required."
+
+[observation.2.12.1]
+task = "2.12"
+file = "spec/sidiora-fee-token/spec.kvx"
+observed = "Requirements 8.1 and 8.3 name an oracle pair, but the oracle precompile is retired and the owner requires governed fee-token rates with a block-age bound."
+assumption = "The governed rate replaces the oracle pair for this task; later fee-path work must adopt this surface while the requirement blocks remain unchanged."
+severity = "note"
+
+[observation.2.12.2]
+revision = "pending"
+command = "GOFLAGS=-p=2 timeout 10m go vet ./modules/evm/types/... ./modules/evm/keeper/..."; exit_code = 1
+log_path = ".logs/vet.log"
+observed = "Vet stopped before source analysis because the shared Go build cache is read-only."
+assumption = "Verification uses a writable task-local cache; the vet result remains unqualified and is not rerun unchanged."
