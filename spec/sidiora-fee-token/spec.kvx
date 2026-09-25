@@ -264,7 +264,7 @@ reqs = ["2.4","2.5","2.6"]
 [task.1.4]
 title = "Give the SDK the quote and the authorisation"
 status = "done"
-revision = "pending"
+revision = "a95765b66fc6fdfd2043244042eb678d3842946c"
 command = "timeout 20m sh -c 'npm --prefix agent/sdk/typescript run build && node agent/sdk/typescript/dist/test/gas-station.test.js'"
 exit_code = 0
 log_path = "/root/lx-lanes/sid-t1-4/.logs/verify.log"
