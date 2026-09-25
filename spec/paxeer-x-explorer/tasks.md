@@ -103,7 +103,7 @@
     - Replace the marks under explorer/frontend/public/static/paxeer-x with the product marks in their light and dark variants, keeping the existing file names so the presets keep resolving.
     - Add explorer/frontend/toolkit/theme/foundations/tokens.spec.ts asserting the exported values for the primary button background and its hover, the accent and its strong and soft variants, the page background, the white and sunken surfaces, the two border tones, the three text tones, the success, destructive and warning pairs, the five radii and the two shadows; add no dependency and no second styling system.
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6_
-  - [ ] 2.2 Resolve kernel identities through the search path
+  - [x] 2.2 Resolve kernel identities through the search path
     - In explorer/frontend/ui/snippets/searchBar/utils.ts keep parsePaxeerXIdentifier recognising and rejecting exactly what it recognises and rejects now, and change getSearchRedirectRoute so a recognised kernel identity no longer returns the unified account route directly.
     - Add a resolver beside it that queries the general search resource with the identity as its term and returns the address hash of the first address result, or nothing when the search returns no address; the backend resolves pax addresses, decentralised identifiers, kernel account ids and bare kernel keys through the recorded account bindings on that path.
     - In explorer/frontend/ui/snippets/searchBar/SearchBarDesktop.tsx and SearchBarMobile.tsx await that resolution before navigating: on a resolved address navigate to the unified account route for that address, on no result fall through to the ordinary search results route, and keep the existing behaviour for every term the parser does not recognise.
@@ -118,7 +118,7 @@
     - Register the route in the metadata title and description templates, the page type map and the open-graph type map beside the existing Paxeer X entries, and regenerate explorer/frontend/nextjs/nextjs-routes.d.ts with the nextjs-routes generator rather than editing it.
     - Add explorer/frontend/ui/paxeerX/receipts/PaxeerXReceiptDetails.spec.tsx rendering the component from a fixture identical to the backend payload and asserting every field and both links.
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5_
-  - [ ] 2.4 Declare OpenAPI operations and schemas for the six Paxeer X paths
+  - [x] 2.4 Declare OpenAPI operations and schemas for the six Paxeer X paths
     - Add schema modules under explorer/backend/apps/block_scout_web/lib/block_scout_web/schemas/api/v2/paxeer_x/ for the unified account document, the capability probe, the transaction status, the anchors page, the receipts page and the single receipt, built from the general schema helpers the fork already uses for hashes, addresses and nullable strings, and describing exactly what the four Paxeer X views render including nullable fields, the status rung enumeration and the pagination parameters.
     - In each of the five Paxeer X controllers add the controller specification module and an operation declaration per action with its summary, its path and query parameters, its 200 response referencing the schema module and its error responses from the shared error-response schemas.
     - Confirm the operations reach the generated specification through the API router without further registration, and add the Paxeer X tag to the specification's tag list where the other chain-specific groups declare theirs.

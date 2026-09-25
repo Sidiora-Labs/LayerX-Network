@@ -1,6 +1,11 @@
 import { bech32 } from '@scure/base';
+import React from 'react';
+
+import type { SearchResult, SearchResultAddressOrContract, SearchResultItem } from 'types/api/search';
 
 import type { Route } from 'nextjs-routes';
+
+import useApiFetch from 'lib/api/useApiFetch';
 
 export const PAX_BECH32_PREFIX = 'pax';
 export const PAX_BECH32_SEPARATOR = '1';
@@ -82,12 +87,58 @@ export function parsePaxeerXIdentifier(term: string): PaxeerXIdentifier | undefi
   return undefined;
 }
 
-export function getSearchRedirectRoute(term: string): Route | undefined {
-  const identifier = parsePaxeerXIdentifier(term);
+export function findSearchResultAddressHash(items: Array<SearchResultItem>): string | undefined {
+  const addressItem = items.find((item): item is SearchResultAddressOrContract => item.type === 'address' || item.type === 'contract');
 
-  if (!identifier) {
-    return undefined;
+  return addressItem?.address_hash;
+}
+
+export function getSearchRedirectRoute(term: string, redirect: boolean, resolvedAddressHash?: string): Route {
+  if (resolvedAddressHash && parsePaxeerXIdentifier(term)) {
+    return { pathname: '/paxeer-x/account/[hash]', query: { hash: resolvedAddressHash } };
   }
 
-  return { pathname: '/paxeer-x/account/[hash]', query: { hash: identifier.hash } };
+  return { pathname: '/search-results', query: { q: term, redirect: redirect ? 'true' : 'false' } };
+}
+
+export interface SearchRequestGuard {
+  discard: () => void;
+  start: (term: string) => (currentTerm: string) => boolean;
+}
+
+export function useSearchRequestGuard(): SearchRequestGuard {
+  const requestRef = React.useRef(0);
+
+  const discard = React.useCallback(() => {
+    requestRef.current++;
+  }, []);
+
+  const start = React.useCallback((term: string) => {
+    const requestId = ++requestRef.current;
+
+    return (currentTerm: string) => requestId === requestRef.current && currentTerm === term;
+  }, []);
+
+  return React.useMemo(() => ({ discard, start }), [ discard, start ]);
+}
+
+export function useSearchRedirect() {
+  const apiFetch = useApiFetch();
+
+  return React.useCallback(async(term: string, redirect: boolean): Promise<Route> => {
+    const identifier = parsePaxeerXIdentifier(term);
+
+    if (!identifier) {
+      return getSearchRedirectRoute(term, redirect);
+    }
+
+    const result = await apiFetch<'general:search', SearchResult>('general:search', {
+      queryParams: { q: identifier.hash },
+      logError: true,
+    }).catch(() => undefined);
+
+    const addressHash = result && 'items' in result ? findSearchResultAddressHash(result.items) : undefined;
+
+    return getSearchRedirectRoute(term, redirect, addressHash);
+  }, [ apiFetch ]);
 }

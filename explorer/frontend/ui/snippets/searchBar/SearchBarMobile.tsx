@@ -3,7 +3,6 @@ import { useRouter } from 'next/router';
 import type { FormEvent } from 'react';
 import React from 'react';
 
-import type { Route } from 'nextjs-routes';
 import { route } from 'nextjs-routes';
 
 import config from 'configs/app';
@@ -28,7 +27,7 @@ import SearchBarInput from 'ui/snippets/searchBar/SearchBarInput';
 import SearchBarRecentKeywords from './SearchBarRecentKeywords';
 import SearchBarSuggest from './SearchBarSuggest/SearchBarSuggest';
 import useQuickSearchQuery from './useQuickSearchQuery';
-import { getSearchRedirectRoute } from './utils';
+import { getSearchRedirectRoute, useSearchRedirect, useSearchRequestGuard } from './utils';
 
 const paxeerXFeature = config.features.paxeerXLists;
 
@@ -44,12 +43,38 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
   const { open, onOpen, onClose, onOpenChange } = useDisclosure();
   const { searchTerm, debouncedSearchTerm, handleSearchTermChange, query, zetaChainCCTXQuery, externalSearchItem } = useQuickSearchQuery();
   const recentSearchKeywords = getRecentSearchKeywords();
+  const resolveSearchRoute = useSearchRedirect();
+  const searchGuard = useSearchRequestGuard();
+  const searchTermRef = React.useRef(searchTerm);
 
-  const navigateToResults = React.useCallback((redirect: boolean) => {
+  React.useEffect(() => {
+    searchTermRef.current = searchTerm;
+  }, [ searchTerm ]);
+
+  const handleTermChange = React.useCallback((value: string) => {
+    searchGuard.discard();
+    searchTermRef.current = value;
+    handleSearchTermChange(value);
+  }, [ searchGuard, handleSearchTermChange ]);
+
+  const handleOpenChange = React.useCallback((details: { open: boolean }) => {
+    if (!details.open) {
+      searchGuard.discard();
+    }
+    onOpenChange(details);
+  }, [ searchGuard, onOpenChange ]);
+
+  const navigateToResults = React.useCallback(async(redirect: boolean) => {
     if (searchTerm) {
-      const paxeerXRoute = paxeerXFeature.isEnabled ? getSearchRedirectRoute(searchTerm) : undefined;
-      const resultRoute: Route = paxeerXRoute ??
-        { pathname: '/search-results', query: { q: searchTerm, redirect: redirect ? 'true' : 'false' } };
+      const isCurrentRequest = searchGuard.start(searchTerm);
+      const resultRoute = paxeerXFeature.isEnabled ?
+        await resolveSearchRoute(searchTerm, redirect) :
+        getSearchRedirectRoute(searchTerm, redirect);
+
+      if (!isCurrentRequest(searchTermRef.current)) {
+        return;
+      }
+
       const url = route(resultRoute);
       mixpanel.logEvent(mixpanel.EventTypes.SEARCH_QUERY, {
         'Search query': searchTerm,
@@ -57,11 +82,11 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
         'Result URL': url,
       });
       saveToRecentKeywords(searchTerm);
-      router.push(resultRoute, undefined, { shallow: !paxeerXRoute });
+      router.push(resultRoute, undefined, { shallow: resultRoute.pathname === '/search-results' });
       onGoToSearchResults?.(searchTerm);
       onClose();
     }
-  }, [ searchTerm, router, onGoToSearchResults, onClose ]);
+  }, [ searchTerm, router, onGoToSearchResults, onClose, resolveSearchRoute, searchGuard ]);
 
   const handleSubmit = React.useCallback((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -79,6 +104,7 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
   }, [ onOpen ]);
 
   const handleItemClick = React.useCallback((event: React.MouseEvent<HTMLAnchorElement>) => {
+    searchGuard.discard();
     onClose();
     mixpanel.logEvent(mixpanel.EventTypes.SEARCH_QUERY, {
       'Search query': searchTerm,
@@ -86,12 +112,12 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
       'Result URL': event.currentTarget.href,
     });
     saveToRecentKeywords(searchTerm);
-  }, [ router.pathname, searchTerm, onClose ]);
+  }, [ searchGuard, router.pathname, searchTerm, onClose ]);
 
   const handleClear = React.useCallback(() => {
-    handleSearchTermChange('');
+    handleTermChange('');
     inputRef.current?.querySelector('input')?.focus();
-  }, [ handleSearchTermChange ]);
+  }, [ handleTermChange ]);
 
   const handleOverlayClick = React.useCallback((event: React.MouseEvent) => {
     event.preventDefault();
@@ -137,7 +163,7 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
   }
 
   return (
-    <DrawerRoot placement="bottom" open={ open } onOpenChange={ onOpenChange } unmountOnExit={ false } lazyMount={ true }>
+    <DrawerRoot placement="bottom" open={ open } onOpenChange={ handleOpenChange } unmountOnExit={ false } lazyMount={ true }>
       <DrawerTrigger asChild>
         { trigger }
       </DrawerTrigger>
@@ -149,14 +175,14 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
         <DrawerBody overflow="hidden" display="flex" flexDirection="column">
           <SearchBarInput
             ref={ inputRef }
-            onChange={ handleSearchTermChange }
+            onChange={ handleTermChange }
             onClear={ handleClear }
             onSubmit={ handleSubmit }
             value={ searchTerm }
             mb={ 5 }
           />
           { searchTerm.trim().length === 0 && recentSearchKeywords.length > 0 && (
-            <SearchBarRecentKeywords onClick={ handleSearchTermChange }/>
+            <SearchBarRecentKeywords onClick={ handleTermChange }/>
           ) }
           { searchTerm.trim().length > 0 && (
             <SearchBarSuggest
