@@ -87,11 +87,15 @@ const SearchBarDesktop = ({ isHeroBanner }: Props) => {
     onOpen();
   }, [ onOpen ]);
 
-  const handelHide = React.useCallback(() => {
+  const handleDismiss = React.useCallback(() => {
     searchGuard.discard();
     onClose();
-    inputRef.current?.querySelector('input')?.blur();
   }, [ searchGuard, onClose ]);
+
+  const handelHide = React.useCallback(() => {
+    handleDismiss();
+    inputRef.current?.querySelector('input')?.blur();
+  }, [ handleDismiss ]);
 
   const handleOutsideClick = React.useCallback((event: Event) => {
     const isFocusInInput = inputRef.current?.contains(event.target as Node);
@@ -127,10 +131,10 @@ const SearchBarDesktop = ({ isHeroBanner }: Props) => {
     const isFocusInMenu = menuRef.current?.contains(event.relatedTarget);
     const isFocusInInput = inputRef.current?.contains(event.relatedTarget);
     if (!isFocusInMenu && !isFocusInInput) {
-      onClose();
+      handleDismiss();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ onClose ]);
+  }, [ handleDismiss ]);
 
   const menuPaddingX = isMobile && !isHeroBanner ? 24 : 0;
   const calculateMenuWidth = React.useCallback(() => {
@@ -206,7 +210,7 @@ const SearchBarDesktop = ({ isHeroBanner }: Props) => {
             overflowY="hidden"
           >
             { searchTerm.trim().length === 0 && recentSearchKeywords.length > 0 && (
-              <SearchBarRecentKeywords onClick={ handleTermChange } onClear={ onClose }/>
+              <SearchBarRecentKeywords onClick={ handleTermChange } onClear={ handleDismiss }/>
             ) }
             { searchTerm.trim().length > 0 && (
               <SearchBarSuggest
