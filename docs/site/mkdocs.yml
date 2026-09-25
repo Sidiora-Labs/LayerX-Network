@@ -83,6 +83,7 @@ nav:
       - Data availability: protocol/data-availability.md
       - Commitment levels: protocol/commitment-levels.md
       - Finality: protocol/finality.md
+      - Sidiora: protocol/sidiora.md
   - Programs:
       - programs/index.md
       - Workspace: programs/workspace.md
