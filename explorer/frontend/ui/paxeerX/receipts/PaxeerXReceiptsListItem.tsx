@@ -1,11 +1,8 @@
-import { Flex } from '@chakra-ui/react';
+import { Flex, Text } from '@chakra-ui/react';
 import React from 'react';
 
 import type { PaxeerXReceiptsItem } from 'types/api/paxeerXLists';
 
-import { route } from 'nextjs/routes';
-
-import { Link } from 'toolkit/chakra/link';
 import { Skeleton } from 'toolkit/chakra/skeleton';
 import CopyToClipboard from 'ui/shared/CopyToClipboard';
 import BlockEntity from 'ui/shared/entities/block/BlockEntity';
@@ -34,11 +31,16 @@ const PaxeerXReceiptsListItem = ({ item, isLoading }: Props) => {
 
       <ListItemMobileGrid.Label isLoading={ isLoading }>Account</ListItemMobileGrid.Label>
       <ListItemMobileGrid.Value>
-        <Skeleton loading={ isLoading } overflow="hidden">
-          <Link href={ route({ pathname: '/paxeer-x/account/[hash]', query: { hash: item.account } }) }>
-            <HashStringShorten hash={ item.account } type="long"/>
-          </Link>
-        </Skeleton>
+        { item.account === null ? (
+          <Text color="text.secondary">—</Text>
+        ) : (
+          <Flex overflow="hidden" whiteSpace="nowrap" alignItems="center" w="100%" justifyContent="start">
+            <Skeleton loading={ isLoading }>
+              <HashStringShorten hash={ item.account } type="long"/>
+            </Skeleton>
+            <CopyToClipboard text={ item.account } isLoading={ isLoading }/>
+          </Flex>
+        ) }
       </ListItemMobileGrid.Value>
 
       <ListItemMobileGrid.Label isLoading={ isLoading }>Status</ListItemMobileGrid.Label>

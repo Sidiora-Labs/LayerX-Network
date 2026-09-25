@@ -47,14 +47,16 @@ export function formatAmount(value: string, asset: PaxeerXAsset | null): string 
   return amount.dividedBy(new BigNumber(10).pow(asset.decimals)).toFormat();
 }
 
+// The kinds the activity feed carries: the five custody event kinds the kernel logs, spelled as
+// the database enum spells them, plus the two chain-side rows the feed merges in.
 const KIND_LABELS: Record<string, string> = {
-  'custody-deposit': 'Custody deposit',
-  'claim-queued': 'Claim queued',
-  'claim-finalised': 'Claim finalised',
-  'custody-release': 'Custody release',
-  'emergency-exit': 'Emergency exit',
-  bound: 'Account bound',
-  unbound: 'Account unbound',
+  custody_deposit: 'Custody deposit',
+  claim_queued: 'Claim queued',
+  claim_finalised: 'Claim finalised',
+  custody_release: 'Custody release',
+  emergency_exit: 'Emergency exit',
+  transaction: 'Transaction',
+  token_transfer: 'Token transfer',
 };
 
 export function activityKindLabel(kind: string): string {

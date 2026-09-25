@@ -20,12 +20,17 @@ describe('ActivityList', () => {
     const { container } = render(<ActivityList items={ paxeerXMock.unifiedAccount.activity }/>);
 
     expect(container.querySelectorAll('[data-activity]')).toHaveLength(3);
-    expect(screen.getByText('Custody deposit')).toBeTruthy();
-    expect(screen.getByText('Claim queued')).toBeTruthy();
+
+    // the first cell of a row names the kind and, under it, the side of the network it happened on
+    const kinds = Array.from(container.querySelectorAll('[data-activity] td:first-child')).map((cell) => cell.textContent);
+
+    expect(kinds).toEqual([ 'Custody depositKernel', 'Token transferChain', 'TransactionChain' ]);
   });
 
   it('humanizes a kind outside the known vocabulary', () => {
-    render(<ActivityList items={ paxeerXMock.unifiedAccount.activity }/>);
+    const item = { ...paxeerXMock.unifiedAccount.activity[0], kind: 'replay_receipt' };
+
+    render(<ActivityList items={ [ item ] }/>);
 
     expect(screen.getByText('Replay receipt')).toBeTruthy();
   });
@@ -46,5 +51,11 @@ describe('ActivityList', () => {
     expect(screen.getByText('2.5 USDX')).toBeTruthy();
     expect(screen.getAllByText('Chain')).toHaveLength(2);
     expect(screen.getByText('Kernel')).toBeTruthy();
+  });
+
+  it('shows a custody amount unscaled and labelled by its kernel asset id', () => {
+    render(<ActivityList items={ paxeerXMock.unifiedAccount.activity }/>);
+
+    expect(screen.getByText(`1,200 ${ paxeerXMock.custodyAsset.denom }`)).toBeTruthy();
   });
 });

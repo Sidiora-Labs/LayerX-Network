@@ -21,7 +21,7 @@ const PaxeerXAnchors = () => {
         {
           next_page_params: {
             items_count: 50,
-            checkpoint_height: PAXEER_X_ANCHORS_ITEM.checkpoint_height,
+            batch_number: PAXEER_X_ANCHORS_ITEM.batch_number,
           },
         },
       ),

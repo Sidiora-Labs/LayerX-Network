@@ -19,11 +19,13 @@ describe('AssetList', () => {
   it('renders one row with one total per asset', () => {
     const { container } = render(<AssetList items={ paxeerXMock.unifiedAccount.balances }/>);
 
-    expect(container.querySelectorAll('[data-asset]')).toHaveLength(2);
-    expect(screen.getByText('HPX')).toBeTruthy();
-    expect(screen.getByText('USDX')).toBeTruthy();
-    expect(screen.getByText('3')).toBeTruthy();
-    expect(screen.getByText('2.5')).toBeTruthy();
+    expect(container.querySelectorAll('[data-asset]')).toHaveLength(3);
+    expect(container.querySelector(`[data-asset="${ paxeerXMock.nativeAsset.id }"] [data-label="total"]`)?.textContent).toBe('1');
+    expect(container.querySelector(`[data-asset="${ paxeerXMock.tokenAsset.id }"] [data-label="total"]`)?.textContent).toBe('2.5');
+    expect(container.querySelector(`[data-asset="${ paxeerXMock.custodyAsset.id }"] [data-label="total"]`)?.textContent).toBe('1,200');
+    // an asset with a symbol is denominated in it, so the symbol and the denom columns agree
+    expect(screen.getAllByText('USDX')).toHaveLength(2);
+    expect(screen.getAllByText('HPX')).toHaveLength(2);
   });
 
   it('keeps the parts row collapsed until the asset is expanded', () => {
@@ -31,14 +33,14 @@ describe('AssetList', () => {
 
     expect(container.querySelectorAll('[data-parts-of]')).toHaveLength(0);
 
-    fireEvent.click(screen.getByLabelText('Show HPX breakdown'));
+    fireEvent.click(screen.getByLabelText(`Show ${ paxeerXMock.custodyAsset.denom } breakdown`));
 
-    const parts = container.querySelectorAll(`[data-parts-of="${ paxeerXMock.nativeAsset.id }"] [data-part]`);
+    const parts = container.querySelectorAll(`[data-parts-of="${ paxeerXMock.custodyAsset.id }"] [data-part]`);
 
     expect(parts).toHaveLength(3);
-    expect(container.querySelector('[data-part="chain"]')?.textContent).toBe('1');
-    expect(container.querySelector('[data-part="custody"]')?.textContent).toBe('1.5');
-    expect(container.querySelector('[data-part="kernel"]')?.textContent).toBe('0.5');
+    expect(container.querySelector('[data-part="chain"]')?.textContent).toBe('0');
+    expect(container.querySelector('[data-part="custody"]')?.textContent).toBe('500');
+    expect(container.querySelector('[data-part="kernel"]')?.textContent).toBe('700');
   });
 
   it('collapses the parts row again', () => {

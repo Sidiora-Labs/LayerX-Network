@@ -1,4 +1,4 @@
-import { Flex } from '@chakra-ui/react';
+import { Flex, Text } from '@chakra-ui/react';
 import React from 'react';
 
 import type { PaxeerXAnchorsItem } from 'types/api/paxeerXLists';
@@ -21,22 +21,30 @@ const PaxeerXAnchorsListItem = ({ item, isLoading }: Props) => {
 
       <ListItemMobileGrid.Label isLoading={ isLoading }>Checkpoint height</ListItemMobileGrid.Label>
       <ListItemMobileGrid.Value fontWeight={ 600 } color="text.primary">
-        <Skeleton loading={ isLoading } display="inline-block">{ item.checkpoint_height }</Skeleton>
+        <Skeleton loading={ isLoading } display="inline-block">
+          { item.checkpoint_height ?? <Text as="span" color="text.secondary">—</Text> }
+        </Skeleton>
       </ListItemMobileGrid.Value>
 
       <ListItemMobileGrid.Label isLoading={ isLoading }>Sealed height</ListItemMobileGrid.Label>
       <ListItemMobileGrid.Value>
-        <Skeleton loading={ isLoading } display="inline-block">{ item.sealed_height }</Skeleton>
+        <Skeleton loading={ isLoading } display="inline-block">
+          { item.sealed_height ?? <Text as="span" color="text.secondary">—</Text> }
+        </Skeleton>
       </ListItemMobileGrid.Value>
 
       <ListItemMobileGrid.Label isLoading={ isLoading }>State root</ListItemMobileGrid.Label>
       <ListItemMobileGrid.Value>
-        <Flex overflow="hidden" whiteSpace="nowrap" alignItems="center" w="100%" justifyContent="start">
-          <Skeleton loading={ isLoading } color="text.secondary">
-            <HashStringShorten hash={ item.state_root } type="long"/>
-          </Skeleton>
-          <CopyToClipboard text={ item.state_root } isLoading={ isLoading }/>
-        </Flex>
+        { item.state_root === null ? (
+          <Text color="text.secondary">—</Text>
+        ) : (
+          <Flex overflow="hidden" whiteSpace="nowrap" alignItems="center" w="100%" justifyContent="start">
+            <Skeleton loading={ isLoading } color="text.secondary">
+              <HashStringShorten hash={ item.state_root } type="long"/>
+            </Skeleton>
+            <CopyToClipboard text={ item.state_root } isLoading={ isLoading }/>
+          </Flex>
+        ) }
       </ListItemMobileGrid.Value>
 
       <ListItemMobileGrid.Label isLoading={ isLoading }>Block</ListItemMobileGrid.Label>

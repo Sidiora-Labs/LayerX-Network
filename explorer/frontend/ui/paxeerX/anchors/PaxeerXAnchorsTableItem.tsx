@@ -1,4 +1,4 @@
-import { Flex } from '@chakra-ui/react';
+import { Flex, Text } from '@chakra-ui/react';
 import React from 'react';
 
 import type { PaxeerXAnchorsItem } from 'types/api/paxeerXLists';
@@ -19,18 +19,26 @@ const PaxeerXAnchorsTableItem = ({ item, isLoading }: Props) => {
   return (
     <TableRow>
       <TableCell verticalAlign="middle">
-        <Skeleton loading={ isLoading } display="inline-block" fontWeight={ 600 }>{ item.checkpoint_height }</Skeleton>
+        <Skeleton loading={ isLoading } display="inline-block" fontWeight={ 600 }>
+          { item.checkpoint_height ?? <Text as="span" color="text.secondary">—</Text> }
+        </Skeleton>
       </TableCell>
       <TableCell verticalAlign="middle">
-        <Skeleton loading={ isLoading } display="inline-block">{ item.sealed_height }</Skeleton>
+        <Skeleton loading={ isLoading } display="inline-block">
+          { item.sealed_height ?? <Text as="span" color="text.secondary">—</Text> }
+        </Skeleton>
       </TableCell>
       <TableCell verticalAlign="middle">
-        <Flex overflow="hidden" w="100%" alignItems="center">
-          <Skeleton loading={ isLoading }>
-            <HashStringShorten hash={ item.state_root } type="long"/>
-          </Skeleton>
-          <CopyToClipboard text={ item.state_root } ml={ 2 } isLoading={ isLoading }/>
-        </Flex>
+        { item.state_root === null ? (
+          <Text color="text.secondary">—</Text>
+        ) : (
+          <Flex overflow="hidden" w="100%" alignItems="center">
+            <Skeleton loading={ isLoading }>
+              <HashStringShorten hash={ item.state_root } type="long"/>
+            </Skeleton>
+            <CopyToClipboard text={ item.state_root } ml={ 2 } isLoading={ isLoading }/>
+          </Flex>
+        ) }
       </TableCell>
       <TableCell verticalAlign="middle">
         <BlockEntity
