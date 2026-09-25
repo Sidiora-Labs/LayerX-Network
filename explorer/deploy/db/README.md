@@ -219,14 +219,26 @@ the two pools are independent.
 into a freshly migrated 10.2.6 one. It reads both connection strings from `SRC_DATABASE_URL`
 and `DST_DATABASE_URL` and from nowhere else, and it prints neither.
 
-### The ceiling
+### The two cuts
 
-Before the first table is read the run pins a **block ceiling**: the highest block number the
-source has marked `consensus` at that moment. Every table's copy predicate is bounded by it,
-and the verification counts both sides at the same ceiling. A source that keeps indexing while
-the copy runs therefore cannot be read as a missing row — the rows it grows by are above the
-ceiling on both sides of the comparison. The ceiling is the first line of the run and is
-repeated in the summary.
+Before the first table is read the run pins two cuts, and every table is copied and counted
+under one of them.
+
+The first is a **block ceiling**: the highest block number the source has marked `consensus`
+at that moment. Every table that carries a block number is bounded by it on both sides of the
+comparison.
+
+The second is an **insert cut**: the source's own clock, read in UTC at the same moment. It
+bounds the tables that carry no block number at all — `addresses`, `tokens`,
+`contract_methods` — through the `inserted_at` column Blockscout stamps on every row and the
+copy carries across unchanged. Both sides are compared as epoch seconds, so neither session's
+`TimeZone` can shift the comparison. Without the insert cut, a source that keeps writing
+addresses while the copy runs would be counted as rows the copy had lost.
+
+So a source that keeps indexing cannot be read as a missing row: what it grows by is above the
+cut on both sides of the comparison. Both cuts are printed at the start of the run and
+repeated in the summary. A table with neither a block number nor an `inserted_at` on both
+sides has no cut to apply; it is copied whole and counted whole, and the summary names it.
 
 A row whose block number is null — a pending transaction, a log the indexer has not yet
 assigned — is below no ceiling and is not copied. The same predicate excludes it from both
@@ -254,12 +266,26 @@ the values it has and a rerun with nothing to do writes nothing. An interrupted 
 resumed by running the same command again.
 
 Tables with no block number on both sides — `addresses`, `tokens`, `contract_methods` and the
-rest — have no key to resume from. They are copied whole under the same conflict handling, so
-a rerun still writes nothing, and the summary names them.
+rest — have no key to resume from. They are copied whole up to the insert cut under the same
+conflict handling, so a rerun still writes nothing.
 
 Rows land in an unlogged staging table (`public.paxeer_x_copy_stage`) first, because `COPY`
 itself has no conflict handling; the tool drops it when the table is done. Both it and the
 progress table can be dropped once the seeding is finished.
+
+### Repairing
+
+Continuing above the highest key already copied is an optimisation, and on its own it would be
+unsound. A source row can appear below that mark after the fact — a block range the source was
+still backfilling, or a row that had no block number when the copy passed it and was given one
+under the ceiling afterwards — and a run that only ever moves forward would never see it.
+
+The verification is what decides. When a table comes up short under its cut, the run rescans
+that table's whole range under the cut, which `ON CONFLICT DO NOTHING` makes free for every
+row already in the destination, and counts it again. The summary names every table it rescanned
+and how many rows the rescan added. A table that is still short afterwards, or that holds more
+rows than the source does under the cut, is reported and the run ends `3`: this tool never
+deletes a row to make a count agree.
 
 ### The destination guard
 
@@ -287,12 +313,13 @@ source row that does carry a trace address keeps the one it has.
 
 ### Verifying
 
-After the last table the tool counts both sides at the ceiling and prints one line per table.
+After the last table the tool counts both sides under each table's cut and prints one line per
+table, rescans any table that came up short and counts it again, and then prints the summary.
 It exits `0` when every table matches, `1` on a usage or precondition failure, `2` when a copy
 was refused or failed — naming the table it stopped on — and `3` when the copy finished but at
-least one table's counts differ, naming every such table with both counts.
+least one table's counts still differ, naming every such table with both counts.
 
-`DRY_RUN=1` pins and prints the ceiling, plans each table and reports the column differences
+`DRY_RUN=1` pins and prints both cuts, plans each table and reports the column differences
 without writing anything at all, including the progress table.
 
 ### Proving it
@@ -301,6 +328,7 @@ without writing anything at all, including the progress table.
 ephemeral loopback ports, creates a source schema shaped like 11.x and a destination schema
 shaped like 10.2.6, seeds synthetic rows, and asserts the tool's exit code and the resulting
 row counts across a dry run, a full copy, a rerun, a copy interrupted part way through a
-table, its resume, a source that grows after the ceiling is pinned, the non-empty destination
-guard, and a destination whose counts no longer match. It removes both containers on every
-exit path and needs `docker` and `psql` on the path.
+table, its resume, a source that grows in both a block table and a block-less one after the
+cuts are pinned, the non-empty destination guard, a source row that appears under the ceiling
+after the copy has passed it, and a destination holding a row the source does not. It removes
+both containers on every exit path and needs `docker` and `psql` on the path.

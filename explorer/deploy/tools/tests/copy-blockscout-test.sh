@@ -22,11 +22,15 @@
 #   4  a copy interrupted part way through a table stops non-zero and keeps
 #      what it had already committed
 #   5  the interrupted copy resumes and completes without being told to
-#   6  a source that grows after the ceiling is pinned is copied up to the
-#      ceiling and verified at the ceiling
+#   6  a source that grows after the cuts are pinned - in a table keyed by
+#      block and in one keyed by nothing but the time it was written - is
+#      copied up to the cuts and verified at the cuts
 #   7  a destination holding rows this tool has no record of is refused, and
 #      accepted with the documented flag
-#   8  counts that differ at the ceiling exit non-zero and name the table
+#   8  a source row that appears under the ceiling after the copy has passed
+#      it is found by the verification and copied by the rescan
+#   9  a destination holding a row the source does not exits non-zero, names
+#      the table with both counts, and deletes nothing
 #
 # Requires docker and psql on PATH.
 
@@ -132,6 +136,10 @@ run_tool() {
     "$TOOL" > "$LAST_LOG" 2>&1 || LAST_RC=$?
 }
 
+# The server is pinned to UTC and so is every client session, because the tool
+# cuts the tables that carry no block number at the source's clock in UTC and
+# the fixtures stamp inserted_at from the same clock. A host that leans on the
+# containers' default zone would otherwise decide what this test proves.
 start_container() {
   local name=$1 port
   docker run --detach --name "$name" \
@@ -139,7 +147,7 @@ start_container() {
     --env POSTGRES_USER=postgres \
     --env POSTGRES_DB=blockscout \
     --publish 127.0.0.1::5432 \
-    "$IMAGE" > /dev/null || die "cannot start ${name}"
+    "$IMAGE" -c timezone=UTC > /dev/null || die "cannot start ${name}"
 
   local attempt
   for attempt in $(seq 1 120); do
@@ -434,6 +442,19 @@ SELECT decode(lpad(to_hex(2000 + g), 64, '0'), 'hex'),
        decode(lpad(to_hex(1000 + g), 64, '0'), 'hex'), i, g,
        decode(lpad(to_hex(3), 40, '0'), 'hex'), '\x01'::bytea, NULL
 FROM generate_series(7, 9) AS g, generate_series(0, 1) AS i;
+
+INSERT INTO addresses (hash)
+SELECT decode(lpad(to_hex(g), 40, '0'), 'hex') FROM generate_series(6, 6) AS g;
+SQL
+
+  # A log the source writes into a block the destination already holds, after
+  # the copy has moved past it. No high-water mark can lead back to it.
+  cat > "${WORK}/source-late-row.sql" << 'SQL'
+INSERT INTO logs (transaction_hash, block_hash, "index", block_number, address_hash,
+                  data, first_topic)
+VALUES (decode(lpad(to_hex(2002), 64, '0'), 'hex'),
+        decode(lpad(to_hex(1002), 64, '0'), 'hex'), 2, 2,
+        decode(lpad(to_hex(3), 40, '0'), 'hex'), '\x01'::bytea, NULL);
 SQL
 }
 
@@ -552,7 +573,7 @@ scenario_full_copy() {
     'the summary names the transaction columns that were not copied'
   assert_log 'internal_transactions: source-only columns not copied: call_type_enum' \
     'the summary names the internal-transaction columns that were not copied'
-  assert_log 'every processed table matches at the ceiling' 'the summary verifies at the ceiling'
+  assert_log 'every processed table matches under its cut' 'the summary verifies at the ceiling'
 }
 
 scenario_rerun() {
@@ -593,11 +614,11 @@ scenario_resume() {
   assert_count dst 'SELECT count(*) FROM logs' 14 'destination logs after the resume'
   assert_count dst 'SELECT count(*) FROM internal_transactions' 3 \
     'destination internal transactions after the resume'
-  assert_log 'every processed table matches at the ceiling' 'the resumed copy verifies at the ceiling'
+  assert_log 'every processed table matches under its cut' 'the resumed copy verifies at the ceiling'
 }
 
 scenario_growing_source() {
-  log "-- 6 a source that grows after the ceiling is pinned"
+  log "-- 6 a source that grows after the cuts are pinned"
   reset_destination
   hold_blocks_lock
 
@@ -626,11 +647,16 @@ scenario_growing_source() {
 
   assert_rc 0 'copy against a growing source'
   assert_log 'ceiling: block 6' 'the ceiling stays where it was pinned'
+  assert_log 'addresses: no block number; cut at insert time' \
+    'the table without a block number is cut at the insert time instead'
   assert_count src 'SELECT count(*) FROM blocks' 10 'source blocks after the growth'
   assert_count src 'SELECT count(*) FROM logs' 20 'source logs after the growth'
+  assert_count src 'SELECT count(*) FROM addresses' 6 'source addresses after the growth'
   assert_count dst 'SELECT count(*) FROM blocks' 7 'destination blocks, bounded by the ceiling'
   assert_count dst 'SELECT count(*) FROM logs' 14 'destination logs, bounded by the ceiling'
-  assert_log 'every processed table matches at the ceiling' 'growth is not read as a mismatch'
+  assert_count dst 'SELECT count(*) FROM addresses' 5 \
+    'destination addresses, bounded by the insert cut'
+  assert_log 'every processed table matches under its cut' 'growth is not read as a mismatch'
 }
 
 scenario_nonempty_destination() {
@@ -646,17 +672,42 @@ scenario_nonempty_destination() {
   assert_log 'ceiling: block 9' 'the appending run pins the ceiling the source has now'
   assert_count dst 'SELECT count(*) FROM blocks' 10 'destination blocks after the append'
   assert_count dst 'SELECT count(*) FROM logs' 20 'destination logs after the append'
+  assert_count dst 'SELECT count(*) FROM addresses' 6 \
+    'destination addresses after the append, under the cut this run pinned'
   assert_count dst 'SELECT count(*) FROM internal_transactions' 3 \
     'destination internal transactions after the append'
 }
 
-scenario_mismatch() {
-  log "-- 8 counts that differ at the ceiling"
-  dst_sql 'DELETE FROM logs WHERE block_number = 2' > /dev/null
+scenario_late_row() {
+  log "-- 8 a source row that appears under the ceiling after the copy passed it"
+  psql --no-psqlrc --quiet --set ON_ERROR_STOP=1 --dbname "$SRC_URL" \
+    --file "${WORK}/source-late-row.sql" > /dev/null
+  assert_count src 'SELECT count(*) FROM logs WHERE block_number = 2' 3 'source logs in block 2'
+
+  run_tool late-row
+  assert_rc 0 'copy after a row appeared below the high-water mark'
+  assert_log 'copied logs: 0 rows' 'the forward pass has nothing above its resume point to copy'
+  assert_log 'repair logs: short at the cut, rescanning its whole range under the cut' \
+    'the verification is what finds the row the resume point cannot reach'
+  assert_log 'repair logs: added 1 row(s) the first pass had not copied' \
+    'the rescan copies the one row and leaves the rest alone'
+  assert_log 'rescanned whole under the cut after coming up short: logs' \
+    'the summary names the table it rescanned'
+  assert_log 'every processed table matches under its cut' 'the rescan settles the count'
+  assert_count dst 'SELECT count(*) FROM logs' 21 'destination logs after the rescan'
+  assert_count dst 'SELECT count(*) FROM logs WHERE block_number = 2' 3 \
+    'destination logs in block 2 after the rescan'
+}
+
+scenario_unrepairable_mismatch() {
+  log "-- 9 a destination holding a row the source does not"
+  src_sql 'DELETE FROM logs WHERE block_number = 2' > /dev/null
   run_tool mismatch
   assert_rc 3 'copy with a mismatching table'
-  assert_log 'mismatch logs: source 20, target 18' 'the summary names the table and both counts'
+  assert_log 'mismatch logs: source 18, target 21' 'the summary names the table and both counts'
   assert_log 'done with mismatches' 'the run says it ended with mismatches'
+  assert_count dst 'SELECT count(*) FROM logs' 21 \
+    'destination logs are left alone rather than trimmed to match'
 }
 
 main() {
@@ -666,6 +717,7 @@ main() {
 
   trap cleanup EXIT INT TERM
   WORK=$(mktemp -d)
+  export PGTZ=UTC
 
   log "starting two disposable ${IMAGE} containers"
   SRC_URL=$(start_container "$SRC_CONTAINER")
@@ -690,7 +742,8 @@ main() {
   scenario_resume
   scenario_growing_source
   scenario_nonempty_destination
-  scenario_mismatch
+  scenario_late_row
+  scenario_unrepairable_mismatch
 
   if [ "$FAILURES" -ne 0 ]; then
     log "${FAILURES} assertion(s) failed"
