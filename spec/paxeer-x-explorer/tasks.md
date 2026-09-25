@@ -191,6 +191,18 @@
     - Rerun nothing that already passed at this revision, spawn no review of a task whose verify_cmd passed, and write no gate record for a command that did not run.
     - _Requirements: 16.1, 16.2, 16.3, 16.4_
 
+## Wave 4 - The Gate's Own Defect
+
+- [ ] 4. Make the gate that qualifies the waves run the suites it discovers
+  - [ ] 4.1 Make the umbrella test leg of the wave gate pass — **Implemented - qualification pending**
+    - Root-cause the backend leg from the recorded wave-gate run rather than from a rerun: the gate collects every Paxeer X suite of the umbrella into a single mix invocation, so the four applications' test helpers run in one virtual machine, and the Ecto sandbox mode the explorer application's non-async cases leave behind denies the indexer test helper's background migrations a connection, ending that application before its first test while the same suites pass when the application is tested on its own.
+    - In tools/explorer/gate-test.sh derive the umbrella applications from the suites the gate discovers and run one leg per application, each of them its own mix invocation through explorer/deploy/tools/mix-in-builder.sh with a fresh database sidecar, carrying that application's suites in path order and no other application's.
+    - Keep every discovered suite in the run: skip no test, exclude no tag, relax no assertion, change no test helper, and keep the gate stopping on the first failing leg with that leg's command, exit code and log path, each leg under its own log.
+    - Report the number of umbrella applications beside the suite count in the gate's check mode, and record the reason for the per-application invocation in the script itself so a later reader does not merge the legs back.
+    - Add tools/explorer/tests/gate-test-test.sh, which builds a throwaway copy of the gate over a backend tree of Paxeer X suites spread across four applications with recording stand-ins for the mix runner and for yarn, and asserts one invocation per application carrying only that application's suites, a log per application, the frontend legs after them, and a failing application stopping the gate on its own exit code before the next application and before the frontend.
+    - Document the per-application backend leg under the fleet gates heading of explorer/README.md, and leave the records of task 3.1 untouched so that task reruns the gate itself.
+    - _Requirements: 4.1, 4.2, 4.5, 16.1_
+
 ## Task Dependency Graph
 
 ```json
@@ -198,7 +210,8 @@
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13"] },
     { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12"] },
-    { "id": 3,  "tasks": ["3.1"] }
+    { "id": 3,  "tasks": ["3.1"] },
+    { "id": 4,  "tasks": ["4.1"] }
   ]
 }
 ```

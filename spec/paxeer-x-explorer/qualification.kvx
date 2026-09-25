@@ -195,3 +195,27 @@ symbol = "gate-test"
 observed = "The task verify_cmd exits 0, but cg spec done 1.13 exits 1 on three graph checks: the symbols gate-test and gate-lint are shell scripts the graph does not index, and the change to explorer/README.md is not matched because the graph looks for a commit carrying a feature-and-task tag that no commit in this repository carries."
 assumption = "Neither check can be satisfied by a change this task is allowed to make, so the task is recorded done by hand from its passing verify_cmd with the same four evidence fields and the conflict is left here for an owner ruling."
 severity = "note"
+
+[observation.4.1.1]
+task = "4.1"
+file = "explorer/backend/apps/explorer/test/explorer/chain/paxeer_x/capabilities_test.exs"
+symbol = "Explorer.Chain.PaxeerX.Capabilities"
+observed = "At revision 4ed6388c760d2c166acacffbb3de09c25c6a3697 the first gate run failed with exit 2 in the explorer leg on 'live?/1 keeps the stored probe when the node stops answering', whose assert_receive found no message in the default 100 ms while the leg ran its eleven suites and the time-zone database updated; log .logs/verify.log, and the same eleven suites rerun on their own passed 111 tests with 0 failures, log .logs/diagnose-explorer-leg.log."
+assumption = "The assertion is load-sensitive rather than wrong - the process sends the message from the continuation that follows its init - so the failure belongs to that test's own timing and not to the per-application legs this task adds; it is recorded here and left to the task that owns the capabilities suite."
+severity = "note"
+
+[observation.4.1.2]
+task = "4.1"
+file = "explorer/frontend/vitest/setup.ts"
+symbol = "getResourceParams"
+observed = "With every backend leg passing, `EXPLORER_GATE_BUDGET_SECONDS=1080 tools/explorer/gate-test.sh` exited 1 in the frontend vitest leg, log build/explorer-gates/frontend-vitest.log: 26 of the 27 failures are `API config for general not found`, because the vitest global setup and setup file both read configs/envs/.env.vitest and no such file is in the checkout - the repository's root ignore rule for .env.* covers that path, so the vendored preset was never committed."
+assumption = "Restoring it means changing an ignore rule the lanes of this feature are not allowed to touch, so it is an owner decision and a task of its own; the per-task frontend gates passed because none of the paths they named builds an API URL."
+severity = "blocker"
+
+[observation.4.1.3]
+task = "4.1"
+file = "explorer/frontend/lib/api/services/general/paxeerX.ts"
+symbol = "paxeer_x_receipt"
+observed = "The twenty-seventh failure of the same leg is lib/api/services/general/paxeerX.spec.ts 'keeps one resource name per definition in both maps', which expects six resource names and reads five: the map the suite walks carries no general:paxeer_x_receipt beside the five other Paxeer X resources."
+assumption = "The single-receipt resource belongs to the receipt detail path of the fork's API surface and its absence is a contradiction between that task's test and its source, not a consequence of the per-application backend legs this task adds."
+severity = "blocker"

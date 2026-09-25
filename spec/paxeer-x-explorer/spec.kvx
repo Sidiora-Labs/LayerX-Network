@@ -199,6 +199,8 @@ ac_4 = "NO gate record SHALL be written for a command that did not run, and no g
 #   wave 1  red continuous-integration jobs, and the explorer's own gates
 #   wave 2  the remaining fork surface, disjoint touches, parallel
 #   wave 3  one aggregate run on the merged revision, recorded
+#   wave 4  the defect that aggregate run exposed in the gate itself, repaired
+#           before wave 3 runs the gate again, so 3.1 requires 4.1
 # --------------------------------------------------------------------------
 
 [task.1]
@@ -633,7 +635,7 @@ status = "pending"
 title = "Run the explorer gates once on the merged revision and record the evidence"
 status = "pending"
 wave = 3
-requires = ["1.1","1.9","1.10","1.11","1.12","1.13","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12"]
+requires = ["1.1","1.9","1.10","1.11","1.12","1.13","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12","4.1"]
 do_1 = "On the revision that merges waves 1 and 2, run tools/explorer/gate-test.sh once with its budget set to fit this task's timeout, writing its logs under build/explorer-gates/."
 do_2 = "Append one gate record per leg to spec/paxeer-x-explorer/qualification.kvx - the backend Paxeer X suites, the frontend type check and vitest suite - carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code and the log path, written only from a command that actually ran."
 do_3 = "Append one observation per failure the run exposes that belongs to no task in this feature: revision, command, exit code, log path, one sentence of what was observed and one sentence of what is assumed; do not investigate it further and do not rerun it."
@@ -642,3 +644,29 @@ verify_cmd = "timeout 20m sh -c 'EXPLORER_GATE_BUDGET_SECONDS=1080 tools/explore
 symbols = ["gate-test"]
 touches = ["spec/paxeer-x-explorer/qualification.kvx"]
 reqs = ["16.1","16.2","16.3","16.4"]
+
+[task.4]
+section = "Wave 4 - The Gate's Own Defect"
+title = "Make the gate that qualifies the waves run the suites it discovers"
+status = "pending"
+
+[task.4.1]
+title = "Make the umbrella test leg of the wave gate pass"
+status = "implemented"
+implemented_revision = "4ed6388c760d2c166acacffbb3de09c25c6a3697"
+implemented_command = "timeout 20m sh -c 'EXPLORER_GATE_BUDGET_SECONDS=1080 tools/explorer/gate-test.sh'"
+implemented_exit_code = 1
+implemented_log = ".logs/verify.log"
+implemented_evidence = "the four backend legs passed - block_scout_web 47, ethereum_jsonrpc 25, explorer 111 and indexer 46 tests, 0 failures - and the frontend install and type check passed; the gate stopped on the frontend vitest leg for the two causes recorded as observations 4.1.2 and 4.1.3"
+wave = 4
+requires = ["1.1","1.13"]
+do_1 = "Root-cause the backend leg from the recorded wave-gate run rather than from a rerun: the gate collects every Paxeer X suite of the umbrella into a single mix invocation, so the four applications' test helpers run in one virtual machine, and the Ecto sandbox mode the explorer application's non-async cases leave behind denies the indexer test helper's background migrations a connection, ending that application before its first test while the same suites pass when the application is tested on its own."
+do_2 = "In tools/explorer/gate-test.sh derive the umbrella applications from the suites the gate discovers and run one leg per application, each of them its own mix invocation through explorer/deploy/tools/mix-in-builder.sh with a fresh database sidecar, carrying that application's suites in path order and no other application's."
+do_3 = "Keep every discovered suite in the run: skip no test, exclude no tag, relax no assertion, change no test helper, and keep the gate stopping on the first failing leg with that leg's command, exit code and log path, each leg under its own log."
+do_4 = "Report the number of umbrella applications beside the suite count in the gate's check mode, and record the reason for the per-application invocation in the script itself so a later reader does not merge the legs back."
+do_5 = "Add tools/explorer/tests/gate-test-test.sh, which builds a throwaway copy of the gate over a backend tree of Paxeer X suites spread across four applications with recording stand-ins for the mix runner and for yarn, and asserts one invocation per application carrying only that application's suites, a log per application, the frontend legs after them, and a failing application stopping the gate on its own exit code before the next application and before the frontend."
+do_6 = "Document the per-application backend leg under the fleet gates heading of explorer/README.md, and leave the records of task 3.1 untouched so that task reruns the gate itself."
+verify_cmd = "timeout 20m sh -c 'EXPLORER_GATE_BUDGET_SECONDS=1080 tools/explorer/gate-test.sh'"
+symbols = ["gate-test"]
+touches = ["tools/explorer/gate-test.sh","tools/explorer/tests/gate-test-test.sh","explorer/README.md","spec/paxeer-x-explorer/qualification.kvx"]
+reqs = ["4.1","4.2","4.5","16.1"]
