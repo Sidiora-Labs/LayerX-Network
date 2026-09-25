@@ -28,7 +28,7 @@
     - Handle every other finding the log reports at its source; do not touch the secret-scan allowlist, and add a path to the audit's own allowlist only where tools/ci/public-repo-audit.sh documents an allowlist for that exact case, with the reason in the same line.
     - Record in spec/paxeer-x-explorer/qualification.kvx any finding that belongs to neither this feature nor an allowlist the tool documents.
     - _Requirements: 1.2, 1.8, 1.9_
-  - [ ] 1.4 Repair the C17 build and test job
+  - [x] 1.4 Repair the C17 build and test job
     - Diagnose from the job log: `gh run view --job 36149017847 --log` and read the Build and test step of the c17 job for both compilers; identify the first failing target and the exact assertion, diagnostic or scan finding it reports.
     - Fix the defect in the core source or in the test that names it, so that the behaviour the test asserts holds under both declared compilers; a difference between the two compilers is a defect in the code, not a reason to narrow the matrix.
     - Extend or add the focused test under tests/ that covers the repaired behaviour so the same regression fails immediately next time, keeping its Makefile target beside the targets of its neighbours.
@@ -53,7 +53,7 @@
     - Write tools/ci/human-web-image-build.sh that packs the tracked sources into a build context exactly as the cluster bring-up does and builds human/apps/web/Dockerfile from it, failing with the build log path on error; fix whatever that build reports - a missing workspace package, a build script that needs a dependency the image does not install, or a stage that copies a path that is not tracked - in the Dockerfile or in the sources it needs.
     - Leave the browser-performance job's own steps untouched; the image is what fails, not the job.
     - _Requirements: 1.6, 1.9_
-  - [ ] 1.8 Repair the documentation site build
+  - [x] 1.8 Repair the documentation site build
     - Diagnose from the job log: `gh run view --job 36149018057 --log` and read the Install documentation tools step, which exits 2 before the site is built.
     - Fix the installer invocation in .github/workflows/docs-site.yml so the pinned requirements install with a valid command; the hash-checking option carries no value and either enables hash checking for every pinned requirement or is absent.
     - Install into an isolated environment inside the job rather than the runner's system interpreter, so the pinned versions are the ones that build the site.
@@ -65,7 +65,7 @@
     - Fix every credo finding in fork-owned modules - the Paxeer X chain, controller, view, import runner, transform and configuration modules - in the code: missing module documentation, alias ordering, function complexity, nesting depth and naming.
     - For findings inherited from vendored upstream files, add a scoped entry to explorer/backend/.credo.exs that names the upstream path it covers with a one-line reason in the file; never disable a check globally and never exclude a fork-owned path.
     - _Requirements: 2.1, 2.5_
-  - [ ] 1.10 Make the frontend lint gate green
+  - [x] 1.10 Make the frontend lint gate green
     - Write tools/explorer/lint-frontend.sh which installs the locked dependencies with husky disabled and runs `yarn lint:eslint` then `yarn lint:tsc` from explorer/frontend, returning the first non-zero exit code.
     - Fix every eslint and type finding in fork-owned frontend files - the Paxeer X pages, views, components, API services, types, mocks, stubs and the search bar helpers - in the code, with no eslint-disable comment and no any.
     - For findings inherited from vendored upstream files, add an override block to explorer/frontend/eslint.config.mjs whose files globs name the upstream paths it covers, with a one-line reason in the file; never relax a rule for the whole project and never for a fork-owned path.
