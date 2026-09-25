@@ -1,0 +1,5 @@
+[
+  {"inputs":[{"internalType":"string","name":"denom","type":"string"}],"name":"setFeeDenom","outputs":[],"stateMutability":"nonpayable","type":"function"},
+  {"inputs":[{"internalType":"address","name":"account","type":"address"}],"name":"getFeeDenom","outputs":[{"internalType":"string","name":"denom","type":"string"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"clearFeeDenom","outputs":[],"stateMutability":"nonpayable","type":"function"}
+]

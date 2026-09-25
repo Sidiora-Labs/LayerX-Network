@@ -123,3 +123,31 @@ revision = "5241cfaeda1a9536e3bf2cde20e3125a5f5a1112"
 command = "sed -n '245,292p' modules/evm/types/params_test.go"; exit_code = 0; log_path = "https://github.com/Sidiora-Labs/Paxeer-X-Network/pull/530#discussion_r4107607672"
 observed = "The descriptor test selects the last three fields as fields 16 through 18, contradicting the addition of field 19."
 assumption = "The code and assertions remain intact because this test is outside task 2.8 touches; a separate correction must preserve all field-name, number and type assertions."
+
+[observation.2.5.1]
+revision = "d1eb0ba1740688198d57530458a5c4e139f58e16"
+command = "timeout 2m go vet ./modules/evm/types ./modules/evm/keeper ./precompiles/ ./precompiles/feetoken/..."; exit_code = 124
+log_path = ".logs/vet.log"
+observed = "Focused vet reached its time limit without diagnostics."
+assumption = "The lint result remains unqualified; the task verification gate is recorded separately."
+
+[observation.2.5.2]
+revision = "aa64844f985255bc82e07822d53d8473d2e7681c"
+file = "contracts/src/BatchCallAndSponsor.sol"
+observed = "Review comment 4107486010 identifies the retired oracle dependency already recorded in observation.1.1.1."
+assumption = "The sponsorship contract and price-source activation are outside task 2.5; the existing fail-closed behavior is retained."
+severity = "blocker"
+
+[observation.2.5.3]
+revision = "aa64844f985255bc82e07822d53d8473d2e7681c"
+file = "modules/evm/keeper/keeper.go"
+observed = "Review comment 4107486044 is valid: CustomPrecompiles selects latestCustomPrecompiles for ordinary execution without consulting the upgrade height."
+assumption = "Height selection and upgrade activation require keeper and upgrade integration outside task 2.5 touches; changing registration alone cannot supply this gate."
+severity = "blocker"
+
+[observation.2.5.4]
+revision = "aa64844f985255bc82e07822d53d8473d2e7681c"
+file = "spec/sidiora-fee-token/spec.kvx"
+observed = "Review comment 4107486051 requests relative evidence paths, conflicting with the explicitly required absolute task evidence path and unchanged existing pull request body."
+assumption = "Other tasks' evidence is outside scope; the prescribed evidence format and existing body are preserved pending reconciliation with the naming rule."
+severity = "suspect"
