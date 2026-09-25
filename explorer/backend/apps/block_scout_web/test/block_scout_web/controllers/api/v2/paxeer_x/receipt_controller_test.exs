@@ -35,6 +35,15 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.ReceiptControllerTest do
       assert [%{"block_number" => 90}] = response["items"]
     end
 
+    test "carries as null the account a receipt log left out", %{conn: conn} do
+      insert_receipt(9, account: nil)
+
+      response = json_response(get(conn, "/api/v2/paxeer-x/receipts"), 200)
+
+      assert [%{"account" => nil, "id" => id}] = response["items"]
+      assert id == receipt_id(9)
+    end
+
     test "paginates", %{conn: conn} do
       for index <- 100..150, do: insert_receipt(index)
 
@@ -63,6 +72,16 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.ReceiptControllerTest do
 
     test "answers 404 for an id that is not a kernel receipt id", %{conn: conn} do
       assert %{"message" => "Not found"} = json_response(get(conn, "/api/v2/paxeer-x/receipts/receipt-1"), 404)
+    end
+
+    test "carries as null the account and the payload hash a receipt log left out", %{conn: conn} do
+      insert_receipt(9, account: nil, payload_hash: nil)
+
+      response = json_response(get(conn, "/api/v2/paxeer-x/receipts/#{receipt_id(9)}"), 200)
+
+      assert response["account"] == nil
+      assert response["payload_hash"] == nil
+      assert response["verification_status"] == "sequencer_signed"
     end
 
     test "answers with one receipt", %{conn: conn} do

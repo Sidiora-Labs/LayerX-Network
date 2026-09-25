@@ -45,6 +45,18 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.TransactionStatusControllerTest do
       assert response["finalized_batch_number"] == nil
     end
 
+    test "carries as null every anchor batch while no checkpoint has been anchored", %{conn: conn} do
+      block = insert(:block, number: 4_242)
+      transaction = :transaction |> insert() |> with_block(block)
+
+      response = json_response(get(conn, "/api/v2/transactions/#{transaction.hash}/status"), 200)
+
+      assert response["sealed_batch_number"] == nil
+      assert response["finalized_batch_number"] == nil
+      assert response["checkpoint_id"] == nil
+      assert response["block_number"] == 4_242
+    end
+
     test "a transaction a submitted checkpoint seals is sealed", %{conn: conn} do
       block = insert(:block, number: 4_242)
       transaction = :transaction |> insert() |> with_block(block)

@@ -51,6 +51,18 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.AnchorControllerTest do
       assert response["items"] == []
     end
 
+    test "carries as null the heights and the state root a checkpoint log left out", %{conn: conn} do
+      insert_anchor(21, kernel_height: nil, sealed_height: nil, state_root: nil)
+
+      response = json_response(get(conn, "/api/v2/paxeer-x/anchors"), 200)
+
+      assert [anchor] = response["items"]
+      assert anchor["checkpoint_height"] == nil
+      assert anchor["sealed_height"] == nil
+      assert anchor["state_root"] == nil
+      assert anchor["batch_number"] == 21
+    end
+
     test "paginates", %{conn: conn} do
       for batch_number <- 1..51, do: insert_anchor(batch_number)
 

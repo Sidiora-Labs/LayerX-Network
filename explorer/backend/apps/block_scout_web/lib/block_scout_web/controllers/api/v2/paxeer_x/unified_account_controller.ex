@@ -4,6 +4,7 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.UnifiedAccountController do
   """
 
   use BlockScoutWeb, :controller
+  use OpenApiSpex.ControllerSpecs
 
   import BlockScoutWeb.Chain, only: [paging_options: 1, split_list_by_page: 1]
 
@@ -16,6 +17,24 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.UnifiedAccountController do
 
   @api_true [api?: true]
 
+  tags(["paxeer-x"])
+
+  operation :unified,
+    summary: "Retrieve the one-account view of an address on Paxeer X Network",
+    description:
+      "Retrieves the one-account view of an EVM address: the account's four identities, one asset list " <>
+        "where each asset carries a single total beside its chain, custody and kernel parts, and one " <>
+        "activity feed merging the chain's transactions and token transfers with the LayerX kernel " <>
+        "events. The feed is keyed by the block number and the index of the last item it returned.",
+    parameters:
+      [address_hash_param() | base_params()] ++
+        define_paging_params(["block_number", "index", "items_count"]),
+    responses: [
+      ok: {"The one-account view of the address.", "application/json", Schemas.PaxeerX.UnifiedAccount},
+      forbidden: ForbiddenResponse.response(),
+      unprocessable_entity: {"Invalid parameter(s).", "application/json", message_response_schema()}
+    ]
+
   @doc """
   Handles GET requests to `/api/v2/addresses/:address_hash_param/unified`.
 
@@ -23,7 +42,7 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.UnifiedAccountController do
   asset carries a single total beside its chain, custody and kernel parts, and one activity
   feed merging the chain's transactions and token transfers with the LayerX kernel events.
   """
-  @spec unified(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  @spec unified(Plug.Conn.t(), map()) :: Plug.Conn.t() | {atom(), any()}
   def unified(conn, %{"address_hash_param" => address_hash_string} = params) do
     with {:format, {:ok, address_hash}} <- {:format, Chain.string_to_address_hash(address_hash_string)},
          {:ok, false} <- AccessHelper.restricted_access?(address_hash_string, params) do
