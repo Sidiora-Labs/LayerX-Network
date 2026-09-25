@@ -212,3 +212,123 @@ This was exercised against the local postgres:16 instance with a role holding on
 
 Size `POOL_SIZE_API` against the replica's own `max_connections` rather than the primary's —
 the two pools are independent.
+
+## 5. Seeding a fresh database from an older one
+
+`../tools/copy-blockscout-11-to-10.sh` copies the chain tables of a Blockscout 11.x database
+into a freshly migrated 10.2.6 one. It reads both connection strings from `SRC_DATABASE_URL`
+and `DST_DATABASE_URL` and from nowhere else, and it prints neither.
+
+### The two cuts
+
+Before the first table is read the run pins two cuts, and every table is copied and counted
+under one of them.
+
+The first is a **block ceiling**: the highest block number the source has marked `consensus`
+at that moment. Every table that carries a block number is bounded by it on both sides of the
+comparison.
+
+The second is an **insert cut**: the source's own clock, read in UTC at the same moment. It
+bounds the tables that carry no block number at all — `addresses`, `tokens`,
+`contract_methods` — through the `inserted_at` column Blockscout stamps on every row and the
+copy carries across unchanged. Both sides are compared as epoch seconds, so neither session's
+`TimeZone` can shift the comparison. Without the insert cut, a source that keeps writing
+addresses while the copy runs would be counted as rows the copy had lost.
+
+So a source that keeps indexing cannot be read as a missing row: what it grows by is above the
+cut on both sides of the comparison. Both cuts are printed at the start of the run and
+repeated in the summary. A table with neither a block number nor an `inserted_at` on both
+sides has no cut to apply; it is copied whole and counted whole, and the summary names it.
+
+A row whose block number is null — a pending transaction, a log the indexer has not yet
+assigned — is below no ceiling and is not copied. The same predicate excludes it from both
+counts, so it is not a mismatch either. Re-indexing writes those rows in the destination.
+
+### Resuming
+
+A table that carries a block number on both sides is copied in block-aligned batches;
+`BLOCK_BATCH` sets how many block numbers one batch spans and defaults to 100000. A batch is
+one statement, so it is either wholly inserted or not inserted at all and no block is ever
+half copied. That statement also advances the table's row in
+`public.paxeer_x_copy_progress` in the destination, which the tool creates:
+
+| column | meaning |
+|---|---|
+| `table_name` | the table the row is about |
+| `ceiling` | the ceiling the last run used |
+| `highest_key` | the highest block number the tool has copied, including ranges that held no row |
+| `rows_copied` | rows inserted across every run |
+| `updated_at` | when that last changed |
+
+A later run continues each table above the greater of that record and the table's own highest
+copied block, and inserts with `ON CONFLICT DO NOTHING`, so a row that is already there keeps
+the values it has and a rerun with nothing to do writes nothing. An interrupted copy is
+resumed by running the same command again.
+
+Tables with no block number on both sides — `addresses`, `tokens`, `contract_methods` and the
+rest — have no key to resume from. They are copied whole up to the insert cut under the same
+conflict handling, so a rerun still writes nothing.
+
+Rows land in an unlogged staging table (`public.paxeer_x_copy_stage`) first, because `COPY`
+itself has no conflict handling; the tool drops it when the table is done. Both it and the
+progress table can be dropped once the seeding is finished.
+
+### Repairing
+
+Continuing above the highest key already copied is an optimisation, and on its own it would be
+unsound. A source row can appear below that mark after the fact — a block range the source was
+still backfilling, or a row that had no block number when the copy passed it and was given one
+under the ceiling afterwards — and a run that only ever moves forward would never see it.
+
+The verification is what decides. When a table comes up short under its cut, the run rescans
+that table's whole range under the cut, which `ON CONFLICT DO NOTHING` makes free for every
+row already in the destination, and counts it again. The summary names every table it rescanned
+and how many rows the rescan added. A table that is still short afterwards, or that holds more
+rows than the source does under the cut, is reported and the run ends `3`: this tool never
+deletes a row to make a count agree.
+
+### The destination guard
+
+A destination table that holds rows the tool has no progress record for is refused, and the
+run stops naming that table; `ALLOW_NONEMPTY_DESTINATION=1` appends to it anyway. Resuming the
+tool's own interrupted run needs no flag — those rows are recorded — so the guard still only
+stands between the copy and data that came from somewhere else.
+
+### Columns
+
+The two schemas are intersected by column name at run time rather than mapped in advance. A
+source column the destination has no name for is reported as it is skipped, and the summary
+repeats them by name for `transactions` and `internal_transactions`. A destination column the
+source cannot answer for is left at its default.
+
+`internal_transactions.trace_address` is the exception. The 10.2.6 schema creates it `NOT
+NULL` while an 11.x row may carry no trace address at all, so copying the value across as it
+stands puts a null into a column that forbids it and the table fails as a whole. The copy
+derives it instead from the source's own representation of where the row sits: the root call
+of a transaction, at index 0, gets the empty array Blockscout writes for it, and every other
+row gets its index as a one-element array. The source carries no parent link, so the derived
+value is the row's flat position within its transaction rather than a reconstruction of the
+call tree; it is unique per transaction and orders the rows the way the source orders them. A
+source row that does carry a trace address keeps the one it has.
+
+### Verifying
+
+After the last table the tool counts both sides under each table's cut and prints one line per
+table, rescans any table that came up short and counts it again, and then prints the summary.
+It exits `0` when every table matches, `1` on a usage or precondition failure, `2` when a copy
+was refused or failed — naming the table it stopped on — and `3` when the copy finished but at
+least one table's counts still differ, naming every such table with both counts.
+
+`DRY_RUN=1` pins and prints both cuts, plans each table and reports the column differences
+without writing anything at all, including the progress table.
+
+### Proving it
+
+`../tools/tests/copy-blockscout-test.sh` starts two disposable PostgreSQL 16 containers on
+ephemeral loopback ports, creates a source schema shaped like 11.x and a destination schema
+shaped like 10.2.6, seeds synthetic rows, and asserts the tool's exit code and the resulting
+row counts across a dry run, a full copy, a rerun, a copy interrupted part way through a
+table, its resume, a source that grows in both a block table and a block-less one after the
+cuts are pinned, the non-empty destination guard, a source row that appears under the ceiling
+after the copy has passed it, and a destination holding a row the source does not. It removes
+both containers on every exit path and needs `docker` and `psql` on the path.

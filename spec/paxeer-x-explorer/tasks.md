@@ -151,7 +151,7 @@
     - Add contracts/test/WPAXTest.t.sol asserting the display name, the symbol and the decimals, a deposit crediting the sender's balance and emitting its event, a withdrawal debiting the sender and paying out, a transfer between accounts and an approved transfer, so the rename is proven to have moved nothing else.
     - Record in spec/paxeer-x-explorer/qualification.kvx that the wrapped-coin fixtures under the JSON-RPC test trees carry the same old display name and are deliberately out of scope for this task.
     - _Requirements: 11.1, 11.2, 11.3, 11.4_
-  - [ ] 2.9 Make the database copy idempotent, resumable and verifiable
+  - [x] 2.9 Make the database copy idempotent, resumable and verifiable
     - In explorer/deploy/tools/copy-blockscout-11-to-10.sh pin a block ceiling before the first table is copied - the source's highest fully written block number at that moment - record it in the run summary, restrict every table's copy predicate to rows at or below it, and make the verification count both sides at that same ceiling.
     - Make each table's copy resumable and idempotent: read the target's highest already copied key for the table, copy only rows above it and below the ceiling, insert with conflict handling that leaves an existing row untouched, and write the table's progress so an interrupted run continues rather than restarting.
     - Derive the target's trace address for internal transactions from the source's representation instead of copying a null into the column that forbids it, and report by name the source-only columns of the internal-transaction and transaction tables as not copied.
