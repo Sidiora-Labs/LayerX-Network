@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 
-import { ChakraProvider } from '@chakra-ui/react';
 import React from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { TokenInfo } from 'types/api/token';
 import type { Transaction } from 'types/api/transaction';
 
 import { base } from 'mocks/txs/tx';
+import { render as renderComponent } from 'ui/paxeerX/account/testWrapper';
 import { afterAll, describe, expect, it, vi } from 'vitest';
+import { within } from 'vitest/lib';
 
 import type TxFee from './TxFee';
 
@@ -49,11 +49,8 @@ const render = async(props: React.ComponentProps<typeof TxFee>) => {
   };
   vi.resetModules();
   const { 'default': Component } = await import('./TxFee');
-  const { 'default': theme } = await import('toolkit/theme/theme');
-  const container = document.createElement('div');
-  container.innerHTML = renderToStaticMarkup(<ChakraProvider value={ theme }><Component { ...props }/></ChakraProvider>);
-  container.querySelectorAll('style').forEach((style) => style.remove());
-  return container;
+  const { container } = renderComponent(<div data-testid="fee"><Component { ...props }/></div>);
+  return within(container).getByTestId('fee');
 };
 
 describe('TxFee', () => {

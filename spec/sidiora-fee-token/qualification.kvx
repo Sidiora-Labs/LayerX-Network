@@ -268,3 +268,10 @@ exit_code = 1
 log_path = "/root/lx-lanes/sid-t1-6/.logs/verify.log"
 observed = "Compilation passed with a 4 GB Node heap; 16 focused tests failed because jsdom lacks window.matchMedia, while five tests passed."
 assumption = "Qualification requires a real media-query implementation or browser test environment; no stub or weakened assertion was added."
+
+[observation.1.6.6]
+revision = "pending"
+command = "timeout 20m sh -c 'cd explorer/frontend && HUSKY=0 yarn install --frozen-lockfile && yarn lint:tsc && yarn test:vitest run ui/shared/tx ui/tx/details'"
+exit_code = 1
+log_path = "/root/lx-lanes/sid-t1-6/.logs/verify.log"
+observed = "Compilation and 15 tests passed; six detail tests fail because Vitest imports icons/info.svg as a URL rather than a React component. Qualification assumes authorization to configure the existing SVG transformer outside the task file list; no production code or assertions were changed."
