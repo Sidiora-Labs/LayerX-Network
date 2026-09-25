@@ -37,7 +37,11 @@ func (k *Keeper) GetParamsPreV606(ctx sdk.Context) (params types.ParamsPreV606) 
 }
 
 func (k *Keeper) GetParamsIfExists(ctx sdk.Context) types.Params {
-	params := types.Params{}
+	params := types.Params{
+		AllowedFeeDenoms:  append([]types.AllowedFeeDenom(nil), types.DefaultAllowedFeeDenoms...),
+		MaxFeeTokenSpread: types.DefaultMaxFeeTokenSpread,
+		FeeTokenEnabled:   types.DefaultFeeTokenEnabled,
+	}
 	k.Paramstore.GetParamSetIfExists(ctx, &params)
 	return params
 }
@@ -264,4 +268,31 @@ func (k *Keeper) GetSstoreSetGasEIP2200(ctx sdk.Context) uint64 {
 		return LegacySstoreSetGasEIP2200
 	}
 	return sstore
+}
+
+func (k *Keeper) GetAllowedFeeDenoms(ctx sdk.Context) []types.AllowedFeeDenom {
+	denoms := append([]types.AllowedFeeDenom(nil), types.DefaultAllowedFeeDenoms...)
+	k.Paramstore.GetIfExists(ctx, types.KeyAllowedFeeDenoms, &denoms)
+	return denoms
+}
+
+func (k *Keeper) GetMaxFeeTokenSpread(ctx sdk.Context) sdk.Dec {
+	spread := types.DefaultMaxFeeTokenSpread
+	k.Paramstore.GetIfExists(ctx, types.KeyMaxFeeTokenSpread, &spread)
+	return spread
+}
+
+func (k *Keeper) GetFeeTokenEnabled(ctx sdk.Context) bool {
+	enabled := types.DefaultFeeTokenEnabled
+	k.Paramstore.GetIfExists(ctx, types.KeyFeeTokenEnabled, &enabled)
+	return enabled
+}
+
+func (k *Keeper) IsAllowedFeeDenom(ctx sdk.Context, denom string) (bool, string) {
+	for _, entry := range k.GetAllowedFeeDenoms(ctx) {
+		if entry.Denom == denom {
+			return true, entry.OraclePair
+		}
+	}
+	return false, ""
 }
