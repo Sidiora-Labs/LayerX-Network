@@ -360,7 +360,11 @@ reqs = ["2.2","2.5"]
 
 [task.1.11]
 title = "Make the services lint gate green"
-status = "pending"
+status = "done"
+revision = "885912cb301082278cfc748489bc79f62766b3b7"
+command = "timeout 20m sh -c 'tools/explorer/lint-services.sh'"
+exit_code = 0
+log_path = "/root/lx-ops/explorer-spec-2026-09-25/logs/ex-t1-11.log"
 wave = 1
 requires = []
 do_1 = "Write tools/explorer/lint-services.sh which, for each of explorer/services/smart-contract-verifier and explorer/services/sig-provider, runs `cargo fmt --all --check` and `cargo clippy --all-targets --locked -- -D warnings` from that service directory and returns the first non-zero exit code."
