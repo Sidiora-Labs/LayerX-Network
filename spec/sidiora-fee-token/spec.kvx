@@ -405,6 +405,7 @@ reqs = ["10.1","10.2","10.3","10.4","10.5","10.6"]
 [task.2.7]
 title = "Accept the same fee denoms on the Cosmos path"
 status = "pending"
+revision = "1855f4903a90b558c52f7456a04c8aab89f4a88b"
 wave = 2
 requires = ["2.4"]
 do_1 = "Add a fee-denom conversion to the Cosmos fee path so a fee offered in a denom the x/evm fee-token parameters allow is converted to Paxeer terms through the same oracle reading and the same spread bound the EVM path uses, and a denom the parameters do not allow is refused."
