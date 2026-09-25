@@ -59,3 +59,11 @@ symbol = "parsePaxeerXIdentifier"
 observed = "The frontend parser recognises a pax address, a did:layerx: identifier and a bare 32-byte kernel key, but not the agent:did:layerx:<key>:main account id spelling that Explorer.Chain.PaxeerX.Identity accepts, so that spelling never reaches the search path."
 assumption = "Task 2.2 requires the parser to recognise and reject exactly what it did before, so the gap is recorded here instead of closed."
 severity = "note"
+
+[observation.2.5.1]
+task = "2.5"
+file = "explorer/backend/apps/indexer/lib/indexer/block/fetcher.ex"
+symbol = "do_import_options/3"
+observed = "The paxeer_x clause maps five transform keys onto import options and names neither paxeer_x_guarantor_events nor paxeer_x_deposit_roots, so no decoded row can reach the two tables this task adds."
+assumption = "No task in this feature lists that file in its touches, so the wiring belongs to whichever task takes the fetcher; the tables, schemas and runners are complete and are exercised end to end through Explorer.Chain.Import.all/1."
+severity = "blocker"

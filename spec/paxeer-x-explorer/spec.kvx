@@ -475,7 +475,11 @@ done_log = "logs/ex-t2-4.log"
 
 [task.2.5]
 title = "Add the guarantor and deposit-root tables with their runners"
-status = "pending"
+status = "done"
+done_revision = "f6e1844a794f89fe2cf8fa6e47cd62cca603ea53"
+done_command = "timeout 20m sh -c 'explorer/deploy/tools/mix-in-builder.sh test apps/explorer/test/explorer/chain/paxeer_x'"
+done_exit_code = 0
+done_evidence = "109 tests, 0 failures"
 wave = 2
 requires = ["1.1"]
 do_1 = "Write a migration under explorer/backend/apps/explorer/priv/repo/migrations creating lx_guarantor_events with the key, block and provenance columns the other lx_ tables carry and the columns the anchor precompile's guarantor, challenge, availability and sequencer-authorisation events supply - guarantor id, signer and operator addresses, bond and amount, batch number, challenge id, challenge kind, upheld flag, evidence hash, challenger, reporter and reporter reward, class and availability masks, sequencer id, sequencer public key, first and last batch number, unbond amount and completion time - with an enumerated kind column naming each event and indexes on the guarantor id and the batch number."

@@ -2,7 +2,7 @@ defmodule Explorer.Chain.PaxeerX.ImportTest do
   use Explorer.DataCase
 
   alias Explorer.Chain.Import
-  alias Explorer.Chain.PaxeerX.{AccountBinding, Anchor, CustodyEvent, MarketEvent, Receipt}
+  alias Explorer.Chain.PaxeerX.{AccountBinding, Anchor, CustodyEvent, DepositRoot, GuarantorEvent, MarketEvent, Receipt}
 
   setup do
     chain_type = Application.get_env(:explorer, :chain_type)
@@ -23,6 +23,8 @@ defmodule Explorer.Chain.PaxeerX.ImportTest do
       assert [%AccountBinding{}] = imported[:insert_paxeer_x_account_bindings]
       assert [%CustodyEvent{}] = imported[:insert_paxeer_x_custody_events]
       assert [%Anchor{}] = imported[:insert_paxeer_x_anchors]
+      assert [%GuarantorEvent{}] = imported[:insert_paxeer_x_guarantor_events]
+      assert [%DepositRoot{}] = imported[:insert_paxeer_x_deposit_roots]
       assert [%Receipt{}] = imported[:insert_paxeer_x_receipts]
       assert [%MarketEvent{}] = imported[:insert_paxeer_x_market_events]
 
@@ -62,6 +64,24 @@ defmodule Explorer.Chain.PaxeerX.ImportTest do
       assert anchor.signers == 9
       assert anchor.parameters["batchNumber"] == 91_234
 
+      guarantor = Repo.one!(GuarantorEvent)
+      assert guarantor.kind == :guarantor_slashed
+      assert guarantor.event_name == "GuarantorSlashed"
+      assert to_string(guarantor.guarantor_id) == bytes32(0x1A)
+      assert guarantor.batch_number == 91_234
+      assert Decimal.equal?(guarantor.amount, Decimal.new(4_000_000_000_000_000_000))
+      assert to_string(guarantor.reporter_address_hash) == "0x0000000000000000000000000000000000000031"
+      assert Decimal.equal?(guarantor.reporter_reward, Decimal.new(400_000_000_000_000_000))
+      assert guarantor.parameters["reason"] == 2
+
+      deposit_root = Repo.one!(DepositRoot)
+      assert deposit_root.event_name == "DepositRootRegistered"
+      assert to_string(deposit_root.checkpoint_id) == bytes32(0x6A)
+      assert to_string(deposit_root.deposit_root) == bytes32(0x6B)
+      assert to_string(deposit_root.commitment) == bytes32(0x6C)
+      assert deposit_root.version == 1
+      assert deposit_root.parameters["version"] == 1
+
       receipt = Repo.one!(Receipt)
       assert receipt.status == :checkpoint_finalised
       assert to_string(receipt.receipt_id) == bytes32(0x5A)
@@ -85,6 +105,8 @@ defmodule Explorer.Chain.PaxeerX.ImportTest do
       assert Repo.aggregate(AccountBinding, :count) == 1
       assert Repo.aggregate(CustodyEvent, :count) == 1
       assert Repo.aggregate(Anchor, :count) == 1
+      assert Repo.aggregate(GuarantorEvent, :count) == 1
+      assert Repo.aggregate(DepositRoot, :count) == 1
       assert Repo.aggregate(Receipt, :count) == 1
       assert Repo.aggregate(MarketEvent, :count) == 1
     end
@@ -103,6 +125,22 @@ defmodule Explorer.Chain.PaxeerX.ImportTest do
       assert {"is invalid", _} = changeset.errors[:kind]
       assert Repo.aggregate(CustodyEvent, :count) == 0
       assert Repo.aggregate(AccountBinding, :count) == 0
+    end
+
+    test "a guarantor event whose kind the schema does not declare is rejected before any insert", %{
+      block: block,
+      transaction: transaction
+    } do
+      data =
+        block
+        |> import_data(transaction)
+        |> put_in([:paxeer_x_guarantor_events, :params, Access.at(0), :kind], :guarantor_retired)
+
+      assert {:error, [changeset]} = Import.all(data)
+      refute changeset.valid?
+      assert {"is invalid", _} = changeset.errors[:kind]
+      assert Repo.aggregate(GuarantorEvent, :count) == 0
+      assert Repo.aggregate(DepositRoot, :count) == 0
     end
   end
 
@@ -170,6 +208,46 @@ defmodule Explorer.Chain.PaxeerX.ImportTest do
             state_root: bytes32(0x7B),
             receipt_root: bytes32(0x7C),
             signers: 9
+          })
+        ]
+      },
+      paxeer_x_guarantor_events: %{
+        params: [
+          Map.merge(key, %{
+            log_index: 5,
+            event_name: "GuarantorSlashed",
+            parameters: %{
+              "guarantorId" => bytes32(0x1A),
+              "reason" => 2,
+              "batchNumber" => 91_234,
+              "amount" => 4_000_000_000_000_000_000,
+              "reporter" => address(0x31),
+              "reporterReward" => 400_000_000_000_000_000
+            },
+            kind: :guarantor_slashed,
+            guarantor_id: bytes32(0x1A),
+            batch_number: 91_234,
+            amount: 4_000_000_000_000_000_000,
+            reporter_address_hash: address(0x31),
+            reporter_reward: 400_000_000_000_000_000
+          })
+        ]
+      },
+      paxeer_x_deposit_roots: %{
+        params: [
+          Map.merge(key, %{
+            log_index: 6,
+            event_name: "DepositRootRegistered",
+            parameters: %{
+              "checkpointId" => bytes32(0x6A),
+              "depositRoot" => bytes32(0x6B),
+              "commitment" => bytes32(0x6C),
+              "version" => 1
+            },
+            checkpoint_id: bytes32(0x6A),
+            deposit_root: bytes32(0x6B),
+            commitment: bytes32(0x6C),
+            version: 1
           })
         ]
       },
