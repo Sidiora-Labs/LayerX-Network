@@ -1,6 +1,7 @@
 package state_test
 
 import (
+	"github.com/sidiora-labs/paxeer-network/modules/evm/keeper"
 	"testing"
 	"time"
 
@@ -118,4 +119,75 @@ func TestSurplus(t *testing.T) {
 	surplus, err = db.Finalize()
 	require.Nil(t, err)
 	require.Equal(t, sdk.NewInt(3), surplus)
+}
+
+func TestFeeTokenBalanceMovements(t *testing.T) {
+	app := testkeeper.EVMTestApp
+	k := &app.EvmKeeper
+	ctx, _ := app.GetContextForDeliverTx(nil).CacheContext()
+	payer, evmAddr := testkeeper.MockAddressPair()
+	k.SetAddressMapping(ctx, payer, evmAddr)
+	coins := sdk.NewCoins(sdk.NewInt64Coin("usid", 10_000_000), sdk.NewInt64Coin("uhpx", 1_000_000))
+	require.NoError(t, k.BankKeeper().MintCoins(ctx, types.ModuleName, coins))
+	require.NoError(t, k.BankKeeper().SendCoinsFromModuleToAccount(ctx, types.ModuleName, payer, coins))
+	db := state.NewDBImpl(ctx, k, false)
+	charge := &state.FeeTokenCharge{Payer: evmAddr, Denom: "usid", Rate: sdk.NewDec(2_000_000)}
+	db.SetFeeTokenCharge(charge, false)
+	require.Equal(t, uint256.NewInt(6_000_000_000_000_000_000), db.GetBalance(evmAddr))
+	db.SubBalance(evmAddr, uint256.NewInt(1_000_000_000_000_000_001), tracing.BalanceDecreaseGasBuy)
+	require.NoError(t, db.Error())
+	require.Equal(t, sdk.NewInt(7_999_999), k.BankKeeper().GetBalance(db.Ctx(), payer, "usid").Amount)
+	require.Equal(t, uint256.NewInt(1_000_000_000_000_000_000), db.GetBalance(evmAddr))
+	db.AddBalance(evmAddr, uint256.NewInt(500_000_000_000_000_001), tracing.BalanceIncreaseGasReturn)
+	require.Equal(t, sdk.NewInt(9_000_000), k.BankKeeper().GetBalance(db.Ctx(), payer, "usid").Amount)
+	coinbase, err := k.GetFeeCollectorAddress(ctx)
+	require.NoError(t, err)
+	db.AddBalance(coinbase, uint256.NewInt(500_000_000_000_000_001), tracing.BalanceIncreaseRewardTransactionFee)
+	require.NoError(t, db.Error())
+	require.Equal(t, sdk.NewInt(1_000_001), k.BankKeeper().GetBalance(db.Ctx(), state.GetCoinbaseAddress(ctx.TxIndex()), "usid").Amount)
+	require.Equal(t, uint256.NewInt(1_000_000_000_000_000_000), db.GetBalance(evmAddr))
+	surplus, err := db.Finalize()
+	require.NoError(t, err)
+	require.True(t, surplus.IsZero())
+}
+
+func TestFeeTokenOtherBalanceReasons(t *testing.T) {
+	app := testkeeper.EVMTestApp
+	k := &app.EvmKeeper
+	for _, reason := range []tracing.BalanceChangeReason{tracing.BalanceChangeUnspecified, tracing.BalanceChangeTransfer, tracing.BalanceIncreaseRewardTransactionFee} {
+		ctx, _ := app.GetContextForDeliverTx(nil).CacheContext()
+		payer, evmAddr := testkeeper.MockAddressPair()
+		k.SetAddressMapping(ctx, payer, evmAddr)
+		db := state.NewDBImpl(ctx, k, false)
+		db.SetFeeTokenCharge(&state.FeeTokenCharge{Payer: evmAddr, Denom: "usid", Rate: sdk.NewDec(2_000_000)}, true)
+		db.AddBalance(evmAddr, uint256.NewInt(123), reason)
+		require.NoError(t, db.Error())
+		require.Equal(t, uint256.NewInt(123), db.GetBalance(evmAddr))
+		db.SubBalance(evmAddr, uint256.NewInt(23), reason)
+		require.NoError(t, db.Error())
+		require.Equal(t, uint256.NewInt(100), db.GetBalance(evmAddr))
+		require.True(t, k.BankKeeper().GetBalance(db.Ctx(), payer, "usid").Amount.IsZero())
+		surplus, err := db.Finalize()
+		require.NoError(t, err)
+		require.Equal(t, sdk.NewInt(-100), surplus)
+	}
+}
+
+func TestFeeTokenConversionErrorInState(t *testing.T) {
+	app := testkeeper.EVMTestApp
+	k := &app.EvmKeeper
+	for _, debit := range []bool{true, false} {
+		ctx, _ := app.GetContextForDeliverTx(nil).CacheContext()
+		_, payer := testkeeper.MockAddressPair()
+		db := state.NewDBImpl(ctx, k, false)
+		db.SetFeeTokenCharge(&state.FeeTokenCharge{Payer: payer, Denom: "usid", Rate: sdk.ZeroDec()}, true)
+		if debit {
+			db.SubBalance(payer, uint256.NewInt(1), tracing.BalanceDecreaseGasBuy)
+		} else {
+			db.AddBalance(payer, uint256.NewInt(1), tracing.BalanceIncreaseGasReturn)
+		}
+		require.ErrorIs(t, db.Error(), keeper.ErrFeeTokenRateInvalid)
+		_, err := db.Finalize()
+		require.ErrorIs(t, err, keeper.ErrFeeTokenRateInvalid)
+	}
 }

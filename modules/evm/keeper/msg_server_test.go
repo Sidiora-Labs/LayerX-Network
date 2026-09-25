@@ -31,6 +31,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/state"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
+	node "github.com/sidiora-labs/paxeer-network/node"
 	testkeeper "github.com/sidiora-labs/paxeer-network/testutil/keeper"
 )
 
@@ -933,4 +934,46 @@ func TestRegisterPointerDisabled(t *testing.T) {
 	})
 	require.NotNil(t, err)
 	require.Contains(t, err.Error(), "registering CW->ERC pointers has been disabled")
+}
+
+func TestFeeTokenRefundUsesAnteRate(t *testing.T) {
+	app := node.Setup(t, false, true, false)
+	k := &app.EvmKeeper
+	ctx, _ := app.GetContextForDeliverTx(nil).WithBlockHeight(100).CacheContext()
+	params := types.DefaultParams()
+	params.FeeTokenEnabled = true
+	params.AllowedFeeDenoms = []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.NewDec(3_114_000), RateUpdateHeight: 100}}
+	k.SetParams(ctx, params)
+	key, err := crypto.GenerateKey()
+	require.NoError(t, err)
+	to := common.HexToAddress("0x4567")
+	tx, err := ethtypes.SignTx(ethtypes.NewTx(&ethtypes.LegacyTx{Gas: 100_000, GasPrice: big.NewInt(1_000_000_000_000), To: &to, Value: big.NewInt(0)}), ethtypes.LatestSignerForChainID(k.ChainID(ctx)), key)
+	require.NoError(t, err)
+	data, err := ethtx.NewLegacyTx(tx)
+	require.NoError(t, err)
+	msg, err := types.NewMsgEVMTransaction(data)
+	require.NoError(t, err)
+	require.NoError(t, ante.Preprocess(ctx, msg, k.ChainID(ctx), false))
+	payer := k.GetPaxAddressOrDefault(ctx, msg.Derived.SenderEVMAddr)
+	require.NoError(t, k.SetAccountFeeDenom(ctx, msg.Derived.SenderEVMAddr, "usid"))
+	coins := sdk.NewCoins(sdk.NewInt64Coin("usid", 1_000_000))
+	require.NoError(t, k.BankKeeper().MintCoins(ctx, types.ModuleName, coins))
+	require.NoError(t, k.BankKeeper().SendCoinsFromModuleToAccount(ctx, types.ModuleName, payer, coins))
+	builder := app.GetTxConfig().NewTxBuilder()
+	require.NoError(t, builder.SetMsgs(msg))
+	_, err = ante.NewEVMFeeCheckDecorator(k, &app.UpgradeKeeper).AnteHandle(ctx, builder.GetTx(), false, func(ctx sdk.Context, _ sdk.Tx, _ bool) (sdk.Context, error) { return ctx, nil })
+	require.NoError(t, err)
+	require.Equal(t, sdk.NewInt(688_600), k.BankKeeper().GetBalance(ctx, payer, "usid").Amount)
+	params.AllowedFeeDenoms[0].Rate = sdk.NewDec(6_228_000)
+	k.SetParams(ctx, params)
+	response, err := keeper.NewMsgServerImpl(k).EVMTransaction(sdk.WrapSDKContext(ctx), msg)
+	require.NoError(t, err)
+	require.Empty(t, response.VmError)
+	require.Equal(t, uint64(21_000), response.GasUsed)
+	require.Equal(t, sdk.NewInt(934_606), k.BankKeeper().GetBalance(ctx, payer, "usid").Amount)
+	require.Equal(t, sdk.NewInt(65_394), k.BankKeeper().GetBalance(ctx, state.GetCoinbaseAddress(ctx.TxIndex()), "usid").Amount)
+	require.Zero(t, k.GetBalance(ctx, payer).Sign())
+	surplus, err := k.GetAnteSurplusSum(ctx)
+	require.NoError(t, err)
+	require.True(t, surplus.IsZero())
 }
