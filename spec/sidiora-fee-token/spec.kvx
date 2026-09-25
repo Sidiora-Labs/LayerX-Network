@@ -1,0 +1,491 @@
+# spec.kvx - Sidiora as the second official coin and a gas token of Paxeer X
+# Network. SINGLE SOURCE OF TRUTH for this feature.
+#
+# requirements.md / design.md / tasks.md next to this file are GENERATED from it
+# by spec/specgen. Never hand-edit those; edit this file and regenerate.
+#
+# Drive the work with:  cg spec next -> cg spec start <id> -> cg spec done <id>
+#
+# Two bodies of work share one feature because they answer the same question -
+# how does a person pay for a Paxeer X transaction in Sidiora - at two
+# different depths. Wave 1 answers it without touching consensus: a sponsored
+# batch signed by the account, relayed by a gas station that pays Paxeer and is
+# repaid in Sidiora inside the same batch. It ships on its own. Wave 2 answers
+# it in the protocol: Sidiora becomes a native denom the bridge alone mints, its
+# token contract becomes a bank-backed pointer at the address it already has,
+# and the fee path debits it directly - every line of which is a consensus
+# change that lands behind an x/upgrade handler and a governance proposal and is
+# not deployed while the chain is halted. Wave 3 runs one merged gate.
+
+[meta]
+feature   = "sidiora-fee-token"
+title     = "Sidiora - Second Official Coin and Gas Token of Paxeer X Network"
+kind      = "product-feature-specification"
+version   = "0.1.0"
+status    = "draft"
+language  = "Go (the Cosmos application: modules/, precompiles/, node/), Solidity (contracts/src and contracts/governance), Rust (the gas-station service under interop/crates), TypeScript (agent/sdk/typescript and human/apps/web), TypeScript and React (the explorer frontend), Protocol Buffers (api/evm), Markdown (docs/site)"
+repo_root = "contracts/src and contracts/test (the Paxeer Foundry project, foundry.paxeer.toml); contracts/governance, scripts/ and test/ (the kernel Foundry project, foundry.toml); interop/crates and interop/Cargo.toml (the gas station); agent/sdk/typescript and human/apps/web (the two surfaces a person signs from); modules/evm, modules/layerxbridge, modules/tokenfactory, modules/oracle, precompiles/ and node/ (the chain); api/evm (the parameter wire format); tests/chain and testutil/processblock (the integration proof); explorer/frontend (fee rendering); docs/site (the page); spec/sidiora-fee-token/ (this feature and its qualification log)"
+upstream  = "The chain is a Sei-v2 style Cosmos application: x/evm carries go-ethereum 1.16 with pointer contracts, beside x/tokenfactory, x/oracle, x/layerxbridge, x/distribution, x/gov and x/upgrade. Its module layout, keeper shapes, precompile registration and gogoproto parameter conventions are preserved exactly; this feature adds to them and rewrites none of them. spec/layerx-beta remains binding for the human control plane and the beta contract, and nothing here relaxes one of its requirements."
+intro     = "Sidiora is the second official coin of Paxeer X Network. Its symbol is SID, it carries six decimals, its supply is approximately 458.86 million SID, and it lives at an upgradeable proxy at 0x21f7b20a555199fa73A238B1a91FD0f549068fEe whose owner is the foundation account. This feature makes it a gas token: a person holding SID and no Paxeer coin can transact. It does that twice over, at two depths, because the two have different risk and ship at different times. Wave 1 changes no consensus rule. It hardens the EIP-7702 sponsored batch at contracts/src/BatchCallAndSponsor.sol into a Sidiora paymaster - a relayer-signed quote carrying a deadline and a maximum fee, nonce and replay protection over both the account's authorisation and the relayer's quote, and an atomic SID transfer to the sponsor inside the same batch, priced from x/oracle - and stands a gas-station service behind it that signs quotes, submits the 7702 transactions, pays the Paxeer coin and collects Sidiora. The signing support reaches people through agent/sdk/typescript and human/apps/web, and the explorer learns to render a six-decimal Sidiora fee. Wave 2 changes consensus. Sidiora becomes a tokenfactory denom that only the x/layerxbridge module account may mint or burn, because most holders bridge SID in and out and the owner has decided the minting right moves from the foundation account to the bridge; the proxy at its existing address is upgraded to a bank-precompile-backed implementation in the shape of contracts/src/NativePaxTokensERC20.sol and bound as the ERC20 pointer for that denom, so the address people already hold keeps working; the proxy admin moves to governance behind a timelock; x/evm gains fee-token parameters and a per-account fee-token preference precompile; the EVMFeeCheckDecorator in modules/evm/ante/fee.go prices a Sidiora fee in Paxeer terms through x/oracle before geth's BuyGas debits it, and the refund and priority paths follow; the Cosmos fee path accepts the same denoms; and a parameter decides whether Sidiora fees are distributed to validators as they arrive or held at the collector for conversion. Every one of those lands behind an x/upgrade handler and a governance proposal and is not deployed during the halt. The address at 0x21f7b20a555199fa73A238B1a91FD0f549068fEe is never replaced: every design in this feature keeps it and upgrades behind it."
+
+# Decisions locked before implementation begins. They bind every task in this
+# feature; where they touch the human control plane or the beta contract they
+# defer to spec/layerx-beta, which stays normative.
+[decision]
+code_quality        = "A+ on every changed path: real code paths, real types, real fixtures. No stub, mock or fake test double on a production path, no placeholder implementation, no TODO, FIXME or 'for now' comment, no dead branch left behind to be cleaned up later. A test exercises the module it names through its public interface with data shaped like production data; a test that would need a fake to pass is a signal that the implementation is wrong, not that the test needs a double. Where a Foundry test must stand in for a precompile the EVM provides at runtime, it uses the shape contracts/test/NativePaxTokensERC20Test.t.sol already uses for the bank precompile and the production contract keeps calling the real precompile address."
+token_identity      = "The token is Sidiora. Its symbol is SID, it carries six decimals, one SID is 1000000 base units, and its supply is approximately 458.86 million SID. It lives at an upgradeable proxy at 0x21f7b20a555199fa73A238B1a91FD0f549068fEe whose owner is the foundation account. No task proposes, prepares or documents a replacement address, a second Sidiora token or a migration of holders to a new contract: the address stays and the implementation behind it is upgraded. The owner has decided that the right to mint Sidiora moves from the foundation account to the bridge, because most holders bridge SID in and out; after wave 2 the only minter and burner of the native denom is the x/layerxbridge module account."
+governance_gate     = "Every change to consensus - a parameter, a precompile, an ante decorator, a denom, a pointer binding, a distribution rule - reaches a running chain only through an x/upgrade handler registered in node/upgrades.go under a name listed in node/tags and through a governance proposal that carries it. No task changes a running chain, no task writes a genesis or a live parameter directly, and no migration runs outside a registered upgrade handler. Wave 2 is written and qualified during the halt and deployed after it."
+no_weakening        = "Inherited from workflow.kvx and restated because this feature touches the fee path: no assertion is relaxed, no bound loosened, no type widened, no silent fallback added, no test skipped, deleted or marked pending, no lint rule disabled on a file this feature owns, and no continue-on-error added to a workflow. A fee check that cannot be satisfied fails the transaction; it never falls back to charging nothing, to charging the Paxeer coin silently, or to a stale price. Where the code and a check disagree, both stay exactly as written and the conflict is recorded in spec/sidiora-fee-token/qualification.kvx."
+test_ratio          = "One to one. Every task's touches list names its test files explicitly, and every production file a task changes is accompanied by a test file that changes or is added in the same task and that exercises it: a Go *_test.go in the same package, a Solidity *.t.sol under contracts/test or test/, a Rust #[cfg(test)] module or a file under the crate's tests/, a TypeScript *.test.ts or *.spec.ts, or an explorer *.spec.ts or *.spec.tsx. Generated files, Protocol Buffer definitions, workflow YAML, JSON fixtures and Markdown are not production files for the ratio and need no test file of their own; the behaviour a generated file carries is tested through the hand-written code that reads it."
+testing_allowance   = "Testing time is bounded on purpose. Every task's verify_cmd is one command wrapped in `timeout 20m`, run from the repository root. A task gets one build of its declared targets and one verify_cmd run, then at most two task-scoped repair cycles, each followed by exactly one rerun. Aggregate suites, the workspace Go matrix, the full Foundry project and the workspace Clippy run once, in the wave gate task of wave 3, never per task and never per rebase. A task whose verify_cmd exceeds its timeout stops at thirty minutes and reports implemented-not-qualified with the exact command, exit code and log path; that is an acceptable outcome and is never dressed up as a pass."
+naming              = "The product is Paxeer X Network. LayerX is the name of the kernel domain only: it stays on kernel modules, kernel precompiles and kernel entities that already carry it, and no new user-facing name introduced by this feature reads LayerX. The Paxeer coin is PAX, its base denom is uhpx and it has eighteen decimals; Sidiora is SID with six decimals. No file, comment, commit message or log line introduced by this feature carries a date, a hostname, an IP address, a port of an internal host, an internal URL, a credential or the name of an agent or a working branch."
+generated_files     = "CLAUDE.md, AGENTS.md, .github/copilot-instructions.md, .codify/agent-context.md and the requirements.md, design.md and tasks.md mirrors under spec/*/ are generated and off limits: edit spec/workflow.kvx or this file and regenerate. modules/evm/types/params.pb.go and every other *.pb.go are generated from api/ by the repository's Protocol Buffer pipeline and are regenerated by it, never hand-edited. precompiles/*/setup.go is generated by scripts/bump_version and is produced the same way for any precompile this feature adds."
+production_safety   = "No task touches mainnet, a production deployment, its services, its variables or its domains, and no task reads, writes or commits a .env file or any secret. The gas station's relayer key, its endpoints and its policy enter a process through a configuration file path and named environment variables documented in the crate, never through a literal value committed to the repository. No task broadcasts a transaction to a public network; every submission path is proven against a local node or a recorded fixture."
+fee_safety          = "A fee denominated in Sidiora is converted to Paxeer terms only from an x/oracle rate that is present and within the governed maximum spread. A missing rate, a stale rate or a rate outside the spread refuses the transaction; it never charges zero, never charges the last known rate without bound and never lets the transaction through unpaid. The conversion is integer arithmetic over sdk.Dec throughout - six decimals on the Sidiora side and eighteen on the Paxeer side - and rounds in the network's favour at the charge and in the payer's favour at the refund."
+upstream_conventions = "modules/, precompiles/ and node/ follow the application's existing shapes: a keeper method lives beside the state it reads, a parameter is a gogoproto field with a ParamSetPair and a validator, a precompile carries its Solidity interface, its abi.json, a generated setup.go and a versions directory, and an ante decorator is registered in node/ante.go in the position its ordering requires. A new crate under interop/crates follows interop/crates/layerx-bridge-relayer: a lib plus a thin bin, a config module, a journal, a transport seam, and workspace lints left exactly as interop/Cargo.toml declares them."
+publication         = "A qualified task is published immediately: one commit per task from the repository root describing the change honestly and naming the gates that actually ran, pushed before the next task starts, with a co-author trailer naming the model that ran the task. Several tasks are never batched into one commit and a finished task is never left unpushed."
+
+[design]
+overview = "Three waves. Wave 1 is the sponsored path and changes no consensus rule, so it can ship while the chain is halted and keeps working afterwards: the sponsored batch at contracts/src/BatchCallAndSponsor.sol becomes a Sidiora paymaster with a relayer-signed quote; a new Rust crate under interop/crates, modelled on the bridge relayer that already lives there, signs those quotes and submits the 7702 transactions; the TypeScript SDK gains the authorisation and quote calls; the human web application gains the journey that uses them; and the explorer learns to render a six-decimal Sidiora fee. Wave 2 is the protocol change and is written, qualified and left ready rather than deployed: the denom and its single minter, the bank-backed implementation behind the existing proxy and its pointer binding, the proxy admin behind a governance timelock, the fee-token parameters, the per-account preference precompile, the EVM fee path, the Cosmos fee path, the destination of Sidiora fees, and finally the upgrade handler that turns all of it on, the integration proof through testutil/processblock and the documentation page. Its touched paths are disjoint where the dependency graph allows, so implementation runs in parallel and only the upgrade handler and the integration proof wait for the rest. Wave 3 runs the Go, Rust and Foundry suites once on the merged revision and writes down what ran."
+
+[tasks]
+heading = "Implementation Plan: Sidiora as a Paxeer X Network Gas Token"
+
+# --------------------------------------------------------------------------
+# REQUIREMENTS
+# --------------------------------------------------------------------------
+
+[req.1]
+title = "Sponsored Gas Paid in Sidiora"
+story = "As someone who holds Sidiora and no Paxeer coin, I want to sign a batch that a sponsor pays for and that repays the sponsor in Sidiora in the same transaction, so that I can transact without first acquiring the network coin."
+ac_1 = "THE sponsored batch contract SHALL execute a batch only when it carries both the account's authorisation over the batch and a relayer quote signed by the relayer named in that quote, and SHALL revert when either signature is absent, recovers to a different address, or covers different bytes."
+ac_2 = "THE quote SHALL carry the sponsor address, the Sidiora token address, the maximum Sidiora amount the account will pay, the quoted amount, a deadline and a quote nonce, and the contract SHALL revert when the block timestamp is past the deadline, when the quoted amount exceeds the maximum, or when the quote nonce has already been consumed."
+ac_3 = "THE contract SHALL transfer the quoted Sidiora amount from the account to the sponsor inside the same batch execution, before or after the batch calls as the ordering the contract documents requires, and SHALL revert the whole batch when that transfer fails, so a batch that executes and a sponsor that is repaid are the same event."
+ac_4 = "THE quoted amount SHALL be checked against the Sidiora price the oracle precompile reports, and a quote whose implied rate lies outside the contract's declared spread from that rate SHALL be rejected; a rate the oracle does not report SHALL reject the quote rather than skip the check."
+ac_5 = "THE batch nonce SHALL keep protecting the account's authorisation against replay exactly as it does now, and the quote nonce SHALL protect the relayer's quote against replay independently, so replaying either half alone reverts."
+ac_6 = "THE direct execution path, which the account itself calls with no signature, SHALL keep working and SHALL require no quote, and the contract SHALL keep receiving the network coin."
+ac_7 = "A Foundry test SHALL cover a successful sponsored batch with the sponsor repaid, a missing and a wrong account signature, a missing and a wrong relayer signature, an expired deadline, a quoted amount above the maximum, a replayed quote nonce, a replayed batch nonce, a failing Sidiora transfer reverting the whole batch, a quote outside the oracle spread, an oracle that reports no rate, and the direct execution path."
+
+[req.2]
+title = "The Gas Station"
+story = "As the operator of the sponsored path, I want a service that quotes a Sidiora price, submits the transaction, pays the Paxeer coin and collects the Sidiora, so that sponsorship is a running system rather than a contract nobody drives."
+ac_1 = "THE gas station SHALL be a Rust crate in the interop workspace, built as a library plus a thin binary that takes a configuration file path, in the shape interop/crates/layerx-bridge-relayer already uses, and SHALL compile under the workspace lints interop/Cargo.toml declares with no allow added at crate scope."
+ac_2 = "THE quote it signs SHALL carry exactly the fields the contract verifies, SHALL be produced over the digest the contract recovers, and SHALL be priced from the chain's own oracle reading plus the station's configured margin, refusing to quote when the rate is absent, stale beyond the configured age or outside the configured spread."
+ac_3 = "THE station SHALL refuse a quote that would exceed its configured per-account, per-interval or per-quote limits, and SHALL refuse to quote at all when its Paxeer balance is below its configured floor, so it cannot promise gas it cannot pay for."
+ac_4 = "THE submission path SHALL build the EIP-7702 transaction carrying the account's authorisation and the signed quote, SHALL record the exact signed bytes in an append-only journal before broadcast so a restart rebroadcasts rather than re-signs, and SHALL treat a consumed quote nonce observed on chain as a completed submission rather than an error to retry."
+ac_5 = "THE relayer key SHALL enter the process through configuration and SHALL never be logged, printed in an error, or written to the journal; the journal SHALL carry no key material and no credential."
+ac_6 = "UNIT tests SHALL cover the quote digest against a vector the contract test also asserts, the pricing refusals, each limit refusal, the balance floor refusal and the journal's replay behaviour; AN integration test SHALL drive a full quote, submit and collect cycle against a local node or a recorded node fixture carried in the crate and SHALL assert the Sidiora that moved and the Paxeer that was spent."
+
+[req.3]
+title = "Signing the Authorisation"
+story = "As someone using the wallet or the SDK, I want the authorisation and the quote presented and signed the way any other transaction is, so that sponsored gas is something I can see and agree to rather than something that happens to me."
+ac_1 = "THE TypeScript SDK SHALL expose the calls that request a quote from a gas station, build the sponsored batch, produce the digest the account signs and assemble the EIP-7702 authorisation, using the same call-construction style the SDK's existing precompile call builders use and adding no runtime dependency."
+ac_2 = "THE SDK SHALL refuse to build a sponsored batch whose quote is expired, whose maximum is below the quoted amount, whose sponsor or token address is not the one configured, or whose decimals do not match Sidiora's six, and each refusal SHALL be a typed result rather than a thrown string."
+ac_3 = "THE human web application SHALL let a person choose to pay a transaction's fee in Sidiora, SHALL show the quoted Sidiora amount, the maximum they are agreeing to and the deadline before they sign, and SHALL surface the unavailable, refused and cancelled outcomes through the same outcome shape the wallet path already returns."
+ac_4 = "EVERY string the web application shows for this journey SHALL come from the copy catalogue, and no literal endpoint, host or address SHALL appear in the application's source; the gas station's location SHALL be a documented configuration value."
+ac_5 = "A SDK test SHALL assert the digest against the same vector the contract and the gas station assert, and each refusal; A web application test SHALL assert the quote presentation, the consent, and the unavailable, refused and cancelled outcomes."
+
+[req.4]
+title = "Sidiora Fees Read Correctly in the Explorer"
+story = "As someone reading a transaction in the explorer, I want a fee paid in Sidiora to read as Sidiora with six decimals, so that I am not shown a Paxeer-shaped number for a Sidiora payment."
+ac_1 = "WHERE a transaction's fee was paid in a token other than the network coin THE explorer SHALL render the amount with that token's decimals and symbol rather than the network coin's eighteen decimals and symbol."
+ac_2 = "THE Sidiora case SHALL render six decimals and the SID symbol, and the existing Paxeer case SHALL keep rendering exactly what it renders now, including its wei and gwei unit names and its exchange-rate toggle."
+ac_3 = "THE types describing the fee payload SHALL declare the fee token's symbol and decimals as optional fields, and their absence SHALL mean the network coin, so a chain that pays only in the network coin renders unchanged."
+ac_4 = "A test SHALL render a Sidiora fee, a Paxeer fee and a fee with no token declared, and SHALL assert the rendered amount, decimals and symbol for each."
+
+[req.5]
+title = "Sidiora as a Native Denom the Bridge Alone Mints"
+story = "As a holder who moves Sidiora across chains, I want the bridge to be the only thing that can create or destroy it on Paxeer X Network, so that the supply on this chain is exactly what the bridge has admitted."
+ac_1 = "SIDIORA SHALL exist on chain as a tokenfactory denom whose creator is the x/layerxbridge module account and whose subdenom names Sidiora's base unit, giving six decimals against a whole SID, and its denom metadata SHALL declare the display symbol SID, the six-decimal exponent and the description."
+ac_2 = "THE tokenfactory admin of that denom SHALL be the x/layerxbridge module account and SHALL NOT be the foundation account or any other address; a mint or burn from any other sender SHALL be refused by the tokenfactory admin check that already exists."
+ac_3 = "THE bridge SHALL mint that denom on an attested inbound bridge and burn it on an outbound bridge through the tokenfactory message server it already uses, with the per-asset cap, the pause, the nullifier set and the attestor threshold applying to Sidiora exactly as they apply to every other bridged asset."
+ac_4 = "THE denom SHALL be registered in the bridge's asset registry against its remote address so that an inbound event naming Sidiora resolves to it and an event naming an unregistered asset is still refused."
+ac_5 = "GO tests SHALL cover the denom's construction and metadata, the admin being the bridge module account, a mint and a burn through the bridge, a mint attempted by any other sender being refused, the cap and the pause refusing a Sidiora bridge, and a replayed inbound event being nullified."
+
+[req.6]
+title = "The Token Contract Becomes a Bank-Backed Pointer at Its Own Address"
+story = "As a holder whose wallet and integrations already know the Sidiora address, I want that same address to keep working after Sidiora becomes native, so that nothing I hold has to move."
+ac_1 = "THE implementation the Sidiora proxy at 0x21f7b20a555199fa73A238B1a91FD0f549068fEe delegates to SHALL be an ERC20 whose balances, total supply and transfers are the bank precompile's view of the Sidiora denom, in the shape contracts/src/NativePaxTokensERC20.sol already uses, and SHALL report the name Sidiora, the symbol SID and six decimals."
+ac_2 = "THE implementation SHALL be written for a proxy: it SHALL hold the denom and the metadata in initialised storage rather than in constructor-immutable state, SHALL refuse a second initialisation, and SHALL NOT move, reorder or reuse a storage slot the existing implementation occupies."
+ac_3 = "THE chain SHALL bind that address as the ERC20 pointer of the Sidiora denom through the existing native-pointer governance proposal, so the pointer registry resolves the denom to the address holders already use and no second pointer contract is deployed for it."
+ac_4 = "NO task SHALL propose a replacement address, a redeployment of Sidiora, or a holder migration; the proxy address is fixed and only what it delegates to changes."
+ac_5 = "A Foundry test SHALL assert the name, the symbol, the six decimals, a balance and a total supply read through the bank precompile, a transfer that moves bank balance and emits the ERC20 event, a transfer the bank refuses reverting, a second initialisation reverting, and the storage layout the proxy requires."
+
+[req.7]
+title = "Governance Owns the Proxy Behind a Timelock"
+story = "As a holder, I want the power to change what the Sidiora address runs to sit with governance behind a delay, so that an upgrade is something I can see coming and not something a single key does."
+ac_1 = "THE proxy administration of the Sidiora contract SHALL be held by a timelock whose proposer is the chain's governance authority and whose execution is possible only after a minimum delay and only within a grace period, following the shape contracts/governance/LayerXTimelock.sol already establishes."
+ac_2 = "THE timelock SHALL restrict the calls it may make on the proxy to the administrative selectors the upgrade needs, SHALL expose a guardian cancellation before the ready time, and SHALL emit a scheduled, a cancelled and an executed event carrying the operation id."
+ac_3 = "THE tooling that hands the administration over and that schedules an upgrade SHALL be committed as a script beside the repository's other deployment scripts, SHALL take every address and delay as a parameter with no literal value compiled in, and SHALL be exercised by a test rather than only documented."
+ac_4 = "THE transfer of administration SHALL be expressible as a governance proposal, and the proposal body SHALL name the timelock, the proxy and the delay it establishes."
+ac_5 = "A test SHALL assert that an upgrade scheduled by governance cannot execute before the delay, can execute after it, cannot execute after the grace period, can be cancelled by the guardian before it is ready, cannot be scheduled or executed by an account holding neither role, and cannot call a selector the timelock does not permit."
+
+[req.8]
+title = "Fee Token Parameters"
+story = "As a governor, I want which tokens may pay for gas, how they are priced and how far a price may drift to be parameters I vote on, so that adding or removing a fee token is a proposal rather than a release."
+ac_1 = "THE x/evm parameters SHALL carry the list of denoms allowed to pay fees beside the network coin, the oracle pair each one is priced against, the maximum spread a conversion may carry, and a switch that turns the whole fee-token path off, each as a gogoproto field with its own ParamSetPair and validator, added at unused field numbers with every existing field left exactly as it is."
+ac_2 = "THE defaults SHALL leave the path off and the allowed list empty, so a chain that takes this code without a governance decision behaves exactly as it behaves now."
+ac_3 = "THE validators SHALL refuse an allowed denom that is empty or malformed, a duplicate denom, an allowed denom with no oracle pair, a spread that is negative or at or above one, and a list containing the network coin's own denom, which needs no conversion."
+ac_4 = "THE keeper SHALL expose readers for each parameter in the style its existing parameter readers use, and a reader SHALL return the documented default when the parameter is unset rather than a zero value that would read as a decision."
+ac_5 = "TESTS SHALL cover each validator's refusals and acceptances, the defaults, the round trip through the parameter store, and a keeper read against an unset parameter."
+
+[req.9]
+title = "Per-Account Fee Token Preference"
+story = "As an account holder, I want to say once which token my fees come out of, so that every transaction I send afterwards is paid the way I chose without my having to say so again."
+ac_1 = "THE chain SHALL carry a precompile through which an account sets, reads and clears its fee-token preference, at an address no other precompile occupies, registered beside the others with its Solidity interface, its committed ABI and its generated setup, and versioned like every other precompile."
+ac_2 = "SETTING a preference to a denom the parameters do not allow, or while the fee-token switch is off, SHALL revert with a reason naming the refusal, and clearing a preference SHALL always be permitted so an account can never be locked into a token that stops being allowed."
+ac_3 = "THE preference SHALL be stored under the x/evm store keyed by the account's EVM address, SHALL be readable by the ante path without charging the caller for the read, and SHALL default to the network coin for an account that has never set one."
+ac_4 = "THE read method SHALL be a view that charges its declared gas and writes no state, and the precompile SHALL declare which of its methods are transactions exactly as the other precompiles do."
+ac_5 = "TESTS SHALL cover setting, reading and clearing, a disallowed denom reverting, a set attempted while the switch is off reverting, the default for an unset account, the gas the methods declare, and that the view writes nothing."
+
+[req.10]
+title = "Gas Debited in Sidiora at an Oracle Price"
+story = "As someone paying in Sidiora, I want the network to take exactly the fee my transaction owes, converted at a price everyone can check, so that paying in a second token costs me the same as paying in the first."
+ac_1 = "WHEN the fee-token path is on and the sender's preference is an allowed denom THE EVM fee check SHALL convert the transaction's maximum fee from Paxeer terms into that denom at the oracle rate for its configured pair, SHALL require the sender's balance of that denom to cover the converted amount, and SHALL debit that denom rather than the network coin."
+ac_2 = "THE conversion SHALL refuse the transaction when the oracle reports no rate for the pair, when the rate is outside the governed maximum spread from the rate the parameters price against, or when the converted amount overflows, and SHALL never fall back to charging the network coin, to charging nothing, or to an unbounded stale rate."
+ac_3 = "THE existing checks SHALL keep their behaviour exactly: the fee cap against the base fee and the minimum fee, the negative tip cap refusal, the blob fee cap check, the stateless checks and the ante surplus accounting SHALL all still run and still refuse what they refuse now."
+ac_4 = "THE refund of unused gas SHALL return the same denom that was debited, at the same rate the debit used, so a transaction cannot profit or lose by the rate moving between the ante and the refund; and the transaction's priority SHALL be computed from the effective gas price in Paxeer terms so a Sidiora payer and a Paxeer payer at the same real price sort identically."
+ac_5 = "WHEN the fee-token path is off, or the sender has no preference, or the sender's preference is the network coin THE path SHALL be byte-for-byte the path that runs today."
+ac_6 = "ANTE tests SHALL cover a Sidiora-paid transaction debiting Sidiora, an insufficient Sidiora balance refusing, a missing rate refusing, a rate outside the spread refusing, the refund returning Sidiora at the debit rate, two payers in different denoms at the same real price receiving the same priority, and every existing case continuing to pass unchanged."
+
+[req.11]
+title = "Cosmos Fee Denom Acceptance"
+story = "As someone sending a Cosmos message rather than an EVM transaction, I want the same fee tokens to be accepted, so that one account does not have two different rules about what pays for what."
+ac_1 = "THE Cosmos fee deduction path SHALL accept a fee offered in any denom the x/evm fee-token parameters allow, converting it to Paxeer terms through the same oracle reading and the same spread bound the EVM path uses, and SHALL refuse a denom the parameters do not allow."
+ac_2 = "THE minimum-fee check SHALL be made against the converted Paxeer-terms amount, so a Sidiora fee and a Paxeer fee of the same real value are accepted or refused together."
+ac_3 = "THE gasless path, the oracle vote decorators and the priority assignment that already sit around fee deduction SHALL keep their behaviour exactly, and the ordering of the decorators SHALL NOT change."
+ac_4 = "WHEN the fee-token path is off THE Cosmos fee path SHALL behave exactly as it behaves now."
+ac_5 = "TESTS SHALL cover a Sidiora-paid Cosmos transaction, a disallowed denom refused, the minimum-fee check against the converted amount, a missing rate refusing, and the gasless path unchanged."
+
+[req.12]
+title = "Where Sidiora Fees Go"
+story = "As a validator, I want to know whether the Sidiora a block collected reaches me as Sidiora or waits at the collector to be converted, so that my reward is a rule rather than a surprise."
+ac_1 = "A GOVERNED parameter SHALL choose between distributing collected Sidiora to validators and delegators as Sidiora through the distribution the fee collector already feeds, and holding it at a named module account for governance to convert, with the held option as the default."
+ac_2 = "THE chosen behaviour SHALL apply to every non-network-coin fee denom the parameters allow, not to Sidiora as a special case, so adding a second fee token later needs no further code."
+ac_3 = "THE network coin's own fees SHALL keep reaching the fee collector and the distribution exactly as they do now, whichever option is chosen."
+ac_4 = "NO task SHALL implement an on-chain conversion, a swap or a price-taking sale to realise the held balance; holding means the coins sit at a module account whose balance governance can move."
+ac_5 = "TESTS SHALL cover both options over a block that collected Sidiora fees and Paxeer fees together, asserting the balances that moved, and SHALL assert that the network coin's path is unchanged under both."
+
+[req.13]
+title = "One Upgrade Handler, One Migration, One Integration Proof"
+story = "As the person who will deploy this, I want every consensus change to arrive at one named upgrade with a migration I can read and a test that drives a block, so that turning it on is one decision with one proof behind it."
+ac_1 = "EVERY consensus change in this feature SHALL be gated by a single upgrade handler registered in node/upgrades.go under a name added to node/tags, and no consensus change SHALL take effect at a height before that upgrade."
+ac_2 = "THE migration SHALL set the new x/evm parameters to their documented defaults on an existing store, SHALL leave every existing parameter at its stored value, SHALL be idempotent on a store that already carries them, and SHALL follow the shape of the migrations already under modules/evm/migrations."
+ac_3 = "THE module's consensus version SHALL be raised and the migration registered with the configurator so it runs exactly once."
+ac_4 = "AN integration test SHALL drive real blocks through testutil/processblock in the shape tests/chain already uses: it SHALL bridge Sidiora in, set an account's fee preference, send a transaction paid in Sidiora, and assert the sender's Sidiora balance fell by the converted fee, the collector or the holding account received it, the sender's Paxeer balance did not move, and a second account paying in Paxeer is charged exactly as before."
+ac_5 = "THE integration test SHALL also drive the refusals end to end: a fee preference set while the switch is off, a transaction from an account whose Sidiora balance cannot cover the fee, and a block in which the oracle reports no rate."
+ac_6 = "NO migration, parameter default or upgrade name introduced here SHALL be applied to a running chain by a task in this feature."
+
+[req.14]
+title = "The Page That Explains It"
+story = "As someone integrating with Paxeer X Network, I want one page that tells me what Sidiora is, how to pay gas with it and what governance controls, so that I do not have to read the chain to find out."
+ac_1 = "THE documentation site SHALL carry a page describing Sidiora as the second official coin of Paxeer X Network: its symbol, its six decimals, its approximate supply, the address it lives at, that the bridge is its only minter, and that its proxy administration sits with governance behind a timelock."
+ac_2 = "THE page SHALL describe both ways to pay gas with it - the sponsored path with its quote, its deadline and its maximum, and the native path with its preference, its parameters and its oracle pricing - and SHALL say which of the two is available without a chain upgrade."
+ac_3 = "THE page SHALL name the governance surface: which parameters exist, what each refuses, and that every change to them is a proposal."
+ac_4 = "THE page SHALL be added to the site navigation, SHALL carry no date, host, IP address, internal URL or credential, and SHALL name the product as Paxeer X Network, using LayerX only where it names the kernel domain."
+ac_5 = "THE site SHALL build under strict mode with the page in place and every link it carries resolving."
+
+[req.15]
+title = "Wave Qualification and Recorded Evidence"
+story = "As the person deciding whether this feature is done, I want the aggregate suites run once on the merged revision with what ran written down, so that the feature's state is a record rather than a recollection."
+ac_1 = "THE aggregate suites - the Go packages this feature touches, the gas-station crate and the Paxeer Foundry project - SHALL be run once, on the merged revision of the feature's waves, and never per task."
+ac_2 = "THE run SHALL be recorded in spec/sidiora-fee-token/qualification.kvx as gate records carrying the task, the requirements the gate qualifies, the revision, the exact command, the exit code and the log path, written only by having executed the command they name."
+ac_3 = "ANY failure the run exposes that belongs to no task in this feature SHALL be recorded once as an observation with its revision, command, exit code, log path, one sentence of what was observed and one sentence of what is assumed, and SHALL NOT be chased."
+ac_4 = "NO gate record SHALL be written for a command that did not run, and no gate that passed at the recorded revision SHALL be rerun to confirm it."
+
+# --------------------------------------------------------------------------
+# TASKS
+#   wave 1  the sponsored path, no consensus change, ships first
+#   wave 2  the protocol change, behind an upgrade handler, not deployed
+#   wave 3  one aggregate run on the merged revision, recorded
+# --------------------------------------------------------------------------
+
+[task.1]
+section = "Wave 1 - Sponsored Gas, No Consensus Change"
+title = "Let a Sidiora holder transact without holding the network coin"
+status = "pending"
+
+[task.1.1]
+title = "Harden the sponsored batch into a Sidiora paymaster"
+status = "pending"
+wave = 1
+requires = []
+do_1 = "In contracts/src/BatchCallAndSponsor.sol add a Quote struct carrying the sponsor address, the token address, the maximum token amount, the quoted token amount, the deadline and the quote nonce, and add an executeSponsored entry point taking the calls, the account's signature over the batch digest and the relayer's signature over the quote digest; keep execute and the existing signature-carrying path working exactly as they do, keep the nonce, the CallExecuted and BatchExecuted events and the payable fallback and receive."
+do_2 = "Bind the two digests so neither half replays alone: the account digest SHALL cover the batch nonce, the calls and the quote digest, and the quote digest SHALL cover the chain id, this contract's address, the sponsor, the token, the maximum, the quoted amount, the deadline and the quote nonce; recover both with the ECDSA library already imported, require the recovered account to equal address(this) and the recovered relayer to equal the quote's sponsor, and revert with a named error otherwise."
+do_3 = "Consume the quote nonce in a mapping separate from the batch nonce, revert on a consumed one, revert when block.timestamp is past the deadline and revert when the quoted amount exceeds the maximum."
+do_4 = "Read the Sidiora rate from the oracle precompile through a new contracts/src/precompiles/IOracle.sol declaring the getExchangeRates view the precompile at 0x0000000000000000000000000000000000001008 exposes, compute the rate the quote implies from the quoted amount and the batch's declared gas cost, and revert when it lies outside the contract's declared spread or when the oracle reports no rate for the pair."
+do_5 = "Transfer the quoted amount of the token from address(this) to the sponsor inside the same execution, in the order the contract's own documentation states, and revert the entire batch when that transfer returns false or reverts; emit one event carrying the sponsor, the token, the quoted amount and the quote nonce."
+do_6 = "Write contracts/test/BatchCallAndSponsorTest.t.sol covering a successful sponsored batch with the sponsor repaid, a missing and a wrong account signature, a missing and a wrong relayer signature, an expired deadline, a quoted amount above the maximum, a replayed quote nonce, a replayed batch nonce, a failing token transfer reverting the whole batch, a quote outside the spread, an oracle reporting no rate, and the direct execute path; stand in for the oracle and the token the way contracts/test/NativePaxTokensERC20Test.t.sol stands in for the bank precompile, with the production contract calling the real precompile address."
+do_7 = "Publish the quote digest as a vector the test asserts, so the gas station and the SDK can assert the same bytes; if the pinned Foundry libraries under contracts/lib are absent, vendor them exactly as .github/workflows/paxeer-forge-test.yml does before running the test."
+verify_cmd = "timeout 20m sh -c 'FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague --match-path contracts/test/BatchCallAndSponsorTest.t.sol -vvv'"
+symbols = ["BatchCallAndSponsor","executeSponsored","Quote","IOracle"]
+touches = ["contracts/src/BatchCallAndSponsor.sol","contracts/src/precompiles/IOracle.sol","contracts/test/BatchCallAndSponsorTest.t.sol"]
+reqs = ["1.1","1.2","1.3","1.4","1.5","1.6","1.7"]
+
+[task.1.2]
+title = "Stand up the gas station crate with its quoting and pricing"
+status = "pending"
+wave = 1
+requires = ["1.1"]
+do_1 = "Add interop/crates/layerx-gas-station to the members of interop/Cargo.toml and give it a Cargo.toml in the shape interop/crates/layerx-bridge-relayer/Cargo.toml uses - workspace version, edition, rust-version, license and lints, a lib at src/lib.rs and a bin at src/main.rs - taking its dependencies from the workspace table and adding none that is not already declared there."
+do_2 = "Write src/config.rs loading the station's configuration from a file path: the chain endpoints, the paymaster address, the Sidiora token address and its six decimals, the oracle pair, the acceptable rate age, the spread, the station's margin, the per-account, per-interval and per-quote limits, the Paxeer balance floor and the relayer key source; refuse a configuration that is incomplete or self-contradictory with a typed error naming the field."
+do_3 = "Write src/quote.rs building the quote the contract verifies and computing its digest byte for byte as contracts/src/BatchCallAndSponsor.sol computes it, asserted against the same vector contracts/test/BatchCallAndSponsorTest.t.sol asserts, and src/signer.rs signing that digest with the configured relayer key held behind a trait so the key never crosses a public boundary."
+do_4 = "Write src/price.rs reading the oracle rate for the configured pair, refusing when the rate is absent, older than the configured age or outside the configured spread, and applying the station's margin in integer arithmetic over the six-decimal Sidiora side and the eighteen-decimal Paxeer side with no floating point."
+do_5 = "Write src/policy.rs enforcing the per-account, per-interval and per-quote limits and the Paxeer balance floor, refusing to quote rather than quoting something the station cannot pay for, and returning a typed refusal that names which limit was hit."
+do_6 = "Write the crate's unit tests as #[cfg(test)] modules beside each file: the digest vector, each pricing refusal, each limit refusal, the balance floor refusal and the configuration refusals; write src/lib.rs and src/main.rs so the binary takes --config PATH and exits with a distinct code for a refused configuration."
+verify_cmd = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p layerx-gas-station --lib'"
+symbols = ["layerx-gas-station","StationConfig","Quote","quote_digest","PriceSource","QuotePolicy"]
+touches = ["interop/Cargo.toml","interop/crates/layerx-gas-station/Cargo.toml","interop/crates/layerx-gas-station/src/lib.rs","interop/crates/layerx-gas-station/src/main.rs","interop/crates/layerx-gas-station/src/config.rs","interop/crates/layerx-gas-station/src/quote.rs","interop/crates/layerx-gas-station/src/signer.rs","interop/crates/layerx-gas-station/src/price.rs","interop/crates/layerx-gas-station/src/policy.rs"]
+reqs = ["2.1","2.2","2.3","2.5"]
+
+[task.1.3]
+title = "Submit the sponsored transaction and prove a full cycle"
+status = "pending"
+wave = 1
+requires = ["1.2"]
+do_1 = "Write interop/crates/layerx-gas-station/src/rpc.rs as the transport seam in the shape interop/crates/layerx-bridge-relayer/src/rpc.rs uses, reading the chain through the configured endpoints and returning a typed fault for a configuration error, an unavailable endpoint, a rate limit, a divergence, a malformed response and a rejection."
+do_2 = "Write src/tx.rs building the EIP-7702 transaction that carries the account's authorisation and calls executeSponsored with the signed quote, signing it with the station key, and src/journal.rs recording the exact signed bytes append-only before broadcast so a restart rebroadcasts rather than re-signs; carry no key material and no credential into the journal."
+do_3 = "Write src/station.rs driving the cycle - accept a request, price it, apply the policy, sign the quote, build and journal the transaction, broadcast it, and confirm - and treat a quote nonce already consumed on chain as a completed submission recorded as such rather than an error to retry."
+do_4 = "Write tests/station.rs as an integration test driving a full quote, submit and collect cycle against a local node when one is reachable and otherwise against a recorded node fixture carried in tests/fixtures/, asserting the Sidiora that moved to the sponsor, the Paxeer the station spent, the journal entry written before broadcast, a restart rebroadcasting the journalled bytes, and a consumed nonce recorded as completed."
+do_5 = "Document the crate's configuration fields and its journal layout in its own lib documentation, naming environment variables and file paths only and carrying no endpoint, host, address or credential."
+verify_cmd = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p layerx-gas-station --test station'"
+symbols = ["GasStation","submit","Journal","RpcFault"]
+touches = ["interop/crates/layerx-gas-station/src/rpc.rs","interop/crates/layerx-gas-station/src/tx.rs","interop/crates/layerx-gas-station/src/journal.rs","interop/crates/layerx-gas-station/src/station.rs","interop/crates/layerx-gas-station/src/lib.rs","interop/crates/layerx-gas-station/tests/station.rs","interop/crates/layerx-gas-station/tests/fixtures"]
+reqs = ["2.4","2.5","2.6"]
+
+[task.1.4]
+title = "Give the SDK the quote and the authorisation"
+status = "pending"
+wave = 1
+requires = ["1.1"]
+do_1 = "Add agent/sdk/typescript/src/gas-station.ts exposing the quote request against a configured gas station, the sponsored batch builder, the account digest the wallet signs and the EIP-7702 authorisation assembly, following the call-construction style of agent/sdk/typescript/src/exchange.ts and adding no runtime dependency to agent/sdk/typescript/package.json."
+do_2 = "Compute the account digest and the quote digest exactly as contracts/src/BatchCallAndSponsor.sol computes them, using the hashing already available in the SDK's dependencies, and export the types describing a quote, a sponsored batch and a refusal."
+do_3 = "Refuse as a typed result rather than a thrown string: an expired quote, a quoted amount above the maximum, a sponsor or token address that is not the configured one, and a decimals value that is not Sidiora's six."
+do_4 = "Export the new surface from agent/sdk/typescript/src/index.ts beside the existing precompile call exports, keeping every existing export unchanged."
+do_5 = "Add agent/sdk/typescript/test/gas-station.test.ts asserting the digests against the same vector contracts/test/BatchCallAndSponsorTest.t.sol asserts, the sponsored batch it builds, and each refusal; add it to the test script in agent/sdk/typescript/package.json beside the existing test files."
+verify_cmd = "timeout 20m sh -c 'npm --prefix agent/sdk/typescript run build && node agent/sdk/typescript/dist/test/gas-station.test.js'"
+symbols = ["sponsoredBatchCall","requestGasQuote","sponsoredBatchDigest","GasQuote"]
+touches = ["agent/sdk/typescript/src/gas-station.ts","agent/sdk/typescript/src/index.ts","agent/sdk/typescript/package.json","agent/sdk/typescript/test/gas-station.test.ts"]
+reqs = ["3.1","3.2","3.5"]
+
+[task.1.5]
+title = "Let a person choose to pay in Sidiora in the web application"
+status = "pending"
+wave = 1
+requires = ["1.4"]
+do_1 = "Add human/apps/web/src/api/gas-station.ts wrapping the SDK's quote request and sponsored batch builder, and export it from human/apps/web/src/api/sdk.ts beside the existing precompile re-exports, taking the gas station's location from the application's server configuration with no literal endpoint in the source."
+do_2 = "Extend the wallet send path so a person can choose to pay a transaction's fee in Sidiora, showing the quoted amount, the maximum they are agreeing to and the deadline before they sign, and signing the authorisation through the same provider path human/apps/web/src/api/wallet.ts already uses."
+do_3 = "Return the outcome through the same shape sendWalletPrecompileCall returns - sent, cancelled, rejected, unavailable or failed - so a refused quote, an unreachable station and a rejected signature are each distinguishable, and add no new outcome vocabulary."
+do_4 = "Add every string this journey shows to human/apps/web/copy/catalog.ts and read them from the catalogue; add no literal user-facing string to a component."
+do_5 = "Add human/apps/web/e2e/gas-station.test.ts asserting the quote presentation, the consent before signing, and the unavailable, refused and cancelled outcomes, and add it to the test and test:component scripts in human/apps/web/package.json beside the existing e2e files."
+verify_cmd = "timeout 20m sh -c 'npm --prefix human/apps/web run typecheck && cd human/apps/web && node --test e2e/gas-station.test.ts'"
+symbols = ["requestSidioraGasQuote","sendSponsoredBatch","GasQuoteOutcome"]
+touches = ["human/apps/web/src/api/gas-station.ts","human/apps/web/src/api/sdk.ts","human/apps/web/src/api/wallet.ts","human/apps/web/src/settings/wallet/model.ts","human/apps/web/src/settings/wallet/wallet-screen.tsx","human/apps/web/copy/catalog.ts","human/apps/web/package.json","human/apps/web/e2e/gas-station.test.ts"]
+reqs = ["3.3","3.4","3.5"]
+
+[task.1.6]
+title = "Render a Sidiora fee as Sidiora in the explorer"
+status = "pending"
+wave = 1
+requires = []
+do_1 = "In explorer/frontend/types/api/transaction.ts declare the fee token's symbol and decimals as optional fields of the fee payload, so their absence means the network coin and a chain that pays only in the network coin is unchanged."
+do_2 = "In explorer/frontend/ui/shared/tx/TxFee.tsx and explorer/frontend/ui/tx/details/TxDetailsTxFee.tsx render the amount with the fee token's decimals and symbol when they are present, and keep the existing network-coin rendering - its wei and gwei unit names from explorer/frontend/lib/units.ts, its exchange-rate toggle and its breakdown - exactly as it is when they are absent."
+do_3 = "Keep explorer/frontend/ui/shared/value/NativeCoinValue.tsx for the network coin and render a non-network fee through the token value component the fork already has, rather than adding a second formatting path."
+do_4 = "Add explorer/frontend/ui/shared/tx/TxFee.spec.tsx and explorer/frontend/ui/tx/details/TxDetailsTxFee.spec.tsx, each rendering a Sidiora fee with six decimals and the SID symbol, a Paxeer fee unchanged, and a fee with no token declared, and asserting the rendered amount, decimals and symbol for each."
+do_5 = "Change no backend module, no environment preset and no upstream file beyond what these three components require."
+verify_cmd = "timeout 20m sh -c 'cd explorer/frontend && HUSKY=0 yarn install --frozen-lockfile && yarn lint:tsc && yarn test:vitest run ui/shared/tx ui/tx/details'"
+symbols = ["TxFee","TxDetailsTxFee","currencyUnits"]
+touches = ["explorer/frontend/types/api/transaction.ts","explorer/frontend/ui/shared/tx/TxFee.tsx","explorer/frontend/ui/shared/tx/TxFee.spec.tsx","explorer/frontend/ui/tx/details/TxDetailsTxFee.tsx","explorer/frontend/ui/tx/details/TxDetailsTxFee.spec.tsx"]
+reqs = ["4.1","4.2","4.3","4.4"]
+
+[task.2]
+section = "Wave 2 - Sidiora as a Native Denom and a Fee Token"
+title = "Make the protocol itself take Sidiora, behind one upgrade"
+status = "pending"
+
+[task.2.1]
+title = "Make Sidiora a tokenfactory denom the bridge alone mints"
+status = "pending"
+wave = 2
+requires = []
+do_1 = "In modules/layerxbridge/types/keys.go declare Sidiora's subdenom and a helper that builds its tokenfactory denom from the module address types.ModuleAddress() through tokenfactorytypes.GetTokenDenom, so the denom is derived rather than written as a literal, and declare the display symbol SID and the six-decimal exponent the denom metadata carries."
+do_2 = "Add modules/layerxbridge/keeper/sidiora.go creating the denom under the bridge module account when it does not exist, setting its bank metadata to the Sidiora name, the SID display symbol, the six-decimal exponent and the description, and leaving the tokenfactory admin as the bridge module account; refuse to create it when the module account is not the creator the tokenfactory would record."
+do_3 = "Register Sidiora in the bridge's asset registry against its remote address so an inbound event naming it resolves to the denom, and leave the refusal of an unregistered asset exactly as modules/layerxbridge/keeper/bridge.go performs it today."
+do_4 = "Leave BridgeIn and BridgeOut minting and burning through the tokenfactory message server exactly as they do now, so the per-asset cap, the pause, the nullifier set and the attestor threshold apply to Sidiora with no special case; add no path by which any sender other than the bridge module account can mint or burn the denom."
+do_5 = "Add modules/layerxbridge/keeper/sidiora_test.go covering the denom's construction and metadata, the admin being the bridge module account, a mint and a burn through the bridge, a mint attempted by another sender being refused by the tokenfactory admin check, the cap and the pause refusing a Sidiora bridge, and a replayed inbound event being nullified."
+verify_cmd = "timeout 20m sh -c 'go test -count=1 ./modules/layerxbridge/...'"
+symbols = ["SidioraSubdenom","SidioraDenom","EnsureSidioraDenom","BridgeIn","BridgeOut"]
+touches = ["modules/layerxbridge/types/keys.go","modules/layerxbridge/keeper/sidiora.go","modules/layerxbridge/keeper/keeper.go","modules/layerxbridge/keeper/bridge.go","modules/layerxbridge/keeper/sidiora_test.go"]
+reqs = ["5.1","5.2","5.3","5.4","5.5"]
+
+[task.2.2]
+title = "Put a bank-backed implementation behind the existing Sidiora address"
+status = "pending"
+wave = 2
+requires = ["2.1"]
+do_1 = "Add contracts/src/SidioraNativeERC20.sol, an ERC20 whose balanceOf, totalSupply and transfers read and move the Sidiora denom through the bank precompile at 0x0000000000000000000000000000000000001001 in the shape contracts/src/NativePaxTokensERC20.sol uses, reporting the name Sidiora, the symbol SID and six decimals."
+do_2 = "Write it for a proxy rather than a constructor: hold the denom and the metadata in storage set by an initialiser that reverts on a second call, occupy storage slots that do not move, reorder or reuse the slots the existing implementation behind 0x21f7b20a555199fa73A238B1a91FD0f549068fEe occupies, and document the layout the proxy requires in the contract itself."
+do_3 = "Revert with a named error when the bank precompile refuses a transfer, and emit the ERC20 Transfer event only when the bank move succeeded, so the log and the balance cannot disagree."
+do_4 = "Write the governance proposal body that binds this address as the ERC20 pointer of the Sidiora denom through the existing native-pointer proposal handled by modules/evm/gov.go, as a committed JSON body beside contracts/test/param_change_proposal.json, naming the denom, the address and the pointer version and nothing else; deploy no second pointer contract for Sidiora and propose no replacement address."
+do_5 = "Add contracts/test/SidioraNativeERC20Test.t.sol asserting the name, the symbol, the six decimals, a balance and a total supply read through the bank precompile, a transfer that moves bank balance and emits the event, a transfer the bank refuses reverting, a second initialisation reverting, and the storage layout the proxy requires."
+verify_cmd = "timeout 20m sh -c 'FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague --match-path contracts/test/SidioraNativeERC20Test.t.sol -vvv'"
+symbols = ["SidioraNativeERC20","initialize","AddERCNativePointerProposalV2"]
+touches = ["contracts/src/SidioraNativeERC20.sol","contracts/test/SidioraNativeERC20Test.t.sol","contracts/test/sidiora_pointer_proposal.json"]
+reqs = ["6.1","6.2","6.3","6.4","6.5"]
+
+[task.2.3]
+title = "Move the Sidiora proxy administration to governance behind a timelock"
+status = "pending"
+wave = 2
+requires = []
+do_1 = "Add contracts/governance/SidioraProxyTimelock.sol extending the shape contracts/governance/LayerXTimelock.sol establishes: a minimum delay with a floor, a grace period, a proposer that is the chain's governance authority, an executor, a guardian that can cancel before the ready time, and a per-target per-selector permission map restricted to the administrative selectors the Sidiora proxy upgrade needs."
+do_2 = "Emit a scheduled, a cancelled and an executed event carrying the operation id, the target, the value and the data hash, following the events the existing timelock already emits, and add no path that executes before the ready time or after the grace period."
+do_3 = "Add scripts/SidioraProxyGovernance.s.sol taking the proxy address, the timelock parameters and the role holders as parameters with no literal value compiled in, handing the proxy administration to the timelock and scheduling an implementation upgrade through it."
+do_4 = "Write the governance proposal body that performs the handover, naming the timelock, the proxy and the delay it establishes, beside the repository's other committed proposal bodies."
+do_5 = "Add test/SidioraProxyGovernance.t.sol in the dependency-free style test/LayerXTimelock.t.sol uses, asserting that an upgrade scheduled by governance cannot execute before the delay, can execute after it, cannot execute after the grace period, can be cancelled by the guardian before it is ready, cannot be scheduled or executed by an account holding neither role, and cannot call a selector the timelock does not permit."
+verify_cmd = "timeout 20m sh -c 'forge test --root . --match-path test/SidioraProxyGovernance.t.sol -vvv'"
+symbols = ["SidioraProxyTimelock","SidioraProxyGovernance","schedule","execute","cancel"]
+touches = ["contracts/governance/SidioraProxyTimelock.sol","scripts/SidioraProxyGovernance.s.sol","test/SidioraProxyGovernance.t.sol"]
+reqs = ["7.1","7.2","7.3","7.4","7.5"]
+
+[task.2.4]
+title = "Add the fee-token parameters to x/evm"
+status = "pending"
+wave = 2
+requires = []
+do_1 = "In api/evm/params.proto add to the Params message, at field numbers no existing field uses and leaving every existing field exactly as it is, the repeated allowed fee denom entries carrying a denom and its oracle pair, the maximum conversion spread as a Dec with the customtype the other Dec fields use, and the boolean that turns the fee-token path off; regenerate modules/evm/types/params.pb.go through the repository's Protocol Buffer pipeline rather than editing it."
+do_2 = "In modules/evm/types/params.go add a parameter key, a default and a validator for each new field, register them in ParamSetPairs beside the existing pairs, and leave every ParamsPreV* set untouched; the defaults leave the path off and the allowed list empty."
+do_3 = "Write the validators to refuse an empty or malformed denom, a duplicate denom, an allowed denom with no oracle pair, a spread that is negative or at or above one, and a list containing the network coin's own denom; return an error naming the field and the value."
+do_4 = "In modules/evm/keeper/params.go add readers for each new parameter in the style of the existing readers, returning the documented default when the parameter is unset, and add a helper that answers whether a given denom is an allowed fee denom and what pair it is priced against."
+do_5 = "Extend modules/evm/types/params_test.go with each validator's refusals and acceptances, the defaults and the round trip through the parameter store, and add keeper tests named with a FeeTokenParams prefix covering a read against an unset parameter and the allowed-denom helper."
+verify_cmd = "timeout 20m sh -c 'go test -count=1 ./modules/evm/types/... && go test -count=1 -run FeeTokenParams ./modules/evm/keeper/...'"
+symbols = ["KeyAllowedFeeDenoms","KeyMaxFeeTokenSpread","KeyFeeTokenEnabled","DefaultAllowedFeeDenoms","validateAllowedFeeDenoms","GetAllowedFeeDenoms","IsAllowedFeeDenom"]
+touches = ["api/evm/params.proto","modules/evm/types/params.go","modules/evm/types/params.pb.go","modules/evm/types/params_test.go","modules/evm/keeper/params.go","modules/evm/keeper/params_test.go"]
+reqs = ["8.1","8.2","8.3","8.4","8.5"]
+
+[task.2.5]
+title = "Add the per-account fee-token preference precompile"
+status = "pending"
+wave = 2
+requires = ["2.4"]
+do_1 = "Add precompiles/feetoken with FeeToken.sol declaring setFeeDenom, getFeeDenom and clearFeeDenom, the committed abi.json matching it, feetoken.go implementing the executor in the shape precompiles/layerxbridge/layerxbridge.go uses, and a versions directory; register it at 0x0000000000000000000000000000000000001018, an address no precompile in precompiles/setup.go occupies, and generate setup.go through scripts/bump_version rather than writing it by hand."
+do_2 = "Declare the gas each method costs from a base plus a per-byte and a per-write component the way the bridge precompile declares its own, make getFeeDenom a view that writes no state, and declare which methods are transactions through IsTransaction exactly as the other precompiles do."
+do_3 = "In modules/evm/types/keys.go add the store prefix for the preference and in a new modules/evm/keeper/feetoken.go add the setter, getter and deleter keyed by the account's EVM address, returning the network coin's denom for an account that has never set one and reading without charging the ante caller for the read."
+do_4 = "Refuse a setFeeDenom whose denom the x/evm parameters do not allow, and refuse any setFeeDenom while the fee-token switch is off, reverting with a reason that names the refusal; always permit clearFeeDenom so an account cannot be locked into a denom that stops being allowed."
+do_5 = "Add precompiles/feetoken/feetoken_test.go covering setting, reading and clearing, a disallowed denom reverting, a set attempted while the switch is off reverting, the default for an unset account, the gas each method declares and that the view writes nothing; add precompiles/setup_test.go asserting the precompile is registered at its address and collides with no other; add modules/evm/keeper/feetoken_test.go covering the store round trip and the default and extend modules/evm/types/keys_test.go with the new prefix."
+verify_cmd = "timeout 20m sh -c 'go test -count=1 ./precompiles/ ./precompiles/feetoken/...'"
+symbols = ["FeeTokenAddress","SetFeeDenomMethod","GetFeeDenomMethod","ClearFeeDenomMethod","GetAccountFeeDenom","SetAccountFeeDenom"]
+touches = ["precompiles/feetoken/FeeToken.sol","precompiles/feetoken/abi.json","precompiles/feetoken/feetoken.go","precompiles/feetoken/setup.go","precompiles/feetoken/versions","precompiles/feetoken/feetoken_test.go","precompiles/setup.go","precompiles/setup_test.go","modules/evm/types/keys.go","modules/evm/types/keys_test.go","modules/evm/keeper/feetoken.go","modules/evm/keeper/feetoken_test.go"]
+reqs = ["9.1","9.2","9.3","9.4","9.5"]
+
+[task.2.6]
+title = "Debit and refund gas in the account's fee denom at an oracle price"
+status = "pending"
+wave = 2
+requires = ["2.4","2.5"]
+do_1 = "In modules/evm/ante/fee.go, inside EVMFeeCheckDecorator.AnteHandle and after the existing fee cap, minimum fee, tip cap and blob fee cap checks have run unchanged, read the sender's fee denom through the x/evm keeper; when the fee-token path is on and that denom is an allowed fee denom, convert the transaction's maximum fee from Paxeer terms into that denom at the x/oracle rate for its configured pair before geth's BuyGas runs, and debit that denom."
+do_2 = "Refuse the transaction when the oracle reports no rate for the pair, when the rate lies outside the governed maximum spread, or when the conversion overflows; return the error the refusal names and add no fallback to the network coin, to a zero charge or to an unbounded stale rate."
+do_3 = "Do the conversion in integer arithmetic over sdk.Dec throughout, six decimals on the Sidiora side and eighteen on the Paxeer side, rounding in the network's favour at the charge; record the rate the charge used so the refund can use the same one."
+do_4 = "Refund unused gas in the denom that was debited, at the rate the debit recorded, rounding in the payer's favour, and leave the ante surplus accounting and the deferred info that carries it exactly as they are; compute the priority from the effective gas price in Paxeer terms through CalculatePriority so a Sidiora payer and a Paxeer payer at the same real price sort identically."
+do_5 = "Leave the path byte for byte as it is today when the fee-token switch is off, when the sender has no preference, or when the sender's preference is the network coin."
+do_6 = "Extend modules/evm/ante/fee_test.go with a Sidiora-paid transaction debiting Sidiora, an insufficient Sidiora balance refusing, a missing rate refusing, a rate outside the spread refusing, the refund returning Sidiora at the debit rate, two payers in different denoms at the same real price receiving the same priority, and every existing case continuing to pass unchanged."
+verify_cmd = "timeout 20m sh -c 'go test -count=1 ./modules/evm/ante/...'"
+symbols = ["EVMFeeCheckDecorator","AnteHandle","CalculatePriority","ConvertFeeToDenom"]
+touches = ["modules/evm/ante/fee.go","modules/evm/ante/fee_test.go","modules/evm/ante/gas.go","modules/evm/ante/gas_test.go","modules/evm/keeper/feetoken.go"]
+reqs = ["10.1","10.2","10.3","10.4","10.5","10.6"]
+
+[task.2.7]
+title = "Accept the same fee denoms on the Cosmos path"
+status = "pending"
+wave = 2
+requires = ["2.4"]
+do_1 = "Add a fee-denom conversion to the Cosmos fee path so a fee offered in a denom the x/evm fee-token parameters allow is converted to Paxeer terms through the same oracle reading and the same spread bound the EVM path uses, and a denom the parameters do not allow is refused."
+do_2 = "Make the minimum-fee check run against the converted Paxeer-terms amount, so a Sidiora fee and a Paxeer fee of the same real value are accepted or refused together, and leave the priority assignment computed from that same converted amount."
+do_3 = "Keep node/ante.go's decorator ordering exactly as it is - the gasless decorator wrapping the deduct-fee decorator, the oracle spamming and vote-alone decorators, and the priority decorator after fee deduction - and change no decorator's construction beyond passing what the conversion needs."
+do_4 = "Leave the path behaving exactly as it behaves now when the fee-token switch is off."
+do_5 = "Add tests beside node/antedecorators covering a Sidiora-paid Cosmos transaction, a disallowed denom refused, the minimum-fee check against the converted amount, a missing rate refusing, and the gasless path unchanged; extend node/ante_test.go, with test names carrying a FeeDenom prefix, asserting the assembled handler still places the decorators in the order node/ante.go declares today."
+verify_cmd = "timeout 20m sh -c 'go test -count=1 ./node/antedecorators/... && go test -count=1 -run FeeDenom ./node/'"
+symbols = ["GaslessDecorator","NewAnteHandler","PriorityDecorator","ConvertFeeToDenom"]
+touches = ["node/ante.go","node/ante_test.go","node/antedecorators/gasless.go","node/antedecorators/gasless_test.go","node/antedecorators/feedenom.go","node/antedecorators/feedenom_test.go"]
+reqs = ["11.1","11.2","11.3","11.4","11.5"]
+
+[task.2.8]
+title = "Decide where collected Sidiora fees go"
+status = "pending"
+wave = 2
+requires = ["2.4"]
+do_1 = "Add to the x/evm parameters, at an unused field number and with its own key, default and validator, the switch that chooses between distributing collected non-network-coin fees through the fee collector the distribution already reads and holding them at a named module account for governance to move, defaulting to holding."
+do_2 = "Add modules/evm/keeper/feecollect.go routing every non-network-coin fee denom the parameters allow according to that switch, applying to the whole allowed list rather than to Sidiora as a special case, and leaving the network coin's own fees reaching the fee collector exactly as they do now under either option."
+do_3 = "Register the holding module account with the account keeper the way the application's other module accounts are registered, with no minting or burning permission, so governance can move its balance and nothing else can."
+do_4 = "Implement no on-chain conversion, swap or price-taking sale to realise a held balance; holding means the coins sit at that module account."
+do_5 = "Add modules/evm/keeper/feecollect_test.go, with test names carrying a SidioraFeeCollection prefix, covering both options over a block that collected Sidiora fees and Paxeer fees together, asserting the balances that moved, asserting the network coin's path is unchanged under both, and asserting that the holding module account node/app.go registers exists in the test application and carries neither a minting nor a burning permission."
+verify_cmd = "timeout 20m sh -c 'go test -count=1 -run SidioraFeeCollection ./modules/evm/keeper/...'"
+symbols = ["KeyFeeTokenDistribution","RouteCollectedFeeTokens","FeeTokenHoldingAccount"]
+touches = ["api/evm/params.proto","modules/evm/types/params.go","modules/evm/keeper/feecollect.go","modules/evm/keeper/feecollect_test.go","node/app.go"]
+reqs = ["12.1","12.2","12.3","12.4","12.5"]
+
+[task.2.9]
+title = "Gate every consensus change behind one upgrade handler"
+status = "pending"
+wave = 2
+requires = ["2.1","2.2","2.4","2.5","2.6","2.7","2.8"]
+do_1 = "Add the upgrade name to node/tags in the alphabetical order the file's parser requires and register its handler in node/upgrades.go beside the existing named handlers, running the module migrations and nothing this feature does not need."
+do_2 = "Add modules/evm/migrations/migrate_fee_token_params.go setting the new x/evm parameters to their documented defaults on an existing store, leaving every existing parameter at its stored value, and returning without change on a store that already carries them; follow the shape of the migrations already in that directory."
+do_3 = "Raise the x/evm module's consensus version in modules/evm/module.go and register the migration with the configurator so it runs exactly once."
+do_4 = "Make the Sidiora denom creation, its metadata and its pointer binding reachable only at or after this upgrade, so a node replaying history before it produces exactly the state it produces today."
+do_5 = "Add modules/evm/migrations/migrate_fee_token_params_test.go asserting the defaults on a store without them, every existing parameter left untouched, and a second run changing nothing; add an upgrade test beside node/upgrades_test.go asserting the handler is registered under the name in node/tags and that the migration runs through it."
+do_6 = "Apply nothing to a running chain: this task writes the handler and the migration and leaves them to a governance proposal."
+verify_cmd = "timeout 20m sh -c 'go test -count=1 ./modules/evm/migrations/... && go test -count=1 -run Upgrade ./node/'"
+symbols = ["RegisterUpgradeHandlers","MigrateFeeTokenParams","ConsensusVersion"]
+touches = ["node/tags","node/upgrades.go","node/upgrades_test.go","modules/evm/migrations/migrate_fee_token_params.go","modules/evm/migrations/migrate_fee_token_params_test.go","modules/evm/module.go"]
+reqs = ["13.1","13.2","13.3","13.6"]
+
+[task.2.10]
+title = "Prove the whole path over real blocks"
+status = "pending"
+wave = 2
+requires = ["2.9"]
+do_1 = "Add testutil/processblock/msgs/feetoken.go building the messages this proof needs in the shape testutil/processblock/msgs/bank.go builds its own: an attested Sidiora bridge in, a fee-preference set through the precompile, and a transaction sent by an account whose preference is Sidiora."
+do_2 = "Add testutil/processblock/verify/feetoken.go asserting balances across a block in the shape testutil/processblock/verify/bank.go and verify/distribution.go assert theirs: the sender's Sidiora balance, the collector or holding account's balance, the sender's Paxeer balance and the validator rewards."
+do_3 = "Add tests/chain/sidiora_fee_test.go, with test names carrying a SidioraFee prefix, driving real blocks through processblock: bridge Sidiora in, set the preference, send a transaction paid in Sidiora, and assert the sender's Sidiora balance fell by the converted fee, the collector or holding account received it, the sender's Paxeer balance did not move, and a second account paying in Paxeer is charged exactly as before."
+do_4 = "Drive the refusals end to end in the same file: a fee preference set while the switch is off, a transaction from an account whose Sidiora balance cannot cover the fee, and a block in which the oracle reports no rate for the pair."
+do_5 = "Use real keepers, real messages and real blocks throughout; add no fake keeper, no stubbed oracle reading that bypasses the keeper and no hand-written balance mutation that the block did not perform."
+verify_cmd = "timeout 20m sh -c 'go test -count=1 -run SidioraFee ./tests/chain/'"
+symbols = ["SidioraFeePaid","SidioraFeeRefused","VerifyFeeTokenBalances"]
+touches = ["testutil/processblock/msgs/feetoken.go","testutil/processblock/verify/feetoken.go","tests/chain/sidiora_fee_test.go"]
+reqs = ["13.4","13.5"]
+
+[task.2.11]
+title = "Write the page that explains Sidiora and its two gas paths"
+status = "pending"
+wave = 2
+requires = ["2.6","2.7","2.8"]
+do_1 = "Add docs/site/docs/protocol/sidiora.md describing Sidiora as the second official coin of Paxeer X Network: the symbol SID, its six decimals, its approximate supply of 458.86 million, the address it lives at, that the bridge is its only minter and burner, and that its proxy administration sits with governance behind a timelock."
+do_2 = "Describe both ways to pay gas with it - the sponsored path with its relayer quote, its deadline and its maximum, and the native path with the per-account preference, the parameters and the oracle pricing - and say plainly which of the two is available without a chain upgrade."
+do_3 = "Name the governance surface: each parameter, what each of its validators refuses, where collected fees go under each option, and that every change to them is a proposal."
+do_4 = "Add the page to the Protocol section of the navigation in docs/site/mkdocs.yml beside the other protocol pages, and make every link it carries resolve so the strict build passes."
+do_5 = "Carry no date, host, IP address, internal URL or credential; name the product as Paxeer X Network and use LayerX only where it names the kernel domain."
+verify_cmd = "timeout 20m sh -c 'python3 -m venv build/sidiora-docs-venv && build/sidiora-docs-venv/bin/pip install -r docs/site/requirements.txt && build/sidiora-docs-venv/bin/mkdocs build --strict -f docs/site/mkdocs.yml'"
+symbols = ["docs-site"]
+touches = ["docs/site/docs/protocol/sidiora.md","docs/site/mkdocs.yml"]
+reqs = ["14.1","14.2","14.3","14.4","14.5"]
+
+[task.3]
+section = "Wave 3 - One Aggregate Run, Recorded"
+title = "Qualify the merged waves once and write down what ran"
+status = "pending"
+
+[task.3.1]
+title = "Run the aggregate suites once on the merged revision and record the evidence"
+status = "pending"
+wave = 3
+requires = ["1.1","1.2","1.3","1.4","1.5","1.6","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11"]
+do_1 = "On the revision that merges waves 1 and 2, run the three legs of the gate once, in order - the Go packages under modules/evm, modules/layerxbridge, precompiles and node/antedecorators, then the gas-station crate, then the Paxeer Foundry project - writing each leg's output to its own log under build/sidiora-gates/."
+do_2 = "Append one gate record per leg to spec/sidiora-fee-token/qualification.kvx carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code and the log path, written only from a command that actually ran."
+do_3 = "Append one observation per failure the run exposes that belongs to no task in this feature: revision, command, exit code, log path, one sentence of what was observed and one sentence of what is assumed; do not investigate it further and do not rerun it."
+do_4 = "Rerun nothing that already passed at this revision, spawn no review of a task whose verify_cmd passed, and write no gate record for a command that did not run."
+do_5 = "Deploy nothing: the upgrade handler and the governance proposals this feature produced are left for their owner."
+verify_cmd = "timeout 20m sh -c 'go test -count=1 ./modules/evm/... ./modules/layerxbridge/... ./precompiles/ ./precompiles/feetoken/... ./node/antedecorators/... && cargo test --locked --manifest-path interop/Cargo.toml -p layerx-gas-station && FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague'"
+symbols = ["sidiora-fee-token-gate"]
+touches = ["spec/sidiora-fee-token/qualification.kvx"]
+reqs = ["15.1","15.2","15.3","15.4"]
