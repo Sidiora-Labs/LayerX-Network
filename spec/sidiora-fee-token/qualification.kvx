@@ -59,3 +59,10 @@ command = "timeout 2m go vet ./modules/evm/types ./modules/evm/keeper ./precompi
 log_path = ".logs/vet.log"
 observed = "Focused vet reached its time limit without diagnostics."
 assumption = "The lint result remains unqualified; the task verification gate is recorded separately."
+
+[observation.2.6.1]
+revision = "aa64844f985255bc82e07822d53d8473d2e7681c"
+command = "sed -n '180,280p' modules/evm/keeper/msg_server.go; cat modules/evm/state/balance.go"; exit_code = 0
+log_path = ".logs/context.log"
+observed = "Execution constructs its StateDB outside ante and AddBalance credits the network denom; the task touches list excludes both execution and balance files and their tests."
+assumption = "The same-denom refund requires an authorized execution or StateDB integration change; implementation stops at this scope conflict."
