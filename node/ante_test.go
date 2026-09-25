@@ -3,6 +3,9 @@ package app_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"math/big"
 	"testing"
 
@@ -19,11 +22,16 @@ import (
 	abci "github.com/sidiora-labs/paxeer-network/consensus/abci/types"
 	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
+	oracletypes "github.com/sidiora-labs/paxeer-network/modules/oracle/types"
 	app "github.com/sidiora-labs/paxeer-network/node"
+	"github.com/sidiora-labs/paxeer-network/node/antedecorators"
 	"github.com/sidiora-labs/paxeer-network/node/apptesting"
 	"github.com/sidiora-labs/paxeer-network/sdk/utils/tracing"
 	"github.com/sidiora-labs/paxeer-network/sdk/x/auth/ante"
 	xauthsigning "github.com/sidiora-labs/paxeer-network/sdk/x/auth/signing"
+	banktypes "github.com/sidiora-labs/paxeer-network/sdk/x/bank/types"
+	paramtypes "github.com/sidiora-labs/paxeer-network/sdk/x/params/types"
+	stakingtypes "github.com/sidiora-labs/paxeer-network/sdk/x/staking/types"
 	testkeeper "github.com/sidiora-labs/paxeer-network/testutil/keeper"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -185,4 +193,119 @@ func TestEvmAnteErrorHandler(t *testing.T) {
 	deferredInfo := testkeeper.EVMTestApp.EvmKeeper.GetAllEVMTxDeferredInfo(ctx)
 	require.Equal(t, 1, len(deferredInfo))
 	require.Contains(t, deferredInfo[0].Error, "nonce too high")
+}
+
+func TestFeeDenomDecoratorOrder(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "ante.go", nil, 0)
+	require.NoError(t, err)
+	var constructors []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		assignment, ok := n.(*ast.AssignStmt)
+		if !ok || len(assignment.Lhs) != 1 {
+			return true
+		}
+		name, ok := assignment.Lhs[0].(*ast.Ident)
+		if !ok || name.Name != "anteDecorators" {
+			return true
+		}
+		list := assignment.Rhs[0].(*ast.CompositeLit)
+		for _, element := range list.Elts {
+			if identifier, ok := element.(*ast.Ident); ok {
+				constructors = append(constructors, identifier.Name)
+				continue
+			}
+			call := element.(*ast.CallExpr)
+			constructors = append(constructors, call.Fun.(*ast.SelectorExpr).Sel.Name)
+			if call.Fun.(*ast.SelectorExpr).Sel.Name == "NewGaslessDecorator" {
+				wrapped := call.Args[0].(*ast.CompositeLit)
+				require.Len(t, wrapped.Elts, 1)
+				deduct := wrapped.Elts[0].(*ast.CallExpr)
+				require.Equal(t, "NewDeductFeeDecorator", deduct.Fun.(*ast.SelectorExpr).Sel.Name)
+				checker := deduct.Args[4].(*ast.CallExpr)
+				require.Equal(t, "NewFeeDenomTxFeeChecker", checker.Fun.(*ast.SelectorExpr).Sel.Name)
+				require.Equal(t, "TxFeeChecker", checker.Args[1].(*ast.SelectorExpr).Sel.Name)
+			}
+		}
+		return false
+	})
+	require.Equal(t, []string{
+		"NewSetUpContextDecorator", "NewGaslessDecorator", "NewLimitSimulationGasDecorator",
+		"NewRejectExtensionOptionsDecorator", "NewSpammingPreventionDecorator", "NewOracleVoteAloneDecorator",
+		"NewValidateBasicDecorator", "NewTxTimeoutHeightDecorator", "NewValidateMemoDecorator",
+		"NewConsumeGasForTxSizeDecorator", "NewPriorityDecorator", "NewSetPubKeyDecorator",
+		"NewValidateSigCountDecorator", "NewSigGasConsumeDecorator", "sequentialVerifyDecorator",
+		"NewIncrementSequenceDecorator", "NewEVMAddressDecorator", "NewAuthzNestedMessageDecorator", "NewAnteDecorator",
+	}, constructors)
+}
+
+func feeDenomAnteSuite(t *testing.T) *AnteTestSuite {
+	t.Helper()
+	s := new(AnteTestSuite)
+	s.SetT(t)
+	s.SetupTest(true)
+	s.Ctx = s.Ctx.WithIsCheckTx(true).WithTxIndex(0)
+	params := s.App.EvmKeeper.GetParams(s.Ctx)
+	params.FeeTokenEnabled = true
+	params.AllowedFeeDenoms = []evmtypes.AllowedFeeDenom{{Denom: "usid", Rate: sdk.NewDec(3_000_000), RateUpdateHeight: 1}}
+	s.App.EvmKeeper.SetParams(s.Ctx, params)
+	s.App.ParamsKeeper.SetFeesParams(s.Ctx, paramtypes.FeesParams{})
+	s.FundAcc(s.testAcc, sdk.NewCoins(sdk.NewInt64Coin("usid", 100)))
+	s.txBuilder = s.clientCtx.TxConfig.NewTxBuilder()
+	s.txBuilder.SetGasLimit(1_000_000)
+	return s
+}
+
+func feeDenomSignedTx(t *testing.T, s *AnteTestSuite) xauthsigning.Tx {
+	t.Helper()
+	account := s.App.AccountKeeper.GetAccount(s.Ctx, s.testAcc)
+	tx, err := s.CreateTestTx([]cryptotypes.PrivKey{s.testAccPriv}, []uint64{account.GetAccountNumber()}, []uint64{account.GetSequence()}, s.Ctx.ChainID())
+	require.NoError(t, err)
+	return tx
+}
+
+func TestFeeDenomAssembledDeductionAndPriority(t *testing.T) {
+	s := feeDenomAnteSuite(t)
+	require.NoError(t, s.txBuilder.SetMsgs(&banktypes.MsgSend{FromAddress: s.testAcc.String(), ToAddress: s.testAcc.String(), Amount: sdk.NewCoins(sdk.NewInt64Coin("uhpx", 1))}))
+	s.txBuilder.SetFeeAmount(sdk.NewCoins(sdk.NewInt64Coin("usid", 30)))
+	result, err := s.anteHandler(s.Ctx, feeDenomSignedTx(t, s), false)
+	require.NoError(t, err)
+	require.Equal(t, sdk.NewInt(70), s.App.BankKeeper.GetBalance(result, s.testAcc, "usid").Amount)
+	require.Equal(t, int64(antedecorators.MaxPriority), result.Priority())
+}
+
+func TestFeeDenomGaslessAndOracleOrdering(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		s := feeDenomAnteSuite(t)
+		s.App.EvmKeeper.Paramstore.Set(s.Ctx, evmtypes.KeyFeeTokenEnabled, enabled)
+		validator := s.SetupValidator(stakingtypes.Bonded)
+		s.App.OracleKeeper.SetFeederDelegation(s.Ctx, validator, s.testAcc)
+		vote := &oracletypes.MsgAggregateExchangeRateVote{Feeder: s.testAcc.String(), Validator: validator.String(), ExchangeRates: "1uhpx"}
+		require.NoError(t, s.txBuilder.SetMsgs(vote))
+		s.txBuilder.SetFeeAmount(sdk.NewCoins(sdk.NewInt64Coin("usid", 30)))
+		s.txBuilder.SetGasLimit(0)
+		transaction := feeDenomSignedTx(t, s)
+		ctx, _ := s.Ctx.CacheContext()
+		result, err := s.anteHandler(ctx, transaction, false)
+		require.NoError(t, err)
+		require.Equal(t, sdk.NewInt(100), s.App.BankKeeper.GetBalance(result, s.testAcc, "usid").Amount)
+		require.Equal(t, int64(antedecorators.OraclePriority), result.Priority())
+		require.Zero(t, result.GasMeter().GasConsumed())
+
+		ctx, _ = s.Ctx.CacheContext()
+		result, err = s.anteHandler(ctx.WithIsCheckTx(false), transaction, false)
+		require.NoError(t, err)
+		remaining := int64(100)
+		if enabled {
+			remaining = 70
+		}
+		require.Equal(t, sdk.NewInt(remaining), s.App.BankKeeper.GetBalance(result, s.testAcc, "usid").Amount)
+		require.Equal(t, int64(antedecorators.OraclePriority), result.Priority())
+
+		s.txBuilder.SetGasLimit(1_000_000)
+		require.NoError(t, s.txBuilder.SetMsgs(vote, &banktypes.MsgSend{FromAddress: s.testAcc.String(), ToAddress: s.testAcc.String(), Amount: sdk.NewCoins(sdk.NewInt64Coin("uhpx", 1))}))
+		ctx, _ = s.Ctx.CacheContext()
+		result, err = s.anteHandler(ctx, feeDenomSignedTx(t, s), false)
+		require.ErrorContains(t, err, "oracle votes cannot be in the same tx")
+		require.Equal(t, sdk.NewInt(remaining), s.App.BankKeeper.GetBalance(result, s.testAcc, "usid").Amount)
+	}
 }
