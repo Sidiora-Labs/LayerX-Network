@@ -29,3 +29,27 @@
 #
 # No record carries a hostname, an IP address, an internal URL, a credential or
 # the name of an agent or a working branch.
+
+[observation.2.8.1]
+task     = "2.8"
+file     = "rpc/solidity/ERC20.sol, rpc/tests/solidity/ERC20.sol"
+symbol   = "WPAX"
+observed = "Both wrapped-coin fixtures under the JSON-RPC test trees still declare the old display name Wrapped Pax, unchanged by this task."
+assumption = "They are inert JSON-RPC test fixtures outside this task's touches list, so renaming them opportunistically is out of scope and left to whoever owns those trees."
+severity = "note"
+
+[observation.2.8.2]
+task     = "2.8"
+file     = "contracts/test/CW1155ERC1155PointerTest.t.sol, contracts/test/CW721ERC721PointerTest.t.sol"
+symbol   = "MockAddr"
+observed = "Pre-existing: both MockAddr doubles implement IAddr without its bindLayerX and unbindLayerX members, so solc 0.8.27 raises Error 3656 and the whole contracts Foundry project fails to compile, which stops task 2.8's verify_cmd at exit 1 before a single test runs."
+assumption = "The two pointer tests are outside this task's touches list, so the mocks are left exactly as they are and the interface drift belongs to whoever owns the precompile interface."
+severity = "blocker"
+
+[observation.2.8.3]
+task     = "2.8"
+file     = "foundry.paxeer.toml, contracts/package.json"
+symbol   = "openzeppelin_remapping"
+observed = "Pre-existing: the Paxeer Foundry profile declares libs contracts/lib only, while nine sources under contracts/ import @openzeppelin/contracts, which npm installs under contracts/node_modules, so a clean checkout cannot resolve the import and no forge command in that project compiles."
+assumption = "Wiring the dependency needs a remapping in foundry.paxeer.toml, outside this task's touches list; the lane supplied the package into contracts/lib out of tree to reach the real compile errors underneath."
+severity = "blocker"
