@@ -4,16 +4,16 @@ export const recipe = defineRecipe({
   base: {
     display: 'inline-flex',
     alignItems: 'center',
-    borderRadius: 'sm',
+    borderRadius: 'full',
     gap: '1',
-    fontWeight: '500',
+    fontWeight: '600',
     width: 'fit-content',
     maxWidth: '100%',
     whiteSpace: 'nowrap',
     fontVariantNumeric: 'normal',
     userSelect: 'text',
     _loading: {
-      borderRadius: 'sm',
+      borderRadius: 'full',
     },
   },
   variants: {

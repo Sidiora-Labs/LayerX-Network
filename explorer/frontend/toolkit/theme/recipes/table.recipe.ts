@@ -32,10 +32,10 @@ export const recipe = defineSlotRecipe({
           color: 'table.header.fg',
           backgroundColor: 'table.header.bg',
           _first: {
-            borderTopLeftRadius: '8px',
+            borderTopLeftRadius: 'sm',
           },
           _last: {
-            borderTopRightRadius: '8px',
+            borderTopRightRadius: 'sm',
           },
         },
         cell: {
@@ -43,7 +43,7 @@ export const recipe = defineSlotRecipe({
           borderColor: 'border.divider',
         },
         row: {
-          bg: 'bg.primary',
+          bg: 'bg.surface',
         },
       },
     },

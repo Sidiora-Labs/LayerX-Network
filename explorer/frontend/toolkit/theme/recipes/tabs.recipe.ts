@@ -131,7 +131,7 @@ export const recipe = defineSlotRecipe({
         trigger: {
           fontWeight: '600',
           gap: '1',
-          borderRadius: 'base',
+          borderRadius: 'full',
           color: 'tabs.solid.fg',
           bg: 'transparent',
           _selected: {
@@ -157,13 +157,13 @@ export const recipe = defineSlotRecipe({
           },
         },
         trigger: {
-          fontWeight: '500',
+          fontWeight: '600',
           color: 'tabs.secondary.fg',
           bg: 'transparent',
           borderWidth: '2px',
           borderStyle: 'solid',
           borderColor: 'tabs.secondary.border',
-          borderRadius: 'base',
+          borderRadius: 'full',
           _selected: {
             bg: 'selected.control.bg',
             color: 'selected.control.text',
@@ -206,12 +206,12 @@ export const recipe = defineSlotRecipe({
             },
           },
           _first: {
-            borderTopLeftRadius: 'base',
-            borderBottomLeftRadius: 'base',
+            borderTopLeftRadius: 'full',
+            borderBottomLeftRadius: 'full',
           },
           _last: {
-            borderTopRightRadius: 'base',
-            borderBottomRightRadius: 'base',
+            borderTopRightRadius: 'full',
+            borderBottomRightRadius: 'full',
           },
         },
       },

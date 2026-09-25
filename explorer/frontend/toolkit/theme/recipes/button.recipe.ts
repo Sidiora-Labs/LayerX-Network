@@ -6,7 +6,7 @@ export const recipe = defineRecipe({
     gap: 0,
     fontWeight: 600,
     overflow: 'hidden',
-    borderRadius: 'base',
+    borderRadius: 'full',
     _disabled: {
       opacity: 'control.disabled',
     },
@@ -17,7 +17,7 @@ export const recipe = defineRecipe({
         bg: 'button.solid.bg',
         color: 'button.solid.text',
         _hover: {
-          bg: 'hover',
+          bg: 'button.solid.bg.hover',
         },
         _loading: {
           opacity: 1,
@@ -28,7 +28,7 @@ export const recipe = defineRecipe({
           },
         },
         _expanded: {
-          bg: 'hover',
+          bg: 'button.solid.bg.hover',
         },
       },
       solid_danger: {
@@ -232,12 +232,12 @@ export const recipe = defineRecipe({
           },
         },
         _first: {
-          borderTopLeftRadius: 'base',
-          borderBottomLeftRadius: 'base',
+          borderTopLeftRadius: 'full',
+          borderBottomLeftRadius: 'full',
         },
         _last: {
-          borderTopRightRadius: 'base',
-          borderBottomRightRadius: 'base',
+          borderTopRightRadius: 'full',
+          borderBottomRightRadius: 'full',
         },
       },
       plain: {
@@ -348,7 +348,7 @@ export const recipe = defineRecipe({
         h: 5,
         minW: 5,
         textStyle: 'xs',
-        borderRadius: 'sm',
+        borderRadius: 'full',
         gap: 1,
         _icon: { boxSize: 'auto' },
       },
@@ -357,7 +357,7 @@ export const recipe = defineRecipe({
         h: 6,
         minW: 6,
         textStyle: 'sm',
-        borderRadius: 'sm',
+        borderRadius: 'full',
         gap: 1,
         _icon: { boxSize: 'auto' },
       },
@@ -366,7 +366,7 @@ export const recipe = defineRecipe({
         h: 8,
         minW: 8,
         textStyle: 'sm',
-        borderRadius: 'base',
+        borderRadius: 'full',
         gap: 1,
         _icon: { boxSize: 'auto' },
       },
@@ -375,7 +375,7 @@ export const recipe = defineRecipe({
         h: 10,
         minW: 10,
         textStyle: 'md',
-        borderRadius: 'base',
+        borderRadius: 'full',
         gap: 2,
         _icon: { boxSize: 'auto' },
         '& .chakra-spinner': { '--spinner-size': '20px' },

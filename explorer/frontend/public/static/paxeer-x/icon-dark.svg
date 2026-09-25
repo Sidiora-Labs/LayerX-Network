@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Paxeer X">
   <title>Paxeer X</title>
-  <rect width="32" height="32" rx="9" fill="#6F63F2"/>
-  <path d="M10.5 10.5 L21.5 21.5" stroke="#12111A" stroke-width="3.2" stroke-linecap="round"/>
-  <path d="M21.5 10.5 L10.5 21.5" stroke="#5CF0E3" stroke-width="3.2" stroke-linecap="round"/>
+  <rect width="32" height="32" rx="8" fill="#FFFFFF"/>
+  <path d="M10.5 10.5 L21.5 21.5" stroke="#101112" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M21.5 10.5 L10.5 21.5" stroke="#0965E8" stroke-width="3.2" stroke-linecap="round"/>
 </svg>

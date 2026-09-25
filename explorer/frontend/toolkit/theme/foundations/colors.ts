@@ -2,86 +2,156 @@ import { defaultsDeep } from 'es-toolkit/compat';
 
 import config from 'configs/app';
 
+// The product design tokens. The light appearance carries them verbatim; the
+// dark appearance is derived from the tones the theme already declares, so the
+// fork never grows a second palette.
+const PRODUCT = {
+  background: '#F8F8F8',
+  surface: '#FFFFFF',
+  surfaceSunken: '#F0F0F0',
+  foreground: '#0A0A0A',
+  foregroundSecondary: '#585858',
+  mutedForeground: '#6B6B6B',
+  border: '#E6E6E6',
+  borderStrong: '#D4D4D4',
+  primary: '#000000',
+  primaryForeground: '#FFFFFF',
+  primaryHover: '#1F1F1F',
+  accent: '#0965E8',
+  accentStrong: '#0060F8',
+  accentSoft: '#E9F1FE',
+  success: '#256B34',
+  successSoft: '#E8F5EA',
+  destructive: '#B42318',
+  destructiveSoft: '#F8E8E8',
+  warning: '#774700',
+  warningSoft: '#FDF3E3',
+};
+
 const DEFAULT_THEME_COLORS = {
   bg: {
     primary: {
       // for some reason links to colors.white and colors.black variables are not working here
       // so we use hex values instead
       // but it is not the case for other colors
-      _light: { value: '#FFFFFF' }, // colors.white
+      _light: { value: PRODUCT.background },
       _dark: { value: '#101112' }, // colors.black
+    },
+    surface: {
+      _light: { value: PRODUCT.surface },
+      _dark: { value: '{colors.gray.900}' },
+    },
+    sunken: {
+      _light: { value: PRODUCT.surfaceSunken },
+      _dark: { value: '{colors.whiteAlpha.100}' },
+    },
+    overlay: {
+      _light: { value: PRODUCT.surface },
+      _dark: { value: '{colors.gray.900}' },
     },
   },
   text: {
     primary: {
-      _light: { value: '{colors.blackAlpha.800}' },
+      _light: { value: PRODUCT.foreground },
       _dark: { value: '{colors.whiteAlpha.800}' },
     },
     secondary: {
-      _light: { value: '{colors.gray.500}' },
+      _light: { value: PRODUCT.foregroundSecondary },
       _dark: { value: '{colors.gray.400}' },
+    },
+    muted: {
+      _light: { value: PRODUCT.mutedForeground },
+      _dark: { value: '{colors.gray.500}' },
+    },
+  },
+  border: {
+    divider: {
+      _light: { value: PRODUCT.border },
+      _dark: { value: '{colors.whiteAlpha.100}' },
+    },
+    strong: {
+      _light: { value: PRODUCT.borderStrong },
+      _dark: { value: '{colors.gray.600}' },
+    },
+  },
+  accent: {
+    primary: {
+      _light: { value: PRODUCT.accent },
+      _dark: { value: '{colors.blue.300}' },
+    },
+    strong: {
+      _light: { value: PRODUCT.accentStrong },
+      _dark: { value: '{colors.blue.200}' },
+    },
+    soft: {
+      _light: { value: PRODUCT.accentSoft },
+      _dark: { value: '{colors.blue.800}' },
     },
   },
   hover: {
-    _light: { value: '{colors.blue.400}' },
-    _dark: { value: '{colors.blue.400}' },
+    _light: { value: PRODUCT.accentStrong },
+    _dark: { value: '{colors.blue.200}' },
   },
   selected: {
     control: {
       text: {
-        _light: { value: '{colors.blue.700}' },
+        _light: { value: PRODUCT.accentStrong },
         _dark: { value: '{colors.gray.50}' },
       },
       bg: {
-        _light: { value: '{colors.blue.50}' },
+        _light: { value: PRODUCT.accentSoft },
         _dark: { value: '{colors.whiteAlpha.50}' },
       },
     },
     option: {
       bg: {
-        _light: { value: '{colors.blue.500}' },
+        _light: { value: PRODUCT.accent },
         _dark: { value: '{colors.blue.500}' },
       },
     },
   },
   icon: {
     primary: {
-      _light: { value: '{colors.gray.500}' },
+      _light: { value: PRODUCT.foregroundSecondary },
       _dark: { value: '{colors.gray.400}' },
     },
     secondary: {
-      _light: { value: '{colors.gray.400}' },
+      _light: { value: PRODUCT.mutedForeground },
       _dark: { value: '{colors.gray.500}' },
     },
   },
   button: {
     primary: {
-      _light: { value: '{colors.blue.600}' },
-      _dark: { value: '{colors.blue.600}' },
+      _light: { value: PRODUCT.primary },
+      _dark: { value: '{colors.white}' },
       text: {
-        _light: { value: '{colors.white}' },
-        _dark: { value: '{colors.white}' },
+        _light: { value: PRODUCT.primaryForeground },
+        _dark: { value: '{colors.black}' },
+      },
+      hover: {
+        _light: { value: PRODUCT.primaryHover },
+        _dark: { value: '{colors.gray.200}' },
       },
     },
   },
   link: {
     primary: {
-      _light: { value: '{colors.blue.600}' },
+      _light: { value: PRODUCT.accent },
       _dark: { value: '{colors.blue.300}' },
     },
   },
   graph: {
     line: {
-      _light: { value: '{colors.blue.500}' },
+      _light: { value: PRODUCT.accent },
       _dark: { value: '{colors.blue.200}' },
     },
     gradient: {
       start: {
-        _light: { value: 'rgba(144, 205, 244, 0.3)' }, // blue.200 with opacity 0.3
+        _light: { value: 'rgba(9, 101, 232, 0.3)' }, // accent with opacity 0.3
         _dark: { value: 'rgba(144, 205, 244, 0.3)' }, // blue.200 with opacity 0.3
       },
       stop: {
-        _light: { value: 'rgba(144, 205, 244, 0)' }, // blue.200 with opacity 0
+        _light: { value: 'rgba(9, 101, 232, 0)' }, // accent with opacity 0
         _dark: { value: 'rgba(144, 205, 244, 0)' }, // blue.200 with opacity 0
       },
     },
@@ -89,34 +159,78 @@ const DEFAULT_THEME_COLORS = {
   navigation: {
     bg: {
       selected: {
-        _light: { value: '{colors.blue.50}' },
+        _light: { value: PRODUCT.accentSoft },
         _dark: { value: '{colors.gray.800}' },
       },
     },
     text: {
       selected: {
-        _light: { value: '{colors.blue.700}' },
+        _light: { value: PRODUCT.accentStrong },
         _dark: { value: '{colors.gray.50}' },
       },
     },
   },
   stats: {
     bg: {
-      _light: { value: '{colors.gray.50}' },
+      _light: { value: PRODUCT.surface },
       _dark: { value: '{colors.whiteAlpha.100}' },
     },
   },
   topbar: {
     bg: {
-      _light: { value: '{colors.gray.50}' },
+      _light: { value: PRODUCT.surface },
       _dark: { value: '{colors.whiteAlpha.100}' },
     },
   },
   tabs: {
     text: {
       primary: {
-        _light: { value: '{colors.blue.700}' },
+        _light: { value: PRODUCT.accentStrong },
         _dark: { value: '{colors.blue.100}' },
+      },
+    },
+  },
+  table: {
+    header: {
+      bg: {
+        _light: { value: PRODUCT.surfaceSunken },
+        _dark: { value: '{colors.whiteAlpha.200}' },
+      },
+      fg: {
+        _light: { value: PRODUCT.mutedForeground },
+        _dark: { value: '{colors.whiteAlpha.700}' },
+      },
+    },
+  },
+  feedback: {
+    success: {
+      fg: {
+        _light: { value: PRODUCT.success },
+        _dark: { value: '{colors.green.200}' },
+      },
+      bg: {
+        _light: { value: PRODUCT.successSoft },
+        _dark: { value: '{colors.green.800}' },
+      },
+    },
+    error: {
+      fg: {
+        _light: { value: PRODUCT.destructive },
+        _dark: { value: '{colors.red.200}' },
+      },
+      bg: {
+        _light: { value: PRODUCT.destructiveSoft },
+        _dark: { value: '{colors.red.800}' },
+      },
+    },
+    warning: {
+      fg: {
+        _light: { value: PRODUCT.warning },
+        _dark: { value: '{colors.orange.100}' },
+      },
+      bg: {
+        _light: { value: PRODUCT.warningSoft },
+        _dark: { value: '{colors.orange.800}' },
       },
     },
   },

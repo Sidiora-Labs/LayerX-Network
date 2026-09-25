@@ -37,22 +37,47 @@ const semanticTokens: ThemingConfig['semanticTokens'] = {
       },
     },
 
+    accent: {
+      DEFAULT: { value: { _light: '{colors.theme.accent.primary._light}', _dark: '{colors.theme.accent.primary._dark}' } },
+      strong: { value: { _light: '{colors.theme.accent.strong._light}', _dark: '{colors.theme.accent.strong._dark}' } },
+      soft: { value: { _light: '{colors.theme.accent.soft._light}', _dark: '{colors.theme.accent.soft._dark}' } },
+    },
+    feedback: {
+      success: {
+        fg: { value: { _light: '{colors.theme.feedback.success.fg._light}', _dark: '{colors.theme.feedback.success.fg._dark}' } },
+        bg: { value: { _light: '{colors.theme.feedback.success.bg._light}', _dark: '{colors.theme.feedback.success.bg._dark}' } },
+      },
+      error: {
+        fg: { value: { _light: '{colors.theme.feedback.error.fg._light}', _dark: '{colors.theme.feedback.error.fg._dark}' } },
+        bg: { value: { _light: '{colors.theme.feedback.error.bg._light}', _dark: '{colors.theme.feedback.error.bg._dark}' } },
+      },
+      warning: {
+        fg: { value: { _light: '{colors.theme.feedback.warning.fg._light}', _dark: '{colors.theme.feedback.warning.fg._dark}' } },
+        bg: { value: { _light: '{colors.theme.feedback.warning.bg._light}', _dark: '{colors.theme.feedback.warning.bg._dark}' } },
+      },
+    },
+
     // FOUNDATIONS
     heading: {
-      DEFAULT: { value: { _light: '{colors.blackAlpha.800}', _dark: '{colors.whiteAlpha.800}' } },
+      DEFAULT: { value: '{colors.text.primary}' },
     },
     text: {
       primary: { value: { _light: '{colors.theme.text.primary._light}', _dark: '{colors.theme.text.primary._dark}' } },
       secondary: { value: { _light: '{colors.theme.text.secondary._light}', _dark: '{colors.theme.text.secondary._dark}' } },
-      error: { value: '{colors.red.500}' },
-      success: { value: { _light: '{colors.green.500}', _dark: '{colors.green.200}' } },
+      muted: { value: { _light: '{colors.theme.text.muted._light}', _dark: '{colors.theme.text.muted._dark}' } },
+      error: { value: '{colors.feedback.error.fg}' },
+      success: { value: '{colors.feedback.success.fg}' },
     },
     bg: {
       primary: { value: { _light: '{colors.theme.bg.primary._light}', _dark: '{colors.theme.bg.primary._dark}' } },
+      surface: { value: { _light: '{colors.theme.bg.surface._light}', _dark: '{colors.theme.bg.surface._dark}' } },
+      sunken: { value: { _light: '{colors.theme.bg.sunken._light}', _dark: '{colors.theme.bg.sunken._dark}' } },
+      overlay: { value: { _light: '{colors.theme.bg.overlay._light}', _dark: '{colors.theme.bg.overlay._dark}' } },
     },
     border: {
-      divider: { value: { _light: '{colors.blackAlpha.100}', _dark: '{colors.whiteAlpha.100}' } },
-      error: { value: '{colors.red.500}' },
+      divider: { value: { _light: '{colors.theme.border.divider._light}', _dark: '{colors.theme.border.divider._dark}' } },
+      strong: { value: { _light: '{colors.theme.border.strong._light}', _dark: '{colors.theme.border.strong._dark}' } },
+      error: { value: '{colors.feedback.error.fg}' },
     },
     icon: {
       primary: { value: { _light: '{colors.theme.icon.primary._light}', _dark: '{colors.theme.icon.primary._dark}' } },
@@ -72,6 +97,7 @@ const semanticTokens: ThemingConfig['semanticTokens'] = {
       solid: {
         bg: {
           DEFAULT: { value: { _light: '{colors.theme.button.primary._light}', _dark: '{colors.theme.button.primary._dark}' } },
+          hover: { value: { _light: '{colors.theme.button.primary.hover._light}', _dark: '{colors.theme.button.primary.hover._dark}' } },
         },
         text: {
           DEFAULT: { value: { _light: '{colors.theme.button.primary.text._light}', _dark: '{colors.theme.button.primary.text._dark}' } },
@@ -95,7 +121,7 @@ const semanticTokens: ThemingConfig['semanticTokens'] = {
           DEFAULT: { value: { _light: '{colors.blackAlpha.800}', _dark: '{colors.whiteAlpha.800}' } },
         },
         border: {
-          DEFAULT: { value: { _light: '{colors.gray.100}', _dark: '{colors.gray.600}' } },
+          DEFAULT: { value: '{colors.border.strong}' },
         },
       },
       header: {
@@ -109,7 +135,7 @@ const semanticTokens: ThemingConfig['semanticTokens'] = {
           highlighted: { value: { _light: '{colors.orange.100}', _dark: '{colors.orange.900}' } },
         },
         border: {
-          DEFAULT: { value: { _light: '{colors.gray.100}', _dark: '{colors.gray.600}' } },
+          DEFAULT: { value: '{colors.border.strong}' },
         },
       },
       segmented: {
@@ -187,7 +213,7 @@ const semanticTokens: ThemingConfig['semanticTokens'] = {
         DEFAULT: { value: '{colors.text.secondary}' },
       },
       underlaid: {
-        bg: { value: { _light: '{colors.gray.100}', _dark: '{colors.gray.800}' } },
+        bg: { value: '{colors.accent.soft}' },
       },
       subtle: {
         DEFAULT: { value: { _light: '{colors.blackAlpha.800}', _dark: '{colors.gray.400}' } },
@@ -217,7 +243,7 @@ const semanticTokens: ThemingConfig['semanticTokens'] = {
     },
     popover: {
       DEFAULT: {
-        bg: { value: { _light: '{colors.white}', _dark: '{colors.gray.900}' } },
+        bg: { value: '{colors.bg.overlay}' },
         shadow: { value: { _light: '{colors.blackAlpha.200}', _dark: '{colors.whiteAlpha.300}' } },
       },
     },
@@ -248,7 +274,7 @@ const semanticTokens: ThemingConfig['semanticTokens'] = {
           DEFAULT: { value: '{colors.text.primary}' },
         },
         border: {
-          DEFAULT: { value: { _light: '{colors.gray.300}', _dark: '{colors.gray.600}' } },
+          DEFAULT: { value: '{colors.border.strong}' },
         },
       },
       segmented: {
@@ -295,16 +321,16 @@ const semanticTokens: ThemingConfig['semanticTokens'] = {
         error: { value: '{colors.text.error}' },
       },
       bg: {
-        DEFAULT: { value: '{colors.bg.primary}' },
-        readOnly: { value: { _light: '{colors.gray.200}', _dark: '{colors.gray.800}' } },
+        DEFAULT: { value: '{colors.bg.surface}' },
+        readOnly: { value: '{colors.bg.sunken}' },
       },
       border: {
-        DEFAULT: { value: { _light: '{colors.gray.100}', _dark: '{colors.gray.600}' } },
-        hover: { value: { _light: '{colors.gray.200}', _dark: '{colors.gray.500}' } },
-        focus: { value: '{colors.hover}' },
-        filled: { value: { _light: '{colors.gray.100}', _dark: '{colors.gray.600}' } },
+        DEFAULT: { value: '{colors.border.divider}' },
+        hover: { value: '{colors.border.strong}' },
+        focus: { value: '{colors.accent.strong}' },
+        filled: { value: '{colors.border.strong}' },
         readOnly: { value: { _light: '{colors.gray.200}', _dark: '{colors.gray.800}' } },
-        error: { value: '{colors.red.500}' },
+        error: { value: '{colors.feedback.error.fg}' },
       },
       placeholder: {
         DEFAULT: { value: { _light: '{colors.gray.400}', _dark: '{colors.gray.500}' } },
@@ -323,15 +349,15 @@ const semanticTokens: ThemingConfig['semanticTokens'] = {
     },
     dialog: {
       bg: {
-        DEFAULT: { value: { _light: '{colors.white}', _dark: '{colors.gray.900}' } },
+        DEFAULT: { value: '{colors.bg.overlay}' },
       },
       fg: {
-        DEFAULT: { value: { _light: '{colors.blackAlpha.800}', _dark: '{colors.whiteAlpha.800}' } },
+        DEFAULT: { value: '{colors.text.primary}' },
       },
     },
     drawer: {
       bg: {
-        DEFAULT: { value: { _light: '{colors.white}', _dark: '{colors.gray.900}' } },
+        DEFAULT: { value: '{colors.bg.overlay}' },
       },
     },
     select: {
@@ -363,12 +389,12 @@ const semanticTokens: ThemingConfig['semanticTokens'] = {
         fg: { value: { _light: '{colors.blackAlpha.800}', _dark: '{colors.whiteAlpha.800}' } },
       },
       green: {
-        bg: { value: { _light: '{colors.green.50}', _dark: '{colors.green.800}' } },
-        fg: { value: { _light: '{colors.green.500}', _dark: '{colors.green.200}' } },
+        bg: { value: '{colors.feedback.success.bg}' },
+        fg: { value: '{colors.feedback.success.fg}' },
       },
       red: {
-        bg: { value: { _light: '{colors.red.50}', _dark: '{colors.red.800}' } },
-        fg: { value: { _light: '{colors.red.500}', _dark: '{colors.red.200}' } },
+        bg: { value: '{colors.feedback.error.bg}' },
+        fg: { value: '{colors.feedback.error.fg}' },
       },
       purple: {
         bg: { value: { _light: '{colors.purple.50}', _dark: '{colors.purple.800}' } },
@@ -379,15 +405,15 @@ const semanticTokens: ThemingConfig['semanticTokens'] = {
         fg: { value: { _light: '{colors.blackAlpha.800}', _dark: '{colors.whiteAlpha.800}' } },
       },
       orange: {
-        bg: { value: { _light: '{colors.orange.50}', _dark: '{colors.orange.800}' } },
-        fg: { value: { _light: '{colors.orange.500}', _dark: '{colors.orange.100}' } },
+        bg: { value: '{colors.feedback.warning.bg}' },
+        fg: { value: '{colors.feedback.warning.fg}' },
       },
       blue: {
-        bg: { value: { _light: '{colors.blue.50}', _dark: '{colors.blue.800}' } },
-        fg: { value: { _light: '{colors.blue.500}', _dark: '{colors.blue.100}' } },
+        bg: { value: '{colors.accent.soft}' },
+        fg: { value: { _light: '{colors.accent.strong}', _dark: '{colors.blue.100}' } },
       },
       blue_alt: {
-        bg: { value: { _light: '{colors.blue.50}', _dark: '{colors.blue.800}' } },
+        bg: { value: '{colors.accent.soft}' },
         fg: { value: { _light: '{colors.blackAlpha.800}', _dark: '{colors.whiteAlpha.800}' } },
       },
       yellow: {
@@ -473,8 +499,8 @@ const semanticTokens: ThemingConfig['semanticTokens'] = {
     },
     table: {
       header: {
-        bg: { value: { _light: '{colors.blackAlpha.100}', _dark: '{colors.whiteAlpha.200}' } },
-        fg: { value: { _light: '{colors.blackAlpha.700}', _dark: '{colors.whiteAlpha.700}' } },
+        bg: { value: { _light: '{colors.theme.table.header.bg._light}', _dark: '{colors.theme.table.header.bg._dark}' } },
+        fg: { value: { _light: '{colors.theme.table.header.fg._light}', _dark: '{colors.theme.table.header.fg._dark}' } },
       },
     },
     checkbox: {
@@ -508,10 +534,10 @@ const semanticTokens: ThemingConfig['semanticTokens'] = {
   },
   shadows: {
     popover: {
-      DEFAULT: { value: { _light: '{shadows.size.2xl}', _dark: '{shadows.dark-lg}' } },
+      DEFAULT: { value: { _light: '{shadows.overlay}', _dark: '{shadows.dark-lg}' } },
     },
     drawer: {
-      DEFAULT: { value: { _light: '{shadows.size.lg}', _dark: '{shadows.dark-lg}' } },
+      DEFAULT: { value: { _light: '{shadows.overlay}', _dark: '{shadows.dark-lg}' } },
     },
   },
   opacity: {

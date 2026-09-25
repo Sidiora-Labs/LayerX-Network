@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 164 32" width="164" height="32" role="img" aria-label="Paxeer X">
   <title>Paxeer X</title>
-  <rect width="32" height="32" rx="9" fill="#3D2FD6"/>
+  <rect width="32" height="32" rx="8" fill="#0A0A0A"/>
   <path d="M10.5 10.5 L21.5 21.5" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round"/>
-  <path d="M21.5 10.5 L10.5 21.5" stroke="#2FD6C8" stroke-width="3.2" stroke-linecap="round"/>
-  <text x="42" y="22.5" textLength="118" lengthAdjust="spacingAndGlyphs" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" letter-spacing="-0.2" fill="#101112">Paxeer X</text>
+  <path d="M21.5 10.5 L10.5 21.5" stroke="#0965E8" stroke-width="3.2" stroke-linecap="round"/>
+  <text x="42" y="22.5" textLength="118" lengthAdjust="spacingAndGlyphs" font-family="Manrope, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="19" font-weight="700" letter-spacing="-0.2" fill="#0A0A0A">Paxeer X</text>
 </svg>

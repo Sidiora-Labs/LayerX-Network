@@ -21,6 +21,7 @@ const globalCss: SystemConfig['globalCss'] = {
   body: {
     bg: 'global.body.bg',
     color: 'global.body.fg',
+    fontFamily: 'body',
     WebkitTapHighlightColor: 'transparent',
     fontVariantLigatures: 'no-contextual',
     focusRingStyle: 'hidden',

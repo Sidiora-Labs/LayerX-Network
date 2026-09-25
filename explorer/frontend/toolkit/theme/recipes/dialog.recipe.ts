@@ -45,8 +45,8 @@ export const recipe = defineSlotRecipe({
       zIndex: 'calc(var(--dialog-z-index) + var(--layer-index, 0))',
       bg: 'dialog.bg',
       color: 'dialog.fg',
-      boxShadow: 'size.lg',
-      borderRadius: 'xl',
+      boxShadow: 'overlay',
+      borderRadius: 'lg',
       _open: {
         animationDuration: 'moderate',
       },
@@ -80,7 +80,7 @@ export const recipe = defineSlotRecipe({
       whiteSpace: 'nowrap',
       overflow: 'hidden',
       textOverflow: 'ellipsis',
-      fontWeight: '500',
+      fontWeight: '600',
     },
     description: {
       color: 'dialog.fg',

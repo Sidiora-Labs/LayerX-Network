@@ -95,7 +95,7 @@
 ## Wave 2 - The Remaining Fork Surface
 
 - [ ] 2. Finish the explorer fork
-  - [ ] 2.1 Apply the product design tokens to the explorer theme
+  - [x] 2.1 Apply the product design tokens to the explorer theme
     - Read the product tokens in human/apps/web/packages/layerx-ui/src/styles/tokens.css and carry their values into explorer/frontend/toolkit/theme/foundations: the typeface into typography.ts, the neutral and accent scales, the surface, background, border and text tones and the success, destructive and warning pairs into colors.ts and semanticTokens.ts, the radii into borders.ts and the card and overlay shadows into shadows.ts, keeping the existing token names the recipes already consume.
     - Update explorer/frontend/toolkit/theme/globalCss.ts so the page background, the default text colour and the default font family come from those tokens, and update the button, input, table, tabs, badge, link and dialog recipes so the primary button is the black pill, the accent is the product accent and no recipe carries a literal colour.
     - Resolve every token in both the light and the dark appearance; where the product tokens define only one appearance, derive the other from the existing semantic token structure rather than inventing a second palette.
