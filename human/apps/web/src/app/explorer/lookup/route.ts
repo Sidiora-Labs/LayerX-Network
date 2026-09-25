@@ -4,7 +4,6 @@ import { resolveName } from "../../../explorer/client";
 import {
   accountIdentifierPath,
   parseAccountIdentifier,
-  validExplorerCoordinate,
   validExplorerIdentifier,
   validExplorerName,
 } from "../../../explorer/model";
@@ -12,8 +11,6 @@ import {
 const DESTINATIONS = Object.freeze({
   receipt: "receipts",
   account: "accounts",
-  checkpoint: "checkpoints",
-  batch: "batches",
   program: "programs",
 });
 
@@ -50,10 +47,7 @@ export async function GET(request: NextRequest) {
     }
     return NextResponse.redirect(new URL(accountIdentifierPath(account.canonical), request.url), 303);
   }
-  const validIdentifier = kind === "batch"
-    ? validExplorerCoordinate(identifier)
-    : validExplorerIdentifier(identifier);
-  if (!validIdentifier) {
+  if (!validExplorerIdentifier(identifier)) {
     return invalid(request, "invalid");
   }
   const destination = DESTINATIONS[kind as keyof typeof DESTINATIONS];

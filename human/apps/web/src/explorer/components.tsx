@@ -4,14 +4,10 @@ import { copyEntry } from "../../copy/runtime";
 import { formatCopy } from "../../copy/format";
 import { ExplorerFreshness as ExplorerFreshnessView, ExplorerNavigation } from "../kit/explorer";
 import { ScreenCard } from "../kit/surface";
+import { EXPLORER_NAVIGATION } from "./links";
 import type { ExplorerFreshness, ExplorerVerificationLevel, MirrorVerificationProvenance } from "./model";
 
-const EXPLORER_NAVIGATION = [
-  { href: "/explorer", copyKey: "explorer.navigation.overview" },
-  { href: "/explorer/checkpoints", copyKey: "explorer.navigation.checkpoints" },
-  { href: "/explorer/batches", copyKey: "explorer.navigation.batches" },
-  { href: "/explorer/verify", copyKey: "explorer.navigation.verify" },
-] as const;
+export { EXPLORER_NAVIGATION };
 
 export function ExplorerFrame({
   title,
@@ -91,8 +87,4 @@ export function ExplorerNotFound({
 
 export function explorerReceiptPath(identifier: string): string {
   return `/explorer/receipts/${encodeURIComponent(identifier)}`;
-}
-
-export function explorerCheckpointPath(identifier: string): string {
-  return `/explorer/checkpoints/${encodeURIComponent(identifier)}`;
 }

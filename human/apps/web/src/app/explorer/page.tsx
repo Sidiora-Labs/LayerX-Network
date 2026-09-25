@@ -1,19 +1,13 @@
 import { copyEntry } from "../../../copy/runtime";
-import { batchPage, checkpointPage } from "../../explorer/client";
-import {
-  ExplorerFrame,
-  ExplorerUnavailable,
-  FreshnessDisplay,
-  verificationLabel,
-} from "../../explorer/components";
-import { ExplorerLink, ExplorerLookupForm, ExplorerPanel, ExplorerTable, ExplorerVerificationBadge } from "../../kit/explorer";
+import { explorerLink } from "../../explorer/client";
+import { ExplorerFrame, ExplorerUnavailable } from "../../explorer/components";
+import { ExplorerExternalLink, ExplorerLookupForm, ExplorerPanel } from "../../kit/explorer";
 import { PlaneRouteAction } from "../../kit/plane-route-action";
 
-export default async function ExplorerPlanePage() {
-  let checkpoints;
-  let batches;
+export default function ExplorerPlanePage() {
+  let anchors;
   try {
-    [checkpoints, batches] = await Promise.all([checkpointPage(undefined, "10"), batchPage(undefined, "10")]);
+    anchors = explorerLink({ kind: "anchor" });
   } catch {
     return <ExplorerUnavailable />;
   }
@@ -22,7 +16,14 @@ export default async function ExplorerPlanePage() {
       title={copyEntry("explorer.title").message}
       description={copyEntry("explorer.summary").message}
     >
-      <FreshnessDisplay freshness={checkpoints.freshness} />
+      <ExplorerPanel title={copyEntry("explorer.anchors.title").message}>
+        <p className="text-sm text-foreground-secondary">
+          {copyEntry("explorer.anchors.body").message}
+        </p>
+        <ExplorerExternalLink href={anchors}>
+          {copyEntry("explorer.anchors.action").message}
+        </ExplorerExternalLink>
+      </ExplorerPanel>
       <div className="grid gap-4 lg:grid-cols-2">
         <ExplorerPanel title={copyEntry("explorer.lookup.receipt.title").message}>
           <ExplorerLookupForm
@@ -52,58 +53,6 @@ export default async function ExplorerPlanePage() {
           />
         </ExplorerPanel>
       </div>
-      <ExplorerPanel title={copyEntry("explorer.checkpoints.recent").message}>
-        <ExplorerTable
-          caption={copyEntry("explorer.checkpoints.table").message}
-          columns={[
-            copyEntry("explorer.column.batch").message,
-            copyEntry("explorer.column.checkpoint").message,
-            copyEntry("explorer.column.sequences").message,
-            copyEntry("explorer.column.verification").message,
-          ]}
-          rows={checkpoints.items.map((checkpoint) => ({
-            id: checkpoint.checkpointId,
-            cells: [
-              checkpoint.batchNumber,
-              <ExplorerLink key="checkpoint" href={`/explorer/checkpoints/${checkpoint.checkpointId}`}>
-                {checkpoint.checkpointId}
-              </ExplorerLink>,
-              `${checkpoint.firstSequence}–${checkpoint.lastSequence}`,
-              <ExplorerVerificationBadge
-                key="verification"
-                label={verificationLabel(checkpoint.verificationLevel)}
-                unverified={checkpoint.verificationLevel === "unverified"}
-              />,
-            ],
-          }))}
-        />
-      </ExplorerPanel>
-      <ExplorerPanel title={copyEntry("explorer.batches.recent").message}>
-        <ExplorerTable
-          caption={copyEntry("explorer.batches.table").message}
-          columns={[
-            copyEntry("explorer.column.batch").message,
-            copyEntry("explorer.column.receipts").message,
-            copyEntry("explorer.column.events").message,
-            copyEntry("explorer.column.verification").message,
-          ]}
-          rows={batches.items.map((batch) => ({
-            id: batch.batchNumber,
-            cells: [
-              <ExplorerLink key="batch" href={`/explorer/batches/${batch.batchNumber}`}>
-                {batch.batchNumber}
-              </ExplorerLink>,
-              batch.receiptCount,
-              batch.eventCount,
-              <ExplorerVerificationBadge
-                key="verification"
-                label={verificationLabel(batch.verificationLevel)}
-                unverified={batch.verificationLevel === "unverified"}
-              />,
-            ],
-          }))}
-        />
-      </ExplorerPanel>
       <div>
         <PlaneRouteAction destination="/app">
           {copyEntry("action.open_app").message}

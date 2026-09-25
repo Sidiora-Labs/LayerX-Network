@@ -20,7 +20,14 @@ export {
   type ReceiptRecord,
 } from "./model";
 export {
-  explorerCheckpointPath,
+  EXPLORER_NAVIGATION,
   explorerReceiptPath,
   verificationLabel,
 } from "./components";
+export {
+  EXPLORER_ANCHOR_PATH,
+  EXPLORER_LINK_KINDS,
+  explorerLinkPath,
+  type ExplorerLinkKind,
+  type ExplorerLinkTarget,
+} from "./links";

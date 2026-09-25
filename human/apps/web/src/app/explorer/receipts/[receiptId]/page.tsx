@@ -1,5 +1,5 @@
 import { copyEntry } from "../../../../../copy/runtime";
-import { receiptRecord } from "../../../../explorer/client";
+import { explorerLink, receiptRecord } from "../../../../explorer/client";
 import {
   ExplorerFrame,
   ExplorerNotFound,
@@ -7,14 +7,16 @@ import {
   FreshnessDisplay,
   verificationLabel,
 } from "../../../../explorer/components";
-import { ExplorerLink, ExplorerPanel, ExplorerTable, ExplorerVerificationBadge } from "../../../../kit/explorer";
+import { ExplorerExternalLink, ExplorerPanel, ExplorerTable, ExplorerVerificationBadge } from "../../../../kit/explorer";
 
 export default async function ReceiptPage({
   params,
 }: Readonly<{ params: Promise<{ receiptId: string }> }>) {
   let record;
+  let anchors;
   try {
     record = await receiptRecord((await params).receiptId);
+    anchors = explorerLink({ kind: "batch" });
   } catch {
     return <ExplorerUnavailable />;
   }
@@ -52,9 +54,9 @@ export default async function ReceiptPage({
             id: "batch",
             cells: [
               copyEntry("explorer.column.batch").message,
-              <ExplorerLink key="batch" href={`/explorer/batches/${receipt.batchNumber}`}>
+              <ExplorerExternalLink key="batch" href={anchors}>
                 {receipt.batchNumber}
-              </ExplorerLink>,
+              </ExplorerExternalLink>,
               verification,
             ],
           },

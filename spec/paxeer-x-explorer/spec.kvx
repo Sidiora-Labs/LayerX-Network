@@ -590,7 +590,7 @@ reqs = ["14.1","14.2","14.3","14.4"]
 
 [task.2.12]
 title = "Leave one explorer surface and link to it"
-status = "pending"
+status = "done"
 wave = 2
 requires = []
 do_1 = "Add a documented explorer base-URL variable to the control plane's server configuration and a helper in human/apps/web/src/explorer/client.ts that builds an explorer link for an anchor, a batch, a checkpoint, a receipt, a transaction and an address from it, carrying no literal host and failing closed with the unavailable state when the variable is unset."
@@ -603,6 +603,10 @@ verify_cmd = "timeout 20m sh -c 'npm --prefix human/apps/web ci --ignore-scripts
 symbols = ["explorerLink","ExplorerPlanePage","EXPLORER_NAVIGATION"]
 touches = ["human/apps/web/src/explorer/client.ts","human/apps/web/src/explorer/components.tsx","human/apps/web/src/app/explorer","human/apps/web/src/kit/explorer.tsx","human/apps/web/src/perf/budgets.ts","human/apps/web/copy/catalog.ts","human/apps/web/e2e/explorer.spec.ts","human/apps/web/e2e/explorer-admission.test.ts","spec/paxeer-x-explorer/qualification.kvx"]
 reqs = ["15.1","15.2","15.3","15.4","15.5"]
+revision = "885912cb301082278cfc748489bc79f62766b3b7"
+command = "timeout 20m sh -c 'npm --prefix human/apps/web ci --ignore-scripts --no-audit --no-fund && npm --prefix human/apps/web run typecheck && cd human/apps/web && node --test e2e/explorer.spec.ts e2e/explorer-admission.test.ts e2e/explorer-verifier.test.ts e2e/explorer-account.test.ts'"
+exit_code = 0
+log = "lane qualification log ex-t2-12.log"
 
 [task.3]
 section = "Wave 3 - One Aggregate Run, Recorded"
