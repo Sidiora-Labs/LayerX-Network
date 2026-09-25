@@ -310,3 +310,15 @@ command = "FOUNDRY_CONFIG=foundry.paxeer.toml forge build --evm-version=prague c
 log_path = ".logs/build.log"
 observed = "Foundry resolves forge-std/Test.sol under the absent contracts/lib/forge-std/contracts/src directory, preventing the standalone build from compiling."
 assumption = "The exact verification command requires FOUNDRY_REMAPPINGS pointing forge-std/ to contracts/lib/forge-std/src/ and @openzeppelin/contracts/ to contracts/lib/openzeppelin-contracts/contracts/, with no repository configuration change."
+
+[observation.1.7.3]
+task = "1.7"; file = "contracts/src/BatchCallAndSponsor.sol"; symbol = "currentRate"
+severity = "blocker"
+observed = "Supplement to observation.1.7.1: requirements 1.4 and the oracle-specific coverage in 1.7 remain unsatisfied by owner-set pricing."
+assumption = "Task completion records its focused verification only; requirement definitions and traceability remain intact pending an authorized resolution."
+
+[observation.1.7.4]
+task = "1.7"; file = "spec/sidiora-fee-token/spec.kvx"; symbol = "task.1.7.log_path"
+severity = "blocker"
+observed = "The review requests a relative evidence path, but the explicit follow-up instructions require the exact absolute log_path, conflicting with the naming rule."
+assumption = "Preserve the explicitly required evidence path and the unchanged existing pull request body; an authorized publication-policy resolution is required."

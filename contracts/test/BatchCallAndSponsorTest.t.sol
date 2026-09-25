@@ -20,6 +20,8 @@ contract SidioraFixture is ERC20 {
 
 contract BatchCallAndSponsorTest is Test {
     event RateUpdated(uint256 rate, uint256 updatedAt);
+    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event Sponsored(address indexed sponsor, address indexed token, uint256 tokenAmount, uint256 quoteNonce);
     event CallExecuted(address indexed sender, address indexed to, uint256 value, bytes data);
     event BatchExecuted(uint256 indexed nonce, BatchCallAndSponsor.Call[] calls);
@@ -348,6 +350,112 @@ contract BatchCallAndSponsorTest is Test {
         vm.expectRevert(BatchCallAndSponsor.InvalidRateContext.selector);
         account.setRate(2 * SID_BASE_UNITS);
         assertEq(account.currentRate(), INITIAL_RATE);
+    }
+
+    function testOwnershipTransferRequiresAcceptanceAndEmitsEvents() public {
+        vm.expectEmit(true, true, false, true, address(implementation));
+        emit OwnershipTransferStarted(address(this), sponsor);
+        implementation.transferOwnership(sponsor);
+        assertEq(implementation.owner(), address(this));
+        assertEq(implementation.pendingOwner(), sponsor);
+        vm.prank(sponsor);
+        vm.expectRevert(BatchCallAndSponsor.UnauthorizedOwner.selector);
+        implementation.setRate(2 * SID_BASE_UNITS);
+        implementation.setRate(INITIAL_RATE);
+        vm.expectEmit(true, true, false, true, address(implementation));
+        emit OwnershipTransferred(address(this), sponsor);
+        vm.prank(sponsor);
+        implementation.acceptOwnership();
+        assertEq(implementation.owner(), sponsor);
+        assertEq(implementation.pendingOwner(), address(0));
+        vm.expectRevert(BatchCallAndSponsor.UnauthorizedOwner.selector);
+        implementation.setRate(2 * SID_BASE_UNITS);
+        vm.expectRevert(BatchCallAndSponsor.UnauthorizedOwner.selector);
+        implementation.transferOwnership(recipient);
+        vm.prank(sponsor);
+        implementation.setRate(INITIAL_RATE);
+        _submit(_calls(), _quote());
+        assertEq(token.balanceOf(sponsor), INITIAL_RATE);
+    }
+
+    function testOwnershipTransferRejectsUnauthorizedAndZeroNomination() public {
+        implementation.transferOwnership(sponsor);
+        vm.prank(recipient);
+        vm.expectRevert(BatchCallAndSponsor.UnauthorizedOwner.selector);
+        implementation.transferOwnership(recipient);
+        vm.expectRevert(BatchCallAndSponsor.InvalidOwner.selector);
+        implementation.transferOwnership(address(0));
+        assertEq(implementation.owner(), address(this));
+        assertEq(implementation.pendingOwner(), sponsor);
+    }
+
+    function testOwnershipAcceptanceRejectsAbsentOrWrongNominee() public {
+        vm.prank(sponsor);
+        vm.expectRevert(BatchCallAndSponsor.UnauthorizedOwner.selector);
+        implementation.acceptOwnership();
+        implementation.transferOwnership(sponsor);
+        vm.prank(recipient);
+        vm.expectRevert(BatchCallAndSponsor.UnauthorizedOwner.selector);
+        implementation.acceptOwnership();
+        assertEq(implementation.owner(), address(this));
+        assertEq(implementation.pendingOwner(), sponsor);
+    }
+
+    function testOnlyLatestOwnershipNomineeCanAccept() public {
+        implementation.transferOwnership(sponsor);
+        implementation.transferOwnership(recipient);
+        vm.prank(sponsor);
+        vm.expectRevert(BatchCallAndSponsor.UnauthorizedOwner.selector);
+        implementation.acceptOwnership();
+        vm.prank(recipient);
+        implementation.acceptOwnership();
+        assertEq(implementation.owner(), recipient);
+        assertEq(implementation.pendingOwner(), address(0));
+        vm.prank(recipient);
+        vm.expectRevert(BatchCallAndSponsor.UnauthorizedOwner.selector);
+        implementation.acceptOwnership();
+    }
+
+    function testDelegatedOwnershipWritesRejected() public {
+        implementation.transferOwnership(sponsor);
+        vm.expectRevert(BatchCallAndSponsor.InvalidRateContext.selector);
+        account.transferOwnership(recipient);
+        vm.prank(sponsor);
+        vm.expectRevert(BatchCallAndSponsor.InvalidRateContext.selector);
+        account.acceptOwnership();
+        assertEq(implementation.owner(), address(this));
+        assertEq(implementation.pendingOwner(), sponsor);
+        assertEq(account.owner(), address(0));
+        assertEq(account.pendingOwner(), address(0));
+        assertEq(account.currentRate(), INITIAL_RATE);
+    }
+
+    function testOwnershipRotationPreservesRateAndReplayStorage() public {
+        _submit(_calls(), _quote());
+        implementation.transferOwnership(sponsor);
+        vm.prank(sponsor);
+        implementation.acceptOwnership();
+        assertEq(uint256(vm.load(address(account), bytes32(uint256(0)))), 1);
+        bytes32 sponsorSlot = keccak256(abi.encode(sponsor, uint256(1)));
+        bytes32 quoteSlot = keccak256(abi.encode(uint256(7), sponsorSlot));
+        assertEq(uint256(vm.load(address(account), quoteSlot)), 1);
+        assertEq(uint256(vm.load(address(implementation), bytes32(uint256(2)))), INITIAL_RATE);
+        assertEq(uint256(vm.load(address(implementation), bytes32(uint256(3)))), 1000);
+        assertEq(account.nonce(), 1);
+        assertTrue(account.usedQuoteNonces(sponsor, 7));
+        assertEq(account.currentRate(), INITIAL_RATE);
+        _refusedAfterRotation();
+    }
+
+    function _refusedAfterRotation() internal {
+        BatchCallAndSponsor.Call[] memory calls = _calls();
+        BatchCallAndSponsor.Quote memory quote = _quote();
+        bytes memory auth = _sign(accountKey, account.sponsoredBatchDigest(calls, quote));
+        bytes memory relayer = _sign(sponsorKey, account.quoteDigest(quote));
+        vm.expectRevert(BatchCallAndSponsor.QuoteAlreadyUsed.selector);
+        account.executeSponsored(calls, quote, auth, relayer);
+        assertEq(account.nonce(), 1);
+        assertEq(token.balanceOf(sponsor), INITIAL_RATE);
     }
 
     function testZeroRateUpdateRefused() public {

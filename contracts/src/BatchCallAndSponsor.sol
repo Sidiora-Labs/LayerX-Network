@@ -38,7 +38,6 @@ contract BatchCallAndSponsor {
 
     address public constant SIDIORA = 0x21f7b20a555199fa73A238B1a91FD0f549068fEe;
     uint256 public constant PAX_BASE_UNITS = 1e18;
-    address public immutable owner;
     address public immutable rateSource;
     uint256 public immutable maxRateAge;
     uint256 public constant MAX_SPREAD_BPS = 500;
@@ -51,6 +50,8 @@ contract BatchCallAndSponsor {
     mapping(address => mapping(uint256 => bool)) public usedQuoteNonces;
     uint256 public rate;
     uint256 public rateUpdatedAt;
+    address public owner;
+    address public pendingOwner;
 
     error InvalidAccountSignature();
     error InvalidRelayerSignature();
@@ -70,6 +71,8 @@ contract BatchCallAndSponsor {
     event Sponsored(address indexed sponsor, address indexed token, uint256 tokenAmount, uint256 quoteNonce);
 
     event RateUpdated(uint256 rate, uint256 updatedAt);
+    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     constructor(address initialOwner, uint256 initialRate, uint256 maximumAge) {
         if (initialOwner == address(0)) revert InvalidOwner();
@@ -83,12 +86,28 @@ contract BatchCallAndSponsor {
     }
 
     function setRate(uint256 newRate) external {
-        if (msg.sender != owner) revert UnauthorizedOwner();
         if (address(this) != rateSource) revert InvalidRateContext();
+        if (msg.sender != owner) revert UnauthorizedOwner();
         if (newRate == 0) revert InvalidRate();
         rate = newRate;
         rateUpdatedAt = block.timestamp;
         emit RateUpdated(newRate, block.timestamp);
+    }
+
+    function transferOwnership(address newOwner) external {
+        if (address(this) != rateSource) revert InvalidRateContext();
+        if (msg.sender != owner) revert UnauthorizedOwner();
+        if (newOwner == address(0)) revert InvalidOwner();
+        pendingOwner = newOwner;
+        emit OwnershipTransferStarted(owner, newOwner);
+    }
+
+    function acceptOwnership() external {
+        if (address(this) != rateSource) revert InvalidRateContext();
+        if (msg.sender != pendingOwner) revert UnauthorizedOwner();
+        emit OwnershipTransferred(owner, msg.sender);
+        owner = msg.sender;
+        pendingOwner = address(0);
     }
 
     function currentRate() public view returns (uint256) {
