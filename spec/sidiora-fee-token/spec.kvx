@@ -317,7 +317,7 @@ reqs = ["4.1","4.2","4.3","4.4"]
 [task.1.7]
 title = "Price sponsored gas through an owner-set rate"
 status = "done"
-revision = "pending"
+revision = "7706f5a22f598415c768c5941505958edccc86e8"
 command = "timeout 20m sh -c 'FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague --match-path contracts/test/BatchCallAndSponsorTest.t.sol -vvv'"
 exit_code = 0
 log_path = "/root/lx-lanes/sid-t1-7/.logs/verify.log"
