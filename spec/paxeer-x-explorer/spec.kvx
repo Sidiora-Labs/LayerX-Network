@@ -634,7 +634,7 @@ status = "pending"
 
 [task.3.1]
 title = "Run the explorer gates once on the merged revision and record the evidence"
-status = "pending"
+status = "done"
 wave = 3
 requires = ["1.1","1.9","1.10","1.11","1.12","1.13","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12","4.1","4.2"]
 do_1 = "On the revision that merges waves 1 and 2, run tools/explorer/gate-test.sh once with its budget set to fit this task's timeout, writing its logs under build/explorer-gates/."
@@ -645,6 +645,10 @@ verify_cmd = "timeout 20m sh -c 'EXPLORER_GATE_BUDGET_SECONDS=1080 tools/explore
 symbols = ["gate-test"]
 touches = ["spec/paxeer-x-explorer/qualification.kvx"]
 reqs = ["16.1","16.2","16.3","16.4"]
+revision = "068346118fbf3b9414f6a6ca57246ed25f41c01d"
+command = "timeout 20m sh -c 'EXPLORER_GATE_BUDGET_SECONDS=1080 tools/explorer/gate-test.sh'"
+exit_code = 0
+log = ".logs/verify.log"
 
 [task.4]
 section = "Wave 4 - The Gate's Own Defect"
