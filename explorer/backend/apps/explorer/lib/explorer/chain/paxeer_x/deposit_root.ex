@@ -2,8 +2,10 @@ defmodule Explorer.Chain.PaxeerX.DepositRoot do
   @moduledoc """
   A deposit root the LayerX custody precompile registered against a checkpoint.
 
-  One row per log, keyed by the emitting transaction hash and the log index. The
-  registration is not a custody movement — it moves no balance and belongs to no
+  One row per log, keyed by the emitting transaction hash, the block hash and the log
+  index the way an upstream log is keyed, so a transaction a reorg moves into another
+  block keeps a row per block rather than losing the later one. The registration is not
+  a custody movement — it moves no balance and belongs to no
   deposit or claim flow — so it is held here rather than folded into
   `Explorer.Chain.PaxeerX.CustodyEvent` and its kind enumeration.
 
@@ -65,6 +67,7 @@ defmodule Explorer.Chain.PaxeerX.DepositRoot do
 
     belongs_to(:block, Block,
       foreign_key: :block_hash,
+      primary_key: true,
       references: :hash,
       type: Hash.Full,
       null: false
@@ -81,7 +84,7 @@ defmodule Explorer.Chain.PaxeerX.DepositRoot do
     |> validate_number(:version, greater_than_or_equal_to: 0, less_than_or_equal_to: @uint16_maximum)
     |> foreign_key_constraint(:transaction_hash)
     |> foreign_key_constraint(:block_hash)
-    |> unique_constraint([:transaction_hash, :log_index], name: :lx_deposit_roots_pkey)
+    |> unique_constraint([:transaction_hash, :block_hash, :log_index], name: :lx_deposit_roots_pkey)
   end
 
   @doc """

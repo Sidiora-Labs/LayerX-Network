@@ -15,13 +15,14 @@ defmodule Explorer.Repo.Migrations.CreatePaxeerXGuarantorAndDepositRootTables do
         primary_key: true
       )
 
-      add(:log_index, :integer, null: false, primary_key: true)
-
       add(
         :block_hash,
         references(:blocks, column: :hash, on_delete: :delete_all, type: :bytea),
-        null: false
+        null: false,
+        primary_key: true
       )
+
+      add(:log_index, :integer, null: false, primary_key: true)
 
       add(:block_number, :bigint, null: false)
       add(:block_consensus, :boolean, null: false, default: true)
@@ -71,13 +72,14 @@ defmodule Explorer.Repo.Migrations.CreatePaxeerXGuarantorAndDepositRootTables do
         primary_key: true
       )
 
-      add(:log_index, :integer, null: false, primary_key: true)
-
       add(
         :block_hash,
         references(:blocks, column: :hash, on_delete: :delete_all, type: :bytea),
-        null: false
+        null: false,
+        primary_key: true
       )
+
+      add(:log_index, :integer, null: false, primary_key: true)
 
       add(:block_number, :bigint, null: false)
       add(:block_consensus, :boolean, null: false, default: true)

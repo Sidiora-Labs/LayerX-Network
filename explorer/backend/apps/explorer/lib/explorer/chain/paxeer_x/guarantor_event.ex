@@ -3,9 +3,11 @@ defmodule Explorer.Chain.PaxeerX.GuarantorEvent do
   A guarantor, challenge, availability or sequencer-authorisation event of the LayerX
   anchor precompile.
 
-  One row per log, keyed by the emitting transaction hash and the log index, so the
-  registration, the bond increases, the slashes and the unbonding of one guarantor are
-  separate rows that share a `guarantor_id`. `kind` names the precompile event the row
+  One row per log, keyed by the emitting transaction hash, the block hash and the log
+  index the way an upstream log is keyed, so the registration, the bond increases, the
+  slashes and the unbonding of one guarantor are separate rows that share a
+  `guarantor_id`, and a transaction a reorg moves into another block keeps a row per
+  block rather than losing the later one. `kind` names the precompile event the row
   was decoded from, so a reader can select the flow it cares about without parsing
   `event_name`.
 
@@ -106,6 +108,7 @@ defmodule Explorer.Chain.PaxeerX.GuarantorEvent do
 
     belongs_to(:block, Block,
       foreign_key: :block_hash,
+      primary_key: true,
       references: :hash,
       type: Hash.Full,
       null: false
@@ -138,7 +141,7 @@ defmodule Explorer.Chain.PaxeerX.GuarantorEvent do
     |> validate_number(:availability_mask, greater_than_or_equal_to: 0, less_than_or_equal_to: @uint8_maximum)
     |> foreign_key_constraint(:transaction_hash)
     |> foreign_key_constraint(:block_hash)
-    |> unique_constraint([:transaction_hash, :log_index], name: :lx_guarantor_events_pkey)
+    |> unique_constraint([:transaction_hash, :block_hash, :log_index], name: :lx_guarantor_events_pkey)
   end
 
   @doc """

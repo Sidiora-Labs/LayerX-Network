@@ -67,3 +67,11 @@ symbol = "do_import_options/3"
 observed = "The paxeer_x clause maps five transform keys onto import options and names neither paxeer_x_guarantor_events nor paxeer_x_deposit_roots, so no decoded row can reach the two tables this task adds."
 assumption = "No task in this feature lists that file in its touches, so the wiring belongs to whichever task takes the fetcher; the tables, schemas and runners are complete and are exercised end to end through Explorer.Chain.Import.all/1."
 severity = "blocker"
+
+[observation.2.5.2]
+task = "2.5"
+file = "explorer/backend/apps/explorer/lib/explorer/chain/import/runner/blocks.ex"
+symbol = "lose_consensus"
+observed = "The consensus-loss transaction updates blocks, transactions and token transfers only and calls no lx_ schema's lose_consensus_query/1, so every Paxeer X table keeps block_consensus true after its block is reorged out."
+assumption = "The gap is inherited by all seven lx_ tables rather than introduced here, the file is in no task's touches, and only_consensus_query/0 reads the authoritative flag through the block association so no read is wrong meanwhile."
+severity = "suspect"

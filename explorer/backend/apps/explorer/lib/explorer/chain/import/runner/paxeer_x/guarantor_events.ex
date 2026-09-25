@@ -2,9 +2,11 @@ defmodule Explorer.Chain.Import.Runner.PaxeerX.GuarantorEvents do
   @moduledoc """
   Bulk imports `t:Explorer.Chain.PaxeerX.GuarantorEvent.t/0`.
 
-  Rows are keyed by the transaction hash and the log index of the log they were decoded
-  from, and a repeated log is left untouched rather than rewritten, so re-reading a
-  range of blocks is idempotent.
+  Rows are keyed by the transaction hash, the block hash and the log index of the log
+  they were decoded from, and a repeated log is left untouched rather than rewritten, so
+  re-reading a range of blocks is idempotent. The block hash is part of that key, as it
+  is for an upstream log, so a transaction that a reorg moves into another block writes
+  a row for the block it now belongs to instead of being skipped.
   """
 
   require Ecto.Query
@@ -64,7 +66,7 @@ defmodule Explorer.Chain.Import.Runner.PaxeerX.GuarantorEvents do
           | {:error, [Changeset.t()]}
   def insert(repo, changes_list, %{timeout: timeout, timestamps: timestamps} = _options) when is_list(changes_list) do
     # Enforce PaxeerX.GuarantorEvent ShareLocks order (see docs: sharelock.md)
-    ordered_changes_list = Enum.sort_by(changes_list, &{&1.transaction_hash, &1.log_index})
+    ordered_changes_list = Enum.sort_by(changes_list, &{&1.transaction_hash, &1.block_hash, &1.log_index})
 
     {:ok, inserted} =
       Import.insert_changes_list(
@@ -74,7 +76,7 @@ defmodule Explorer.Chain.Import.Runner.PaxeerX.GuarantorEvents do
         returning: true,
         timeout: timeout,
         timestamps: timestamps,
-        conflict_target: [:transaction_hash, :log_index],
+        conflict_target: [:transaction_hash, :block_hash, :log_index],
         on_conflict: :nothing
       )
 

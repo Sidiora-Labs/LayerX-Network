@@ -251,6 +251,29 @@ defmodule Explorer.Chain.PaxeerX.GuarantorEventTest do
                Repo.all(from(event in GuarantorEvent, order_by: [asc: event.log_index], select: event.kind))
     end
 
+    test "writes a row for the block a reorg moved the transaction into" do
+      %{block: reorged_block, transaction: transaction} = block_with_transaction()
+      replacement_block = insert(:block)
+
+      attrs = attributes(reorged_block, transaction)
+
+      replayed =
+        Map.merge(attrs, %{block_hash: replacement_block.hash, block_number: replacement_block.number})
+
+      assert {:ok, %{insert_paxeer_x_guarantor_events: [_]}} = run_changes([attrs])
+      assert {:ok, %{insert_paxeer_x_guarantor_events: [_]}} = run_changes([replayed])
+
+      assert Repo.aggregate(GuarantorEvent, :count) == 2
+
+      assert Enum.sort([reorged_block.hash, replacement_block.hash]) ==
+               GuarantorEvent |> select([event], event.block_hash) |> Repo.all() |> Enum.sort()
+
+      Repo.update!(Ecto.Changeset.change(reorged_block, consensus: false))
+
+      assert [%GuarantorEvent{block_hash: kept}] = Repo.all(GuarantorEvent.only_consensus_query())
+      assert kept == replacement_block.hash
+    end
+
     test "handles an empty changes list" do
       assert {:ok, %{insert_paxeer_x_guarantor_events: []}} = run_changes([])
     end

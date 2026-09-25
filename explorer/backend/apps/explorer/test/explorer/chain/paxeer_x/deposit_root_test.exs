@@ -122,6 +122,29 @@ defmodule Explorer.Chain.PaxeerX.DepositRootTest do
       assert Repo.aggregate(DepositRoot, :count) == 2
     end
 
+    test "writes a row for the block a reorg moved the transaction into" do
+      %{block: reorged_block, transaction: transaction} = block_with_transaction()
+      replacement_block = insert(:block)
+
+      attrs = attributes(reorged_block, transaction)
+
+      replayed =
+        Map.merge(attrs, %{block_hash: replacement_block.hash, block_number: replacement_block.number})
+
+      assert {:ok, %{insert_paxeer_x_deposit_roots: [_]}} = run_changes([attrs])
+      assert {:ok, %{insert_paxeer_x_deposit_roots: [_]}} = run_changes([replayed])
+
+      assert Repo.aggregate(DepositRoot, :count) == 2
+
+      assert Enum.sort([reorged_block.hash, replacement_block.hash]) ==
+               DepositRoot |> select([root], root.block_hash) |> Repo.all() |> Enum.sort()
+
+      Repo.update!(Ecto.Changeset.change(reorged_block, consensus: false))
+
+      assert [%DepositRoot{block_hash: kept}] = Repo.all(DepositRoot.only_consensus_query())
+      assert kept == replacement_block.hash
+    end
+
     test "handles an empty changes list" do
       assert {:ok, %{insert_paxeer_x_deposit_roots: []}} = run_changes([])
     end
