@@ -4,6 +4,14 @@ import (
 	"testing"
 	"time"
 
+	tmproto "github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/types"
+	evmkeeper "github.com/sidiora-labs/paxeer-network/modules/evm/keeper"
+	"github.com/sidiora-labs/paxeer-network/sdk/codec"
+	codectypes "github.com/sidiora-labs/paxeer-network/sdk/codec/types"
+	"github.com/sidiora-labs/paxeer-network/sdk/store"
+	paramtypes "github.com/sidiora-labs/paxeer-network/sdk/x/params/types"
+	dbm "github.com/tendermint/tm-db"
+
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	testkeeper "github.com/sidiora-labs/paxeer-network/testutil/keeper"
@@ -111,4 +119,66 @@ func TestParamGettersTracingVersions(t *testing.T) {
 	require.Equal(t, customTargetGas, k.GetTargetGasUsedPerBlock(ctxPost606))
 	require.Equal(t, customDeliverTxGasLimit, k.GetDeliverTxHookWasmGasLimit(ctxPost606))
 	require.Equal(t, customRegisterPointerDisabled, k.GetRegisterPointerDisabled(ctxPost606))
+}
+
+func TestFeeTokenParamsUnset(t *testing.T) {
+	k, ctx := feeTokenParamsKeeper(t)
+	require.Equal(t, types.DefaultAllowedFeeDenoms, k.GetAllowedFeeDenoms(ctx))
+	require.Equal(t, types.DefaultMaxFeeTokenSpread, k.GetMaxFeeTokenSpread(ctx))
+	require.Equal(t, types.DefaultFeeTokenEnabled, k.GetFeeTokenEnabled(ctx))
+	params := k.GetParams(ctx)
+	require.Equal(t, types.DefaultAllowedFeeDenoms, params.AllowedFeeDenoms)
+	require.Equal(t, types.DefaultMaxFeeTokenSpread, params.MaxFeeTokenSpread)
+	require.Equal(t, types.DefaultFeeTokenEnabled, params.FeeTokenEnabled)
+	allowed, pair := k.IsAllowedFeeDenom(ctx, "usid")
+	require.False(t, allowed)
+	require.Empty(t, pair)
+	for _, key := range [][]byte{types.KeyAllowedFeeDenoms, types.KeyMaxFeeTokenSpread, types.KeyFeeTokenEnabled} {
+		require.False(t, k.Paramstore.Has(ctx, key))
+	}
+}
+
+func TestFeeTokenParamsReadersAndAllowedDenom(t *testing.T) {
+	k, ctx := feeTokenParamsKeeper(t)
+	params := types.DefaultParams()
+	params.AllowedFeeDenoms = []types.AllowedFeeDenom{{Denom: "usid", OraclePair: "SID/PAX"}, {Denom: "uasset", OraclePair: "ASSET/PAX"}}
+	params.MaxFeeTokenSpread = sdk.ZeroDec()
+	params.FeeTokenEnabled = true
+	k.SetParams(ctx, params)
+	require.Equal(t, params, k.GetParams(ctx))
+	require.Equal(t, params.AllowedFeeDenoms, k.GetAllowedFeeDenoms(ctx))
+	require.Equal(t, sdk.ZeroDec(), k.GetMaxFeeTokenSpread(ctx))
+	require.True(t, k.GetFeeTokenEnabled(ctx))
+	for _, entry := range params.AllowedFeeDenoms {
+		allowed, pair := k.IsAllowedFeeDenom(ctx, entry.Denom)
+		require.True(t, allowed)
+		require.Equal(t, entry.OraclePair, pair)
+	}
+	for _, denom := range []string{"", k.GetBaseDenom(ctx), "unknown"} {
+		allowed, pair := k.IsAllowedFeeDenom(ctx, denom)
+		require.False(t, allowed)
+		require.Empty(t, pair)
+	}
+	denoms := k.GetAllowedFeeDenoms(ctx)
+	denoms[0].OraclePair = "CHANGED/PAX"
+	require.Equal(t, params.AllowedFeeDenoms, k.GetAllowedFeeDenoms(ctx))
+	k.Paramstore.Set(ctx, types.KeyFeeTokenEnabled, false)
+	require.False(t, k.GetFeeTokenEnabled(ctx))
+	allowed, pair := k.IsAllowedFeeDenom(ctx, "usid")
+	require.True(t, allowed)
+	require.Equal(t, "SID/PAX", pair)
+}
+
+func feeTokenParamsKeeper(t *testing.T) (*evmkeeper.Keeper, sdk.Context) {
+	t.Helper()
+	db := dbm.NewMemDB()
+	ms := store.NewCommitMultiStore(db)
+	key := sdk.NewKVStoreKey(paramtypes.StoreKey)
+	tkey := sdk.NewTransientStoreKey(paramtypes.TStoreKey)
+	ms.MountStoreWithDB(key, sdk.StoreTypeIAVL, db)
+	ms.MountStoreWithDB(tkey, sdk.StoreTypeTransient, db)
+	require.NoError(t, ms.LoadLatestVersion())
+	ctx := sdk.NewContext(ms, tmproto.Header{}, false)
+	ss := paramtypes.NewSubspace(codec.NewProtoCodec(codectypes.NewInterfaceRegistry()), codec.NewLegacyAmino(), key, tkey, types.ModuleName).WithKeyTable(types.ParamKeyTable())
+	return &evmkeeper.Keeper{Paramstore: ss}, ctx
 }

@@ -3,6 +3,7 @@ package types
 import (
 	"errors"
 	fmt "fmt"
+	"strings"
 
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	paramtypes "github.com/sidiora-labs/paxeer-network/sdk/x/params/types"
@@ -10,6 +11,9 @@ import (
 )
 
 var (
+	KeyAllowedFeeDenoms                    = []byte("KeyAllowedFeeDenoms")
+	KeyMaxFeeTokenSpread                   = []byte("KeyMaxFeeTokenSpread")
+	KeyFeeTokenEnabled                     = []byte("KeyFeeTokenEnabled")
 	KeyPriorityNormalizer                  = []byte("KeyPriorityNormalizer")
 	KeyMinFeePerGas                        = []byte("KeyMinFeePerGas")
 	KeyMaxFeePerGas                        = []byte("KeyMaximumFeePerGas")
@@ -23,6 +27,10 @@ var (
 	KeyWhitelistedCwCodeHashesForDelegateCall = []byte("KeyWhitelistedCwCodeHashesForDelegateCall")
 	KeyRegisterPointerDisabled                = []byte("KeyRegisterPointerDisabled")
 )
+
+var DefaultAllowedFeeDenoms = []AllowedFeeDenom(nil)
+var DefaultMaxFeeTokenSpread = sdk.NewDecWithPrec(5, 2)
+var DefaultFeeTokenEnabled = false
 
 var DefaultPriorityNormalizer = sdk.NewDec(1)
 
@@ -50,6 +58,9 @@ func ParamKeyTable() paramtypes.KeyTable {
 
 func DefaultParams() Params {
 	return Params{
+		AllowedFeeDenoms:                       append([]AllowedFeeDenom(nil), DefaultAllowedFeeDenoms...),
+		MaxFeeTokenSpread:                      DefaultMaxFeeTokenSpread,
+		FeeTokenEnabled:                        DefaultFeeTokenEnabled,
 		PriorityNormalizer:                     DefaultPriorityNormalizer,
 		BaseFeePerGas:                          DefaultBaseFeePerGas,
 		MaxDynamicBaseFeeUpwardAdjustment:      DefaultMaxDynamicBaseFeeUpwardAdjustment,
@@ -66,6 +77,9 @@ func DefaultParams() Params {
 
 func (p *Params) ParamSetPairs() paramtypes.ParamSetPairs {
 	return paramtypes.ParamSetPairs{
+		paramtypes.NewParamSetPair(KeyAllowedFeeDenoms, &p.AllowedFeeDenoms, validateAllowedFeeDenoms),
+		paramtypes.NewParamSetPair(KeyMaxFeeTokenSpread, &p.MaxFeeTokenSpread, validateMaxFeeTokenSpread),
+		paramtypes.NewParamSetPair(KeyFeeTokenEnabled, &p.FeeTokenEnabled, validateFeeTokenEnabled),
 		paramtypes.NewParamSetPair(KeyPriorityNormalizer, &p.PriorityNormalizer, validatePriorityNormalizer),
 		paramtypes.NewParamSetPair(KeyBaseFeePerGas, &p.BaseFeePerGas, validateBaseFeePerGas),
 		paramtypes.NewParamSetPair(KeyMaxDynamicBaseFeeUpwardAdjustment, &p.MaxDynamicBaseFeeUpwardAdjustment, validateBaseFeeAdjustment),
@@ -127,6 +141,15 @@ func (ppre606 *ParamsPreV606) ParamSetPairs() paramtypes.ParamSetPairs {
 }
 
 func (p Params) Validate() error {
+	if err := validateAllowedFeeDenoms(p.AllowedFeeDenoms); err != nil {
+		return err
+	}
+	if err := validateMaxFeeTokenSpread(p.MaxFeeTokenSpread); err != nil {
+		return err
+	}
+	if err := validateFeeTokenEnabled(p.FeeTokenEnabled); err != nil {
+		return err
+	}
 	if err := validatePriorityNormalizer(p.PriorityNormalizer); err != nil {
 		return err
 	}
@@ -290,4 +313,49 @@ func validatePaxSstoreSetGasEIP2200(i interface{}) error {
 
 func generateDefaultWhitelistedCwCodeHashesForDelegateCall() [][]byte {
 	return [][]byte(nil)
+}
+
+func validateAllowedFeeDenoms(i interface{}) error {
+	entries, ok := i.([]AllowedFeeDenom)
+	if !ok {
+		return fmt.Errorf("invalid allowed_fee_denoms type %T: %v", i, i)
+	}
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if err := sdk.ValidateDenom(entry.Denom); err != nil {
+			return fmt.Errorf("invalid allowed_fee_denoms denom %q: %w", entry.Denom, err)
+		}
+		if entry.Denom == "uhpx" {
+			return fmt.Errorf("invalid allowed_fee_denoms denom %q: network coin needs no conversion", entry.Denom)
+		}
+		if _, exists := seen[entry.Denom]; exists {
+			return fmt.Errorf("invalid allowed_fee_denoms duplicate denom %q", entry.Denom)
+		}
+		if strings.TrimSpace(entry.OraclePair) == "" {
+			return fmt.Errorf("invalid allowed_fee_denoms oracle_pair %q for denom %q: pair is required", entry.OraclePair, entry.Denom)
+		}
+		seen[entry.Denom] = struct{}{}
+	}
+	return nil
+}
+
+func validateMaxFeeTokenSpread(i interface{}) error {
+	spread, ok := i.(sdk.Dec)
+	if !ok {
+		return fmt.Errorf("invalid max_fee_token_spread type %T: %v", i, i)
+	}
+	if spread.IsNil() {
+		return fmt.Errorf("invalid max_fee_token_spread %v: spread is required", spread)
+	}
+	if spread.IsNegative() || spread.GTE(sdk.OneDec()) {
+		return fmt.Errorf("invalid max_fee_token_spread %s: must be at least zero and less than one", spread)
+	}
+	return nil
+}
+
+func validateFeeTokenEnabled(i interface{}) error {
+	if _, ok := i.(bool); !ok {
+		return fmt.Errorf("invalid fee_token_enabled type %T: %v", i, i)
+	}
+	return nil
 }
