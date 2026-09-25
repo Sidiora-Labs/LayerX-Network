@@ -4,9 +4,10 @@
 #
 # The explorer test gate, the path the workflow contract names as the test
 # gate. It runs the backend Paxeer X suites through
-# explorer/deploy/tools/mix-in-builder.sh, which gives every invocation a
-# database sidecar of its own, and then the frontend type check and the
-# frontend vitest suite from explorer/frontend. Run it from anywhere:
+# explorer/deploy/tools/mix-in-builder.sh, one invocation per umbrella
+# application so that each of them gets a database sidecar and a virtual
+# machine of its own, and then the frontend type check and the frontend vitest
+# suite from explorer/frontend. Run it from anywhere:
 #
 #   tools/explorer/gate-test.sh
 #   tools/explorer/gate-test.sh --check
@@ -157,6 +158,23 @@ backend_suites() {
   )
 }
 
+# The umbrella applications those suites belong to, and the suites of one of
+# them. The backend is tested one application at a time because each
+# application's test helper configures the whole virtual machine it is given:
+# it defines the Mox mocks and leaves the Ecto sandbox in the mode its own
+# cases expect. A single umbrella-wide invocation runs every helper in one
+# virtual machine, where the sandbox mode an earlier application leaves behind
+# denies the next application's background migrations a connection and ends
+# that application before its first test. One invocation per application is
+# also the shape every task in this feature qualified through.
+backend_applications() {
+  backend_suites | sed -n 's|^apps/\([^/]*\)/.*|\1|p' | LC_ALL=C sort -u
+}
+
+backend_application_suites() {
+  backend_suites | grep "^apps/$1/"
+}
+
 check_toolchain() {
   sh -n "$0" || die "$0 does not parse"
   log 'the gate script parses'
@@ -192,7 +210,8 @@ check_toolchain() {
   suite_count=$(backend_suites | grep -c . || true)
   [ "$suite_count" -gt 0 ] ||
     die "no Paxeer X test file was found under ${backend_dir#"$repo_root"/}/apps"
-  log "$suite_count backend Paxeer X test files resolve"
+  application_count=$(backend_applications | grep -c . || true)
+  log "$suite_count backend Paxeer X test files in $application_count umbrella applications resolve"
 
   log "no suite was run; the budget per leg is $budget seconds"
 }
@@ -235,21 +254,30 @@ if [ "$check_only" -eq 1 ]; then
   exit 0
 fi
 
-# The suite paths become the positional parameters so a path survives the way
-# the shell splits words.
-set --
-while IFS= read -r suite; do
-  [ -n "$suite" ] || continue
-  set -- "$@" "$suite"
-done <<BACKEND_SUITES
-$(backend_suites)
-BACKEND_SUITES
+backend_leg_applications=$(backend_applications)
+[ -n "$backend_leg_applications" ] ||
+  die "no Paxeer X test file was found under ${backend_dir#"$repo_root"/}/apps"
 
-[ "$#" -gt 0 ] || die "no Paxeer X test file was found under ${backend_dir#"$repo_root"/}/apps"
+# One leg per umbrella application, each of them its own mix invocation. No
+# --reuse-db: every invocation gets a fresh database sidecar, which is what the
+# gate is required to run the backend suites against.
+for backend_application in $backend_leg_applications; do
+  # The suite paths become the positional parameters so a path survives the way
+  # the shell splits words.
+  set --
+  while IFS= read -r suite; do
+    [ -n "$suite" ] || continue
+    set -- "$@" "$suite"
+  done <<APPLICATION_SUITES
+$(backend_application_suites "$backend_application")
+APPLICATION_SUITES
 
-# No --reuse-db: every invocation gets a fresh database sidecar, which is what
-# the gate is required to run the backend suites against.
-run_leg backend-paxeer-x 'backend Paxeer X' "$repo_root" "$runner" test "$@"
+  [ "$#" -gt 0 ] ||
+    die "the $backend_application application lost its Paxeer X test files"
+
+  run_leg "backend-$backend_application" "backend Paxeer X $backend_application" \
+    "$repo_root" "$runner" test "$@"
+done
 
 # Husky installs git hooks from the package prepare script; a gate run must not
 # rewrite the checkout's hooks.

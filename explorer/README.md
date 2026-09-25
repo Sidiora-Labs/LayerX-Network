@@ -104,9 +104,11 @@ tools/explorer/gate-lint.sh
 
 `tools/explorer/gate-test.sh` runs the backend Paxeer X suites - every
 `*_test.exs` under `backend/apps` whose path carries `paxeer_x` - through
-`deploy/tools/mix-in-builder.sh`, so they get the pinned builder image and a
-database sidecar of their own, and then runs the frontend dependency install,
-`yarn lint:tsc` and `yarn test:vitest run` from `frontend/`.
+`deploy/tools/mix-in-builder.sh`, one invocation per umbrella application, so
+each application gets the pinned builder image, a database sidecar and a
+virtual machine of its own, which is what its test helper configures; it then
+runs the frontend dependency install, `yarn lint:tsc` and `yarn test:vitest
+run` from `frontend/`.
 
 `tools/explorer/gate-lint.sh` runs `tools/explorer/lint-backend.sh`,
 `tools/explorer/lint-frontend.sh` and `tools/explorer/lint-services.sh` in that
