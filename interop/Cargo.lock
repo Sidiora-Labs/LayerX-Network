@@ -764,6 +764,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-gas-station"
+version = "0.1.0"
+dependencies = [
+ "k256",
+ "serde",
+ "serde_json",
+ "sha3",
+ "zeroize",
+]
+
+[[package]]
 name = "layerx-intents"
 version = "0.1.0"
 dependencies = [

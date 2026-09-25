@@ -1,0 +1,23 @@
+[package]
+name = "layerx-gas-station"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "paxeer-gas-station"
+path = "src/main.rs"
+
+[dependencies]
+k256.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha3.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true
