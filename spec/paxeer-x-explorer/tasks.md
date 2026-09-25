@@ -7,7 +7,7 @@
 ## Wave 1 - Green Checks and the Gates That Keep Them Green
 
 - [ ] 1. Close every red job and build the explorer's gates
-  - [ ] 1.1 Give every mix command one containerised recipe
+  - [x] 1.1 Give every mix command one containerised recipe
     - Write explorer/deploy/tools/mix-in-builder.sh, an executable POSIX shell script run from the repository root as `explorer/deploy/tools/mix-in-builder.sh <mix args>`, that runs the given mix invocation inside the pinned Elixir builder image against explorer/backend.
     - Mount apps, config, rel, mix.exs, mix.lock and .formatter.exs from explorer/backend into the container work directory, keep the build artefacts in a named volume so a rerun does not recompile dependencies, and set MIX_ENV=test, MIX_BUILD_PATH to the volume, CHAIN_TYPE=paxeer_x and ETHEREUM_JSONRPC_VARIANT=paxeer_x unless the caller already set them.
     - Start a disposable PostgreSQL 16 sidecar per invocation, join the mix container to its network namespace so the database answers on localhost, pass PGUSER and PGPASSWORD matching explorer/backend/apps/explorer/config/test.exs, install the headless browser driver the block_scout_web test helper starts before running a test under that application, and remove the sidecar and its volume on exit including on interrupt.

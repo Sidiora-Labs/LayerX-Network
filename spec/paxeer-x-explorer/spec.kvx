@@ -208,7 +208,7 @@ status = "pending"
 
 [task.1.1]
 title = "Give every mix command one containerised recipe"
-status = "pending"
+status = "done"
 wave = 1
 requires = []
 do_1 = "Write explorer/deploy/tools/mix-in-builder.sh, an executable POSIX shell script run from the repository root as `explorer/deploy/tools/mix-in-builder.sh <mix args>`, that runs the given mix invocation inside the pinned Elixir builder image against explorer/backend."

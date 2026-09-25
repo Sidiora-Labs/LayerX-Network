@@ -36,6 +36,56 @@ two licence domains never share a binary.
 imported trees small so the fork can still be rebased onto later upstream
 releases.
 
+## Running backend commands
+
+`deploy/tools/mix-in-builder.sh` runs one mix command against `backend/` inside
+the pinned Elixir builder image, so a compile, a format check and a test suite
+behave the same wherever they run. Call it from the repository root:
+
+```
+explorer/deploy/tools/mix-in-builder.sh compile
+explorer/deploy/tools/mix-in-builder.sh format --check-formatted
+explorer/deploy/tools/mix-in-builder.sh test apps/explorer/test/explorer
+```
+
+It mounts `apps`, `config`, `rel`, `mix.exs`, `mix.lock` and `.formatter.exs`
+into the container, keeps the compiled artefacts in a named volume so a rerun
+does not recompile the dependencies, starts a disposable PostgreSQL 16 sidecar
+and joins the mix container to its network namespace so the database answers on
+localhost, installs the headless browser driver when the run reaches
+`block_scout_web`, prints the command it resolved, and exits with the mix exit
+code. The sidecar and its volume are removed when the command finishes and when
+it is interrupted.
+
+The builder image is built on demand from
+`deploy/tools/Dockerfile.elixir-builder`, which pins the Elixir and Erlang
+versions the explorer build workflow uses, whenever its reference is absent.
+
+Options come before the mix arguments; `--` ends them.
+
+| Option | What it does |
+| --- | --- |
+| `--reuse-db` | reuse the sidecar a previous `--reuse-db` run left behind and leave it running at exit, so a suite can be run twice against one database |
+| `--image <ref>` | run a different builder image reference |
+| `--check` | resolve the container runtime, the image and the mounts, print the command that would run, and exit without starting anything |
+| `-h`, `--help` | print the usage, including every variable below |
+
+Every other invocation gets its own database on purpose: a second `mix test`
+run against a database an earlier run already migrated trips an upstream
+migration-cache defect, which is exactly what `--reuse-db` opts into when a
+suite is deliberately run twice over one database.
+
+| Variable | Default |
+| --- | --- |
+| `MIX_ENV` | `test` |
+| `MIX_BUILD_PATH` | `/build`, where the named volume is mounted |
+| `MIX_BUILD_VOLUME` | a name derived from the backend path, so two working trees never share one build |
+| `CHAIN_TYPE` | `paxeer_x` |
+| `ETHEREUM_JSONRPC_VARIANT` | `paxeer_x` |
+| `PGUSER`, `PGPASSWORD` | `postgres`, the credentials `backend/apps/explorer/config/test.exs` expects |
+| `MIX_IN_BUILDER_IMAGE` | the same override as `--image` |
+| `MIX_IN_BUILDER_BROWSER_DRIVER` | unset, which lets the script decide from the mix arguments; `1` always installs the driver, `0` never does |
+
 ## Running the whole stack locally
 
 `deploy/docker-compose.local.yml` brings up Postgres, the backend, the
