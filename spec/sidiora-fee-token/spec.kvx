@@ -347,7 +347,7 @@ reqs = ["6.1","6.2","6.3","6.4","6.5"]
 
 [task.2.3]
 title = "Move the Sidiora proxy administration to governance behind a timelock"
-status = "pending"
+status = "done"
 wave = 2
 requires = []
 do_1 = "Add contracts/governance/SidioraProxyTimelock.sol extending the shape contracts/governance/LayerXTimelock.sol establishes: a minimum delay with a floor, a grace period, a proposer that is the chain's governance authority, an executor, a guardian that can cancel before the ready time, and a per-target per-selector permission map restricted to the administrative selectors the Sidiora proxy upgrade needs."
@@ -357,8 +357,12 @@ do_4 = "Write the governance proposal body that performs the handover, naming th
 do_5 = "Add test/SidioraProxyGovernance.t.sol in the dependency-free style test/LayerXTimelock.t.sol uses, asserting that an upgrade scheduled by governance cannot execute before the delay, can execute after it, cannot execute after the grace period, can be cancelled by the guardian before it is ready, cannot be scheduled or executed by an account holding neither role, and cannot call a selector the timelock does not permit."
 verify_cmd = "timeout 20m sh -c 'forge test --root . --match-path test/SidioraProxyGovernance.t.sol -vvv'"
 symbols = ["SidioraProxyTimelock","SidioraProxyGovernance","schedule","execute","cancel"]
-touches = ["contracts/governance/SidioraProxyTimelock.sol","scripts/SidioraProxyGovernance.s.sol","test/SidioraProxyGovernance.t.sol"]
+touches = ["contracts/governance/SidioraProxyTimelock.sol","scripts/SidioraProxyGovernance.s.sol","test/SidioraProxyGovernance.t.sol","contracts/governance/SidioraProxyGovernanceProposal.json"]
 reqs = ["7.1","7.2","7.3","7.4","7.5"]
+revision = "974fcd706f687617f9b4a1e3aa6e2d0b85981143"
+command = "timeout 20m sh -c 'forge test --root . --match-path test/SidioraProxyGovernance.t.sol -vvv'"
+exit_code = 0
+log_path = "/root/lx-lanes/sid-t2-3/.logs/verify.log"
 
 [task.2.4]
 title = "Add the fee-token parameters to x/evm"

@@ -1,0 +1,7 @@
+{
+  "content": {
+    "@type": "/cosmos.gov.v1beta1.TextProposal",
+    "title": "Sidiora proxy governance handover",
+    "description": "Paxeer X Network authorises the foundation to transfer ownership of the existing Sidiora proxy at 0x21f7b20a555199fa73A238B1a91FD0f549068fEe to SidioraProxyTimelock. The timelock must use the chain governance authority as its sole proposer, the governance-designated executor and guardian, a minimum delay of 172800 seconds, a delay floor of 86400 seconds and an execution grace period of 604800 seconds. Its only permitted proxy call is upgradeToAndCall(address,bytes), with zero call value. The guardian may cancel only before readiness. Before submission, use SidioraProxyGovernance.proposalBody with the deployed timelock and approved role holders to bind their addresses and exact parameters in the proposal description. Passage of this text proposal authorises the foundation handover through SidioraProxyGovernance.handover; it does not execute an EVM call. Verify the existing proxy exposes owner(), transferOwnership(address) and an owner-authorised upgradeToAndCall(address,bytes) before handover. No replacement token, new Sidiora address or holder migration is authorised."
+  }
+}
