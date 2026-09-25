@@ -380,3 +380,10 @@ task = "2.6"; file = "node/app.go"
 observed = "executeEVMTxWithGigaExecutor pre-charges gas through a separate StateDB and bypasses the EVM fee-token ante charge and its recorded refund rate."
 assumption = "The separate execution path requires its own fee-token integration before network-wide activation."
 severity = "note"
+
+[observation.2.7.1]
+revision = "pending"
+command = "timeout 20m sh -c 'go test -count=1 ./node/antedecorators/... && go test -count=1 -run FeeDenom ./node/'"; exit_code = 1
+log_path = ".logs/verify.log"
+observed = "Antedecorator tests pass, but the assembled-handler priority assertions compare int constants with int64 results and fail despite matching numeric values."
+assumption = "The two task-scoped repair cycles are exhausted; the assertions remain intact and task 2.7 is implemented but not qualified."
