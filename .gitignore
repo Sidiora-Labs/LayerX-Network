@@ -57,6 +57,7 @@ node_modules/
 # Credentials and local configuration
 .env
 .env.*
+!explorer/frontend/configs/envs/.env.vitest
 !.env.example
 .envrc
 /secrets/

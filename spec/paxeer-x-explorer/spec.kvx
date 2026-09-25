@@ -199,8 +199,9 @@ ac_4 = "NO gate record SHALL be written for a command that did not run, and no g
 #   wave 1  red continuous-integration jobs, and the explorer's own gates
 #   wave 2  the remaining fork surface, disjoint touches, parallel
 #   wave 3  one aggregate run on the merged revision, recorded
-#   wave 4  the defect that aggregate run exposed in the gate itself, repaired
-#           before wave 3 runs the gate again, so 3.1 requires 4.1
+#   wave 4  the defects that aggregate run exposed, repaired before wave 3
+#           runs the gate again, so 3.1 requires 4.1: 4.1 in the gate itself,
+#           4.2 in the checkout and the suite the gate's frontend leg runs
 # --------------------------------------------------------------------------
 
 [task.1]
@@ -635,7 +636,7 @@ status = "pending"
 title = "Run the explorer gates once on the merged revision and record the evidence"
 status = "pending"
 wave = 3
-requires = ["1.1","1.9","1.10","1.11","1.12","1.13","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12","4.1"]
+requires = ["1.1","1.9","1.10","1.11","1.12","1.13","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12","4.1","4.2"]
 do_1 = "On the revision that merges waves 1 and 2, run tools/explorer/gate-test.sh once with its budget set to fit this task's timeout, writing its logs under build/explorer-gates/."
 do_2 = "Append one gate record per leg to spec/paxeer-x-explorer/qualification.kvx - the backend Paxeer X suites, the frontend type check and vitest suite - carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code and the log path, written only from a command that actually ran."
 do_3 = "Append one observation per failure the run exposes that belongs to no task in this feature: revision, command, exit code, log path, one sentence of what was observed and one sentence of what is assumed; do not investigate it further and do not rerun it."
@@ -670,3 +671,24 @@ verify_cmd = "timeout 20m sh -c 'EXPLORER_GATE_BUDGET_SECONDS=1080 tools/explore
 symbols = ["gate-test"]
 touches = ["tools/explorer/gate-test.sh","tools/explorer/tests/gate-test-test.sh","explorer/README.md","spec/paxeer-x-explorer/qualification.kvx"]
 reqs = ["4.1","4.2","4.5","16.1"]
+
+[task.4.2]
+title = "Make the frontend test leg of the wave gate pass"
+status = "done"
+wave = 4
+requires = ["4.1"]
+do_1 = "Root-cause the frontend leg from the recorded wave-gate run rather than from a rerun: twenty-six of its twenty-seven failures raise 'API config for general not found' because explorer/frontend/vitest/global-setup.ts and explorer/frontend/vitest/setup.ts both read configs/envs/.env.vitest and the repository-wide ignore rule for .env.* keeps that upstream preset out of the checkout, so every suite that builds an API URL starts with no environment at all."
+do_2 = "Track the preset the test runner needs: add explorer/frontend/configs/envs/.env.vitest with the content of the upstream frontend release the fork is vendored from, carrying only public localhost placeholders and no secret, token, key, password, database URL or internal host, and add exactly one negation for that single path after the .env.* rule of the repository ignore file so no other environment file becomes publishable."
+do_3 = "Keep the preset byte-identical to upstream rather than rebranding it, because the tracked upstream snapshots and specs of the frontend assert the network name, the application host and the API host it declares, and record that reason where the fork records what it took from upstream."
+do_4 = "Close the twenty-seventh failure in its own file: lib/api/services/general/paxeerX.spec.ts walks both Paxeer X resource maps and compares their keys against an enumeration of the names they may carry, and that enumeration was left at five when the receipt detail page registered the sixth resource, general:paxeer_x_receipt; complete the enumeration and cover the sixth resource the way the other five are covered - its path, its id path parameter and its payload type - relaxing no assertion and deleting no case."
+do_5 = "Change no production source under explorer/frontend: the single-receipt resource, its path, its path parameter and its payload type stay exactly as the receipt detail page registered them."
+do_6 = "Run the frontend leg of the wave gate as one command - the install, the type check and the whole vitest suite - and record its revision, command, exit code and log path; leave the records of tasks 3.1 and 4.1 untouched."
+do_7 = "Record in spec/paxeer-x-explorer/qualification.kvx that observation 4.1.3 reads its failure the wrong way round - the enumeration in the test is the received value of the comparison and the keys of the two maps the expected one - and leave that observation as task 4.1 wrote it."
+verify_cmd = "timeout 20m sh -c 'cd explorer/frontend && HUSKY=0 yarn install --frozen-lockfile && yarn lint:tsc && yarn test:vitest run'"
+symbols = ["GENERAL_API_PAXEER_X_LISTS_RESOURCES","paxeer_x_receipt"]
+touches = [".gitignore","explorer/frontend/configs/envs/.env.vitest","explorer/frontend/lib/api/services/general/paxeerX.spec.ts","explorer/UPSTREAM.md","spec/paxeer-x-explorer/qualification.kvx"]
+reqs = ["4.1","4.2","4.5","7.1","7.3","16.1"]
+revision = "c5b5774b5c107596436106e2c2556d3a54811f77"
+command = "timeout 20m sh -c 'cd explorer/frontend && HUSKY=0 yarn install --frozen-lockfile && yarn lint:tsc && yarn test:vitest run'"
+exit_code = 0
+log = ".logs/verify.log"

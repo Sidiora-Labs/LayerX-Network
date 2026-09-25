@@ -27,5 +27,12 @@ that still carries `LICENSE-MIT`; the next commit,
   `backend/.devcontainer/.blockscout_config.example` are not tracked here: the
   repository-wide ignore rules keep `.env.*` files out of the publication set.
   Recreate them from upstream when a deployment needs them.
+- `frontend/configs/envs/.env.vitest` is the one exception, tracked through a
+  single negation of that path in the repository's ignore file, because the
+  frontend unit tests read it before every suite. It carries upstream's own
+  values - localhost placeholders and upstream's network name - rather than the
+  product's, because the tracked frontend snapshots and specs assert exactly
+  those values; the deployment presets under the same directory are where the
+  product's own configuration lives.
 - Nothing else was edited: the tracked files are byte-identical to upstream at
   the commits above.

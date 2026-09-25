@@ -219,3 +219,11 @@ symbol = "paxeer_x_receipt"
 observed = "The twenty-seventh failure of the same leg is lib/api/services/general/paxeerX.spec.ts 'keeps one resource name per definition in both maps', which expects six resource names and reads five: the map the suite walks carries no general:paxeer_x_receipt beside the five other Paxeer X resources."
 assumption = "The single-receipt resource belongs to the receipt detail path of the fork's API surface and its absence is a contradiction between that task's test and its source, not a consequence of the per-application backend legs this task adds."
 severity = "blocker"
+
+[observation.4.2.1]
+task = "4.2"
+file = "spec/paxeer-x-explorer/qualification.kvx"
+symbol = "paxeer_x_receipt"
+observed = "Observation 4.1.3 reads the twenty-seventh frontend failure the wrong way round: in expect(names).toEqual(defined) the hard-coded enumeration is the received value and the keys of the two resource maps are the expected one, so the gate log's five-against-six diff means the maps carry general:paxeer_x_receipt and the enumeration in lib/api/services/general/paxeerX.spec.ts did not."
+assumption = "The resource has been registered since the receipt detail page landed and the receipt page queries it, so task 4.2 completes the enumeration in the test file and changes no production source; observation 4.1.3 is left as task 4.1 wrote it."
+severity = "note"

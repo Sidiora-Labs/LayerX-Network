@@ -202,6 +202,15 @@
     - Add tools/explorer/tests/gate-test-test.sh, which builds a throwaway copy of the gate over a backend tree of Paxeer X suites spread across four applications with recording stand-ins for the mix runner and for yarn, and asserts one invocation per application carrying only that application's suites, a log per application, the frontend legs after them, and a failing application stopping the gate on its own exit code before the next application and before the frontend.
     - Document the per-application backend leg under the fleet gates heading of explorer/README.md, and leave the records of task 3.1 untouched so that task reruns the gate itself.
     - _Requirements: 4.1, 4.2, 4.5, 16.1_
+  - [x] 4.2 Make the frontend test leg of the wave gate pass
+    - Root-cause the frontend leg from the recorded wave-gate run rather than from a rerun: twenty-six of its twenty-seven failures raise 'API config for general not found' because explorer/frontend/vitest/global-setup.ts and explorer/frontend/vitest/setup.ts both read configs/envs/.env.vitest and the repository-wide ignore rule for .env.* keeps that upstream preset out of the checkout, so every suite that builds an API URL starts with no environment at all.
+    - Track the preset the test runner needs: add explorer/frontend/configs/envs/.env.vitest with the content of the upstream frontend release the fork is vendored from, carrying only public localhost placeholders and no secret, token, key, password, database URL or internal host, and add exactly one negation for that single path after the .env.* rule of the repository ignore file so no other environment file becomes publishable.
+    - Keep the preset byte-identical to upstream rather than rebranding it, because the tracked upstream snapshots and specs of the frontend assert the network name, the application host and the API host it declares, and record that reason where the fork records what it took from upstream.
+    - Close the twenty-seventh failure in its own file: lib/api/services/general/paxeerX.spec.ts walks both Paxeer X resource maps and compares their keys against an enumeration of the names they may carry, and that enumeration was left at five when the receipt detail page registered the sixth resource, general:paxeer_x_receipt; complete the enumeration and cover the sixth resource the way the other five are covered - its path, its id path parameter and its payload type - relaxing no assertion and deleting no case.
+    - Change no production source under explorer/frontend: the single-receipt resource, its path, its path parameter and its payload type stay exactly as the receipt detail page registered them.
+    - Run the frontend leg of the wave gate as one command - the install, the type check and the whole vitest suite - and record its revision, command, exit code and log path; leave the records of tasks 3.1 and 4.1 untouched.
+    - Record in spec/paxeer-x-explorer/qualification.kvx that observation 4.1.3 reads its failure the wrong way round - the enumeration in the test is the received value of the comparison and the keys of the two maps the expected one - and leave that observation as task 4.1 wrote it.
+    - _Requirements: 4.1, 4.2, 4.5, 7.1, 7.3, 16.1_
 
 ## Task Dependency Graph
 
@@ -211,7 +220,7 @@
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13"] },
     { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12"] },
     { "id": 3,  "tasks": ["3.1"] },
-    { "id": 4,  "tasks": ["4.1"] }
+    { "id": 4,  "tasks": ["4.1", "4.2"] }
   ]
 }
 ```
