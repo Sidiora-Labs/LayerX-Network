@@ -72,6 +72,7 @@ TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 	test-revocation \
 	test-rotation \
 	test-kernel \
+	test-kernel-symbol-isolation \
 	test-module-ctx \
 	test-dispatch \
 	test-receipts \
@@ -289,7 +290,7 @@ test: test-state-diff test-da-verified test-result test-protocol test-state-comm
 	test-activity-codec test-envelope test-verify-pool test-admission \
 	test-idempotency test-fee-gate test-identity test-grants \
 	test-authority-resolve test-authority-multisig test-allowance \
-	test-revocation test-rotation \
+	test-revocation test-rotation test-kernel-symbol-isolation \
 	test-terminal-rejection test-batch-identity \
 	test-escrow-open test-escrow-capture test-escrow-timeout \
 	test-escrow-dispute test-escrow-invariants \
@@ -321,6 +322,9 @@ test-kernel: $(BUILD_DIR)/tests/lxp_test_kernel \
 		$(BUILD_DIR)/tests/lxp_test_module_custody
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_kernel
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_module_custody
+
+test-kernel-symbol-isolation: $(BUILD_DIR)/obj/src/protocol/lxp_kernel.o
+	sh tests/protocol/lxp_test_kernel_symbol_isolation.sh "$<"
 
 $(BUILD_DIR)/tests/lxp_test_module_ctx: \
 		tests/protocol/lxp_test_module_ctx.c $(LIBRARY) \
