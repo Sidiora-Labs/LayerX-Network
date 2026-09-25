@@ -24,6 +24,10 @@ export interface OpWithdrawal extends OptimisticL2WithdrawalClaimInfo {
   status: OptimisticL2WithdrawalStatus;
 }
 
+export interface TransactionFee extends Fee {
+  token?: Omit<TokenInfo, 'symbol' | 'decimals'> & Partial<Pick<TokenInfo, 'symbol' | 'decimals'>>;
+}
+
 export type Transaction = {
   to: AddressParam | null;
   created_contract: AddressParam | null;
@@ -36,7 +40,7 @@ export type Transaction = {
   confirmation_duration: Array<number> | null;
   from: AddressParam;
   value: string;
-  fee: Fee;
+  fee: TransactionFee;
   gas_price: string | null;
   type: number | null;
   gas_used: string | null;
