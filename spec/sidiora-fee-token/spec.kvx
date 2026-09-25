@@ -208,7 +208,7 @@ status = "pending"
 [task.1.1]
 title = "Harden the sponsored batch into a Sidiora paymaster"
 status = "done"
-revision = "pending"
+revision = "efe112babbb5577315cfe934effb71f3b435f203"
 command = "timeout 20m sh -c 'FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague --match-path contracts/test/BatchCallAndSponsorTest.t.sol -vvv'"
 exit_code = 0
 log_path = "/root/lx-lanes/sid-t1-1/.logs/verify.log"
