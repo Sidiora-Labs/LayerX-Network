@@ -92,6 +92,46 @@ suite is deliberately run twice over one database.
 | `MIX_IN_BUILDER_IMAGE` | the same override as `--image` |
 | `MIX_IN_BUILDER_BROWSER_DRIVER` | unset, which lets the script decide from the mix arguments; `1` always installs the driver, `0` never does |
 
+## Fleet gates
+
+Two scripts gate a branch before it lands, and both run from the repository
+root:
+
+```
+tools/explorer/gate-test.sh
+tools/explorer/gate-lint.sh
+```
+
+`tools/explorer/gate-test.sh` runs the backend Paxeer X suites - every
+`*_test.exs` under `backend/apps` whose path carries `paxeer_x` - through
+`deploy/tools/mix-in-builder.sh`, so they get the pinned builder image and a
+database sidecar of their own, and then runs the frontend dependency install,
+`yarn lint:tsc` and `yarn test:vitest run` from `frontend/`.
+
+`tools/explorer/gate-lint.sh` runs `tools/explorer/lint-backend.sh`,
+`tools/explorer/lint-frontend.sh` and `tools/explorer/lint-services.sh` in that
+order, which is what the `explorer-lint` job runs.
+
+Each gate stops on the first leg that fails and reports the leg, the command it
+ran, its exit code and its log path rather than starting the next leg; the exit
+code of the gate is the exit code of that leg.
+
+| Variable | What it does |
+| --- | --- |
+| `EXPLORER_GATE_BUDGET_SECONDS` | seconds allowed per leg, `1500` by default; a leg that exhausts it is terminated, reported as a timeout and stops the gate with exit code `124` |
+| `EXPLORER_GATE_LOG_DIR` | directory the logs are written to; the default is `build/explorer-gates/` under the repository root, which the gate prints on every run |
+
+Both gates take `--check`, which validates the gate script itself, the
+container runtime, the builder image recipe, the node toolchain and the three
+lint scripts, prints the log directory and exits without running a suite or a
+check - enough to qualify a change to the gates without spending a suite's
+worth of time:
+
+```
+tools/explorer/gate-lint.sh --check
+tools/explorer/gate-test.sh --check
+```
+
 ## Running the whole stack locally
 
 `deploy/docker-compose.local.yml` brings up Postgres, the backend, the

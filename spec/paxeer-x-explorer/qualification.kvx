@@ -187,3 +187,11 @@ symbol = "task.1.12.symbols"
 observed = "The task verify command exited 0, but cg spec done 1.12 exited 1 on two graph checks: the symbol test-ratio is a shell script the code graph does not index, and the touch check for explorer/README.md finds no match because the change is already committed without a spec tag in its message."
 assumption = "Neither check can be satisfied without editing the task's own symbols entry or rewriting a published commit message, so the task is recorded done by hand from its passing verify command, as task 1.5 was for the same class of check."
 severity = "note"
+
+[observation.1.13.1]
+task = "1.13"
+file = "tools/explorer/gate-test.sh"
+symbol = "gate-test"
+observed = "The task verify_cmd exits 0, but cg spec done 1.13 exits 1 on three graph checks: the symbols gate-test and gate-lint are shell scripts the graph does not index, and the change to explorer/README.md is not matched because the graph looks for a commit carrying a feature-and-task tag that no commit in this repository carries."
+assumption = "Neither check can be satisfied by a change this task is allowed to make, so the task is recorded done by hand from its passing verify_cmd with the same four evidence fields and the conflict is left here for an owner ruling."
+severity = "note"
