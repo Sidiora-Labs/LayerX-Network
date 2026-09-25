@@ -65,7 +65,7 @@
     - Fix every credo finding in fork-owned modules - the Paxeer X chain, controller, view, import runner, transform and configuration modules - in the code: missing module documentation, alias ordering, function complexity, nesting depth and naming.
     - For findings inherited from vendored upstream files, add a scoped entry to explorer/backend/.credo.exs that names the upstream path it covers with a one-line reason in the file; never disable a check globally and never exclude a fork-owned path.
     - _Requirements: 2.1, 2.5_
-  - [ ] 1.10 Make the frontend lint gate green
+  - [x] 1.10 Make the frontend lint gate green
     - Write tools/explorer/lint-frontend.sh which installs the locked dependencies with husky disabled and runs `yarn lint:eslint` then `yarn lint:tsc` from explorer/frontend, returning the first non-zero exit code.
     - Fix every eslint and type finding in fork-owned frontend files - the Paxeer X pages, views, components, API services, types, mocks, stubs and the search bar helpers - in the code, with no eslint-disable comment and no any.
     - For findings inherited from vendored upstream files, add an override block to explorer/frontend/eslint.config.mjs whose files globs name the upstream paths it covers, with a one-line reason in the file; never relax a rule for the whole project and never for a fork-owned path.
@@ -95,7 +95,7 @@
 ## Wave 2 - The Remaining Fork Surface
 
 - [ ] 2. Finish the explorer fork
-  - [ ] 2.1 Apply the product design tokens to the explorer theme
+  - [x] 2.1 Apply the product design tokens to the explorer theme
     - Read the product tokens in human/apps/web/packages/layerx-ui/src/styles/tokens.css and carry their values into explorer/frontend/toolkit/theme/foundations: the typeface into typography.ts, the neutral and accent scales, the surface, background, border and text tones and the success, destructive and warning pairs into colors.ts and semanticTokens.ts, the radii into borders.ts and the card and overlay shadows into shadows.ts, keeping the existing token names the recipes already consume.
     - Update explorer/frontend/toolkit/theme/globalCss.ts so the page background, the default text colour and the default font family come from those tokens, and update the button, input, table, tabs, badge, link and dialog recipes so the primary button is the black pill, the accent is the product accent and no recipe carries a literal colour.
     - Resolve every token in both the light and the dark appearance; where the product tokens define only one appearance, derive the other from the existing semantic token structure rather than inventing a second palette.
