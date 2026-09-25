@@ -1,0 +1,10 @@
+{
+  "method": "web3_clientVersion",
+  "recorded_from": "the Paxeer X Network public JSON-RPC surface",
+  "responses": [
+    {
+      "match": [],
+      "result": "Geth/linux-amd64/go1.25.6"
+    }
+  ]
+}

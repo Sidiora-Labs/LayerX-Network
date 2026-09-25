@@ -2,31 +2,56 @@
 
 The explorer runs on Railway as four services in one project: a Postgres
 database, the Blockscout backend, the Next.js frontend, and (optionally) the
-two Rust microservices under `explorer/services`. The two JSON files beside
-this one hold the build and deploy configuration for the backend and the
-frontend; everything else is a per-service setting or a variable and is listed
-below.
+two Rust microservices under `explorer/services`. No service builds from this
+repository any more: each runs the image `.github/workflows/explorer-images.yml`
+publishes. The two JSON files beside this one hold the deploy configuration for
+the backend and the frontend; everything else is a per-service setting or a
+variable and is listed below.
 
 Railway's config-as-code format (`railway.json` / `railway.toml`) is on its way
 out in favour of Infrastructure as Code (`.railway/railway.ts`). Existing
 services keep reading these files until the cutoff Railway announces in its own
 documentation; the fields used here are the ones both formats express, so the
-move is a mechanical translation.
+move is a mechanical translation — `deploy.startCommand` becomes `start`,
+`deploy.healthcheckPath` becomes `healthcheck`, and the image below becomes
+`source: image("…")`.
+
+## Images
+
+Every service runs a published image. The registry path is
+`ghcr.io/sidiora-labs/paxeer-x-explorer-<service>`, the path the image workflow
+pushes to, and the tag comes from `EXPLORER_IMAGE_TAG`:
+
+| Service | Image |
+| --- | --- |
+| backend | `ghcr.io/sidiora-labs/paxeer-x-explorer-backend:${EXPLORER_IMAGE_TAG}` |
+| frontend | `ghcr.io/sidiora-labs/paxeer-x-explorer-frontend:${EXPLORER_IMAGE_TAG}` |
+| smart-contract-verifier | `ghcr.io/sidiora-labs/paxeer-x-explorer-smart-contract-verifier:${EXPLORER_IMAGE_TAG}` |
+| sig-provider | `ghcr.io/sidiora-labs/paxeer-x-explorer-sig-provider:${EXPLORER_IMAGE_TAG}` |
+
+The workflow publishes `sha-<short commit>` for every build on the main branch
+and moves `main` and `latest` onto it, so `EXPLORER_IMAGE_TAG=latest` follows
+the branch and `EXPLORER_IMAGE_TAG=sha-<short commit>` pins one build. The same
+variable and the same four paths drive `../docker-compose.local.yml`, where it
+defaults to `latest`.
+
+`railway.json` has no field for an image: its schema
+(<https://railway.com/railway.schema.json>) describes a build and a deploy, not
+a source. On Railway the image path and its tag are therefore part of the
+service's source, set once per service, and the rest of the deployment stays in
+the two files below.
 
 ## Per-service settings
 
-These three cannot be expressed in `railway.json` and have to be set once in
-the service settings.
+These cannot be expressed in `railway.json` and have to be set once in the
+service settings.
 
-| Service | Root directory | Config file path | Public port |
+| Service | Source | Config file path | Public port |
 | --- | --- | --- | --- |
-| backend | `explorer/backend` | `/explorer/deploy/railway/backend.railway.json` | 4000 |
-| frontend | `explorer/frontend` | `/explorer/deploy/railway/frontend.railway.json` | 3000 |
+| backend | image, see above | `/explorer/deploy/railway/backend.railway.json` | 4000 |
+| frontend | image, see above | `/explorer/deploy/railway/frontend.railway.json` | 3000 |
 
-The config file path is resolved from the repository root and deliberately does
-not follow the root directory; `dockerfilePath` inside each file *is* resolved
-from the root directory, and `watchPatterns` are gitignore-style patterns
-resolved from the repository root.
+The config file path is resolved from the repository root.
 
 Railway injects `PORT` into every container. Both images honour it: the
 Blockscout release reads `PORT` (4000 in these definitions) and the frontend
@@ -35,8 +60,7 @@ the container port and the service's target port agree.
 
 ## What each file says
 
-`backend.railway.json` builds `docker/Dockerfile` from the backend tree and
-starts with
+`backend.railway.json` starts the published backend image with
 
 ```
 /bin/sh -c "bin/blockscout eval 'Elixir.Explorer.ReleaseTasks.create_and_migrate()' && bin/blockscout start"
@@ -48,12 +72,32 @@ serves from `BlockScoutWeb.API.HealthController`. The timeout is generous
 because the first deploy of a fresh database runs every migration before the
 endpoint answers.
 
-`frontend.railway.json` builds `Dockerfile` from the frontend tree and sets no
-start command on purpose: the image has an `ENTRYPOINT` (`entrypoint.sh`) that
-validates the `NEXT_PUBLIC_*` variables, generates the client-side env script,
-the favicon and the sitemap, and then runs `node server.js`. Overriding the
-start command would skip that. The health check is `GET /api/healthz`, the
-Next.js route in `explorer/frontend/pages/api/healthz.tsx`.
+`frontend.railway.json` sets no start command on purpose: the image has an
+`ENTRYPOINT` (`entrypoint.sh`) that validates the `NEXT_PUBLIC_*` variables,
+generates the client-side env script, the favicon and the sitemap, and then runs
+`node server.js`. Overriding the start command would skip that. The health check
+is `GET /api/healthz`, the Next.js route in
+`explorer/frontend/pages/api/healthz.tsx`.
+
+## Proving the definitions
+
+`../tools/tests/compose-smoke-test.sh` brings the database, the recorded
+JSON-RPC server under `../tools/` and the published backend image up from
+`../docker-compose.local.yml` under its `fixture` profile, with no node and no
+deployment involved. It waits for `GET /api/health/liveness`, then asserts that
+`GET /api/v2/paxeer-x/capabilities` answers
+
+```json
+{"addr":false,"custody":false,"anchor":false,"exchange":false,"bridge":false,"launchpad":false}
+```
+
+which is the body the endpoint owes for the chain as recorded: the addr
+precompile reverts `getUnifiedAccount` and the five surface precompiles carry no
+code, so every surface reads as absent. The run turns the capability probe on
+(`PAXEER_X_CAPABILITIES_ENABLED=true`, off by default in
+`../env/backend.example.env`) and checks the fixture server's journal, so the
+answer is a probe that ran against the recorded chain rather than the
+never-probed default.
 
 ## Database
 
@@ -63,10 +107,9 @@ Use a Railway Postgres service and give the backend its connection string in
 
 ## Microservices
 
-`smart-contract-verifier` and `sig-provider` build from
-`explorer/services/<name>/Dockerfile` with the service's root directory set to
-that same path; neither has a path dependency outside its own directory. They
-listen on 8050 and take no config file, so they need no `railway.json` — set
+`smart-contract-verifier` and `sig-provider` run their published images, listed
+above. They listen on 8050 and take no config file, so they need no
+`railway.json` — set
 `SMART_CONTRACT_VERIFIER__SERVER__HTTP__ADDR` / `SIG_PROVIDER__SERVER__HTTP__ADDR`
 and point the backend's `MICROSERVICE_SC_VERIFIER_URL` and
 `MICROSERVICE_SIG_PROVIDER_URL` at their private network addresses.

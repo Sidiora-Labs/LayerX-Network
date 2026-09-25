@@ -1,0 +1,14 @@
+{
+  "method": "eth_syncing",
+  "recorded_from": "the Paxeer X Network public JSON-RPC surface",
+  "note": "The Paxeer X EVM RPC registers eth_syncing and rejects it; EthereumJSONRPC.PaxeerX reads that refusal as synced.",
+  "responses": [
+    {
+      "match": [],
+      "error": {
+        "code": -32000,
+        "message": "eth_syncing is not supported on Pax EVM RPC"
+      }
+    }
+  ]
+}
