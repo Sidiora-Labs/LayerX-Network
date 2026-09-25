@@ -533,7 +533,7 @@ reqs = ["14.1","14.2","14.3","14.4","14.5"]
 [task.2.12]
 title = "Replace the oracle pair with a governed fee-token rate"
 status = "done"
-revision = "dc466e5334b978a8d89330e4c23b80b22c835024"
+revision = "eb739148d4e873315e538c7cfa94e6826634ad36"
 command = "timeout 20m sh -c 'go test -count=1 ./modules/evm/types/... && go test -count=1 -run FeeTokenParams ./modules/evm/keeper/...'"
 exit_code = 0
 log_path = "/root/lx-lanes/sid-t2-12/.logs/verify.log"
