@@ -248,7 +248,7 @@ reqs = ["2.1","2.2","2.3","2.5"]
 
 [task.1.3]
 title = "Submit the sponsored transaction and prove a full cycle"
-status = "pending"
+status = "done"
 wave = 1
 requires = ["1.2"]
 do_1 = "Write interop/crates/layerx-gas-station/src/rpc.rs as the transport seam in the shape interop/crates/layerx-bridge-relayer/src/rpc.rs uses, reading the chain through the configured endpoints and returning a typed fault for a configuration error, an unavailable endpoint, a rate limit, a divergence, a malformed response and a rejection."
@@ -260,6 +260,10 @@ verify_cmd = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Car
 symbols = ["GasStation","submit","Journal","RpcFault"]
 touches = ["interop/crates/layerx-gas-station/src/rpc.rs","interop/crates/layerx-gas-station/src/tx.rs","interop/crates/layerx-gas-station/src/journal.rs","interop/crates/layerx-gas-station/src/station.rs","interop/crates/layerx-gas-station/src/lib.rs","interop/crates/layerx-gas-station/tests/station.rs","interop/crates/layerx-gas-station/tests/fixtures"]
 reqs = ["2.4","2.5","2.6"]
+revision = "pending"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p layerx-gas-station --test station'"
+exit_code = 0
+log_path = "/root/lx-lanes/sid-t1-3/.logs/verify.log"
 
 [task.1.4]
 title = "Give the SDK the quote and the authorisation"

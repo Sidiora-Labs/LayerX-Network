@@ -1,0 +1,1 @@
+{"ok":{"jsonrpc":"2.0","id":1,"result":"0x1"},"other":{"jsonrpc":"2.0","id":1,"result":"0x2"},"rejected":{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"refused"}},"malformed":{"jsonrpc":"2.0","id":2,"result":null}}
