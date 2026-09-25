@@ -34,6 +34,96 @@
       {"method":"eth_getBalance","params":["$sponsor","latest"],"result":"0x30927f74c9de0000"},
       {"method":"eth_call","params":[{"to":"$token","data":"$balance_call"},"latest"],"result":"$amount"}
     ],
+    "refused": [
+      {
+        "method": "eth_getTransactionReceipt",
+        "params": [
+          "$hash"
+        ],
+        "result": null
+      },
+      {
+        "method": "eth_call",
+        "params": [
+          {
+            "to": "$account",
+            "data": "$consumed_call"
+          },
+          "finalized"
+        ],
+        "result": "$zero"
+      },
+      {
+        "method": "eth_sendRawTransaction",
+        "params": [
+          "$raw"
+        ],
+        "error": {
+          "code": -32000,
+          "message": "insufficient funds for gas * price + value"
+        }
+      }
+    ],
+    "already_known": [
+      {
+        "method": "eth_getTransactionReceipt",
+        "params": [
+          "$hash"
+        ],
+        "result": null
+      },
+      {
+        "method": "eth_call",
+        "params": [
+          {
+            "to": "$account",
+            "data": "$consumed_call"
+          },
+          "finalized"
+        ],
+        "result": "$zero"
+      },
+      {
+        "method": "eth_sendRawTransaction",
+        "params": [
+          "$raw"
+        ],
+        "error": {
+          "code": -32000,
+          "message": "already known"
+        }
+      }
+    ],
+    "nonce_too_low": [
+      {
+        "method": "eth_getTransactionReceipt",
+        "params": [
+          "$hash"
+        ],
+        "result": null
+      },
+      {
+        "method": "eth_call",
+        "params": [
+          {
+            "to": "$account",
+            "data": "$consumed_call"
+          },
+          "finalized"
+        ],
+        "result": "$zero"
+      },
+      {
+        "method": "eth_sendRawTransaction",
+        "params": [
+          "$raw"
+        ],
+        "error": {
+          "code": -32000,
+          "message": "nonce too low"
+        }
+      }
+    ],
     "consumed": [
       {"method":"eth_call","params":[{"to":"$account","data":"$consumed_call"},"finalized"],"result":"$one"}
     ]

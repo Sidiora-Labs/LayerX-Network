@@ -9,9 +9,13 @@ use layerx_gas_station::config::StationConfig;
 use layerx_gas_station::journal::{Completion, Entry, Journal, Key};
 use layerx_gas_station::price::{OracleRate, PriceError, PriceSource};
 use layerx_gas_station::quote::{address_word, keccak, word, Address, Word, SIDIORA};
-use layerx_gas_station::rpc::{bytes, hex, quantity, ConfiguredRpc, Exchange, JsonRpc, RpcFault};
+use layerx_gas_station::rpc::{
+    bytes, hex, quantity, ConfiguredRpc, Exchange, HttpsExchange, JsonRpc, RpcFault,
+};
 use layerx_gas_station::signer::{LocalSigner, QuoteSigner, SignerError};
-use layerx_gas_station::station::{GasStation, Progress, QuoteOutcome, SubmitRequest};
+use layerx_gas_station::station::{
+    GasStation, Progress, QuoteOutcome, StationError, SubmitRequest,
+};
 use layerx_gas_station::tx::{authorization_digest, batch_digest, Authorization, Call, Fees};
 use layerx_gas_station::QuoteRequest;
 use serde_json::{json, Value};
@@ -117,6 +121,9 @@ impl Exchange for ReplayExchange {
                 {
                     if rule["fault"] == "unavailable" {
                         return Err(RpcFault::Unavailable);
+                    }
+                    if let Some(code) = rule["error"]["code"].as_i64() {
+                        return Err(RpcFault::Rejected { code });
                     }
                     return Ok(substitute(&rule["result"], &self.0.bindings.borrow()));
                 }
@@ -290,7 +297,7 @@ fn assert_balances(
     assert_eq!(balance, hex(&word(2_020_000)));
     Ok(())
 }
-fn full_cycle() -> TestResult {
+fn full_cycle(initial_phase: &str) -> TestResult {
     let config = config();
     let inner = install_ephemeral_signer(&config)?;
     let account_signer = install_ephemeral_signer(&config)?;
@@ -306,6 +313,7 @@ fn full_cycle() -> TestResult {
         std::fs::remove_file(&path)?;
     }
     let recorded = recording(path.clone(), account, sponsor)?;
+    *recorded.phase.borrow_mut() = initial_phase.into();
     let start = || {
         GasStation::new(
             config.clone(),
@@ -324,7 +332,16 @@ fn full_cycle() -> TestResult {
     assert_eq!(count.get(), 1);
     assert!(recorded.sent.borrow().is_empty());
     submit.account_signature[0] ^= 1;
-    assert_eq!(station.submit(&submit, 1000)?, Progress::Pending);
+    if initial_phase == "refused" {
+        assert!(matches!(
+            station.submit(&submit, 1000),
+            Err(StationError::Rpc(RpcFault::Rejected { code: -32000 }))
+        ));
+        assert!(station.journal().state().items[&key].submission.is_some());
+        assert!(station.journal().state().items[&key].completion.is_none());
+    } else {
+        assert_eq!(station.submit(&submit, 1000)?, Progress::Pending);
+    }
     assert_eq!(count.get(), 2);
     assert_eq!(recorded.sent.borrow().len(), 1);
     assert_envelope(&recorded.sent.borrow()[0], sponsor, account)?;
@@ -335,6 +352,18 @@ fn full_cycle() -> TestResult {
     assert_eq!(count.get(), 2);
     assert_eq!(recorded.sent.borrow()[0], recorded.sent.borrow()[1]);
     drop(station);
+    for phase in ["already_known", "nonce_too_low"] {
+        *recorded.phase.borrow_mut() = phase.into();
+        let mut station = start()?;
+        assert_eq!(station.resume(key)?, Progress::Pending);
+        assert!(station.journal().state().items[&key].completion.is_none());
+        assert_eq!(count.get(), 2);
+        assert!(recorded
+            .sent
+            .borrow()
+            .iter()
+            .all(|raw| raw == &recorded.sent.borrow()[0]));
+    }
     *recorded.phase.borrow_mut() = "included".into();
     let mut station = start()?;
     let expected = Completion::Included {
@@ -346,7 +375,7 @@ fn full_cycle() -> TestResult {
     assert_eq!(station.resume(key)?, Progress::Completed(expected));
     assert_eq!(station.resume(key)?, Progress::Completed(expected));
     assert_eq!(count.get(), 2);
-    assert_eq!(recorded.sent.borrow().len(), 2);
+    assert_eq!(recorded.sent.borrow().len(), 4);
     assert_balances(&config, &recorded, sponsor)?;
     drop(station);
     let recovered = Journal::open(&path)?;
@@ -364,7 +393,7 @@ fn full_cycle() -> TestResult {
         Some(Completion::Consumed)
     );
     assert_eq!(count.get(), 2);
-    assert_eq!(recorded.sent.borrow().len(), 2);
+    assert_eq!(recorded.sent.borrow().len(), 4);
     drop(station);
     std::fs::remove_file(&path)?;
     Ok(())
@@ -380,7 +409,61 @@ impl QuoteSigner for SharedSigner {
 }
 #[test]
 fn quote_submit_collect_restart_and_consumed_nonce() -> TestResult {
-    full_cycle()
+    full_cycle("submit")?;
+    full_cycle("refused")
+}
+
+#[test]
+fn response_reads_bound_total_time_and_size() -> TestResult {
+    use std::io::{Cursor, Write as _};
+    use std::os::unix::net::UnixStream;
+    use std::time::{Duration, Instant};
+
+    let budget = Duration::from_millis(300);
+    let (mut reader, mut writer) = UnixStream::pair()?;
+    reader.set_nonblocking(true)?;
+    let sending = std::thread::spawn(move || {
+        let mut sent = 0;
+        while writer.write_all(b"x").is_ok() {
+            sent += 1;
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        sent
+    });
+    let started = Instant::now();
+    assert_eq!(
+        HttpsExchange::read_response(&mut reader, budget),
+        Err(RpcFault::Unavailable)
+    );
+    assert!(started.elapsed() >= budget);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    drop(reader);
+    assert!(sending.join().map_err(|_| "response writer panicked")? > 1);
+
+    let body = json!({"jsonrpc":"2.0","id":1,"result":"0x5"}).to_string();
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    assert_eq!(
+        HttpsExchange::read_response(&mut Cursor::new(response.as_bytes()), budget)?,
+        json!("0x5")
+    );
+    assert_eq!(
+        HttpsExchange::read_response(&mut Cursor::new(response.as_bytes()), Duration::ZERO),
+        Err(RpcFault::Unavailable)
+    );
+    assert_eq!(
+        HttpsExchange::read_response(&mut Cursor::new(vec![b'x'; 1_048_577]), budget),
+        Err(RpcFault::Malformed)
+    );
+    let (mut reader, _writer) = UnixStream::pair()?;
+    reader.set_nonblocking(true)?;
+    assert_eq!(
+        HttpsExchange::read_response(&mut reader, budget),
+        Err(RpcFault::Unavailable)
+    );
+    Ok(())
 }
 
 type RlpParts<'a> = (&'a [u8], &'a [u8]);

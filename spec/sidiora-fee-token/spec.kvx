@@ -260,10 +260,10 @@ verify_cmd = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Car
 symbols = ["GasStation","submit","Journal","RpcFault"]
 touches = ["interop/crates/layerx-gas-station/src/rpc.rs","interop/crates/layerx-gas-station/src/tx.rs","interop/crates/layerx-gas-station/src/journal.rs","interop/crates/layerx-gas-station/src/station.rs","interop/crates/layerx-gas-station/src/lib.rs","interop/crates/layerx-gas-station/tests/station.rs","interop/crates/layerx-gas-station/tests/fixtures"]
 reqs = ["2.4","2.5","2.6"]
-revision = "f43729920e0ac4c68ca68a25bd26e488ddcc3b37"
+revision = "pending"
 command = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p layerx-gas-station --test station'"
 exit_code = 0
-log_path = "/root/lx-lanes/sid-t1-3/.logs/verify.log"
+log_path = "/root/lx-lanes/sid-t1-3/.logs/verify-review.log"
 
 [task.1.4]
 title = "Give the SDK the quote and the authorisation"

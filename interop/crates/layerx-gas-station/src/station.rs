@@ -367,7 +367,10 @@ impl<S: QuoteSigner, R: JsonRpc, P: PriceSource> GasStation<S, R, P> {
             return self.complete(key, item.account, Completion::Consumed);
         }
         if item.submission.is_some() {
-            self.broadcast(key)
+            match self.broadcast(key) {
+                Err(StationError::Rpc(RpcFault::Rejected { .. })) => Ok(Progress::Pending),
+                result => result,
+            }
         } else {
             Ok(Progress::Pending)
         }

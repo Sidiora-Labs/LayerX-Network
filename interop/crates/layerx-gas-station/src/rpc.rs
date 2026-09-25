@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
-use std::io::{Read as _, Write as _};
+use std::io::{ErrorKind, Read, Write as _};
 use std::net::{TcpStream, ToSocketAddrs as _};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -160,6 +160,42 @@ impl<E: Exchange> JsonRpc for ConfiguredRpc<E> {
 }
 
 pub struct HttpsExchange;
+impl HttpsExchange {
+    /// Reads an HTTP response from a stream configured for nonblocking reads.
+    /// # Errors
+    /// Refuses an incomplete, oversized, malformed or over-budget response.
+    pub fn read_response(stream: &mut impl Read, budget: Duration) -> Result<Value, RpcFault> {
+        let started = Instant::now();
+        let mut response = Vec::new();
+        let mut chunk = [0_u8; 16_384];
+        loop {
+            if started.elapsed() >= budget {
+                return Err(RpcFault::Unavailable);
+            }
+            let capacity = chunk.len().min(1_048_577 - response.len());
+            let result = stream.read(&mut chunk[..capacity]);
+            if started.elapsed() >= budget {
+                return Err(RpcFault::Unavailable);
+            }
+            match result {
+                Ok(0) => return decode_http(&response),
+                Ok(count) => {
+                    response.extend_from_slice(&chunk[..count]);
+                    if response.len() > 1_048_576 {
+                        return Err(RpcFault::Malformed);
+                    }
+                }
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    std::thread::sleep(
+                        Duration::from_millis(10).min(budget.saturating_sub(started.elapsed())),
+                    );
+                }
+                Err(error) if error.kind() == ErrorKind::Interrupted => (),
+                Err(_) => return Err(RpcFault::Unavailable),
+            }
+        }
+    }
+}
 impl Exchange for HttpsExchange {
     fn request(&self, endpoint: &str, method: &str, params: &Value) -> Result<Value, RpcFault> {
         let tail = endpoint
@@ -205,12 +241,11 @@ impl Exchange for HttpsExchange {
         }
         write!(stream, "POST {path} HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len()).map_err(|_| RpcFault::Unavailable)?;
         stream.flush().map_err(|_| RpcFault::Unavailable)?;
-        let mut response = Vec::new();
         stream
-            .take(1_048_577)
-            .read_to_end(&mut response)
+            .get_ref()
+            .set_nonblocking(true)
             .map_err(|_| RpcFault::Unavailable)?;
-        decode_http(&response)
+        Self::read_response(&mut stream, Duration::from_secs(30))
     }
 }
 
