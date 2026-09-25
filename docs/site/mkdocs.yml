@@ -140,6 +140,7 @@ nav:
       - Porting: operators/porting.md
   - Reference:
       - reference/index.md
+      - Public RPC endpoints: reference/public-rpc.md
 validation:
   omitted_files: warn
   absolute_links: info

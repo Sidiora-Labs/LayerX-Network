@@ -5,6 +5,7 @@ and from `docs/`.
 
 ## Public contracts
 
+- [Public RPC endpoints](public-rpc.md)
 - [Public JSON-RPC](../platform/gateway-rpc.md)
 - [Public payment API transcript](../platform/public-api.md)
 - [CLI](../platform/cli.md)
