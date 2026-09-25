@@ -285,7 +285,11 @@ reqs = ["1.4","1.9"]
 
 [task.1.6]
 title = "Repair the two failing agent daemon tests"
-status = "in_progress"
+status = "implemented"
+revision = "4bc5c7545fe7cc9e3172f84228939bf29b36069c"
+command = "timeout 20m sh -c 'sh tools/runtime/run-with-clock.sh cargo test --locked --manifest-path agent/Cargo.toml -p layerx-agentd --lib protocol_evidence && make agent-test-agentd-budget-create'"
+exit_code = 101
+log_path = "/root/lx-lanes/ex-t1-6/.logs/verify.log"
 wave = 1
 requires = []
 do_1 = "Diagnose from the job log: `gh run view --job 36149017828 --log` and read both the Build, lint, and enforce boundaries step and the Run sanitizer variants step; the two named failures are the terminal-transition case in the native protocol-evidence tests and the confirmed-creation budget case."
