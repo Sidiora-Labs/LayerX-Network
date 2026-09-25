@@ -2,9 +2,11 @@ package app
 
 import (
 	"embed"
+	"fmt"
 	"os"
 	"strings"
 
+	layerxbridgetypes "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	"github.com/sidiora-labs/paxeer-network/sdk/types/module"
 	upgradetypes "github.com/sidiora-labs/paxeer-network/sdk/x/upgrade/types"
@@ -49,6 +51,11 @@ func overrideList() {
 	}
 }
 
+// sidioraFeeTokenUpgrade gates the Sidiora fee token: it runs the x/evm
+// fee-token parameter migration and creates the Sidiora denom and its bank
+// metadata under the bridge module account.
+const sidioraFeeTokenUpgrade = "v6.7"
+
 func (app *App) RegisterUpgradeHandlers() {
 	// if there is an override list, use that instead, for integration tests
 	overrideList()
@@ -90,6 +97,23 @@ func (app *App) RegisterUpgradeHandlers() {
 				cp.Block.MaxGasWanted = 50000000 // 50 mil
 				app.StoreConsensusParams(ctx, cp)
 				return newVM, err
+			}
+
+			if upgradeName == sidioraFeeTokenUpgrade {
+				newVM, err := app.mm.RunMigrations(ctx, app.configurator, fromVM)
+				if err != nil {
+					return newVM, err
+				}
+
+				denom := layerxbridgetypes.SidioraDenom()
+				asset, found := app.LayerXBridgeKeeper.GetAssetByDenom(ctx, denom)
+				if !found {
+					return newVM, fmt.Errorf("upgrade %s requires the registered Sidiora remote asset of %s", upgradeName, denom)
+				}
+				if _, err := app.LayerXBridgeKeeper.EnsureSidioraDenom(ctx, asset.ChainID); err != nil {
+					return newVM, err
+				}
+				return newVM, nil
 			}
 
 			return app.mm.RunMigrations(ctx, app.configurator, fromVM)

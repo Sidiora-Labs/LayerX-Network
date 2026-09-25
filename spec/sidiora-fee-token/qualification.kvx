@@ -361,3 +361,15 @@ command = "timeout 20m sh -c 'go test -count=1 ./node/antedecorators/... && go t
 log_path = ".logs/verify.log"
 observed = "Antedecorator tests pass, but the assembled-handler priority assertions compare int constants with int64 results and fail despite matching numeric values."
 assumption = "The two task-scoped repair cycles are exhausted; the assertions remain intact and task 2.7 is implemented but not qualified."
+
+[observation.2.9.1]
+task = "2.9"; file = "node/upgrades.go"; symbol = "RegisterUpgradeHandlers"
+observed = "The handler reads the chain of the Sidiora remote asset from the bridge registry and returns an error naming the missing registration when the registry carries no such record."
+assumption = "The Sidiora remote asset registration is a deployment prerequisite that must land before the upgrade proposal executes; the handler registers neither the chain nor the asset itself."
+severity = "note"
+
+[observation.2.9.2]
+task = "2.9"; file = "precompiles/bank/setup.go"; symbol = "GetVersioned"
+observed = "Every precompile's generated setup maps the latest upgrade name to its current implementation and names earlier upgrades explicitly, so adding an upgrade name moves that latest key without freezing the previous name as a legacy version."
+assumption = "The generated setup files are produced by the repository's version bump script and are outside this task's file list; the new name serves the latest implementation and no committed legacy version is lost."
+severity = "note"
