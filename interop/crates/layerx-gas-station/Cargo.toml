@@ -9,7 +9,7 @@ license.workspace = true
 path = "src/lib.rs"
 
 [[bin]]
-name = "layerx-gas-station"
+name = "paxeer-gas-station"
 path = "src/main.rs"
 
 [dependencies]

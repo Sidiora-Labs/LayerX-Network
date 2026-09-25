@@ -2,6 +2,7 @@ use layerx_gas_station::config::StationConfig;
 use layerx_gas_station::signer::LocalSigner;
 use layerx_gas_station::Station;
 use std::ffi::OsString;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -15,7 +16,8 @@ fn config_path(arguments: impl IntoIterator<Item = OsString>) -> Option<PathBuf>
 
 fn main() -> ExitCode {
     let Some(path) = config_path(std::env::args_os().skip(1)) else {
-        eprintln!("usage: layerx-gas-station --config PATH");
+        eprintln!("Paxeer X Network gas station initialization check");
+        eprintln!("usage: paxeer-gas-station --config PATH");
         return ExitCode::from(2);
     };
     let config = match StationConfig::load(&path) {
@@ -33,7 +35,13 @@ fn main() -> ExitCode {
         }
     };
     match Station::new(config, signer) {
-        Ok(_) => ExitCode::SUCCESS,
+        Ok(_) => match report_initialization(io::stdout().lock()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        },
         Err(error) => {
             eprintln!("{error}");
             ExitCode::from(2)
@@ -41,9 +49,34 @@ fn main() -> ExitCode {
     }
 }
 
+fn report_initialization(mut output: impl Write) -> io::Result<()> {
+    writeln!(
+        output,
+        "Paxeer X Network gas station initialization check passed; no service was started."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn initialization_output_does_not_claim_service_startup() -> io::Result<()> {
+        let mut output = Vec::new();
+        report_initialization(&mut output)?;
+        assert_eq!(
+            output,
+            b"Paxeer X Network gas station initialization check passed; no service was started.\n"
+        );
+        let mut full = [];
+        assert_eq!(
+            report_initialization(full.as_mut_slice())
+                .err()
+                .map(|e| e.kind()),
+            Some(io::ErrorKind::WriteZero)
+        );
+        Ok(())
+    }
+
     #[test]
     fn exact_config_arguments_required() {
         assert_eq!(
