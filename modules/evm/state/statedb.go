@@ -21,6 +21,8 @@ var errUnsupportedStateRoot = errors.New("EVM StateDB does not own an Ethereum s
 
 // Initialized for each transaction individually
 type DBImpl struct {
+	feeTokenCharge  *FeeTokenCharge
+	gasBought       bool
 	ctx             sdk.Context
 	snapshottedCtxs []sdk.Context
 
@@ -87,12 +89,16 @@ func (s *DBImpl) SetEVM(evm *vm.EVM) {}
 func (s *DBImpl) AddPreimage(_ common.Hash, _ []byte) {}
 
 func (s *DBImpl) Cleanup() {
+	s.feeTokenCharge = nil
+	s.gasBought = false
 	s.tempState = nil
 	s.logger = nil
 	s.snapshottedCtxs = nil
 }
 
 func (s *DBImpl) CleanupForTracer() {
+	s.feeTokenCharge = nil
+	s.gasBought = false
 	s.flushCtxs()
 	if len(s.snapshottedCtxs) > 0 {
 		s.ctx = s.snapshottedCtxs[0]
@@ -110,6 +116,8 @@ func (s *DBImpl) CleanupForTracer() {
 // this statedb are being read from other goroutines, since it never calls
 // CacheMultiStore.Write() on any shared store layer.
 func (s *DBImpl) ResetForTracer() {
+	s.feeTokenCharge = nil
+	s.gasBought = false
 	feeCollector, _ := s.k.GetFeeCollectorAddress(s.Ctx())
 	s.coinbaseEvmAddress = feeCollector
 	s.tempState = NewTemporaryState()
@@ -190,6 +198,8 @@ func (s *DBImpl) Copy() vm.StateDB {
 		err:                s.err,
 		precompileErr:      s.precompileErr,
 		logger:             s.logger,
+		feeTokenCharge:     s.feeTokenCharge,
+		gasBought:          s.gasBought,
 	}
 }
 

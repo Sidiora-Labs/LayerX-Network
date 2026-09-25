@@ -54,8 +54,9 @@ var (
 	PointerCWCodePrefix          = []byte{0x16}
 	PointerReverseRegistryPrefix = []byte{0x17}
 
-	AnteSurplusPrefix  = []byte{0x18} // transient
-	DeferredInfoPrefix = []byte{0x19} // transient
+	AnteFeeTokenChargePrefix = []byte{0x24} // transient
+	AnteSurplusPrefix        = []byte{0x18} // transient
+	DeferredInfoPrefix       = []byte{0x19} // transient
 
 	LegacyBlockBloomCutoffHeightKey = []byte{0x1a}
 	BaseFeePerGasPrefix             = []byte{0x1b}

@@ -336,3 +336,21 @@ command = "GOFLAGS=-p=2 timeout 10m go vet ./modules/evm/types/... ./modules/evm
 log_path = ".logs/vet.log"
 observed = "Vet stopped before source analysis because the shared Go build cache is read-only."
 assumption = "Verification uses a writable task-local cache; the vet result remains unqualified and is not rerun unchanged."
+
+[observation.2.6.1]
+task = "2.6"; file = "modules/evm/keeper/params.go"
+observed = "Requirement 10.2 demands a spread comparison, but the governed parameter rate is the only price source."
+assumption = "Missing, invalid, stale and overflowing rates are refused; no second price source is invented and the spread parameter remains unchanged."
+severity = "suspect"
+
+[observation.2.6.2]
+task = "2.6"; file = "modules/evm/keeper/abci.go"
+observed = "EndBlock sweeps the transaction coinbase in the network base denom only, leaving collected fee tokens at that address."
+assumption = "Task 2.8 owns fee-token collection and distribution; this task does not alter the sweep."
+severity = "note"
+
+[observation.2.6.3]
+task = "2.6"; file = "node/app.go"
+observed = "executeEVMTxWithGigaExecutor pre-charges gas through a separate StateDB and bypasses the EVM fee-token ante charge and its recorded refund rate."
+assumption = "The separate execution path requires its own fee-token integration before network-wide activation."
+severity = "note"

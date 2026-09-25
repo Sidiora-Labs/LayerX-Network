@@ -73,7 +73,14 @@ func (server msgServer) EVMTransaction(goCtx context.Context, msg *types.MsgEVMT
 	tx, _ := msg.AsTransaction()
 	ctx, originalGasMeter := server.PrepareCtxForEVMTransaction(ctx, tx)
 
+	charge, err := server.GetAnteFeeTokenCharge(ctx, tx.Hash())
+	if err != nil {
+		return nil, err
+	}
 	stateDB := state.NewDBImpl(ctx, &server, false)
+	if charge != nil {
+		stateDB.SetFeeTokenCharge(charge, true)
+	}
 	emsg := server.GetEVMMessage(ctx, tx, msg.Derived.SenderEVMAddr)
 	gp := server.GetGasPool()
 
