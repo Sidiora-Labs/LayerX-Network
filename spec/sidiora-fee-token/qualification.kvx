@@ -214,3 +214,17 @@ command = "timeout 20m sh -c 'FOUNDRY_CONFIG=foundry.paxeer.toml forge test --ev
 log_path = ".logs/verify.log"
 observed = "Compilation reported existing payable-fallback and unused-parameter warnings in ProxySwapTester.sol and a selfdestruct warning in SelfDestructTester.sol."
 assumption = "These unchanged files are outside the task scope; the focused gate passed and is not rerun."
+
+[observation.2.2.5]
+task = "2.2"; file = "scripts/SidioraProxyGovernance.s.sol"
+symbol = "SidioraProxyGovernance"
+observed = "Review comment 4107758202 requires the governance upgrade to initialize atomically; task 2.2 documents this requirement and tests upgradeAndCall, but the governance upgrade tooling belongs to task 2.3."
+assumption = "Task 2.3 must encode initialize in the same upgrade operation; task 2.2 leaves the initializer and its one-time guard unchanged."
+severity = "blocker"
+
+[observation.2.2.6]
+task = "2.2"; file = "modules/layerxbridge/types/genesis.go"
+symbol = "GenesisState.Validate"
+observed = "Review comment 4107758215 identifies the Sidiora genesis export/import conflict already recorded in observation.2.1.1; the validator is outside task 2.2 touches."
+assumption = "The recorded conflict requires separately authorized validator work; it is not reinvestigated here and the existing validation remains intact."
+severity = "blocker"
