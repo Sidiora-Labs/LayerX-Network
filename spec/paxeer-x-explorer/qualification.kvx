@@ -227,3 +227,115 @@ symbol = "paxeer_x_receipt"
 observed = "Observation 4.1.3 reads the twenty-seventh frontend failure the wrong way round: in expect(names).toEqual(defined) the hard-coded enumeration is the received value and the keys of the two resource maps are the expected one, so the gate log's five-against-six diff means the maps carry general:paxeer_x_receipt and the enumeration in lib/api/services/general/paxeerX.spec.ts did not."
 assumption = "The resource has been registered since the receipt detail page landed and the receipt page queries it, so task 4.2 completes the enumeration in the test file and changes no production source; observation 4.1.3 is left as task 4.1 wrote it."
 severity = "note"
+
+[gate.3.1.1]
+task = "3.1"
+reqs = ["16.1","16.2"]
+revision = "4ed6388c760d2c166acacffbb3de09c25c6a3697"
+command = "timeout 20m sh -c 'EXPLORER_GATE_BUDGET_SECONDS=1080 tools/explorer/gate-test.sh'"
+environment = "linux/x86_64, the pinned builder image explorer-elixir-builder:v10.2.6 with a postgres:16 sidecar of its own, node 22 and yarn 1 for the frontend legs"
+outcome = "fail"
+evidence = "build/explorer-gates/backend-paxeer-x.log"
+note = "The backend Paxeer X leg ran all twenty Paxeer X test files the umbrella carries in one mix invocation and exited 1: the ethereum_jsonrpc project reported 25 tests and 0 failures, the explorer project reported 111 tests and 0 failures, and the indexer project then raised in its test helper before its first test. The gate stops on the first failing leg, so the frontend dependency install, the frontend type check and the frontend vitest legs never ran and no record is written for them."
+
+[observation.3.1.1]
+task = "3.1"
+file = "explorer/backend/apps/indexer/test/test_helper.exs"
+symbol = "Explorer.TestHelper.run_necessary_background_migrations/0"
+observed = "At revision 4ed6388c760d2c166acacffbb3de09c25c6a3697 the gate command exited 1 with log build/explorer-gates/backend-paxeer-x.log: once ethereum_jsonrpc and explorer had passed inside the same mix invocation, the indexer project's test helper raised RuntimeError Background migrations failed, every background migration having reported DBConnection.OwnershipError against the sandbox pool, so the indexer and block_scout_web Paxeer X suites never started."
+assumption = "The helper is an upstream test entry point no task in this feature touches and the indexer Paxeer X suite passes when that project is tested on its own, so the failure belongs to running several umbrella projects in one mix invocation rather than to any task's code, and it is recorded here rather than investigated or rerun."
+severity = "blocker"
+
+[observation.3.1.2]
+task = "3.1"
+file = "spec/paxeer-x-explorer/qualification.kvx"
+symbol = "gate.started_at"
+observed = "The gate record shape this file's header documents carries started_at, a UTC timestamp, while the feature's naming decision forbids any file this feature introduces from carrying a date."
+assumption = "The record above is written without started_at because the revision, the command, the exit code and the log path identify the run without one, and the header is left exactly as written for its owner to reconcile."
+severity = "note"
+
+[observation.3.1.3]
+task = "3.1"
+file = "spec/paxeer-x-explorer/spec.kvx"
+symbol = "task.3.1.verify_cmd"
+observed = "Requirement 16 ac_1 counts the three lint checks among the aggregate suites the wave gate runs, but this task's verify_cmd names tools/explorer/gate-test.sh alone, and two of the tasks the wave gate requires, 2.8 and 2.11, are still pending at the revision it ran against."
+assumption = "Only the command the task names was run, so no lint record is written here and the wave gate is run again by its owner once the two outstanding tasks have landed."
+severity = "note"
+
+[gate.3.1.2]
+task = "3.1"
+reqs = ["16.1","16.2"]
+revision = "068346118fbf3b9414f6a6ca57246ed25f41c01d"
+command = "explorer/deploy/tools/mix-in-builder.sh test <the seven block_scout_web Paxeer X suites in path order>"
+environment = "linux/x86_64, the pinned builder image explorer-elixir-builder:v10.2.6 with a postgres:16 sidecar and a virtual machine of its own, the headless browser driver installed for this application"
+outcome = "pass"
+evidence = "build/explorer-gates/backend-block_scout_web.log"
+note = "The first backend leg of the wave gate, run under EXPLORER_GATE_BUDGET_SECONDS=1080: exit code 0, 47 tests, 0 failures, nothing excluded and nothing skipped."
+
+[gate.3.1.3]
+task = "3.1"
+reqs = ["16.1","16.2"]
+revision = "068346118fbf3b9414f6a6ca57246ed25f41c01d"
+command = "explorer/deploy/tools/mix-in-builder.sh test apps/ethereum_jsonrpc/test/ethereum_jsonrpc/paxeer_x_test.exs"
+environment = "linux/x86_64, the pinned builder image explorer-elixir-builder:v10.2.6 with a postgres:16 sidecar and a virtual machine of its own"
+outcome = "pass"
+evidence = "build/explorer-gates/backend-ethereum_jsonrpc.log"
+note = "The second backend leg of the wave gate: exit code 0, 25 tests, 0 failures, nothing excluded and nothing skipped."
+
+[gate.3.1.4]
+task = "3.1"
+reqs = ["16.1","16.2"]
+revision = "068346118fbf3b9414f6a6ca57246ed25f41c01d"
+command = "explorer/deploy/tools/mix-in-builder.sh test <the eleven explorer Paxeer X suites in path order>"
+environment = "linux/x86_64, the pinned builder image explorer-elixir-builder:v10.2.6 with a postgres:16 sidecar and a virtual machine of its own"
+outcome = "pass"
+evidence = "build/explorer-gates/backend-explorer.log"
+note = "The third backend leg of the wave gate: exit code 0, 111 tests, 0 failures, nothing excluded and nothing skipped. The load-sensitive capabilities case of observation 4.1.1 passed in this leg."
+
+[gate.3.1.5]
+task = "3.1"
+reqs = ["16.1","16.2"]
+revision = "068346118fbf3b9414f6a6ca57246ed25f41c01d"
+command = "explorer/deploy/tools/mix-in-builder.sh test apps/indexer/test/indexer/transform/paxeer_x_logs_test.exs"
+environment = "linux/x86_64, the pinned builder image explorer-elixir-builder:v10.2.6 with a postgres:16 sidecar and a virtual machine of its own"
+outcome = "pass"
+evidence = "build/explorer-gates/backend-indexer.log"
+note = "The fourth backend leg of the wave gate: exit code 0, 46 tests, 0 failures. This is the application whose test helper raised in gate.3.1.1, when every application shared one mix invocation; with a virtual machine of its own it runs its suite through."
+
+[gate.3.1.6]
+task = "3.1"
+reqs = ["16.1","16.2"]
+revision = "068346118fbf3b9414f6a6ca57246ed25f41c01d"
+command = "env HUSKY=0 yarn install --frozen-lockfile"
+environment = "linux/x86_64, node 22 and yarn 1 in explorer/frontend"
+outcome = "pass"
+evidence = "build/explorer-gates/frontend-install.log"
+note = "The frontend dependency leg of the wave gate: exit code 0, the lock file resolved without a change and the git hooks were left alone."
+
+[gate.3.1.7]
+task = "3.1"
+reqs = ["16.1","16.2"]
+revision = "068346118fbf3b9414f6a6ca57246ed25f41c01d"
+command = "env HUSKY=0 yarn lint:tsc"
+environment = "linux/x86_64, node 22 and yarn 1 in explorer/frontend"
+outcome = "pass"
+evidence = "build/explorer-gates/frontend-tsc.log"
+note = "The frontend type check leg of the wave gate: exit code 0, tsc reported no diagnostic over the project."
+
+[gate.3.1.8]
+task = "3.1"
+reqs = ["16.1","16.2"]
+revision = "068346118fbf3b9414f6a6ca57246ed25f41c01d"
+command = "env HUSKY=0 yarn test:vitest run"
+environment = "linux/x86_64, node 22 and yarn 1 in explorer/frontend, reading the tracked configs/envs/.env.vitest preset"
+outcome = "pass"
+evidence = "build/explorer-gates/frontend-vitest.log"
+note = "The frontend vitest leg of the wave gate: exit code 0, 37 test files and 326 tests passed with no failure and nothing skipped. This is the leg that carried the twenty-seven failures of observations 4.1.2 and 4.1.3, both of which task 4.2 closed."
+
+[observation.3.1.4]
+task = "3.1"
+file = "spec/paxeer-x-explorer/spec.kvx"
+symbol = "task.4.1.status"
+observed = "Task 4.1 is recorded implemented rather than done, from a run of this same command that stopped in the frontend vitest leg, and its verify_cmd is the command this task just ran to exit code 0 at revision 068346118fbf3b9414f6a6ca57246ed25f41c01d with every one of its four per-application backend legs passing."
+assumption = "The per-application legs task 4.1 added are qualified by this run and its status is an owner's to move, since this task may write only its own evidence and the no-reverify rule forbids running the command again to record it against 4.1."
+severity = "note"
