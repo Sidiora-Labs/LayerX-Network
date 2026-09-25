@@ -73,6 +73,8 @@ defmodule Explorer.Chain.Import.Stage.ChainTypeSpecific do
       Runner.PaxeerX.AccountBindings,
       Runner.PaxeerX.CustodyEvents,
       Runner.PaxeerX.Anchors,
+      Runner.PaxeerX.GuarantorEvents,
+      Runner.PaxeerX.DepositRoots,
       Runner.PaxeerX.Receipts,
       Runner.PaxeerX.MarketEvents
     ]

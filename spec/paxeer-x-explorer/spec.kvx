@@ -468,14 +468,18 @@ verify_cmd = "timeout 20m sh -c 'explorer/deploy/tools/mix-in-builder.sh test ap
 symbols = ["BlockScoutWeb.API.V2.PaxeerX.UnifiedAccountController","BlockScoutWeb.API.V2.PaxeerX.CapabilitiesController","BlockScoutWeb.API.V2.PaxeerX.TransactionStatusController","BlockScoutWeb.API.V2.PaxeerX.AnchorController","BlockScoutWeb.API.V2.PaxeerX.ReceiptController"]
 touches = ["explorer/backend/apps/block_scout_web/lib/block_scout_web/schemas/api/v2/paxeer_x","explorer/backend/apps/block_scout_web/lib/block_scout_web/controllers/api/v2/paxeer_x","explorer/backend/apps/block_scout_web/lib/block_scout_web/views/api/v2/paxeer_x","explorer/backend/apps/block_scout_web/lib/block_scout_web/specs/public.ex","explorer/backend/apps/block_scout_web/lib/block_scout_web/specs/private.ex","explorer/backend/apps/block_scout_web/test/block_scout_web/controllers/api/v2/paxeer_x"]
 reqs = ["8.1","8.2","8.3","8.4","8.5"]
-done_revision = "48fe90df93f09f9923c19771ebb62d0afeca50d3"
+done_revision = "5509cb7821e4fa43273694707a231efe0cd5abc5"
 done_command = "timeout 20m sh -c 'explorer/deploy/tools/mix-in-builder.sh test apps/block_scout_web/test/block_scout_web/controllers/api/v2/paxeer_x'"
 done_exit_code = 0
 done_log = "logs/ex-t2-4.log"
 
 [task.2.5]
 title = "Add the guarantor and deposit-root tables with their runners"
-status = "pending"
+status = "done"
+done_revision = "66e4b9a7adaf3f4370829104663addf47da73c33"
+done_command = "timeout 20m sh -c 'explorer/deploy/tools/mix-in-builder.sh test apps/explorer/test/explorer/chain/paxeer_x'"
+done_exit_code = 0
+done_evidence = "111 tests, 0 failures"
 wave = 2
 requires = ["1.1"]
 do_1 = "Write a migration under explorer/backend/apps/explorer/priv/repo/migrations creating lx_guarantor_events with the key, block and provenance columns the other lx_ tables carry and the columns the anchor precompile's guarantor, challenge, availability and sequencer-authorisation events supply - guarantor id, signer and operator addresses, bond and amount, batch number, challenge id, challenge kind, upheld flag, evidence hash, challenger, reporter and reporter reward, class and availability masks, sequencer id, sequencer public key, first and last batch number, unbond amount and completion time - with an enumerated kind column naming each event and indexes on the guarantor id and the batch number."
