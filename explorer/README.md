@@ -141,3 +141,85 @@ a Blockscout 11.x database into a freshly migrated 10.2.6 one, intersecting the
 two schemas by column name instead of assuming they match. It takes both
 connection strings from the environment; run it with `DRY_RUN=1` first to see
 which columns each table would gain and lose.
+
+## Test ratio and lint scripts
+
+Every pull request that touches this directory runs two gates besides the
+builds: `explorer-lint`, one leg per language, and `explorer-test-ratio`.
+Neither is marked `continue-on-error` and neither is skipped by a condition, so
+a red leg is a red pull request.
+
+### The ratio rule
+
+A change under `explorer/` carries at least as many test files as source files,
+and every changed source file has a changed test that references it. A test
+references a source file when it names its Elixir module, names something the
+file exports, contains a fragment of its path, or sits where that source file's
+test belongs - beside it under the same name, or under the umbrella `test/`
+mirror of its `lib/` path.
+
+Files are classified by name, and by content for Rust:
+
+| Class | Files |
+| --- | --- |
+| source | an Elixir `.ex`; a TypeScript `.ts` or `.tsx` that is not a test; a Rust `.rs` that is not a test module |
+| test | an Elixir `*_test.exs`; a TypeScript `*.test.ts`, `*.test.tsx`, `*.spec.ts`, `*.spec.tsx` or `*.pw.tsx`; a Rust file under a `tests/` directory or carrying a `#[cfg(test)]` module |
+| neither | everything else - shell scripts, YAML workflows and compose files, JSON deployment definitions, environment presets, SVG marks and Markdown |
+
+A file classified as neither carries no test requirement, and a range that
+changes no explorer source file passes whatever else it carries.
+
+### Running the ratio gate locally
+
+`tools/explorer/test-ratio.sh` takes the range to measure. The pull request job
+passes the merge base of the base branch and the head commit, which is what the
+three-dot form computes:
+
+```
+tools/explorer/test-ratio.sh origin/main...HEAD
+tools/explorer/test-ratio.sh HEAD~1..HEAD
+tools/explorer/test-ratio.sh origin/main HEAD
+```
+
+It exits 0 when the ratio holds or the range changes no explorer source file, 1
+when it does not and names every source file left without a referencing test,
+and 2 when the arguments or the repository do not resolve.
+`tools/explorer/tests/test-ratio-test.sh` is the gate's own test: it builds a
+throwaway git history and asserts the exit code and the named files for a
+satisfied ratio, an unsatisfied one, a test that references nothing changed, a
+shell and documentation change and an empty range.
+
+### Running the lint gates locally
+
+One script per language, each running exactly what its leg of `explorer-lint`
+runs, each from anywhere in the repository:
+
+```
+tools/explorer/lint-backend.sh
+tools/explorer/lint-frontend.sh
+tools/explorer/lint-services.sh
+```
+
+`lint-backend.sh` runs `mix format --check-formatted` and `mix credo --strict`
+through `deploy/tools/mix-in-builder.sh`, so the container, the toolchain and
+the mix invocations are the ones the job uses; it runs both checks even when the
+first fails and exits with the first non-zero code, naming the failing command
+and its log. `lint-frontend.sh` installs the frozen lockfile and runs
+`yarn lint:eslint` and `yarn lint:tsc` from `frontend/`. `lint-services.sh` runs
+`cargo fmt --all --check` and `cargo clippy --all-targets --locked -- -D warnings`
+in each Rust service, installing the protocol-buffer compiler and the OpenAPI
+plugin the builds generate from if they are absent.
+
+### Scoped upstream exemptions
+
+A lint finding in a file this fork owns is fixed in the code. A finding
+inherited from vendored upstream code, where fixing it would mean a mass edit of
+files the fork takes from upstream, is silenced only by a scoped configuration
+entry, and that entry carries three things: the exact upstream path or glob it
+covers, the single rule or check it covers, and a one-line reason recorded in
+the configuration file itself - a `.credo.exs` check exclusion, an eslint
+override with an explicit file glob, a `clippy` attribute on the vendored
+module. A rule is never disabled globally, never disabled on a fork-owned file,
+and a job is never marked `continue-on-error` to carry a finding past the gate.
+The test ratio has no exemption: a source file the fork changes arrives with a
+test that references it.
