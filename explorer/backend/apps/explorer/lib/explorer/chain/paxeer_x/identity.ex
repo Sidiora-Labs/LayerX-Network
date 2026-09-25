@@ -56,9 +56,8 @@ defmodule Explorer.Chain.PaxeerX.Identity do
 
     with :error <- parse_evm(trimmed),
          :error <- parse_did(trimmed),
-         :error <- parse_kernel_account(trimmed),
-         :error <- parse_pax(trimmed) do
-      :error
+         :error <- parse_kernel_account(trimmed) do
+      parse_pax(trimmed)
     end
   end
 
@@ -233,14 +232,17 @@ defmodule Explorer.Chain.PaxeerX.Identity do
 
   defp polymod(values) do
     Enum.reduce(values, 1, fn value, checksum ->
-      top = bsr(checksum, 25)
       folded = bxor(bsl(band(checksum, 0x1FFFFFF), 5), value)
 
-      @bech32_generators
-      |> Enum.with_index()
-      |> Enum.reduce(folded, fn {generator, index}, acc ->
-        if band(bsr(top, index), 1) == 1, do: bxor(acc, generator), else: acc
-      end)
+      fold_generators(folded, bsr(checksum, 25))
+    end)
+  end
+
+  defp fold_generators(folded, top) do
+    @bech32_generators
+    |> Enum.with_index()
+    |> Enum.reduce(folded, fn {generator, index}, acc ->
+      if band(bsr(top, index), 1) == 1, do: bxor(acc, generator), else: acc
     end)
   end
 

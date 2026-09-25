@@ -9,9 +9,8 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.UnifiedAccountController do
   import BlockScoutWeb.Chain, only: [paging_options: 1, split_list_by_page: 1]
 
   alias BlockScoutWeb.AccessHelper
-  alias Explorer.Chain
+  alias Explorer.{Chain, PagingOptions}
   alias Explorer.Chain.PaxeerX.UnifiedAccount
-  alias Explorer.PagingOptions
 
   action_fallback(BlockScoutWeb.API.V2.FallbackController)
 

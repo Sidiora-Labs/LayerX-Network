@@ -12,7 +12,7 @@ defmodule EthereumJSONRPC.HTTP.ThrottleTest.CountingTransport do
   @latest_block_parameters ~w(latest pending)
 
   def start_link do
-    Agent.start_link(fn -> %{current: %{}, max: %{}, calls: 0} end, name: __MODULE__)
+    Agent.start_link(fn -> %{current: %{}, max: %{}, calls: 0, served: []} end, name: __MODULE__)
   end
 
   @doc """
@@ -27,12 +27,18 @@ defmodule EthereumJSONRPC.HTTP.ThrottleTest.CountingTransport do
   @spec calls() :: non_neg_integer()
   def calls, do: Agent.get(__MODULE__, & &1.calls)
 
+  @doc """
+  Identifiers of the requests that reached the transport, in the order they reached it.
+  """
+  @spec served() :: [term()]
+  def served, do: Agent.get(__MODULE__, &Enum.reverse(&1.served))
+
   @impl EthereumJSONRPC.HTTP
   def json_rpc(_url, json, _headers, options) do
     decoded = json |> IO.iodata_to_binary() |> Jason.decode!()
     kind = kind(decoded)
 
-    enter(kind)
+    enter(kind, request_ids(decoded))
 
     options |> Keyword.get(:test_delay, 25) |> Process.sleep()
 
@@ -55,13 +61,23 @@ defmodule EthereumJSONRPC.HTTP.ThrottleTest.CountingTransport do
 
   defp response(%{"id" => id}), do: %{"jsonrpc" => "2.0", "id" => id, "result" => "0x1"}
 
-  defp enter(kind) do
+  defp request_ids(payload) when is_list(payload), do: Enum.flat_map(payload, &request_ids/1)
+
+  defp request_ids(%{"id" => id}), do: [id]
+
+  defp enter(kind, ids) do
     Agent.update(__MODULE__, fn state ->
       current = Map.update(state.current, kind, 1, &(&1 + 1))
       in_flight = Map.fetch!(current, kind)
       maxima = Map.update(state.max, kind, in_flight, &max(&1, in_flight))
 
-      %{state | current: current, max: maxima, calls: state.calls + 1}
+      %{
+        state
+        | current: current,
+          max: maxima,
+          calls: state.calls + 1,
+          served: Enum.reverse(ids, state.served)
+      }
     end)
   end
 
@@ -273,6 +289,33 @@ defmodule EthereumJSONRPC.HTTP.ThrottleTest do
       assert Throttle.stats(@url).queue_depth == 0
     end
 
+    test "admits waiting callers in the order they arrived" do
+      configure(
+        max_inflight: 1,
+        rps: @unlimited_rps,
+        trace_max_inflight: 1,
+        archive_max_inflight: 1,
+        coalesce?: false
+      )
+
+      holder = Task.async(fn -> block_request(1, test_delay: 500) end)
+      wait_until(fn -> Throttle.stats(@url).inflight_total == 1 end)
+
+      queued =
+        Enum.map(2..5, fn id ->
+          task = Task.async(fn -> block_request(id, test_delay: 0) end)
+
+          wait_until(fn -> Throttle.stats(@url).queue_depth == id - 1 end)
+
+          task
+        end)
+
+      assert {:ok, "0x1"} = Task.await(holder, 30_000)
+      assert Enum.all?(Task.await_many(queued, 30_000), &match?({:ok, "0x1"}, &1))
+
+      assert CountingTransport.served() == Enum.to_list(1..5)
+    end
+
     test "waiting callers are served by the restarted guard instead of bypassing it" do
       configure(
         max_inflight: 1,
@@ -313,9 +356,7 @@ defmodule EthereumJSONRPC.HTTP.ThrottleTest do
                Throttle.classify(block_request_payload(1, "eth_getBalance", ["0xabc", "0x1"]))
 
       assert {:archive, 1} =
-               Throttle.classify(
-                 block_request_payload(1, "eth_getStorageAt", ["0xabc", "0x0", "0x1"])
-               )
+               Throttle.classify(block_request_payload(1, "eth_getStorageAt", ["0xabc", "0x0", "0x1"]))
 
       assert {:default, 1} =
                Throttle.classify(block_request_payload(1, "eth_getBalance", ["0xabc", "latest"]))

@@ -163,3 +163,19 @@ symbol = "compose-smoke-test"
 observed = "The published sig-provider image restarts on every start: its runtime stage cannot load libssl.so.3, so ./sig-provider-server never runs."
 assumption = "The defect is in that service's own Dockerfile, which this task does not touch; the compose file names the published image as the deployment definitions require, and the smoke test brings the backend up without the microservices, so nothing here depends on it."
 severity = "blocker"
+
+[observation.1.9.1]
+task = "1.9"
+file = "explorer/deploy/tools/mix-in-builder.sh"
+symbol = "mix-in-builder"
+observed = "The runner mounted .formatter.exs but not .credo.exs, so mix credo --strict analysed the umbrella under credo's built-in defaults rather than the committed configuration, reporting findings in files the configuration excludes."
+assumption = "Task 1.9 adds the missing mount because its verify_cmd cannot measure the fork's own configuration without it; the line belongs to task 1.1 and this work is stacked on that branch."
+severity = "note"
+
+[observation.1.9.2]
+task = "1.9"
+file = "explorer/backend/apps/ethereum_jsonrpc/lib/ethereum_jsonrpc/http/throttle.ex"
+symbol = "lint-backend"
+observed = "Once the configuration was honoured every exit-affecting credo finding sat in a fork-owned or fork-modified file, several of them outside the task's touches list: the JSON-RPC application, transaction, receipt and throttle modules, the internal transaction fetcher and the logger metadata in config_helper.exs."
+assumption = "do_4 does not apply because no finding came from a vendored file the fork has not modified, so every finding was fixed in code and .credo.exs gained no exclusion and no disabled check."
+severity = "note"

@@ -24,8 +24,7 @@ defmodule EthereumJSONRPC.Transaction do
     ]
 
   alias EthereumJSONRPC
-  alias EthereumJSONRPC.PaxeerX
-  alias EthereumJSONRPC.SignedAuthorization
+  alias EthereumJSONRPC.{PaxeerX, SignedAuthorization}
 
   case @chain_type do
     :ethereum ->

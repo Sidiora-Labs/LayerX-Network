@@ -5,8 +5,8 @@ defmodule EthereumJSONRPC.Application do
 
   use Application
 
-  alias EthereumJSONRPC.{IPC, RequestCoordinator, RollingWindow}
   alias EthereumJSONRPC.HTTP.Throttle
+  alias EthereumJSONRPC.{IPC, RequestCoordinator, RollingWindow}
   alias EthereumJSONRPC.Utility.{EndpointAvailabilityChecker, EndpointAvailabilityObserver}
 
   @impl Application
@@ -63,9 +63,7 @@ defmodule EthereumJSONRPC.Application do
     case Application.get_env(:ethereum_jsonrpc, :rpc_transport) do
       :ipc ->
         [
-          :poolboy.child_spec(:worker, poolboy_config(),
-            path: Application.get_env(:ethereum_jsonrpc, :ipc_path)
-          )
+          :poolboy.child_spec(:worker, poolboy_config(), path: Application.get_env(:ethereum_jsonrpc, :ipc_path))
           | children
         ]
 

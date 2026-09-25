@@ -415,13 +415,18 @@ defmodule Explorer.Chain.PaxeerX.Finality do
   end
 
   defp read_live_anchor(json_rpc_named_arguments) do
-    with {:ok, [batch_number, exists?]} <- call(:latest_finalized, [], json_rpc_named_arguments),
-         finalized_batch = exists? && batch_number,
-         sealed_batch = probe_sealed_batch(finalized_batch, json_rpc_named_arguments) do
-      build_live_anchor(finalized_batch, sealed_batch, json_rpc_named_arguments)
-    else
-      {:ok, _other} -> {:error, :malformed_latest_finalized}
-      {:error, reason} -> {:error, reason}
+    case call(:latest_finalized, [], json_rpc_named_arguments) do
+      {:ok, [batch_number, exists?]} ->
+        finalized_batch = exists? && batch_number
+        sealed_batch = probe_sealed_batch(finalized_batch, json_rpc_named_arguments)
+
+        build_live_anchor(finalized_batch, sealed_batch, json_rpc_named_arguments)
+
+      {:ok, _other} ->
+        {:error, :malformed_latest_finalized}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

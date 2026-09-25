@@ -22,9 +22,9 @@ defmodule Explorer.Chain.PaxeerX.UnifiedAccount do
 
   alias Explorer.Chain
   alias Explorer.Chain.Address
+  alias Explorer.Chain.{Hash, Token, TokenTransfer, Transaction, Wei}
   alias Explorer.Chain.PaxeerX.{AccountBinding, Anchor, CustodyEvent, Finality, Identity, Receipt, Status}
   alias Explorer.Chain.PaxeerX.Finality.Heights
-  alias Explorer.Chain.{Hash, Token, TokenTransfer, Transaction, Wei}
 
   @native_asset_id "native"
   @native_decimals 18
