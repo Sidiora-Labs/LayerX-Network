@@ -52,3 +52,10 @@ exit_code = 127
 log_path = ".logs/guard.log"
 observed = "The required guard executable is unavailable."
 assumption = "Publication remains restricted to the requested branch with no chain interaction."
+
+[observation.2.5.1]
+revision = "d1eb0ba1740688198d57530458a5c4e139f58e16"
+command = "timeout 2m go vet ./modules/evm/types ./modules/evm/keeper ./precompiles/ ./precompiles/feetoken/..."; exit_code = 124
+log_path = ".logs/vet.log"
+observed = "Focused vet reached its time limit without diagnostics."
+assumption = "The lint result remains unqualified; the task verification gate is recorded separately."

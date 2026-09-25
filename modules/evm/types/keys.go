@@ -67,6 +67,7 @@ var (
 	EVMAddressToLayerXDidKeyPrefix = []byte{0x20}
 	LayerXDidToEVMAddressKeyPrefix = []byte{0x21}
 	LayerXBindNonceKeyPrefix       = []byte{0x22}
+	AccountFeeDenomKeyPrefix       = []byte{0x23}
 )
 
 var (
@@ -183,4 +184,8 @@ func PointerCW1155ERC1155Key(erc1155Addr common.Address) []byte {
 
 func PointerReverseRegistryKey(addr common.Address) []byte {
 	return append(PointerReverseRegistryPrefix, addr[:]...)
+}
+
+func AccountFeeDenomKey(evmAddress common.Address) []byte {
+	return append(append([]byte(nil), AccountFeeDenomKeyPrefix...), evmAddress[:]...)
 }
