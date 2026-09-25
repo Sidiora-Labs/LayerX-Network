@@ -123,3 +123,10 @@ revision = "5241cfaeda1a9536e3bf2cde20e3125a5f5a1112"
 command = "sed -n '245,292p' modules/evm/types/params_test.go"; exit_code = 0; log_path = "https://github.com/Sidiora-Labs/Paxeer-X-Network/pull/530#discussion_r4107607672"
 observed = "The descriptor test selects the last three fields as fields 16 through 18, contradicting the addition of field 19."
 assumption = "The code and assertions remain intact because this test is outside task 2.8 touches; a separate correction must preserve all field-name, number and type assertions."
+
+[observation.2.5.1]
+revision = "d1eb0ba1740688198d57530458a5c4e139f58e16"
+command = "timeout 2m go vet ./modules/evm/types ./modules/evm/keeper ./precompiles/ ./precompiles/feetoken/..."; exit_code = 124
+log_path = ".logs/vet.log"
+observed = "Focused vet reached its time limit without diagnostics."
+assumption = "The lint result remains unqualified; the task verification gate is recorded separately."

@@ -9,6 +9,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/precompiles/addr"
 	"github.com/sidiora-labs/paxeer-network/precompiles/bank"
 	"github.com/sidiora-labs/paxeer-network/precompiles/distribution"
+	"github.com/sidiora-labs/paxeer-network/precompiles/feetoken"
 	"github.com/sidiora-labs/paxeer-network/precompiles/gov"
 	"github.com/sidiora-labs/paxeer-network/precompiles/ibc"
 	"github.com/sidiora-labs/paxeer-network/precompiles/json"
@@ -51,6 +52,7 @@ func GetCustomPrecompiles(
 	keepers utils.Keepers,
 ) map[ecommon.Address]utils.VersionedPrecompiles {
 	return map[ecommon.Address]utils.VersionedPrecompiles{
+		ecommon.HexToAddress(feetoken.FeeTokenAddress):           feetoken.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(bank.BankAddress):                   bank.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(wasmd.WasmdAddress):                 wasmd.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(json.JSONAddress):                   json.GetVersioned(latestUpgrade, keepers),
@@ -172,6 +174,15 @@ func InitializePrecompiles(
 		}
 	}
 
+	feetokenp, err := feetoken.NewPrecompile(keepers)
+	if err != nil {
+		if !dryRun {
+			return err
+		}
+		feetokenp = feetoken.NewPrecompileWithKeeper(nil)
+	}
+
+	PrecompileNamesToInfo[feetokenp.GetName()] = PrecompileInfo{ABI: feetokenp.GetABI(), Address: feetokenp.Address()}
 	PrecompileNamesToInfo[bankp.GetName()] = PrecompileInfo{ABI: bankp.GetABI(), Address: bankp.Address()}
 	PrecompileNamesToInfo[wasmdp.GetName()] = PrecompileInfo{ABI: wasmdp.GetABI(), Address: wasmdp.Address()}
 	PrecompileNamesToInfo[jsonp.GetName()] = PrecompileInfo{ABI: jsonp.GetABI(), Address: jsonp.Address()}
@@ -192,6 +203,7 @@ func InitializePrecompiles(
 	PrecompileNamesToInfo[launchpadp.GetName()] = PrecompileInfo{ABI: launchpadp.GetABI(), Address: launchpadp.Address()}
 
 	if !dryRun {
+		addPrecompileToVM(feetokenp)
 		addPrecompileToVM(bankp)
 		addPrecompileToVM(wasmdp)
 		addPrecompileToVM(jsonp)

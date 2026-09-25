@@ -80,3 +80,30 @@ func TestTransientReceiptKeyTransactionIndexSorting(t *testing.T) {
 			i, expectedHash.Hex(), actualHash.Hex())
 	}
 }
+
+func TestAccountFeeDenomKey(t *testing.T) {
+	account := common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
+	key := types.AccountFeeDenomKey(account)
+	require.Equal(t, []byte{0x23}, types.AccountFeeDenomKeyPrefix)
+	require.Equal(t, append([]byte{0x23}, account.Bytes()...), key)
+	other := common.HexToAddress("0x5678")
+	require.NotEqual(t, key, types.AccountFeeDenomKey(other))
+	for _, prefix := range [][]byte{
+		types.EVMAddressToPaxAddressKeyPrefix, types.PaxAddressToEVMAddressKeyPrefix,
+		types.StateKeyPrefix, types.TransientStateKeyPrefix, types.AccountTransientStateKeyPrefix,
+		types.TransientModuleStateKeyPrefix, types.CodeKeyPrefix, types.CodeHashKeyPrefix,
+		types.CodeSizeKeyPrefix, types.NonceKeyPrefix, types.ReceiptKeyPrefix,
+		types.WhitelistedCodeHashesForBankSendPrefix, types.BlockBloomPrefix, types.TxHashesPrefix,
+		types.WhitelistedCodeHashesForDelegateCallPrefix, types.ReplaySeenAddrPrefix,
+		types.ReplayedHeight, types.ReplayInitialHeight, types.PointerRegistryPrefix,
+		types.PointerCWCodePrefix, types.PointerReverseRegistryPrefix, types.AnteSurplusPrefix,
+		types.DeferredInfoPrefix, types.LegacyBlockBloomCutoffHeightKey, types.BaseFeePerGasPrefix,
+		types.NextBaseFeePerGasPrefix, types.EvmOnlyBlockBloomPrefix, types.ZeroStorageCleanupCheckpointKey,
+		types.NonceBumpPrefix, types.EVMAddressToLayerXDidKeyPrefix, types.LayerXDidToEVMAddressKeyPrefix,
+		types.LayerXBindNonceKeyPrefix,
+	} {
+		require.NotEqual(t, prefix, types.AccountFeeDenomKeyPrefix)
+	}
+	key[0] = 0
+	require.Equal(t, byte(0x23), types.AccountFeeDenomKey(account)[0])
+}
