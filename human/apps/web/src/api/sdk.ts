@@ -33,3 +33,22 @@ export {
   launchpadSellCall,
   type LaunchpadSwapOrder,
 } from "../../../../../agent/sdk/typescript/src/launchpad.ts";
+export {
+  SIDIORA_TOKEN,
+  SIDIORA_DECIMALS,
+  assembleEip7702Authorization,
+  eip7702AuthorizationDigest,
+  gasQuoteDigest,
+  sponsoredBatchCall,
+  sponsoredBatchDigest,
+  type GasQuote,
+  type GasQuoteRequest,
+  type GasStationConfig,
+  type SponsoredBatch,
+} from "../../../../../agent/sdk/typescript/src/gas-station.ts";
+export {
+  requestSidioraGasQuote,
+  sendSponsoredBatch,
+  type GasQuoteOutcome,
+  type SidioraGasQuote,
+} from "./gas-station.ts";
