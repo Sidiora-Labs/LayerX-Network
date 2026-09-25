@@ -332,7 +332,7 @@ reqs = ["1.7","1.9"]
 
 [task.1.9]
 title = "Make the backend lint gate green"
-status = "pending"
+status = "done"
 wave = 1
 requires = ["1.1"]
 do_1 = "Write tools/explorer/lint-backend.sh which runs `mix format --check-formatted` and `mix credo --strict` through explorer/deploy/tools/mix-in-builder.sh, returns the first non-zero exit code, and prints the failing command and log path."
@@ -343,6 +343,10 @@ verify_cmd = "timeout 20m sh -c 'tools/explorer/lint-backend.sh'"
 symbols = ["lint-backend"]
 touches = ["tools/explorer/lint-backend.sh","explorer/backend/.credo.exs","explorer/backend/.formatter.exs","explorer/backend/apps/explorer/lib/explorer/chain/paxeer_x","explorer/backend/apps/explorer/lib/explorer/chain/import/runner/paxeer_x","explorer/backend/apps/indexer/lib/indexer/transform/paxeer_x_logs.ex","explorer/backend/apps/ethereum_jsonrpc/lib/ethereum_jsonrpc/paxeer_x.ex","explorer/backend/apps/block_scout_web/lib/block_scout_web/controllers/api/v2/paxeer_x","explorer/backend/apps/block_scout_web/lib/block_scout_web/views/api/v2/paxeer_x"]
 reqs = ["2.1","2.5"]
+done_revision = "0743b0ad82f545896c16840c80b902cf9be53c44"
+done_command = "timeout 20m sh -c 'tools/explorer/lint-backend.sh'"
+done_exit_code = 0
+done_log = ".logs/explorer-lint"
 
 [task.1.10]
 title = "Make the frontend lint gate green"

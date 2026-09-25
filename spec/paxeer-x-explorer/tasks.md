@@ -59,7 +59,7 @@
     - Install into an isolated environment inside the job rather than the runner's system interpreter, so the pinned versions are the ones that build the site.
     - Repair whatever the strict site build then reports - a broken internal link, a missing navigation entry or a page outside the navigation - in docs/site, and leave the strict flag in place.
     - _Requirements: 1.7, 1.9_
-  - [ ] 1.9 Make the backend lint gate green
+  - [x] 1.9 Make the backend lint gate green
     - Write tools/explorer/lint-backend.sh which runs `mix format --check-formatted` and `mix credo --strict` through explorer/deploy/tools/mix-in-builder.sh, returns the first non-zero exit code, and prints the failing command and log path.
     - Fix every formatting finding in fork-owned modules by formatting them with the committed .formatter.exs settings; do not reformat vendored upstream files the fork has not modified.
     - Fix every credo finding in fork-owned modules - the Paxeer X chain, controller, view, import runner, transform and configuration modules - in the code: missing module documentation, alias ordering, function complexity, nesting depth and naming.
