@@ -71,7 +71,7 @@
     - For findings inherited from vendored upstream files, add an override block to explorer/frontend/eslint.config.mjs whose files globs name the upstream paths it covers, with a one-line reason in the file; never relax a rule for the whole project and never for a fork-owned path.
     - Leave the lint scripts in package.json exactly as upstream defines them so the job and a developer run the same commands.
     - _Requirements: 2.2, 2.5_
-  - [ ] 1.11 Make the services lint gate green
+  - [x] 1.11 Make the services lint gate green
     - Write tools/explorer/lint-services.sh which, for each of explorer/services/smart-contract-verifier and explorer/services/sig-provider, runs `cargo fmt --all --check` and `cargo clippy --all-targets --locked -- -D warnings` from that service directory and returns the first non-zero exit code.
     - Fix every formatting difference by running the formatter over the service workspaces, and fix every clippy warning in the code.
     - Where a clippy lint is inherited from vendored upstream code and cannot be fixed without a mass edit, add the allow at the narrowest scope that covers it with a one-line reason beside it; never add a crate-wide allow and never pass an allow flag from the script.
