@@ -16,7 +16,7 @@ var ZeroInt = uint256.NewInt(0)
 func (s *DBImpl) SubBalance(evmAddr common.Address, amtUint256 *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
 	if s.feeTokenCharge != nil && evmAddr == s.feeTokenCharge.Payer && reason == tracing.BalanceDecreaseGasBuy {
 		s.gasBought = true
-		return s.moveFeeToken(evmAddr, amtUint256, true)
+		return s.moveFeeToken(evmAddr, amtUint256, true, true)
 	}
 	s.k.PrepareReplayedAddr(s.ctx, evmAddr)
 	amt := amtUint256.ToBig()
@@ -67,8 +67,14 @@ func (s *DBImpl) SubBalance(evmAddr common.Address, amtUint256 *uint256.Int, rea
 }
 
 func (s *DBImpl) AddBalance(evmAddr common.Address, amtUint256 *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
-	if s.feeTokenCharge != nil && ((evmAddr == s.feeTokenCharge.Payer && reason == tracing.BalanceIncreaseGasReturn) || (evmAddr == s.coinbaseEvmAddress && reason == tracing.BalanceIncreaseRewardTransactionFee)) {
-		return s.moveFeeToken(evmAddr, amtUint256, false)
+	if s.feeTokenCharge != nil {
+		if evmAddr == s.feeTokenCharge.Payer && reason == tracing.BalanceIncreaseGasReturn {
+			return s.moveFeeToken(evmAddr, amtUint256, false, true)
+		}
+		if evmAddr == s.coinbaseEvmAddress && reason == tracing.BalanceIncreaseRewardTransactionFee {
+			// The coinbase credit floors so the refund and the reward together never exceed the ceilinged debit.
+			return s.moveFeeToken(evmAddr, amtUint256, false, false)
+		}
 	}
 	s.k.PrepareReplayedAddr(s.ctx, evmAddr)
 	amt := amtUint256.ToBig()
@@ -197,8 +203,8 @@ func (s *DBImpl) SetFeeTokenCharge(charge *FeeTokenCharge, gasBought bool) {
 	s.gasBought = gasBought
 }
 
-func (s *DBImpl) moveFeeToken(evmAddr common.Address, amount *uint256.Int, debit bool) uint256.Int {
-	converted, err := s.k.ConvertFeeToDenom(sdk.NewIntFromBigInt(amount.ToBig()), s.feeTokenCharge.Rate, true)
+func (s *DBImpl) moveFeeToken(evmAddr common.Address, amount *uint256.Int, debit bool, roundUp bool) uint256.Int {
+	converted, err := s.k.ConvertFeeToDenom(sdk.NewIntFromBigInt(amount.ToBig()), s.feeTokenCharge.Rate, roundUp)
 	if err != nil {
 		s.err = err
 		return *ZeroInt
