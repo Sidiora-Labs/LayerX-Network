@@ -386,7 +386,7 @@ reqs = ["8.1","8.2","8.3","8.4","8.5"]
 [task.2.5]
 title = "Add the per-account fee-token preference precompile"
 status = "done"
-revision = "pending"
+revision = "77c50d2b21d5b3d31131ad5976e9402ed5231500"
 command = "timeout 20m sh -c 'go test -count=1 ./precompiles/ ./precompiles/feetoken/...'"
 exit_code = 0
 log_path = "/root/lx-lanes/sid-t2-5/.logs/verify.log"
