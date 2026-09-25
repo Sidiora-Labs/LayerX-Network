@@ -52,6 +52,7 @@ const TEMPLATE_MAP: Record<Route['pathname'], string> = {
   '/paxeer-x/account/[hash]': '%network_name% Paxeer X account %hash%',
   '/paxeer-x/anchors': '%network_name% anchor checkpoints',
   '/paxeer-x/receipts': '%network_name% kernel receipts',
+  '/paxeer-x/receipts/[id]': '%network_name% kernel receipt %id%',
   '/dispute-games': '%network_name% dispute games',
   '/batches': '%network_name% txn batches',
   '/batches/[number]': `%network_name% ${ layerLabels.current } txn batch %number%`,

@@ -3,6 +3,9 @@ import React from 'react';
 
 import type { PaxeerXReceiptsItem } from 'types/api/paxeerXLists';
 
+import { route } from 'nextjs/routes';
+
+import { Link } from 'toolkit/chakra/link';
 import { Skeleton } from 'toolkit/chakra/skeleton';
 import { TableCell, TableRow } from 'toolkit/chakra/table';
 import CopyToClipboard from 'ui/shared/CopyToClipboard';
@@ -21,7 +24,9 @@ const PaxeerXReceiptsTableItem = ({ item, isLoading }: Props) => {
       <TableCell verticalAlign="middle">
         <Flex overflow="hidden" w="100%" alignItems="center">
           <Skeleton loading={ isLoading } fontWeight={ 600 }>
-            <HashStringShorten hash={ item.id } type="long"/>
+            <Link href={ route({ pathname: '/paxeer-x/receipts/[id]', query: { id: item.id } }) }>
+              <HashStringShorten hash={ item.id } type="long"/>
+            </Link>
           </Skeleton>
           <CopyToClipboard text={ item.id } ml={ 2 } isLoading={ isLoading }/>
         </Flex>

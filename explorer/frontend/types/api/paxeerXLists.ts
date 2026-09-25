@@ -46,3 +46,24 @@ export type PaxeerXReceiptsResponse = {
     items_count: number;
   } | null;
 };
+
+export const PAXEER_X_VERIFICATION_STATUSES = [
+  'unverified',
+  'sequencer_signed',
+  'batch_included',
+  'state_proven',
+  'checkpoint_finalised',
+  'settlement_anchored',
+] as const;
+
+export type PaxeerXVerificationStatus = typeof PAXEER_X_VERIFICATION_STATUSES[number];
+
+// One receipt carries, on top of the list item, the rung it has reached on the kernel's own
+// verification lattice and the log that recorded it. `payload_hash` is an optional column of the
+// receipt log, while the emitting transaction and the timestamp of its block are not.
+export type PaxeerXReceipt = PaxeerXReceiptsItem & {
+  verification_status: PaxeerXVerificationStatus;
+  payload_hash: string | null;
+  transaction_hash: string;
+  timestamp: string;
+};

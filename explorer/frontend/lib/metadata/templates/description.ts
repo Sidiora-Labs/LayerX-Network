@@ -50,6 +50,7 @@ const TEMPLATE_MAP: Record<Route['pathname'], string> = {
   '/paxeer-x/account/[hash]': DEFAULT_TEMPLATE,
   '/paxeer-x/anchors': DEFAULT_TEMPLATE,
   '/paxeer-x/receipts': DEFAULT_TEMPLATE,
+  '/paxeer-x/receipts/[id]': DEFAULT_TEMPLATE,
   '/dispute-games': DEFAULT_TEMPLATE,
   '/batches': DEFAULT_TEMPLATE,
   '/batches/[number]': DEFAULT_TEMPLATE,

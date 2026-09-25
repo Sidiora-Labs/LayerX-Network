@@ -45,6 +45,7 @@ export const PAGE_TYPE_DICT: Record<Route['pathname'], string> = {
   '/paxeer-x/account/[hash]': 'Paxeer X account details',
   '/paxeer-x/anchors': 'Anchor checkpoints',
   '/paxeer-x/receipts': 'Kernel receipts',
+  '/paxeer-x/receipts/[id]': 'Kernel receipt details',
   '/dispute-games': 'Dispute games',
   '/batches': 'Txn batches',
   '/batches/[number]': 'L2 txn batch details',

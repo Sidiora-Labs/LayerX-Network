@@ -3,6 +3,9 @@ import React from 'react';
 
 import type { PaxeerXReceiptsItem } from 'types/api/paxeerXLists';
 
+import { route } from 'nextjs/routes';
+
+import { Link } from 'toolkit/chakra/link';
 import { Skeleton } from 'toolkit/chakra/skeleton';
 import CopyToClipboard from 'ui/shared/CopyToClipboard';
 import BlockEntity from 'ui/shared/entities/block/BlockEntity';
@@ -23,7 +26,9 @@ const PaxeerXReceiptsListItem = ({ item, isLoading }: Props) => {
       <ListItemMobileGrid.Value>
         <Flex overflow="hidden" whiteSpace="nowrap" alignItems="center" w="100%" justifyContent="start">
           <Skeleton loading={ isLoading } fontWeight={ 600 } color="text.primary">
-            <HashStringShorten hash={ item.id } type="long"/>
+            <Link href={ route({ pathname: '/paxeer-x/receipts/[id]', query: { id: item.id } }) }>
+              <HashStringShorten hash={ item.id } type="long"/>
+            </Link>
           </Skeleton>
           <CopyToClipboard text={ item.id } isLoading={ isLoading }/>
         </Flex>
