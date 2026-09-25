@@ -39,6 +39,15 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.CapabilitiesControllerTest do
       end
     end
 
+    test "answers with the six surfaces and nothing else", %{conn: conn} do
+      response =
+        conn
+        |> get("/api/v2/paxeer-x/capabilities")
+        |> json_response(200)
+
+      assert Enum.sort(Map.keys(response)) == Enum.sort(@surfaces)
+    end
+
     test "reports the surfaces of the last probe", %{conn: conn} do
       set_mox_global()
 

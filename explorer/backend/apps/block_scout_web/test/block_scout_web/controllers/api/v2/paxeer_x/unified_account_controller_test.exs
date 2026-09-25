@@ -165,6 +165,30 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.UnifiedAccountControllerTest do
       refute is_nil(event["timestamp"])
     end
 
+    test "carries as null the asset, the amount and the counterparty a kernel event left out", %{conn: conn} do
+      address = insert(:address)
+      block = insert(:block, number: 500)
+      transaction = :transaction |> insert() |> with_block(block)
+
+      insert_custody_event(block, transaction,
+        log_index: 0,
+        kind: :custody_release,
+        direction: :withdrawal,
+        amount: nil,
+        asset_id: nil,
+        address_hash: to_string(address.hash),
+        account: nil
+      )
+
+      response = json_response(get(conn, "/api/v2/addresses/#{Address.checksum(address.hash)}/unified"), 200)
+
+      assert [item] = response["activity"]
+      assert item["kind"] == "custody_release"
+      assert item["asset"] == nil
+      assert item["amount"] == nil
+      assert item["counterparty"] == nil
+    end
+
     test "pages the activity feed on the block number and the index of the last item", %{conn: conn} do
       address = insert(:address)
 

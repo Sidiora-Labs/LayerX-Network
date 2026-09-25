@@ -12,7 +12,6 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.CapabilitiesController do
   use OpenApiSpex.ControllerSpecs
 
   alias Explorer.Chain.PaxeerX.Capabilities
-  alias OpenApiSpex.Schema
 
   plug(OpenApiSpex.Plug.CastAndValidate, json_render_error_v2: true)
 
@@ -26,27 +25,7 @@ defmodule BlockScoutWeb.API.V2.PaxeerX.CapabilitiesController do
         "getUnifiedAccount. A surface that the running chain does not carry yet reads as false.",
     parameters: base_params(),
     responses: [
-      ok:
-        {"Surfaces the connected node answers.", "application/json",
-         %Schema{
-           type: :object,
-           properties: %{
-             addr: %Schema{type: :boolean},
-             custody: %Schema{type: :boolean},
-             anchor: %Schema{type: :boolean},
-             exchange: %Schema{type: :boolean},
-             bridge: %Schema{type: :boolean},
-             launchpad: %Schema{type: :boolean}
-           },
-           required: [
-             :addr,
-             :custody,
-             :anchor,
-             :exchange,
-             :bridge,
-             :launchpad
-           ]
-         }},
+      ok: {"Surfaces the connected node answers.", "application/json", Schemas.PaxeerX.Capabilities},
       unprocessable_entity: JsonErrorResponse.response()
     ]
   )
