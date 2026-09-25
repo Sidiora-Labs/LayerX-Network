@@ -1,0 +1,38 @@
+# Builder image for every mix command run against explorer/backend.
+#
+# mix-in-builder.sh builds this on demand when its image reference is absent,
+# and the explorer build workflow compiles the backend on the same Elixir and
+# Erlang versions, so the toolchain moves in one place.
+#
+# Build context: explorer/backend
+#   docker build --file explorer/deploy/tools/Dockerfile.elixir-builder \
+#     --tag explorer-elixir-builder:v10.2.6 explorer/backend
+#
+# The image carries the dependency sources and the build toolchain, not the
+# compiled artefacts: mix-in-builder.sh points MIX_BUILD_PATH at a named volume
+# so a rerun reuses the compilation of the environment it runs in. The umbrella
+# sources are mounted over this layout at run time, which is why only the mix
+# manifests are copied in.
+
+FROM hexpm/elixir:1.19.4-erlang-27.3.4.6-alpine-3.22.2
+
+WORKDIR /app
+
+RUN apk --no-cache --update add \
+    alpine-sdk gmp-dev automake libtool inotify-tools autoconf python3 \
+    file gcompat libstdc++ curl ca-certificates git make bash postgresql-client
+
+ENV MIX_HOME=/opt/mix
+
+COPY mix.exs mix.lock ./
+COPY apps/block_scout_web/mix.exs ./apps/block_scout_web/
+COPY apps/explorer/mix.exs ./apps/explorer/
+COPY apps/ethereum_jsonrpc/mix.exs ./apps/ethereum_jsonrpc/
+COPY apps/indexer/mix.exs ./apps/indexer/
+COPY apps/utils/mix.exs ./apps/utils/
+COPY apps/nft_media_handler/mix.exs ./apps/nft_media_handler/
+
+RUN mix local.hex --force && mix local.rebar --force
+RUN mix deps.get
+
+CMD ["/bin/sh"]
