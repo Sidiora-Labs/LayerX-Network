@@ -39,12 +39,28 @@ const SearchBarDesktop = ({ isHeroBanner }: Props) => {
 
   const { searchTerm, debouncedSearchTerm, handleSearchTermChange, query, zetaChainCCTXQuery, externalSearchItem } = useSearchWithClusters();
   const resolveSearchRoute = useSearchRedirect();
+  const pendingSearchRef = React.useRef(0);
+
+  const discardPendingSearch = React.useCallback(() => {
+    pendingSearchRef.current++;
+  }, []);
+
+  const handleTermChange = React.useCallback((value: string) => {
+    discardPendingSearch();
+    handleSearchTermChange(value);
+  }, [ discardPendingSearch, handleSearchTermChange ]);
 
   const navigateToResults = React.useCallback(async(redirect: boolean) => {
     if (searchTerm) {
+      const requestId = ++pendingSearchRef.current;
       const resultRoute = paxeerXFeature.isEnabled ?
         await resolveSearchRoute(searchTerm, redirect) :
         getSearchRedirectRoute(searchTerm, redirect);
+
+      if (requestId !== pendingSearchRef.current) {
+        return;
+      }
+
       const url = route(resultRoute);
       mixpanel.logEvent(mixpanel.EventTypes.SEARCH_QUERY, {
         'Search query': searchTerm,
@@ -70,9 +86,10 @@ const SearchBarDesktop = ({ isHeroBanner }: Props) => {
   }, [ onOpen ]);
 
   const handelHide = React.useCallback(() => {
+    discardPendingSearch();
     onClose();
     inputRef.current?.querySelector('input')?.blur();
-  }, [ onClose ]);
+  }, [ discardPendingSearch, onClose ]);
 
   const handleOutsideClick = React.useCallback((event: Event) => {
     const isFocusInInput = inputRef.current?.contains(event.target as Node);
@@ -89,11 +106,12 @@ const SearchBarDesktop = ({ isHeroBanner }: Props) => {
   }, [ onOpen ]);
 
   const handleClear = React.useCallback(() => {
-    handleSearchTermChange('');
+    handleTermChange('');
     inputRef.current?.querySelector('input')?.focus();
-  }, [ handleSearchTermChange ]);
+  }, [ handleTermChange ]);
 
   const handleItemClick = React.useCallback((event: React.MouseEvent<HTMLAnchorElement>) => {
+    discardPendingSearch();
     mixpanel.logEvent(mixpanel.EventTypes.SEARCH_QUERY, {
       'Search query': searchTerm,
       'Source page type': mixpanel.getPageType(router.pathname),
@@ -101,7 +119,7 @@ const SearchBarDesktop = ({ isHeroBanner }: Props) => {
     });
     saveToRecentKeywords(searchTerm);
     onClose();
-  }, [ router.pathname, searchTerm, onClose ]);
+  }, [ discardPendingSearch, router.pathname, searchTerm, onClose ]);
 
   const handleBlur = React.useCallback((event: React.FocusEvent<HTMLFormElement>) => {
     const isFocusInMenu = menuRef.current?.contains(event.relatedTarget);
@@ -119,7 +137,7 @@ const SearchBarDesktop = ({ isHeroBanner }: Props) => {
 
   // clear input on page change
   React.useEffect(() => {
-    handleSearchTermChange('');
+    handleTermChange('');
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ router.asPath?.split('?')?.[0] ]);
 
@@ -159,7 +177,7 @@ const SearchBarDesktop = ({ isHeroBanner }: Props) => {
         <PopoverTrigger asChild w="100%">
           <SearchBarInput
             ref={ inputRef }
-            onChange={ handleSearchTermChange }
+            onChange={ handleTermChange }
             onSubmit={ handleSubmit }
             onFocus={ handleFocus }
             onHide={ handelHide }
@@ -186,7 +204,7 @@ const SearchBarDesktop = ({ isHeroBanner }: Props) => {
             overflowY="hidden"
           >
             { searchTerm.trim().length === 0 && recentSearchKeywords.length > 0 && (
-              <SearchBarRecentKeywords onClick={ handleSearchTermChange } onClear={ onClose }/>
+              <SearchBarRecentKeywords onClick={ handleTermChange } onClear={ onClose }/>
             ) }
             { searchTerm.trim().length > 0 && (
               <SearchBarSuggest

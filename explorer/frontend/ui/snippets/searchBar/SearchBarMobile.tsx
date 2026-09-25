@@ -44,12 +44,35 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
   const { searchTerm, debouncedSearchTerm, handleSearchTermChange, query, zetaChainCCTXQuery, externalSearchItem } = useQuickSearchQuery();
   const recentSearchKeywords = getRecentSearchKeywords();
   const resolveSearchRoute = useSearchRedirect();
+  const pendingSearchRef = React.useRef(0);
+
+  const discardPendingSearch = React.useCallback(() => {
+    pendingSearchRef.current++;
+  }, []);
+
+  const handleTermChange = React.useCallback((value: string) => {
+    discardPendingSearch();
+    handleSearchTermChange(value);
+  }, [ discardPendingSearch, handleSearchTermChange ]);
+
+  const handleOpenChange = React.useCallback((details: { open: boolean }) => {
+    if (!details.open) {
+      discardPendingSearch();
+    }
+    onOpenChange(details);
+  }, [ discardPendingSearch, onOpenChange ]);
 
   const navigateToResults = React.useCallback(async(redirect: boolean) => {
     if (searchTerm) {
+      const requestId = ++pendingSearchRef.current;
       const resultRoute = paxeerXFeature.isEnabled ?
         await resolveSearchRoute(searchTerm, redirect) :
         getSearchRedirectRoute(searchTerm, redirect);
+
+      if (requestId !== pendingSearchRef.current) {
+        return;
+      }
+
       const url = route(resultRoute);
       mixpanel.logEvent(mixpanel.EventTypes.SEARCH_QUERY, {
         'Search query': searchTerm,
@@ -79,6 +102,7 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
   }, [ onOpen ]);
 
   const handleItemClick = React.useCallback((event: React.MouseEvent<HTMLAnchorElement>) => {
+    discardPendingSearch();
     onClose();
     mixpanel.logEvent(mixpanel.EventTypes.SEARCH_QUERY, {
       'Search query': searchTerm,
@@ -86,12 +110,12 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
       'Result URL': event.currentTarget.href,
     });
     saveToRecentKeywords(searchTerm);
-  }, [ router.pathname, searchTerm, onClose ]);
+  }, [ discardPendingSearch, router.pathname, searchTerm, onClose ]);
 
   const handleClear = React.useCallback(() => {
-    handleSearchTermChange('');
+    handleTermChange('');
     inputRef.current?.querySelector('input')?.focus();
-  }, [ handleSearchTermChange ]);
+  }, [ handleTermChange ]);
 
   const handleOverlayClick = React.useCallback((event: React.MouseEvent) => {
     event.preventDefault();
@@ -137,7 +161,7 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
   }
 
   return (
-    <DrawerRoot placement="bottom" open={ open } onOpenChange={ onOpenChange } unmountOnExit={ false } lazyMount={ true }>
+    <DrawerRoot placement="bottom" open={ open } onOpenChange={ handleOpenChange } unmountOnExit={ false } lazyMount={ true }>
       <DrawerTrigger asChild>
         { trigger }
       </DrawerTrigger>
@@ -149,14 +173,14 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
         <DrawerBody overflow="hidden" display="flex" flexDirection="column">
           <SearchBarInput
             ref={ inputRef }
-            onChange={ handleSearchTermChange }
+            onChange={ handleTermChange }
             onClear={ handleClear }
             onSubmit={ handleSubmit }
             value={ searchTerm }
             mb={ 5 }
           />
           { searchTerm.trim().length === 0 && recentSearchKeywords.length > 0 && (
-            <SearchBarRecentKeywords onClick={ handleSearchTermChange }/>
+            <SearchBarRecentKeywords onClick={ handleTermChange }/>
           ) }
           { searchTerm.trim().length > 0 && (
             <SearchBarSuggest

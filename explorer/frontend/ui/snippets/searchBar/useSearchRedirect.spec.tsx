@@ -9,9 +9,8 @@ import { renderHook, wrapper } from 'vitest/lib';
 vi.hoisted(() => {
   window.__envs = {
     ...window.__envs,
-    NEXT_PUBLIC_API_HOST: 'localhost',
-    NEXT_PUBLIC_API_PROTOCOL: 'http',
-    NEXT_PUBLIC_API_PORT: '3001',
+    NEXT_PUBLIC_API_HOST: window.location.hostname,
+    NEXT_PUBLIC_API_PROTOCOL: window.location.protocol.replace(':', ''),
   };
 });
 
