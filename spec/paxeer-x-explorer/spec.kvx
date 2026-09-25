@@ -448,7 +448,7 @@ reqs = ["7.1","7.2","7.3","7.4","7.5"]
 
 [task.2.4]
 title = "Declare OpenAPI operations and schemas for the six Paxeer X paths"
-status = "pending"
+status = "done"
 wave = 2
 requires = ["1.1"]
 do_1 = "Add schema modules under explorer/backend/apps/block_scout_web/lib/block_scout_web/schemas/api/v2/paxeer_x/ for the unified account document, the capability probe, the transaction status, the anchors page, the receipts page and the single receipt, built from the general schema helpers the fork already uses for hashes, addresses and nullable strings, and describing exactly what the four Paxeer X views render including nullable fields, the status rung enumeration and the pagination parameters."
@@ -460,6 +460,10 @@ verify_cmd = "timeout 20m sh -c 'explorer/deploy/tools/mix-in-builder.sh test ap
 symbols = ["BlockScoutWeb.API.V2.PaxeerX.UnifiedAccountController","BlockScoutWeb.API.V2.PaxeerX.CapabilitiesController","BlockScoutWeb.API.V2.PaxeerX.TransactionStatusController","BlockScoutWeb.API.V2.PaxeerX.AnchorController","BlockScoutWeb.API.V2.PaxeerX.ReceiptController"]
 touches = ["explorer/backend/apps/block_scout_web/lib/block_scout_web/schemas/api/v2/paxeer_x","explorer/backend/apps/block_scout_web/lib/block_scout_web/controllers/api/v2/paxeer_x","explorer/backend/apps/block_scout_web/lib/block_scout_web/views/api/v2/paxeer_x","explorer/backend/apps/block_scout_web/lib/block_scout_web/specs/public.ex","explorer/backend/apps/block_scout_web/lib/block_scout_web/specs/private.ex","explorer/backend/apps/block_scout_web/test/block_scout_web/controllers/api/v2/paxeer_x"]
 reqs = ["8.1","8.2","8.3","8.4","8.5"]
+done_revision = "48fe90df93f09f9923c19771ebb62d0afeca50d3"
+done_command = "timeout 20m sh -c 'explorer/deploy/tools/mix-in-builder.sh test apps/block_scout_web/test/block_scout_web/controllers/api/v2/paxeer_x'"
+done_exit_code = 0
+done_log = "logs/ex-t2-4.log"
 
 [task.2.5]
 title = "Add the guarantor and deposit-root tables with their runners"
