@@ -5,7 +5,6 @@ import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {BatchCallAndSponsor} from "../src/BatchCallAndSponsor.sol";
-import {IOracle} from "../src/precompiles/IOracle.sol";
 
 contract SidioraFixture is ERC20 {
     constructor() ERC20("Sidiora", "SID") {}
@@ -20,6 +19,7 @@ contract SidioraFixture is ERC20 {
 }
 
 contract BatchCallAndSponsorTest is Test {
+    event RateUpdated(uint256 rate, uint256 updatedAt);
     event Sponsored(address indexed sponsor, address indexed token, uint256 tokenAmount, uint256 quoteNonce);
     event CallExecuted(address indexed sender, address indexed to, uint256 value, bytes data);
     event BatchExecuted(uint256 indexed nonce, BatchCallAndSponsor.Call[] calls);
@@ -31,34 +31,29 @@ contract BatchCallAndSponsorTest is Test {
     uint256 internal sponsorKey;
     address internal sponsor;
     address internal recipient;
-    address internal oracle;
+    uint256 internal constant SID_BASE_UNITS = 10 ** 6;
+    uint256 internal constant PAX_BASE_UNITS = 10 ** 18;
+    uint256 internal constant INITIAL_RATE = 3114 * SID_BASE_UNITS / 1000;
+    uint256 internal constant MAX_RATE_AGE = 300;
 
     function setUp() public {
         (address accountAddress, uint256 key) = makeAddrAndKey("account");
         accountKey = key;
         (sponsor, sponsorKey) = makeAddrAndKey("sponsor");
         recipient = makeAddr("recipient");
-        implementation = new BatchCallAndSponsor();
+        vm.warp(1000);
+        implementation = new BatchCallAndSponsor(address(this), INITIAL_RATE, MAX_RATE_AGE);
         vm.signAndAttachDelegation(address(implementation), accountKey);
         account = BatchCallAndSponsor(payable(accountAddress));
         SidioraFixture tokenImplementation = new SidioraFixture();
         vm.etch(account.SIDIORA(), address(tokenImplementation).code);
         token = SidioraFixture(account.SIDIORA());
         token.mint(address(account), 10_000_000);
-        oracle = account.ORACLE();
-        vm.warp(1000);
-        _rates("1.000000000000000000", "2.000000000000000000", 1000);
-    }
-
-    function _rates(string memory sid, string memory pax, int64 updated) internal {
-        IOracle.DenomOracleExchangeRatePair[] memory rates = new IOracle.DenomOracleExchangeRatePair[](2);
-        rates[0] = IOracle.DenomOracleExchangeRatePair("usid", IOracle.OracleExchangeRate(sid, "10", updated));
-        rates[1] = IOracle.DenomOracleExchangeRatePair("uhpx", IOracle.OracleExchangeRate(pax, "10", updated));
-        vm.mockCall(oracle, abi.encodeCall(IOracle.getExchangeRates, ()), abi.encode(rates));
     }
 
     function _quote() internal view returns (BatchCallAndSponsor.Quote memory) {
-        return BatchCallAndSponsor.Quote(sponsor, address(token), 2_100_000, 2_000_000, 1100, 7, 1 ether);
+        return
+            BatchCallAndSponsor.Quote(sponsor, address(token), INITIAL_RATE * 105 / 100, INITIAL_RATE, 1100, 7, 1 ether);
     }
 
     function _calls() internal view returns (BatchCallAndSponsor.Call[] memory calls) {
@@ -101,12 +96,12 @@ contract BatchCallAndSponsorTest is Test {
         vm.expectEmit(true, true, true, true, address(account));
         emit BatchExecuted(0, calls);
         vm.expectEmit(true, true, true, true, address(account));
-        emit Sponsored(sponsor, address(token), 2_000_000, 7);
+        emit Sponsored(sponsor, address(token), quote.tokenAmount, 7);
         vm.prank(sponsor);
         account.executeSponsored(calls, quote, auth, relayer);
-        assertEq(token.balanceOf(sponsor), 2_000_000);
+        assertEq(token.balanceOf(sponsor), quote.tokenAmount);
         assertEq(token.balanceOf(recipient), 123);
-        assertEq(token.balanceOf(address(account)), 7_999_877);
+        assertEq(token.balanceOf(address(account)), 10_000_000 - quote.tokenAmount - 123);
         assertEq(address(account).balance, 0);
         assertEq(account.nonce(), 1);
         assertTrue(account.usedQuoteNonces(sponsor, 7));
@@ -257,29 +252,28 @@ contract BatchCallAndSponsorTest is Test {
 
     function testOutsideUpperSpread() public {
         BatchCallAndSponsor.Quote memory quote = _quote();
-        quote.maxTokenAmount = 3_000_000;
-        quote.tokenAmount = 2_100_001;
+        quote.tokenAmount = INITIAL_RATE * (10_000 + account.MAX_SPREAD_BPS()) / 10_000 + 1;
+        quote.maxTokenAmount = quote.tokenAmount;
         _refused(quote, BatchCallAndSponsor.QuoteOutsideSpread.selector);
     }
 
     function testOutsideLowerSpread() public {
         BatchCallAndSponsor.Quote memory quote = _quote();
-        quote.tokenAmount = 1_899_999;
+        quote.tokenAmount = INITIAL_RATE * (10_000 - account.MAX_SPREAD_BPS()) / 10_000 - 1;
         _refused(quote, BatchCallAndSponsor.QuoteOutsideSpread.selector);
     }
 
     function testSpreadBoundariesAccepted() public {
         BatchCallAndSponsor.Quote memory quote = _quote();
-        quote.tokenAmount = 1_900_000;
+        quote.tokenAmount = INITIAL_RATE * (10_000 - account.MAX_SPREAD_BPS()) / 10_000;
         _submit(_calls(), quote);
         quote.quoteNonce++;
-        quote.tokenAmount = 2_100_000;
+        quote.tokenAmount = INITIAL_RATE * (10_000 + account.MAX_SPREAD_BPS()) / 10_000;
         _submit(_calls(), quote);
-        assertEq(token.balanceOf(sponsor), 4_000_000);
+        assertEq(token.balanceOf(sponsor), 2 * INITIAL_RATE);
     }
 
     function testSixDecimalConversionRoundsUp() public {
-        _rates("3", "1", 1000);
         BatchCallAndSponsor.Quote memory quote = _quote();
         quote.tokenAmount = 1;
         quote.gasCost = 1;
@@ -287,69 +281,123 @@ contract BatchCallAndSponsorTest is Test {
         assertEq(token.balanceOf(sponsor), 1);
     }
 
-    function testOracleNoRate() public {
-        IOracle.DenomOracleExchangeRatePair[] memory rates = new IOracle.DenomOracleExchangeRatePair[](0);
-        vm.mockCall(oracle, abi.encodeCall(IOracle.getExchangeRates, ()), abi.encode(rates));
-        _refused(_quote(), BatchCallAndSponsor.OracleUnavailable.selector);
+    function testConstructorSetsRateAndConfiguration() public view {
+        assertEq(implementation.owner(), address(this));
+        assertEq(implementation.rateSource(), address(implementation));
+        assertEq(implementation.rate(), INITIAL_RATE);
+        assertEq(implementation.rateUpdatedAt(), block.timestamp);
+        assertEq(implementation.maxRateAge(), MAX_RATE_AGE);
+        assertEq(account.currentRate(), INITIAL_RATE);
     }
 
-    function testOracleAbiSelectorsAndTupleDecoding() public {
-        assertEq(IOracle.getExchangeRates.selector, bytes4(keccak256("getExchangeRates()")));
-        assertEq(IOracle.getOracleTwaps.selector, bytes4(keccak256("getOracleTwaps(uint64)")));
-        IOracle.DenomOracleExchangeRatePair[] memory rates = IOracle(oracle).getExchangeRates();
-        assertEq(rates.length, 2);
-        assertEq(rates[0].denom, "usid");
-        assertEq(rates[0].oracleExchangeRateVal.exchangeRate, "1.000000000000000000");
-        assertEq(rates[0].oracleExchangeRateVal.lastUpdate, "10");
-        assertEq(rates[0].oracleExchangeRateVal.lastUpdateTimestamp, 1000);
-
-        IOracle.OracleTwap[] memory twaps = new IOracle.OracleTwap[](1);
-        twaps[0] = IOracle.OracleTwap("usid", "1.000000000000000000", 300);
-        vm.mockCall(oracle, abi.encodeWithSignature("getOracleTwaps(uint64)", uint64(300)), abi.encode(twaps));
-        IOracle.OracleTwap[] memory decoded = IOracle(oracle).getOracleTwaps(300);
-        assertEq(decoded.length, 1);
-        assertEq(decoded[0].denom, "usid");
-        assertEq(decoded[0].twap, "1.000000000000000000");
-        assertEq(decoded[0].lookbackSeconds, 300);
+    function testConstructorRejectsZeroConfiguration() public {
+        vm.expectRevert(BatchCallAndSponsor.InvalidOwner.selector);
+        new BatchCallAndSponsor(address(0), INITIAL_RATE, MAX_RATE_AGE);
+        vm.expectRevert(BatchCallAndSponsor.InvalidRate.selector);
+        new BatchCallAndSponsor(address(this), 0, MAX_RATE_AGE);
+        vm.expectRevert(BatchCallAndSponsor.InvalidMaxRateAge.selector);
+        new BatchCallAndSponsor(address(this), INITIAL_RATE, 0);
     }
 
-    function testOracleMissingPaxRate() public {
-        IOracle.DenomOracleExchangeRatePair[] memory rates = new IOracle.DenomOracleExchangeRatePair[](1);
-        rates[0] = IOracle.DenomOracleExchangeRatePair("usid", IOracle.OracleExchangeRate("1", "10", 1000));
-        vm.mockCall(oracle, abi.encodeCall(IOracle.getExchangeRates, ()), abi.encode(rates));
-        _refused(_quote(), BatchCallAndSponsor.OracleUnavailable.selector);
+    function testConstructorUsesSuppliedConfiguration() public {
+        BatchCallAndSponsor configured = new BatchCallAndSponsor(sponsor, 2 * SID_BASE_UNITS, 17);
+        assertEq(configured.owner(), sponsor);
+        assertEq(configured.currentRate(), 2 * SID_BASE_UNITS);
+        assertEq(configured.maxRateAge(), 17);
+        vm.warp(block.timestamp + 18);
+        vm.expectRevert(BatchCallAndSponsor.StaleRate.selector);
+        configured.currentRate();
+        vm.prank(sponsor);
+        configured.setRate(INITIAL_RATE);
+        assertEq(configured.currentRate(), INITIAL_RATE);
     }
 
-    function testOracleRetiredRefusesSponsorship() public {
-        vm.mockCallRevert(
-            oracle,
-            abi.encodeCall(IOracle.getExchangeRates, ()),
-            abi.encodeWithSignature("Error(string)", "oracle precompile is retired; oracle data queries are disabled")
-        );
-        _refused(_quote(), BatchCallAndSponsor.OracleUnavailable.selector);
+    function testOwnerRateUpdateEmitsAndChangesAcceptedQuote() public {
+        BatchCallAndSponsor.Quote memory quote = _quote();
+        _submit(_calls(), quote);
+        vm.warp(block.timestamp + 1);
+        uint256 newRate = 2 * SID_BASE_UNITS;
+        vm.expectEmit(true, true, true, true, address(implementation));
+        emit RateUpdated(newRate, block.timestamp);
+        implementation.setRate(newRate);
+        assertEq(implementation.rate(), newRate);
+        assertEq(implementation.rateUpdatedAt(), block.timestamp);
+        assertEq(account.currentRate(), newRate);
+        quote.quoteNonce++;
+        BatchCallAndSponsor.Call[] memory calls = _calls();
+        bytes memory auth = _sign(accountKey, account.sponsoredBatchDigest(calls, quote));
+        bytes memory relayer = _sign(sponsorKey, account.quoteDigest(quote));
+        vm.expectRevert(BatchCallAndSponsor.QuoteOutsideSpread.selector);
+        account.executeSponsored(calls, quote, auth, relayer);
+        assertEq(account.nonce(), 1);
+        assertFalse(account.usedQuoteNonces(sponsor, quote.quoteNonce));
+        quote.tokenAmount = newRate;
+        _submit(calls, quote);
+        assertEq(token.balanceOf(sponsor), INITIAL_RATE + newRate);
     }
 
-    function testStaleRate() public {
-        _rates("1", "2", 699);
-        _refused(_quote(), BatchCallAndSponsor.StaleOracleRate.selector);
+    function testNonOwnerCannotSetRate() public {
+        vm.prank(sponsor);
+        vm.expectRevert(BatchCallAndSponsor.UnauthorizedOwner.selector);
+        implementation.setRate(2 * SID_BASE_UNITS);
+        assertEq(implementation.rate(), INITIAL_RATE);
+        assertEq(implementation.rateUpdatedAt(), 1000);
     }
 
-    function testFutureRate() public {
-        _rates("1", "2", 1001);
-        _refused(_quote(), BatchCallAndSponsor.StaleOracleRate.selector);
+    function testOwnerCannotWriteRateOnDelegatedAccount() public {
+        vm.expectRevert(BatchCallAndSponsor.InvalidRateContext.selector);
+        account.setRate(2 * SID_BASE_UNITS);
+        assertEq(account.currentRate(), INITIAL_RATE);
     }
 
-    function testMissingTimestamp() public {
-        _rates("1", "2", 0);
-        _refused(_quote(), BatchCallAndSponsor.StaleOracleRate.selector);
+    function testZeroRateUpdateRefused() public {
+        vm.warp(block.timestamp + 1);
+        vm.expectRevert(BatchCallAndSponsor.InvalidRate.selector);
+        implementation.setRate(0);
+        assertEq(implementation.rate(), INITIAL_RATE);
+        assertEq(implementation.rateUpdatedAt(), 1000);
     }
 
-    function testInvalidDecimalRates() public {
-        string[8] memory invalid = ["0", "-1", "1.2.3", "1e18", ".1", "1.", "1.0000000000000000001", ""];
-        for (uint256 i; i < invalid.length; i++) {
-            _rates(invalid[i], "2", 1000);
-            _refused(_quote(), BatchCallAndSponsor.InvalidOracleRate.selector);
-        }
+    function testStaleRateRefusesReadAndSponsorship() public {
+        vm.warp(block.timestamp + MAX_RATE_AGE + 1);
+        vm.expectRevert(BatchCallAndSponsor.StaleRate.selector);
+        implementation.currentRate();
+        vm.expectRevert(BatchCallAndSponsor.StaleRate.selector);
+        account.currentRate();
+        BatchCallAndSponsor.Quote memory quote = _quote();
+        quote.deadline = block.timestamp;
+        _refused(quote, BatchCallAndSponsor.StaleRate.selector);
+    }
+
+    function testRateAgeInclusive() public {
+        vm.warp(block.timestamp + MAX_RATE_AGE);
+        BatchCallAndSponsor.Quote memory quote = _quote();
+        quote.deadline = block.timestamp;
+        _submit(_calls(), quote);
+        assertEq(token.balanceOf(sponsor), quote.tokenAmount);
+    }
+
+    function testOwnerRefreshRestoresStaleSponsorship() public {
+        vm.warp(block.timestamp + MAX_RATE_AGE + 1);
+        implementation.setRate(INITIAL_RATE);
+        BatchCallAndSponsor.Quote memory quote = _quote();
+        quote.deadline = block.timestamp;
+        _submit(_calls(), quote);
+        assertEq(token.balanceOf(sponsor), quote.tokenAmount);
+        assertEq(implementation.rateUpdatedAt(), block.timestamp);
+    }
+
+    function testInitialRateArithmeticUsesBothDecimalBases() public {
+        BatchCallAndSponsor.Quote memory quote = _quote();
+        quote.gasCost = PAX_BASE_UNITS / 4 + 1;
+        uint256 numerator = quote.gasCost * 3114 * SID_BASE_UNITS;
+        uint256 denominator = 1000 * PAX_BASE_UNITS;
+        uint256 expected = (numerator + denominator - 1) / denominator;
+        quote.tokenAmount = expected;
+        quote.maxTokenAmount = expected;
+        _submit(_calls(), quote);
+        assertEq(token.balanceOf(sponsor), expected);
+        assertEq(token.balanceOf(address(account)), 10_000_000 - expected - 123);
     }
 
     function testWrongTokenRefused() public {
@@ -370,8 +418,8 @@ contract BatchCallAndSponsorTest is Test {
         _refused(quote, BatchCallAndSponsor.InvalidQuote.selector);
     }
 
-    function testDirectExecuteNeedsNoQuoteOrOracle() public {
-        vm.mockCallRevert(oracle, abi.encodeCall(IOracle.getExchangeRates, ()), "unavailable");
+    function testDirectExecuteNeedsNoQuoteOrFreshRate() public {
+        vm.warp(block.timestamp + MAX_RATE_AGE + 1);
         BatchCallAndSponsor.Call[] memory calls = _calls();
         vm.prank(address(account));
         account.execute(calls);

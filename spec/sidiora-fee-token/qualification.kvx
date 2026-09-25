@@ -296,3 +296,17 @@ file = "observation.1.6.6"
 observed = "Append-only attribution: the SVG import failures checked the test harness published in this source revision; the original exit code remains 1."
 assumption = "This identifies the published source snapshot, not a commit that existed before verification."
 severity = "note"
+
+[observation.1.7.1]
+revision = "12478c28531d6c39ce4f3d941b8960c1efcdfa5c"
+command = "cat precompiles/oracle/oracle.go"; exit_code = 0
+log_path = ".logs/context.log"
+observed = "Requirement 1 acceptance criterion 4 requires the oracle precompile, whose every ABI method returns ErrOraclePrecompileRetired, so executable sponsorship cannot satisfy it."
+assumption = "The authorized owner-set bounded rate replaces sponsored oracle pricing while the requirement remains unchanged, including its related oracle coverage in acceptance criterion 7."
+
+[observation.1.7.2]
+revision = "12478c28531d6c39ce4f3d941b8960c1efcdfa5c"
+command = "FOUNDRY_CONFIG=foundry.paxeer.toml forge build --evm-version=prague contracts/src/BatchCallAndSponsor.sol contracts/test/BatchCallAndSponsorTest.t.sol"; exit_code = 1
+log_path = ".logs/build.log"
+observed = "Foundry resolves forge-std/Test.sol under the absent contracts/lib/forge-std/contracts/src directory, preventing the standalone build from compiling."
+assumption = "The exact verification command requires FOUNDRY_REMAPPINGS pointing forge-std/ to contracts/lib/forge-std/src/ and @openzeppelin/contracts/ to contracts/lib/openzeppelin-contracts/contracts/, with no repository configuration change."

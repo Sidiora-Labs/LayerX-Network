@@ -5,7 +5,6 @@ import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IOracle} from "./precompiles/IOracle.sol";
 
 /**
  * @title BatchCallAndSponsor
@@ -38,10 +37,10 @@ contract BatchCallAndSponsor {
     }
 
     address public constant SIDIORA = 0x21f7b20a555199fa73A238B1a91FD0f549068fEe;
-    address public constant ORACLE = 0x0000000000000000000000000000000000001008;
-    string public constant SID_ORACLE_DENOM = "usid";
-    string public constant PAX_ORACLE_DENOM = "uhpx";
-    uint256 public constant MAX_RATE_AGE = 300;
+    uint256 public constant PAX_BASE_UNITS = 1e18;
+    address public immutable owner;
+    address public immutable rateSource;
+    uint256 public immutable maxRateAge;
     uint256 public constant MAX_SPREAD_BPS = 500;
     bytes32 public constant QUOTE_TYPEHASH = keccak256(
         "Quote(uint256 chainId,address account,address sponsor,address token,uint256 maxTokenAmount,uint256 tokenAmount,uint256 deadline,uint256 quoteNonce,uint256 gasCost)"
@@ -50,6 +49,8 @@ contract BatchCallAndSponsor {
         keccak256("SponsoredBatch(uint256 nonce,bytes32 callsHash,bytes32 quoteDigest)");
 
     mapping(address => mapping(uint256 => bool)) public usedQuoteNonces;
+    uint256 public rate;
+    uint256 public rateUpdatedAt;
 
     error InvalidAccountSignature();
     error InvalidRelayerSignature();
@@ -57,16 +58,49 @@ contract BatchCallAndSponsor {
     error QuoteExpired();
     error QuoteAboveMaximum();
     error QuoteAlreadyUsed();
-    error OracleUnavailable();
-    error InvalidOracleRate();
-    error StaleOracleRate();
+    error UnauthorizedOwner();
+    error InvalidOwner();
+    error InvalidRate();
+    error InvalidMaxRateAge();
+    error InvalidRateContext();
+    error StaleRate();
     error QuoteOutsideSpread();
     error TokenTransferFailed();
 
     event Sponsored(address indexed sponsor, address indexed token, uint256 tokenAmount, uint256 quoteNonce);
 
+    event RateUpdated(uint256 rate, uint256 updatedAt);
+
+    constructor(address initialOwner, uint256 initialRate, uint256 maximumAge) {
+        if (initialOwner == address(0)) revert InvalidOwner();
+        if (initialRate == 0) revert InvalidRate();
+        if (maximumAge == 0) revert InvalidMaxRateAge();
+        owner = initialOwner;
+        rateSource = address(this);
+        maxRateAge = maximumAge;
+        rate = initialRate;
+        rateUpdatedAt = block.timestamp;
+    }
+
+    function setRate(uint256 newRate) external {
+        if (msg.sender != owner) revert UnauthorizedOwner();
+        if (address(this) != rateSource) revert InvalidRateContext();
+        if (newRate == 0) revert InvalidRate();
+        rate = newRate;
+        rateUpdatedAt = block.timestamp;
+        emit RateUpdated(newRate, block.timestamp);
+    }
+
+    function currentRate() public view returns (uint256) {
+        if (address(this) != rateSource) {
+            return BatchCallAndSponsor(payable(rateSource)).currentRate();
+        }
+        if (rate == 0) revert InvalidRate();
+        if (block.timestamp - rateUpdatedAt > maxRateAge) revert StaleRate();
+        return rate;
+    }
+
     /// @notice gasCost is the declared fee in PAX wei; token amounts are SID base units.
-    /// @dev Both oracle denoms carry prices in the same quote currency, as decimal strings.
     function quoteDigest(Quote calldata quote) public view returns (bytes32) {
         return MessageHashUtils.toEthSignedMessageHash(
             keccak256(abi.encode(QUOTE_TYPEHASH, block.chainid, address(this), quote))
@@ -114,61 +148,10 @@ contract BatchCallAndSponsor {
     }
 
     function _checkPrice(Quote calldata quote) internal view {
-        IOracle.DenomOracleExchangeRatePair[] memory rates;
-        try IOracle(ORACLE).getExchangeRates() returns (IOracle.DenomOracleExchangeRatePair[] memory result) {
-            rates = result;
-        } catch {
-            revert OracleUnavailable();
-        }
-        uint256 sidRate;
-        uint256 paxRate;
-        for (uint256 i; i < rates.length; i++) {
-            bytes32 denom = keccak256(bytes(rates[i].denom));
-            if (denom == keccak256(bytes(SID_ORACLE_DENOM))) {
-                if (sidRate != 0) revert InvalidOracleRate();
-                sidRate = _readRate(rates[i].oracleExchangeRateVal);
-            } else if (denom == keccak256(bytes(PAX_ORACLE_DENOM))) {
-                if (paxRate != 0) revert InvalidOracleRate();
-                paxRate = _readRate(rates[i].oracleExchangeRateVal);
-            }
-        }
-        if (sidRate == 0 || paxRate == 0) revert OracleUnavailable();
-        uint256 sidWei = Math.mulDiv(quote.gasCost, paxRate, sidRate, Math.Rounding.Ceil);
-        uint256 expected = Math.ceilDiv(sidWei, 1e12);
+        uint256 expected = Math.mulDiv(quote.gasCost, currentRate(), PAX_BASE_UNITS, Math.Rounding.Ceil);
         uint256 lower = Math.mulDiv(expected, 10_000 - MAX_SPREAD_BPS, 10_000, Math.Rounding.Ceil);
         uint256 upper = Math.mulDiv(expected, 10_000 + MAX_SPREAD_BPS, 10_000);
         if (quote.tokenAmount < lower || quote.tokenAmount > upper) revert QuoteOutsideSpread();
-    }
-
-    function _readRate(IOracle.OracleExchangeRate memory rate) internal view returns (uint256) {
-        if (
-            rate.lastUpdateTimestamp <= 0 || uint256(uint64(rate.lastUpdateTimestamp)) > block.timestamp
-                || block.timestamp - uint256(uint64(rate.lastUpdateTimestamp)) > MAX_RATE_AGE
-        ) {
-            revert StaleOracleRate();
-        }
-        bytes memory raw = bytes(rate.exchangeRate);
-        uint256 value;
-        uint256 decimals;
-        bool dot;
-        if (raw.length == 0 || raw[0] == bytes1(".") || raw[raw.length - 1] == bytes1(".")) {
-            revert InvalidOracleRate();
-        }
-        for (uint256 i; i < raw.length; i++) {
-            if (raw[i] == bytes1(".") && !dot) {
-                dot = true;
-                continue;
-            }
-            uint8 digit = uint8(raw[i]);
-            if (digit < 48 || digit > 57 || (dot && ++decimals > 18) || value > (type(uint256).max - (digit - 48)) / 10)
-            {
-                revert InvalidOracleRate();
-            }
-            value = value * 10 + digit - 48;
-        }
-        uint256 scale = 10 ** (18 - decimals);
-        if (value == 0 || value > type(uint256).max / scale) revert InvalidOracleRate();
-        return value * scale;
     }
 
     /// @notice Emitted for every individual call executed.
