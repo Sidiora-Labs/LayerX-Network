@@ -41,7 +41,9 @@ die() {
 
 # Runs one mix invocation through the builder, streams its output and keeps a
 # copy in the log directory. The pipeline hides the mix exit code from the
-# shell, so the command writes it to a file the caller reads back.
+# shell, so the command writes it to a file the caller reads back. The
+# invocation is guarded by || so a failing check records its status instead of
+# tripping set -e inside the pipeline's subshell.
 run_check() {
   name=$1
   shift
@@ -52,8 +54,9 @@ run_check() {
   log "running mix $*"
   rm -f "$status_file"
   {
-    "$runner" "$@" 2>&1
-    printf '%s' "$?" >"$status_file"
+    check_status=0
+    "$runner" "$@" 2>&1 || check_status=$?
+    printf '%s' "$check_status" >"$status_file"
   } | tee "$check_log"
 
   [ -f "$status_file" ] || die "the $name check left no exit code in $status_file"

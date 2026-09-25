@@ -40,11 +40,28 @@ defmodule EthereumJSONRPC.HTTP.ThrottleTest.CountingTransport do
 
     enter(kind, request_ids(decoded))
 
-    options |> Keyword.get(:test_delay, 25) |> Process.sleep()
+    hold(options)
 
     leave(kind)
 
     {:ok, %{body: Jason.encode!(response(decoded)), status_code: 200}}
+  end
+
+  # Holds the request either for a fixed time or until the test releases it by
+  # reference, so a test that needs a request in flight while it arranges the
+  # next ones does not depend on the arranging finishing inside a delay.
+  defp hold(options) do
+    case Keyword.fetch(options, :test_release) do
+      {:ok, reference} ->
+        receive do
+          {:release, ^reference} -> :ok
+        after
+          30_000 -> raise "the release signal #{inspect(reference)} never arrived"
+        end
+
+      :error ->
+        options |> Keyword.get(:test_delay, 25) |> Process.sleep()
+    end
   end
 
   defp kind(payload) when is_list(payload), do: :batch
@@ -298,7 +315,8 @@ defmodule EthereumJSONRPC.HTTP.ThrottleTest do
         coalesce?: false
       )
 
-      holder = Task.async(fn -> block_request(1, test_delay: 500) end)
+      release = make_ref()
+      holder = Task.async(fn -> block_request(1, test_release: release) end)
       wait_until(fn -> Throttle.stats(@url).inflight_total == 1 end)
 
       queued =
@@ -309,6 +327,8 @@ defmodule EthereumJSONRPC.HTTP.ThrottleTest do
 
           task
         end)
+
+      send(holder.pid, {:release, release})
 
       assert {:ok, "0x1"} = Task.await(holder, 30_000)
       assert Enum.all?(Task.await_many(queued, 30_000), &match?({:ok, "0x1"}, &1))
