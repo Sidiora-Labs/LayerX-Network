@@ -51,15 +51,21 @@ explorer/deploy/tools/mix-in-builder.sh test apps/explorer/test/explorer
 It mounts `apps`, `config`, `rel`, `mix.exs`, `mix.lock` and `.formatter.exs`
 into the container, keeps the compiled artefacts in a named volume so a rerun
 does not recompile the dependencies, starts a disposable PostgreSQL 16 sidecar
-and joins the mix container to its network namespace so the database answers on
-localhost, installs the headless browser driver when the run reaches
-`block_scout_web`, prints the command it resolved, and exits with the mix exit
-code. The sidecar and its volume are removed when the command finishes and when
-it is interrupted.
+and joins the mix container to its network namespace so both reach the database
+over the same loopback interface, waits until the database accepts a connection
+over that interface, installs the headless browser driver when the run reaches
+`block_scout_web`, prints the command it resolved with the database password
+redacted, and exits with the mix exit code. The sidecar and its volume are
+removed when the command finishes and when it is interrupted.
 
 The builder image is built on demand from
 `deploy/tools/Dockerfile.elixir-builder`, which pins the Elixir and Erlang
-versions the explorer build workflow uses, whenever its reference is absent.
+versions the explorer build workflow uses. The script labels the image it
+builds with the digest of that Dockerfile, `mix.lock` and the application
+manifests, and builds again when the image is absent or when one of those
+inputs has moved since, so a stale image is never reused. An image the script
+did not build - one named with `--image`, say - carries no such digest, and the
+script reports that it cannot tell rather than building over it.
 
 Options come before the mix arguments; `--` ends them.
 

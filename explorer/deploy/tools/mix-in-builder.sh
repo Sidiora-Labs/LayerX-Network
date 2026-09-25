@@ -22,6 +22,12 @@ readonly DATABASE_IMAGE='postgres:16'
 readonly CONTAINER_WORKDIR='/app'
 readonly MIX_HOME_IN_IMAGE='/opt/mix'
 readonly DATABASE_READY_ATTEMPTS=60
+# The label that carries the digest of the inputs an image was built from.
+readonly IMAGE_INPUT_LABEL='mix-in-builder.inputs'
+# The loopback name apps/explorer/config/test.exs connects to. The sidecar and
+# the mix container share one network namespace, so the readiness probe and the
+# application reach the database the same way.
+readonly DATABASE_PROBE_HOST='localhost'
 
 # Runs inside the builder container. The block_scout_web test helper starts
 # Wallaby unconditionally, so a run that reaches that application needs the
@@ -106,9 +112,14 @@ Environment
 USAGE
 }
 
-# Print an argument list the way a shell would accept it back.
+# Print an argument list the way a shell would accept it back, with the
+# database password replaced: the command is printed on every run, and a caller
+# who supplies a real password should not find it in a captured log.
 print_command() {
   for argument in "$@"; do
+    case $argument in
+      PGPASSWORD=*) argument='PGPASSWORD=<redacted>' ;;
+    esac
     case $argument in
       '' | *[!A-Za-z0-9_@%+=:,./-]*)
         printf " '%s'" "$(printf '%s' "$argument" | sed "s/'/'\\\\''/g")"
@@ -182,14 +193,79 @@ ensure_mounts() {
   done
 }
 
-ensure_image() {
-  if docker image inspect "$image" >/dev/null 2>&1; then
+# Everything the builder image is built from. The digest goes on the image as a
+# label, so a later run can tell a current image from one built before the lock
+# file, an application manifest or the Dockerfile moved.
+image_input_digest() {
+  command -v sha256sum >/dev/null 2>&1 || die 'sha256sum is not on PATH'
+
+  {
+    cat "$dockerfile" "$backend_dir/mix.exs" "$backend_dir/mix.lock"
+    for manifest in "$backend_dir"/apps/*/mix.exs; do
+      printf '%s\n' "${manifest#"$backend_dir"/}"
+      cat "$manifest"
+    done
+  } | sha256sum | cut -d ' ' -f 1
+}
+
+# absent, current, stale or unlabelled. An unlabelled image was built by
+# something other than this script - a published image named with --image, for
+# instance - so the script says what it cannot tell instead of building over it.
+image_state() {
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    printf 'absent'
     return 0
   fi
 
-  [ -f "$dockerfile" ] || die "builder image $image is absent and $dockerfile does not exist"
-  log "builder image $image is absent, building it from ${dockerfile#"$repo_root"/}"
-  docker build --file "$dockerfile" --tag "$image" "$backend_dir" >&2
+  recorded=$(docker image inspect --format "{{index .Config.Labels \"$IMAGE_INPUT_LABEL\"}}" "$image" 2>/dev/null || true)
+  case $recorded in
+    '' | '<no value>') printf 'unlabelled' ;;
+    "$(image_input_digest)") printf 'current' ;;
+    *) printf 'stale' ;;
+  esac
+}
+
+ensure_image() {
+  case $(image_state) in
+    current)
+      return 0
+      ;;
+    unlabelled)
+      log "the builder image $image carries no input digest, so this run cannot tell whether it matches the current Dockerfile, lock file and application manifests"
+      return 0
+      ;;
+    absent)
+      [ -f "$dockerfile" ] || die "the builder image $image is absent and $dockerfile does not exist"
+      log "the builder image $image is absent, building it from ${dockerfile#"$repo_root"/}"
+      ;;
+    stale)
+      [ -f "$dockerfile" ] || die "the builder image $image was built from other inputs and $dockerfile does not exist"
+      log "the builder image $image was built from other inputs, rebuilding it from ${dockerfile#"$repo_root"/}"
+      ;;
+  esac
+
+  docker build \
+    --file "$dockerfile" \
+    --tag "$image" \
+    --label "$IMAGE_INPUT_LABEL=$(image_input_digest)" \
+    "$backend_dir" >&2
+}
+
+# The database is ready once it accepts a connection over the transport the mix
+# container uses. A socket probe is not enough: while it initialises, the
+# PostgreSQL image runs a temporary server that answers on its socket and
+# accepts nothing over the network.
+wait_for_database() {
+  attempt=0
+  until docker exec "$database_container" \
+    pg_isready --quiet --host "$DATABASE_PROBE_HOST" --username "$pguser" >/dev/null 2>&1; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge "$DATABASE_READY_ATTEMPTS" ]; then
+      die "the database sidecar $database_container did not become ready"
+    fi
+    sleep 1
+  done
+  log "the database sidecar $database_container is ready"
 }
 
 start_sidecar() {
@@ -199,32 +275,23 @@ start_sidecar() {
     fi
     sidecar_started=1
     log "reusing the database sidecar $database_container"
-    return 0
+  else
+    docker rm --force --volumes "$database_container" >/dev/null 2>&1 || true
+    docker run \
+      --detach \
+      --name "$database_container" \
+      --env POSTGRES_USER="$pguser" \
+      --env POSTGRES_PASSWORD="$pgpassword" \
+      "$DATABASE_IMAGE" \
+      postgres \
+      -c fsync=off \
+      -c synchronous_commit=off \
+      -c full_page_writes=off \
+      -c max_connections=200 >/dev/null
+    sidecar_started=1
   fi
 
-  docker rm --force --volumes "$database_container" >/dev/null 2>&1 || true
-  docker run \
-    --detach \
-    --name "$database_container" \
-    --env POSTGRES_USER="$pguser" \
-    --env POSTGRES_PASSWORD="$pgpassword" \
-    "$DATABASE_IMAGE" \
-    postgres \
-    -c fsync=off \
-    -c synchronous_commit=off \
-    -c full_page_writes=off \
-    -c max_connections=200 >/dev/null
-  sidecar_started=1
-
-  attempt=0
-  until docker exec "$database_container" pg_isready --quiet --username "$pguser" >/dev/null 2>&1; do
-    attempt=$((attempt + 1))
-    if [ "$attempt" -ge "$DATABASE_READY_ATTEMPTS" ]; then
-      die "the database sidecar $database_container did not become ready"
-    fi
-    sleep 1
-  done
-  log "the database sidecar $database_container is ready"
+  wait_for_database
 }
 
 # Builds the docker invocation around the mix arguments, then either prints it
@@ -316,13 +383,22 @@ ensure_runtime
 ensure_mounts
 
 if [ "$check_only" -eq 1 ]; then
-  if docker image inspect "$image" >/dev/null 2>&1; then
-    log "the builder image $image resolves"
-  elif [ -f "$dockerfile" ]; then
-    log "the builder image $image is absent, it would be built from ${dockerfile#"$repo_root"/}"
-  else
-    die "the builder image $image is absent and $dockerfile does not exist"
-  fi
+  case $(image_state) in
+    current)
+      log "the builder image $image resolves and matches the inputs it was built from"
+      ;;
+    unlabelled)
+      log "the builder image $image resolves but carries no input digest, so this run cannot tell whether it matches the current Dockerfile, lock file and application manifests"
+      ;;
+    absent)
+      [ -f "$dockerfile" ] || die "the builder image $image is absent and $dockerfile does not exist"
+      log "the builder image $image is absent, it would be built from ${dockerfile#"$repo_root"/}"
+      ;;
+    stale)
+      [ -f "$dockerfile" ] || die "the builder image $image was built from other inputs and $dockerfile does not exist"
+      log "the builder image $image was built from other inputs, it would be rebuilt from ${dockerfile#"$repo_root"/}"
+      ;;
+  esac
   log "every mount source resolves, build volume $build_volume, sidecar $database_container"
   mix_in_container print "$@"
   exit 0
