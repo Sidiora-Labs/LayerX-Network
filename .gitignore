@@ -40,7 +40,7 @@
 /crash-*
 !programs/vendor/**
 node_modules/
-target/
+/target/
 # Runtime state and logs
 /.logs/
 *.log
