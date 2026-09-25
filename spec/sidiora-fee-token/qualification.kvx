@@ -228,3 +228,43 @@ symbol = "GenesisState.Validate"
 observed = "Review comment 4107758215 identifies the Sidiora genesis export/import conflict already recorded in observation.2.1.1; the validator is outside task 2.2 touches."
 assumption = "The recorded conflict requires separately authorized validator work; it is not reinvestigated here and the existing validation remains intact."
 severity = "blocker"
+
+[observation.1.6.1]
+revision = "17c8ed319f18cbe5a003614c4ee082c2c3c0b122"
+command = "cortex_guard"
+exit_code = 127
+log_path = ".logs/guard.log"
+observed = "The required guard executable is unavailable."
+assumption = "The explicitly authorized branch publication remains subject to the written hard-rule self-check."
+
+[observation.1.6.2]
+revision = "17c8ed319f18cbe5a003614c4ee082c2c3c0b122"
+command = "HUSKY=0 yarn install --frozen-lockfile --cache-folder /root/lx-lanes/sid-t1-6/.yarn-cache"
+exit_code = 130
+log_path = "/root/lx-lanes/sid-t1-6/.logs/install.log"
+observed = "The dependency install remained in linking until interrupted at the qualification limit; lint, compilation and verify_cmd did not run."
+assumption = "Qualification requires a completed dependency install in a fresh qualification window."
+
+[observation.1.6.3]
+revision = "17c8ed319f18cbe5a003614c4ee082c2c3c0b122"
+command = "git add -A"
+exit_code = 128
+log_path = ".logs/publish.log"
+observed = "Publication could not create the worktree index lock because the shared Git metadata is read-only."
+assumption = "Publication requires writable Git metadata; no commit, push or pull request was created."
+
+[observation.1.6.4]
+revision = "pending"
+command = "timeout 20m sh -c 'cd explorer/frontend && HUSKY=0 yarn install --frozen-lockfile && yarn lint:tsc && yarn test:vitest run ui/shared/tx ui/tx/details'"
+exit_code = 134
+log_path = "/root/lx-lanes/sid-t1-6/.logs/verify-attempt-1.log"
+observed = "TypeScript compilation exhausted the default 2 GB Node heap before the focused tests ran."
+assumption = "The repair cycle supplies a 4 GB Node heap without changing the command or checks."
+
+[observation.1.6.5]
+revision = "pending"
+command = "timeout 20m sh -c 'cd explorer/frontend && HUSKY=0 yarn install --frozen-lockfile && yarn lint:tsc && yarn test:vitest run ui/shared/tx ui/tx/details'"
+exit_code = 1
+log_path = "/root/lx-lanes/sid-t1-6/.logs/verify.log"
+observed = "Compilation passed with a 4 GB Node heap; 16 focused tests failed because jsdom lacks window.matchMedia, while five tests passed."
+assumption = "Qualification requires a real media-query implementation or browser test environment; no stub or weakened assertion was added."

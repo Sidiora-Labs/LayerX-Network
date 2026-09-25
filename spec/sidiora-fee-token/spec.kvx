@@ -297,7 +297,11 @@ reqs = ["3.3","3.4","3.5"]
 
 [task.1.6]
 title = "Render a Sidiora fee as Sidiora in the explorer"
-status = "pending"
+status = "implemented"
+revision = "pending"
+command = "timeout 20m sh -c 'cd explorer/frontend && HUSKY=0 yarn install --frozen-lockfile && yarn lint:tsc && yarn test:vitest run ui/shared/tx ui/tx/details'"
+exit_code = 1
+log_path = "/root/lx-lanes/sid-t1-6/.logs/verify.log"
 wave = 1
 requires = []
 do_1 = "In explorer/frontend/types/api/transaction.ts declare the fee token's symbol and decimals as optional fields of the fee payload, so their absence means the network coin and a chain that pays only in the network coin is unchanged."

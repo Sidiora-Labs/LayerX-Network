@@ -2,6 +2,7 @@ import type { BoxProps } from '@chakra-ui/react';
 import { chakra } from '@chakra-ui/react';
 import React from 'react';
 
+import type { TokenInfo } from 'types/api/token';
 import type { Transaction, WrappedTransactionFields } from 'types/api/transaction';
 
 import config from 'configs/app';
@@ -20,7 +21,29 @@ interface Props extends BoxProps {
   layout?: 'horizontal' | 'vertical';
 }
 
+export const isNonNativeFeeToken = (token: Transaction['fee']['token']): token is TokenInfo => {
+  return Boolean(token?.symbol && token.decimals != null && (
+    token.symbol !== config.chain.currency.symbol || Number(token.decimals) !== config.chain.currency.decimals
+  ));
+};
+
 const TxFee = ({ tx, accuracy, accuracyUsd, loading, noSymbol: noSymbolProp, noUsd, noTooltip, hasExchangeRateToggle, ...rest }: Props) => {
+
+  if (isNonNativeFeeToken(tx.fee.token)) {
+    return (
+      <TokenValue
+        amount={ tx.fee.value || '0' }
+        token={ tx.fee.token }
+        exchangeRate={ noUsd ? null : tx.fee.token.exchange_rate }
+        accuracy={ accuracy }
+        accuracyUsd={ accuracyUsd }
+        loading={ loading }
+        noTooltip={ noTooltip }
+        endElement={ noSymbolProp || config.UI.views.tx.hiddenFields?.fee_currency ? '' : undefined }
+        { ...rest }
+      />
+    );
+  }
 
   if ('celo' in tx && tx.celo?.gas_token) {
     return (

@@ -36,7 +36,9 @@ export type Transaction = {
   confirmation_duration: Array<number> | null;
   from: AddressParam;
   value: string;
-  fee: Fee;
+  fee: Fee & {
+    token?: Omit<TokenInfo, 'symbol' | 'decimals'> & Partial<Pick<TokenInfo, 'symbol' | 'decimals'>>;
+  };
   gas_price: string | null;
   type: number | null;
   gas_used: string | null;

@@ -6,7 +6,7 @@ import type { Transaction } from 'types/api/transaction';
 import config from 'configs/app';
 import * as DetailedInfo from 'ui/shared/DetailedInfo/DetailedInfo';
 import * as DetailedInfoItemBreakdown from 'ui/shared/DetailedInfo/DetailedInfoItemBreakdown';
-import TxFee from 'ui/shared/tx/TxFee';
+import TxFee, { isNonNativeFeeToken } from 'ui/shared/tx/TxFee';
 import NativeCoinValue from 'ui/shared/value/NativeCoinValue';
 
 interface Props {
@@ -21,7 +21,7 @@ const TxDetailsTxFee = ({ isLoading, data }: Props) => {
   }
 
   const content = (() => {
-    if (!config.UI.views.tx.groupedFees) {
+    if (!config.UI.views.tx.groupedFees || isNonNativeFeeToken(data.fee.token)) {
       return (
         <TxFee
           tx={ data }
