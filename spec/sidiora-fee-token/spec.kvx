@@ -61,7 +61,7 @@ story = "As someone who holds Sidiora and no Paxeer coin, I want to sign a batch
 ac_1 = "THE sponsored batch contract SHALL execute a batch only when it carries both the account's authorisation over the batch and a relayer quote signed by the relayer named in that quote, and SHALL revert when either signature is absent, recovers to a different address, or covers different bytes."
 ac_2 = "THE quote SHALL carry the sponsor address, the Sidiora token address, the maximum Sidiora amount the account will pay, the quoted amount, a deadline and a quote nonce, and the contract SHALL revert when the block timestamp is past the deadline, when the quoted amount exceeds the maximum, or when the quote nonce has already been consumed."
 ac_3 = "THE contract SHALL transfer the quoted Sidiora amount from the account to the sponsor inside the same batch execution, before or after the batch calls as the ordering the contract documents requires, and SHALL revert the whole batch when that transfer fails, so a batch that executes and a sponsor that is repaid are the same event."
-ac_4 = "THE quoted amount SHALL be checked against the paymaster's owner-set Sidiora rate and the staleness bound that rate carries, and a quote whose implied rate lies outside the contract's declared spread from that rate SHALL be rejected; a rate the paymaster holds no longer than its staleness bound allows SHALL reject the quote rather than skip the check."
+ac_4 = "THE quoted amount SHALL be checked against the paymaster's owner-set Sidiora rate and the staleness bound that rate carries, and a quote whose implied rate lies outside the contract's declared spread from that rate SHALL be rejected; a rate the paymaster has held longer than its staleness bound allows SHALL reject the quote rather than skip the check."
 ac_5 = "THE batch nonce SHALL keep protecting the account's authorisation against replay exactly as it does now, and the quote nonce SHALL protect the relayer's quote against replay independently, so replaying either half alone reverts."
 ac_6 = "THE direct execution path, which the account itself calls with no signature, SHALL keep working and SHALL require no quote, and the contract SHALL keep receiving the network coin."
 ac_7 = "A Foundry test SHALL cover a successful sponsored batch with the sponsor repaid, a missing and a wrong account signature, a missing and a wrong relayer signature, an expired deadline, a quoted amount above the maximum, a replayed quote nonce, a replayed batch nonce, a failing Sidiora transfer reverting the whole batch, a quote outside the oracle spread, an oracle that reports no rate, and the direct execution path."
@@ -441,10 +441,10 @@ reqs = ["9.1","9.2","9.3","9.4","9.5"]
 [task.2.6]
 title = "Debit and refund gas in the account's fee denom at a governed rate"
 status = "done"
-revision = "6f94592c82abf9d6ca665cf8e8b98e606c945d37"
+revision = "pending"
 command = "timeout 20m sh -c 'go test -count=1 ./modules/evm/ante/...'"
 exit_code = 0
-log_path = "/root/lx-lanes/sid-t2-6b/.logs/verify.log"
+log_path = "/root/lx-lanes/sid-t2-6b/.logs/verify-review.log"
 wave = 2
 requires = ["2.4","2.5","2.12"]
 do_1 = "In modules/evm/ante/fee.go, inside EVMFeeCheckDecorator.AnteHandle and after the existing fee cap, minimum fee, tip cap and blob fee cap checks have run unchanged, read the sender's fee denom through the x/evm keeper; when the fee-token path is on and that denom is an allowed fee denom, convert the transaction's maximum fee from Paxeer terms into that denom through GetFeeTokenRate before geth's BuyGas runs, and debit that denom."

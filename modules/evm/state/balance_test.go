@@ -134,17 +134,26 @@ func TestFeeTokenBalanceMovements(t *testing.T) {
 	charge := &state.FeeTokenCharge{Payer: evmAddr, Denom: "usid", Rate: sdk.NewDec(2_000_000)}
 	db.SetFeeTokenCharge(charge, false)
 	require.Equal(t, uint256.NewInt(6_000_000_000_000_000_000), db.GetBalance(evmAddr))
+	before := k.BankKeeper().GetBalance(db.Ctx(), payer, "usid").Amount
 	db.SubBalance(evmAddr, uint256.NewInt(1_000_000_000_000_000_001), tracing.BalanceDecreaseGasBuy)
 	require.NoError(t, db.Error())
-	require.Equal(t, sdk.NewInt(7_999_999), k.BankKeeper().GetBalance(db.Ctx(), payer, "usid").Amount)
+	afterDebit := k.BankKeeper().GetBalance(db.Ctx(), payer, "usid").Amount
+	require.Equal(t, sdk.NewInt(7_999_999), afterDebit)
+	debited := before.Sub(afterDebit)
+	require.Equal(t, sdk.NewInt(2_000_001), debited)
 	require.Equal(t, uint256.NewInt(1_000_000_000_000_000_000), db.GetBalance(evmAddr))
 	db.AddBalance(evmAddr, uint256.NewInt(500_000_000_000_000_001), tracing.BalanceIncreaseGasReturn)
-	require.Equal(t, sdk.NewInt(9_000_000), k.BankKeeper().GetBalance(db.Ctx(), payer, "usid").Amount)
+	afterRefund := k.BankKeeper().GetBalance(db.Ctx(), payer, "usid").Amount
+	require.Equal(t, sdk.NewInt(9_000_000), afterRefund)
+	refunded := afterRefund.Sub(afterDebit)
+	require.Equal(t, sdk.NewInt(1_000_001), refunded)
 	coinbase, err := k.GetFeeCollectorAddress(ctx)
 	require.NoError(t, err)
 	db.AddBalance(coinbase, uint256.NewInt(500_000_000_000_000_001), tracing.BalanceIncreaseRewardTransactionFee)
 	require.NoError(t, db.Error())
-	require.Equal(t, sdk.NewInt(1_000_001), k.BankKeeper().GetBalance(db.Ctx(), state.GetCoinbaseAddress(ctx.TxIndex()), "usid").Amount)
+	rewarded := k.BankKeeper().GetBalance(db.Ctx(), state.GetCoinbaseAddress(ctx.TxIndex()), "usid").Amount
+	require.Equal(t, sdk.NewInt(1_000_000), rewarded)
+	require.True(t, refunded.Add(rewarded).LTE(debited))
 	require.Equal(t, uint256.NewInt(1_000_000_000_000_000_000), db.GetBalance(evmAddr))
 	surplus, err := db.Finalize()
 	require.NoError(t, err)
