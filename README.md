@@ -1,16 +1,41 @@
-<p align="center"><img src="layerx-network.png" alt="Paxeer X Network" width="720"></p>
+<p align="center"><img src="https://supabase.paxeer.app/storage/v1/object/public/json/Tiny%20worker%20on%20a%20floating%20moss%20island.png" alt="Paxeer X Network" width="1540"></p>
 
 <h1 align="center">Paxeer X Network</h1>
 
-Paxeer X Network — one network: the Paxeer EVM chain and the LayerX agent-native domain behind one interface.
-
+<h1 align="center">
+  
 English · [Español](docs/readme/README.es.md) · [日本語](docs/readme/README.ja.md) · [Русский](docs/readme/README.ru.md) · [简体中文](docs/readme/README.zh-CN.md) · [Português](docs/readme/README.pt-BR.md) · [Deutsch](docs/readme/README.de.md) · [Français](docs/readme/README.fr.md)
+  
+</h1>
+<p align="center">
+  <!-- ═══ Network Identity ═══ -->
+  <img src="https://img.shields.io/badge/Paxeer%20X-Network-6C3BFF?style=for-the-badge" alt="Paxeer X Network" />
+  <img src="https://img.shields.io/badge/Chain%20ID-125%20(0x7D)-1F6FEB?style=for-the-badge&logo=chainlink&logoColor=white" alt="Chain ID 125" />
+  <img src="https://img.shields.io/badge/EVM-Compatible-3C3C3D?style=for-the-badge&logo=ethereum&logoColor=white" alt="EVM Compatible" />
+  <a href="https://github.com/Sidiora-Labs/LayerX-Protocol">
+    <img src="https://img.shields.io/badge/LayerX-Settlement%20Layer-FF6B00?style=for-the-badge&logo=databricks&logoColor=white" alt="LayerX" />
+  </a>
+  <img src="https://img.shields.io/badge/Solidity-Smart%20Contracts-363636?style=for-the-badge&logo=solidity&logoColor=white" alt="Solidity" />
+</p>
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![CI](https://github.com/Sidiora-Labs/Paxeer-X-Network/actions/workflows/ci.yml/badge.svg)](.github/workflows/ci.yml)
+<p align="center">
+  <!-- ═══ Language Stack ═══ -->
+  <img src="https://img.shields.io/badge/C-00599C?style=for-the-badge&logo=c&logoColor=white" alt="C" />
+  <img src="https://img.shields.io/badge/Rust-CE422B?style=for-the-badge&logo=rust&logoColor=white" alt="Rust" />
+  <img src="https://img.shields.io/badge/Go-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go" />
+  <img src="https://img.shields.io/badge/WebAssembly-654FF0?style=for-the-badge&logo=webassembly&logoColor=white" alt="WebAssembly" />
+  <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
+</p>
+
+<p align="center">
+  <!-- ═══ Repo Health (dynamic — requires public repo) ═══ -->
+  <img src="https://img.shields.io/github/actions/workflow/status/Sidiora-Labs/paxeer-x-network/ci.yml?style=for-the-badge&logo=githubactions&logoColor=white&label=CI" alt="CI" />
+  <img src="https://img.shields.io/github/license/Sidiora-Labs/paxeer-x-network?style=for-the-badge" alt="License" />
+  <img src="https://img.shields.io/github/last-commit/Sidiora-Labs/paxeer-x-network?style=for-the-badge&logo=git&logoColor=white" alt="Last Commit" />
+  <img src="https://img.shields.io/github/stars/Sidiora-Labs/paxeer-x-network?style=for-the-badge&logo=github" alt="Stars" />
+</p>
 
 ## What Paxeer X Network is
-
 Paxeer X Network is a deterministic execution and accounting network for autonomous agents. Every state-changing operation enters as a signed, canonically encoded `Activity`. The protocol verifies the actor and its authority, consumes the account sequence, orders the activity on one global sequence, applies a deterministic state transition, and returns a signed receipt tied to the resulting state root.
 
 The append-only activity log is the authority. Database indexes are disposable projections and can be rebuilt by replaying that log. Consensus-critical execution excludes floating point, local clock decisions, database iteration order, and other sources of nondeterminism. `402LXP` is the only component allowed to write balances. Protocol modules emit validated transfer sets rather than mutating funds themselves.
