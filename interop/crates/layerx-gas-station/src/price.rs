@@ -74,7 +74,7 @@ fn abi_offset(bytes: &[u8], start: usize) -> Result<usize, PriceError> {
     usize::try_from(u64::from_be_bytes(value)).map_err(|_| PriceError::Malformed)
 }
 fn offset(base: usize, relative: usize) -> Result<usize, PriceError> {
-    if relative % 32 != 0 {
+    if !relative.is_multiple_of(32) {
         return Err(PriceError::Malformed);
     }
     base.checked_add(relative).ok_or(PriceError::Malformed)
@@ -91,7 +91,7 @@ fn abi_string(bytes: &[u8], base: usize, head: usize) -> Result<String, PriceErr
 /// # Errors
 /// Refuses invalid ABI offsets, lengths, strings and signed timestamps.
 pub fn decode_exchange_rates(bytes: &[u8]) -> Result<Vec<OracleRate>, PriceError> {
-    if bytes.len() > 1_048_576 || bytes.len() % 32 != 0 || abi_offset(bytes, 0)? != 32 {
+    if bytes.len() > 1_048_576 || !bytes.len().is_multiple_of(32) || abi_offset(bytes, 0)? != 32 {
         return Err(PriceError::Malformed);
     }
     let count = abi_offset(bytes, 32)?;
@@ -177,7 +177,7 @@ fn rate(rates: &[OracleRate], denom: &str, now: u64, max_age: u64) -> Result<u12
 
 fn ceil_div(value: u128, divisor: u128) -> Result<u128, PriceError> {
     (value / divisor)
-        .checked_add(u128::from(value % divisor != 0))
+        .checked_add(u128::from(!value.is_multiple_of(divisor)))
         .ok_or(PriceError::Overflow)
 }
 
@@ -322,7 +322,7 @@ pub(crate) mod tests {
         bad[64] = 255;
         assert_eq!(decode_exchange_rates(&bad), Err(PriceError::Malformed));
         let abi: serde_json::Value =
-            serde_json::from_str(include_str!("../../../../../precompiles/oracle/abi.json"))
+            serde_json::from_str(include_str!("../../../../precompiles/oracle/abi.json"))
                 .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(abi[0]["name"], "getExchangeRates");
         assert_eq!(abi[0]["inputs"].as_array().map(Vec::len), Some(0));

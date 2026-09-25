@@ -202,8 +202,8 @@ pub(crate) mod tests {
             "paymaster":"0x4444444444444444444444444444444444444444",
             "token":"0x21f7b20a555199fa73A238B1a91FD0f549068fEe","decimals":6,
             "sid_denom":"usid","pax_denom":"uhpx","max_rate_age":300,"spread_bps":500,
-            "margin_bps":100,"per_account_limit":4000000,"per_interval_limit":8000000,
-            "per_quote_limit":3000000,"interval_seconds":60,"balance_floor":100,
+            "margin_bps":100,"per_account_limit":4_000_000,"per_interval_limit":8_000_000,
+            "per_quote_limit":3_000_000,"interval_seconds":60,"balance_floor":100,
             "relayer_key_env":"PAXEER_RELAYER_KEY"})
     }
 

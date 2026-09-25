@@ -87,7 +87,7 @@ impl<S: QuoteSigner> Station<S> {
             max_token_amount: word(request.max_token_amount),
             token_amount: word(amount),
             deadline: word(u128::from(request.deadline)),
-            quote_nonce: request.quote_nonce,
+            nonce: request.quote_nonce,
             gas_cost: word(request.gas_cost),
         };
         let digest = quote_digest(
@@ -132,15 +132,15 @@ mod tests {
             Err(QuoteError::AboveMaximum)
         ));
         request.max_token_amount = 2_100_000;
-        let signed = station
+        let result = station
             .quote(&request, &rates, u128::MAX, 1000)
             .unwrap_or_else(|e| panic!("{e:?}"));
-        assert_eq!(signed.quote.token_amount, word(2_020_000));
+        assert_eq!(result.quote.token_amount, word(2_020_000));
         assert_eq!(
-            signed.digest,
-            quote_digest(word(1325), request.account, &signed.quote)
+            result.digest,
+            quote_digest(word(1325), request.account, &result.quote)
         );
-        assert!(matches!(signed.signature[64], 27 | 28));
+        assert!(matches!(result.signature[64], 27 | 28));
         assert!(matches!(
             station.quote(&request, &rates, u128::MAX, 1000),
             Err(QuoteError::Policy(PolicyRefusal::PerAccount))

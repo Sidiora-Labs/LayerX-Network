@@ -14,7 +14,7 @@ pub struct Quote {
     pub max_token_amount: Word,
     pub token_amount: Word,
     pub deadline: Word,
-    pub quote_nonce: Word,
+    pub nonce: Word,
     pub gas_cost: Word,
 }
 
@@ -49,7 +49,7 @@ pub fn quote_digest(chain_id: Word, account: Address, quote: &Quote) -> Word {
         quote.max_token_amount,
         quote.token_amount,
         quote.deadline,
-        quote.quote_nonce,
+        quote.nonce,
         quote.gas_cost,
     ]
     .concat();
@@ -69,7 +69,7 @@ mod tests {
             max_token_amount: word(2_100_000),
             token_amount: word(2_000_000),
             deadline: word(1000),
-            quote_nonce: word(7),
+            nonce: word(7),
             gas_cost: word(1_000_000_000_000_000_000),
         }
     }
@@ -98,7 +98,7 @@ mod tests {
                 2 => changed.max_token_amount[0] ^= 1,
                 3 => changed.token_amount[0] ^= 1,
                 4 => changed.deadline[0] ^= 1,
-                5 => changed.quote_nonce[0] ^= 1,
+                5 => changed.nonce[0] ^= 1,
                 _ => changed.gas_cost[0] ^= 1,
             }
             assert_ne!(quote_digest(word(1325), [0x11; 20], &changed), digest);
