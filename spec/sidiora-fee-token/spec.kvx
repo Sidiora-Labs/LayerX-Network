@@ -498,7 +498,11 @@ reqs = ["12.1","12.2","12.3","12.4","12.5"]
 
 [task.2.9]
 title = "Gate every consensus change behind one upgrade handler"
-status = "pending"
+status = "done"
+revision = "pending"
+command = "timeout 20m sh -c 'go test -count=1 ./modules/evm/migrations/... && go test -count=1 -run Upgrade ./node/'"
+exit_code = 0
+log_path = "/root/lx-lanes/sid-t2-9/.logs/verify.log"
 wave = 2
 requires = ["2.1","2.2","2.4","2.5","2.6","2.7","2.8"]
 do_1 = "Add the upgrade name to node/tags in the alphabetical order the file's parser requires and register its handler in node/upgrades.go beside the existing named handlers, running the module migrations and nothing this feature does not need."
