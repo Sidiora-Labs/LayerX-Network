@@ -8,17 +8,29 @@ defmodule Indexer.Transform.PaxeerXLogs do
   transform runs inside the existing logs pipeline of `Indexer.Block.Fetcher`
   and costs one topic lookup per log; it issues no RPC of its own.
 
-  `parse/1` returns a map with one list per target table:
+  `parse/1` returns a map with one list per target table, plus the count of the
+  precompile logs it could not place:
 
     * `:lx_account_bindings` - `addr` precompile, `0x…1004`
-    * `:lx_custody_events` - `layerxcustody` precompile, `0x…1013`
-    * `:lx_anchors` - `layerxanchor` precompile, `0x…1014`
+    * `:lx_custody_events` - the custody movements of the `layerxcustody`
+      precompile, `0x…1013`
+    * `:lx_deposit_roots` - the deposit root registration of the same
+      `layerxcustody` precompile, which moves no balance
+    * `:lx_anchors` - the checkpoints of the `layerxanchor` precompile, `0x…1014`
+    * `:lx_guarantor_events` - the guarantor, bond, unbonding, challenge,
+      availability and sequencer authorisation events of the same
+      `layerxanchor` precompile
     * `:lx_market_events` - `layerxexchange` `0x…1015`, `layerxbridge` `0x…1016`
       and `launchpad` `0x…1017`
     * `:lx_receipts` - always empty. A kernel receipt is not an EVM event; the
       only source is the kernel relay/archive HTTP history API. The key is part
       of the contract with the runner lane so that a later kernel ingester can
       fill it without changing any caller.
+    * `:undecoded_log_count` - how many logs emitted by a kernel precompile
+      carried a `topic0` no definition below matches. Every one of them is
+      logged with its emitting precompile and its `topic0` before it is
+      counted, so an event added to a precompile ahead of this transform is
+      visible rather than dropped in silence.
 
   Every row is a parameter map for the changeset of its schema, so the keys are
   the column names of the `lx_*` tables and nothing else. All rows carry
@@ -47,16 +59,25 @@ defmodule Indexer.Transform.PaxeerXLogs do
       `checkpoint_hash`, `asset_id`, `amount`, `address_hash`, `account`
     * `lx_anchors` - `status`, `batch_number`, `checkpoint_id`, `state_root`,
       `receipt_root`, `signers`
+    * `lx_guarantor_events` - `kind`, `guarantor_id`, `signer_address_hash`,
+      `operator_address_hash`, `bond`, `amount`, `batch_number`,
+      `challenge_id`, `challenge_kind`, `upheld`, `evidence_hash`,
+      `challenger_address_hash`, `reporter_address_hash`, `reporter_reward`,
+      `class_mask`, `availability_mask`, `sequencer_id`,
+      `sequencer_public_key`, `first_batch_number`, `last_batch_number`,
+      `completion_time`
+    * `lx_deposit_roots` - `checkpoint_id`, `deposit_root`, `commitment`,
+      `version`
     * `lx_market_events` - `domain`, `kind`, `address_hash`, `account`,
       `asset_id`, `asset_address_hash`, `amount`
 
-  Three families of precompile event are decoded by no definition because the
-  fixed column vocabulary has no row that can hold them without inventing a
-  value for a `NOT NULL` column: `AvailabilityAttested` and the guarantor and
-  challenge events of `0x…1014` carry a guarantor and a batch but no
-  `checkpoint_id`, and `DepositRootRegistered` of `0x…1013` registers a deposit
-  root for a checkpoint rather than a custody movement, so it matches none of
-  the five `lx_custody_event_kind` values.
+  The guarantor, challenge, availability and sequencer authorisation events of
+  `0x…1014` carry a guarantor and a batch rather than a checkpoint, so they are
+  rows of `lx_guarantor_events`, where `kind` names the event they were decoded
+  from and a column is filled only by the events that supply it.
+  `DepositRootRegistered` of `0x…1013` registers a deposit root for a
+  checkpoint rather than a custody movement, so it is a row of
+  `lx_deposit_roots` instead of a sixth `lx_custody_event_kind`.
 
   Event signatures come from `precompiles/<name>/abi.json`. The `topic0`
   constants below are proved against keccak256 of those signatures in
@@ -78,10 +99,21 @@ defmodule Indexer.Transform.PaxeerXLogs do
 
   @did_prefix "did:layerx:"
 
-  @empty %{
+  @precompile_names %{
+    @addr_precompile => "addr",
+    @custody_precompile => "layerxcustody",
+    @anchor_precompile => "layerxanchor",
+    @exchange_precompile => "layerxexchange",
+    @bridge_precompile => "layerxbridge",
+    @launchpad_precompile => "launchpad"
+  }
+
+  @empty_rows %{
     lx_account_bindings: [],
     lx_custody_events: [],
+    lx_deposit_roots: [],
     lx_anchors: [],
+    lx_guarantor_events: [],
     lx_receipts: [],
     lx_market_events: []
   }
@@ -198,6 +230,19 @@ defmodule Indexer.Transform.PaxeerXLogs do
       ]
     },
     %{
+      table: :lx_deposit_roots,
+      address: @custody_precompile,
+      name: "DepositRootRegistered",
+      signature: "DepositRootRegistered(bytes32,bytes32,bytes32,uint16)",
+      topic: "0xdc7b7dbcfc1dc6570c57d3d6413b4a7fd3c1aa068b1a8a45910d76e65a35b0bc",
+      arguments: [
+        {"checkpointId", {:bytes, 32}, true},
+        {"depositRoot", {:bytes, 32}, true},
+        {"commitment", {:bytes, 32}, false},
+        {"version", {:uint, 16}, false}
+      ]
+    },
+    %{
       table: :lx_anchors,
       address: @anchor_precompile,
       name: "CheckpointSubmitted",
@@ -224,6 +269,142 @@ defmodule Indexer.Transform.PaxeerXLogs do
         {"checkpointId", {:bytes, 32}, true},
         {"stateRoot", {:bytes, 32}, false},
         {"receiptRoot", {:bytes, 32}, false}
+      ]
+    },
+    %{
+      table: :lx_guarantor_events,
+      address: @anchor_precompile,
+      name: "GuarantorRegistered",
+      signature: "GuarantorRegistered(bytes32,address,address,uint256,uint8)",
+      topic: "0x674824b594bdf3d0829ce02226b81f1a7bff5ae2f5cb90c58fea0d384d5d3e1f",
+      kind: :guarantor_registered,
+      arguments: [
+        {"guarantorId", {:bytes, 32}, true},
+        {"signer", :address, true},
+        {"operator", :address, false},
+        {"bond", {:uint, 256}, false},
+        {"status", {:uint, 8}, false}
+      ]
+    },
+    %{
+      table: :lx_guarantor_events,
+      address: @anchor_precompile,
+      name: "GuarantorActivated",
+      signature: "GuarantorActivated(bytes32)",
+      topic: "0xda409fb8d447ce2b38c558fe19db7dfa5068b213c60e9bb07d4a2491b21a8fb3",
+      kind: :guarantor_activated,
+      arguments: [
+        {"guarantorId", {:bytes, 32}, true}
+      ]
+    },
+    %{
+      table: :lx_guarantor_events,
+      address: @anchor_precompile,
+      name: "GuarantorSlashed",
+      signature: "GuarantorSlashed(bytes32,uint8,uint64,uint256,address,uint256)",
+      topic: "0x718d0e16e03f75b88f54c53a3f6fcd12aae1175b35426afc92df60212f70566f",
+      kind: :guarantor_slashed,
+      arguments: [
+        {"guarantorId", {:bytes, 32}, true},
+        {"reason", {:uint, 8}, false},
+        {"batchNumber", {:uint, 64}, false},
+        {"amount", {:uint, 256}, false},
+        {"reporter", :address, false},
+        {"reporterReward", {:uint, 256}, false}
+      ]
+    },
+    %{
+      table: :lx_guarantor_events,
+      address: @anchor_precompile,
+      name: "BondIncreased",
+      signature: "BondIncreased(bytes32,uint256,uint256)",
+      topic: "0xd56317245f938f2d5073eaf7af3784a15e0ded0afc5cfddd6decce82d14f0293",
+      kind: :bond_increased,
+      arguments: [
+        {"guarantorId", {:bytes, 32}, true},
+        {"amount", {:uint, 256}, false},
+        {"bond", {:uint, 256}, false}
+      ]
+    },
+    %{
+      table: :lx_guarantor_events,
+      address: @anchor_precompile,
+      name: "UnbondBegun",
+      signature: "UnbondBegun(bytes32,uint256,uint64)",
+      topic: "0xf5928c432be887b8eccd5109d720b9f65fa58b6ebb9d13d49cf607140038cd56",
+      kind: :unbond_begun,
+      arguments: [
+        {"guarantorId", {:bytes, 32}, true},
+        {"amount", {:uint, 256}, false},
+        {"completionTime", {:uint, 64}, false}
+      ]
+    },
+    %{
+      table: :lx_guarantor_events,
+      address: @anchor_precompile,
+      name: "UnbondCompleted",
+      signature: "UnbondCompleted(bytes32,uint256)",
+      topic: "0x92e6a12ec08d26815bba775a0b61b2e6b904c9515298e0c7e7e0c27ddc8608e4",
+      kind: :unbond_completed,
+      arguments: [
+        {"guarantorId", {:bytes, 32}, true},
+        {"amount", {:uint, 256}, false}
+      ]
+    },
+    %{
+      table: :lx_guarantor_events,
+      address: @anchor_precompile,
+      name: "ChallengeOpened",
+      signature: "ChallengeOpened(uint64,uint64,uint8,bytes32,address)",
+      topic: "0x8ece2a23e0281871d7d23716fbbe6b69c45e33958f359fac931c806ec1faadc1",
+      kind: :challenge_opened,
+      arguments: [
+        {"challengeId", {:uint, 64}, true},
+        {"batchNumber", {:uint, 64}, true},
+        {"kind", {:uint, 8}, false},
+        {"evidenceHash", {:bytes, 32}, false},
+        {"challenger", :address, false}
+      ]
+    },
+    %{
+      table: :lx_guarantor_events,
+      address: @anchor_precompile,
+      name: "ChallengeResolved",
+      signature: "ChallengeResolved(uint64,uint64,bool)",
+      topic: "0xad0042435ab8c2545c029804312dcf040aae34bc589e0c6a66b6c0e0a5f92da0",
+      kind: :challenge_resolved,
+      arguments: [
+        {"challengeId", {:uint, 64}, true},
+        {"batchNumber", {:uint, 64}, true},
+        {"upheld", :bool, false}
+      ]
+    },
+    %{
+      table: :lx_guarantor_events,
+      address: @anchor_precompile,
+      name: "AvailabilityAttested",
+      signature: "AvailabilityAttested(uint64,bytes32,uint8,uint8)",
+      topic: "0xd7c406977ce3f1c395680312e35d6b784519d82014ed3ce74143c6c0473b3098",
+      kind: :availability_attested,
+      arguments: [
+        {"batchNumber", {:uint, 64}, true},
+        {"guarantorId", {:bytes, 32}, true},
+        {"classMask", {:uint, 8}, false},
+        {"availabilityMask", {:uint, 8}, false}
+      ]
+    },
+    %{
+      table: :lx_guarantor_events,
+      address: @anchor_precompile,
+      name: "SequencerAuthorized",
+      signature: "SequencerAuthorized(bytes32,bytes32,uint64,uint64)",
+      topic: "0x55f0596642b8a5c649f976accfd18b1b3b516a4161b5589fba967fb33dc30ac4",
+      kind: :sequencer_authorized,
+      arguments: [
+        {"sequencerId", {:bytes, 32}, true},
+        {"publicKey", {:bytes, 32}, false},
+        {"firstBatchNumber", {:uint, 64}, false},
+        {"lastBatchNumber", {:uint, 64}, false}
       ]
     },
     %{
@@ -505,28 +686,57 @@ defmodule Indexer.Transform.PaxeerXLogs do
 
   @doc """
   Decodes the Paxeer X precompile logs of `logs` into one list of row maps per
-  `lx_*` table. Logs from any other emitter, and logs whose `topic0` is not a
-  decoded event, contribute nothing.
+  `lx_*` table, and counts under `:undecoded_log_count` every kernel precompile
+  log it cannot place on a row: one whose `topic0` matches no definition, and one
+  whose arguments a matching definition fails to decode. Each is logged before it
+  is counted. Logs from any other emitter contribute nothing and are not counted.
   """
   @spec parse([map()]) :: %{
           lx_account_bindings: [map()],
           lx_custody_events: [map()],
+          lx_deposit_roots: [map()],
           lx_anchors: [map()],
+          lx_guarantor_events: [map()],
           lx_receipts: [map()],
-          lx_market_events: [map()]
+          lx_market_events: [map()],
+          undecoded_log_count: non_neg_integer()
         }
   def parse(logs) when is_list(logs) do
-    logs
-    |> Enum.reduce(@empty, &parse_log/2)
-    |> Map.new(fn {table, rows} -> {table, Enum.reverse(rows)} end)
+    {rows, undecoded_log_count} = Enum.reduce(logs, {@empty_rows, 0}, &parse_log/2)
+
+    rows
+    |> Map.new(fn {table, table_rows} -> {table, Enum.reverse(table_rows)} end)
+    |> Map.put(:undecoded_log_count, undecoded_log_count)
   end
 
-  defp parse_log(log, acc) do
-    with {:ok, definition} <- definition(log),
-         {:ok, parameters} <- decode_arguments(log, definition) do
-      Map.update!(acc, definition.table, &[row(definition, log, parameters) | &1])
-    else
-      :error -> acc
+  defp parse_log(log, {rows, undecoded_log_count} = acc) do
+    case definition(log) do
+      {:ok, definition} ->
+        case decode_arguments(log, definition) do
+          {:ok, parameters} ->
+            {Map.update!(rows, definition.table, &[row(definition, log, parameters) | &1]), undecoded_log_count}
+
+          :error ->
+            {rows, undecoded_log_count + 1}
+        end
+
+      :error ->
+        count_undecoded(log, acc)
+    end
+  end
+
+  defp count_undecoded(log, {rows, undecoded_log_count} = acc) do
+    case Map.fetch(@precompile_names, hex_string(log[:address_hash])) do
+      {:ok, precompile} ->
+        Logger.error(
+          "No definition for topic0 #{inspect(hex_string(log[:first_topic]))} of the #{precompile} precompile, " <>
+            "log #{log_key(log)}. Counting it as undecoded."
+        )
+
+        {rows, undecoded_log_count + 1}
+
+      :error ->
+        acc
     end
   end
 
@@ -609,6 +819,45 @@ defmodule Indexer.Transform.PaxeerXLogs do
       amount: parameters["amount"],
       address_hash: party_address_hash(parameters),
       account: parameters["account"] || parameters["beneficiary"]
+    })
+  end
+
+  defp row(%{table: :lx_guarantor_events} = definition, log, parameters) do
+    definition
+    |> base_row(log, parameters)
+    |> Map.merge(%{
+      kind: definition.kind,
+      guarantor_id: parameters["guarantorId"],
+      signer_address_hash: parameters["signer"],
+      operator_address_hash: parameters["operator"],
+      bond: parameters["bond"],
+      amount: parameters["amount"],
+      batch_number: parameters["batchNumber"],
+      challenge_id: parameters["challengeId"],
+      challenge_kind: parameters["kind"],
+      upheld: parameters["upheld"],
+      evidence_hash: parameters["evidenceHash"],
+      challenger_address_hash: parameters["challenger"],
+      reporter_address_hash: parameters["reporter"],
+      reporter_reward: parameters["reporterReward"],
+      class_mask: parameters["classMask"],
+      availability_mask: parameters["availabilityMask"],
+      sequencer_id: parameters["sequencerId"],
+      sequencer_public_key: parameters["publicKey"],
+      first_batch_number: parameters["firstBatchNumber"],
+      last_batch_number: parameters["lastBatchNumber"],
+      completion_time: parameters["completionTime"]
+    })
+  end
+
+  defp row(%{table: :lx_deposit_roots} = definition, log, parameters) do
+    definition
+    |> base_row(log, parameters)
+    |> Map.merge(%{
+      checkpoint_id: parameters["checkpointId"],
+      deposit_root: parameters["depositRoot"],
+      commitment: parameters["commitment"],
+      version: parameters["version"]
     })
   end
 

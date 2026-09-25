@@ -83,3 +83,11 @@ symbol     = "--reuse-db"
 observed   = "The task verify_cmd runs the fetcher suite once without --reuse-db and once with it, but the first invocation removes its own sidecar on exit and --reuse-db only adopts a sidecar a previous --reuse-db invocation left running, so both halves of a single invocation start on a freshly created database."
 assumption = "Requirement 10 ac_4's second pass over an already migrated database is reached by invoking the verify_cmd a second time, which adopts the sidecar the recorded run leaves behind; the recorded run proves the fresh-database case under two independent ExUnit seeds."
 severity   = "note"
+
+[observation.2.6.1]
+task = "2.6"
+file = "explorer/backend/apps/indexer/lib/indexer/transform/paxeer_x_logs.ex"
+symbol = "definitions/0"
+observed = "req.9 ac_4 asks for twenty-eight kernel precompile events, while the committed ABI definitions of the six kernel precompiles carry thirty-seven events in total: twenty-six were already decoded and this task adds the remaining eleven."
+assumption = "The intent is every event of the committed ABI set, so all thirty-seven now have a definition and the count in the criterion is stale rather than a bound on what is decoded."
+severity = "note"

@@ -132,7 +132,7 @@
     - Add import runners Explorer.Chain.Import.Runner.PaxeerX.GuarantorEvents and DepositRoots modelled on the anchors runner with the same conflict handling so a replayed block is idempotent, and register both in the chain-type-specific import stage beside the existing Paxeer X runners.
     - Add explorer/backend/apps/explorer/test/explorer/chain/paxeer_x/guarantor_event_test.exs and deposit_root_test.exs covering the changeset's required columns, each enumerated value, and an import that inserts and then replays the same rows without duplicating them.
     - _Requirements: 9.1, 9.2, 9.3_
-  - [ ] 2.6 Decode every kernel precompile event
+  - [x] 2.6 Decode every kernel precompile event
     - In explorer/backend/apps/indexer/lib/indexer/transform/paxeer_x_logs.ex add topic constants and decoders for the nine guarantor and challenge events of the anchor precompile and for its availability attestation, from the signatures in precompiles/layerxanchor/abi.json, returning them under a new lx_guarantor_events key mapped to the columns the new schema declares.
     - Add the decoder for the deposit-root registration of the custody precompile from precompiles/layerxcustody/abi.json under a new lx_deposit_roots key, and remove the moduledoc paragraph that records these events as undecodable, replacing it with the mapping now implemented.
     - Keep every event already decoded producing exactly the row it produces now, keep the lossless parameter map on every row, and keep the address, hash and integer conversions the module already applies.
