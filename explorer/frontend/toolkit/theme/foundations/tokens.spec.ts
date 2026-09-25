@@ -242,5 +242,6 @@ describe('the Paxeer X presets', () => {
     expect(preset).toContain('NEXT_PUBLIC_FONT_FAMILY_BODY=');
     expect(preset).toMatch(/NEXT_PUBLIC_FONT_FAMILY_HEADING=\{'name':'Manrope'/);
     expect(preset).toMatch(/NEXT_PUBLIC_FONT_FAMILY_BODY=\{'name':'Manrope'/);
+    expect(preset).toMatch(/^NEXT_PUBLIC_COLOR_THEME_DEFAULT=light$/m);
   });
 });

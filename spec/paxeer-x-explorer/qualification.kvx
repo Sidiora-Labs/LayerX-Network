@@ -41,6 +41,13 @@ severity = "note"
 [observation.2.1.1]
 task = "2.1"
 file = "spec/paxeer-x-explorer/spec.kvx"
-observed = "cg spec done 2.1 exited 1 on 23 graph checks - the six theme symbols are not indexed and the touched paths are read outside this branch - after the task verify_cmd had exited 0 with its log at /root/lx-ops/explorer-spec-2026-09-25/logs/ex-t2-1.log."
-assumption = "The refusal is a code-graph coverage gap rather than a task failure, so the status was set to done by hand against that gate result."
+observed = "cg spec done 2.1 exits 1 on 23 graph checks: the six theme symbols are not indexed and the touched paths are read outside the branch under test, while the task verify_cmd exits 0."
+assumption = "The refusal is a code-graph coverage gap rather than a task failure, so the status was set by hand against the gate result the task declares."
+severity = "note"
+
+[observation.2.1.2]
+task = "2.1"
+file = "explorer/frontend/toolkit/theme/foundations/colors.ts"
+observed = "The frontend review path instruction asks that no product-specific value be hard-coded outside the configs/envs presets, while req 5 ac_1 and ac_6 require the theme foundations to carry and to export the product tokens."
+assumption = "The acceptance criteria govern: the foundations hold the defaults a preset then overrides through the colour theme override the theme already merges, and radii and shadows gain no preset surface because that would be the second configuration system ac_5 forbids."
 severity = "note"
