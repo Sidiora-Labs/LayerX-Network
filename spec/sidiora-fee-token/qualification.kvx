@@ -296,3 +296,29 @@ file = "observation.1.6.6"
 observed = "Append-only attribution: the SVG import failures checked the test harness published in this source revision; the original exit code remains 1."
 assumption = "This identifies the published source snapshot, not a commit that existed before verification."
 severity = "note"
+
+[observation.1.7.1]
+revision = "12478c28531d6c39ce4f3d941b8960c1efcdfa5c"
+command = "cat precompiles/oracle/oracle.go"; exit_code = 0
+log_path = ".logs/context.log"
+observed = "Requirement 1 acceptance criterion 4 requires the oracle precompile, whose every ABI method returns ErrOraclePrecompileRetired, so executable sponsorship cannot satisfy it."
+assumption = "The authorized owner-set bounded rate replaces sponsored oracle pricing while the requirement remains unchanged, including its related oracle coverage in acceptance criterion 7."
+
+[observation.1.7.2]
+revision = "12478c28531d6c39ce4f3d941b8960c1efcdfa5c"
+command = "FOUNDRY_CONFIG=foundry.paxeer.toml forge build --evm-version=prague contracts/src/BatchCallAndSponsor.sol contracts/test/BatchCallAndSponsorTest.t.sol"; exit_code = 1
+log_path = ".logs/build.log"
+observed = "Foundry resolves forge-std/Test.sol under the absent contracts/lib/forge-std/contracts/src directory, preventing the standalone build from compiling."
+assumption = "The exact verification command requires FOUNDRY_REMAPPINGS pointing forge-std/ to contracts/lib/forge-std/src/ and @openzeppelin/contracts/ to contracts/lib/openzeppelin-contracts/contracts/, with no repository configuration change."
+
+[observation.1.7.3]
+task = "1.7"; file = "contracts/src/BatchCallAndSponsor.sol"; symbol = "currentRate"
+severity = "blocker"
+observed = "Supplement to observation.1.7.1: requirements 1.4 and the oracle-specific coverage in 1.7 remain unsatisfied by owner-set pricing."
+assumption = "Task completion records its focused verification only; requirement definitions and traceability remain intact pending an authorized resolution."
+
+[observation.1.7.4]
+task = "1.7"; file = "spec/sidiora-fee-token/spec.kvx"; symbol = "task.1.7.log_path"
+severity = "blocker"
+observed = "The review requests a relative evidence path, but the explicit follow-up instructions require the exact absolute log_path, conflicting with the naming rule."
+assumption = "Preserve the explicitly required evidence path and the unchanged existing pull request body; an authorized publication-policy resolution is required."

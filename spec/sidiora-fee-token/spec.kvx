@@ -314,6 +314,26 @@ symbols = ["TxFee","TxDetailsTxFee","currencyUnits"]
 touches = ["explorer/frontend/types/api/transaction.ts","explorer/frontend/ui/shared/tx/TxFee.tsx","explorer/frontend/ui/shared/tx/TxFee.spec.tsx","explorer/frontend/ui/tx/details/TxDetailsTxFee.tsx","explorer/frontend/ui/tx/details/TxDetailsTxFee.spec.tsx"]
 reqs = ["4.1","4.2","4.3","4.4"]
 
+[task.1.7]
+title = "Price sponsored gas through an owner-set rate"
+status = "done"
+revision = "fd1d25d1f40ac860ad0e32af80d7c14d435c6afe"
+command = "timeout 20m sh -c 'FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague --match-path contracts/test/BatchCallAndSponsorTest.t.sol -vvv'"
+exit_code = 0
+log_path = "/root/lx-lanes/sid-t1-7/.logs/verify-review.log"
+wave = 1
+requires = ["1.1"]
+do_1 = "In contracts/src/BatchCallAndSponsor.sol replace the oracle import, address, denoms and parsing helpers with a constructor taking the owner, initial SID base units per whole PAX and maximum rate age, rejecting zero configuration and recording the initial update time."
+do_2 = "Add owner-only setRate updating the stored rate and timestamp and emitting RateUpdated, rejecting an unauthorized caller with UnauthorizedOwner and a delegated write with InvalidRateContext."
+do_3 = "Read the deployed paymaster through currentRate from EIP-7702 delegated accounts, reject an unset rate with InvalidRate and an expired rate with StaleRate, and retain the existing spread check and upward rounding over six-decimal SID and eighteen-decimal PAX."
+do_4 = "Keep Quote, both bound digests, both nonces, the deadline and maximum checks, atomic repayment, every existing event, direct execute and the payable receive and fallback unchanged."
+do_5 = "Update contracts/test/BatchCallAndSponsorTest.t.sol to deploy with 3.114 SID per PAX and cover constructor refusals, owner updates and their event, unauthorized updates, delegated pricing, staleness and its inclusive boundary, independent decimal arithmetic and spread refusals while retaining every case independent of the oracle."
+do_6 = "Delete contracts/src/precompiles/IOracle.sol after confirming no remaining import uses it, remove its mocking and selector assertions from contracts/test/BatchCallAndSponsorTest.t.sol, and record the unchanged requirement 1 acceptance criterion 4 contradiction in spec/sidiora-fee-token/qualification.kvx."
+verify_cmd = "timeout 20m sh -c 'FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague --match-path contracts/test/BatchCallAndSponsorTest.t.sol -vvv'"
+symbols = ["owner","rateSource","rate","rateUpdatedAt","maxRateAge","PAX_BASE_UNITS","setRate","currentRate","RateUpdated","UnauthorizedOwner","InvalidOwner","InvalidRate","InvalidMaxRateAge","InvalidRateContext","StaleRate"]
+touches = ["contracts/src/BatchCallAndSponsor.sol","contracts/test/BatchCallAndSponsorTest.t.sol","contracts/src/precompiles/IOracle.sol"]
+reqs = ["1.1","1.2","1.3","1.4","1.5","1.6","1.7"]
+
 [task.2]
 section = "Wave 2 - Sidiora as a Native Denom and a Fee Token"
 title = "Make the protocol itself take Sidiora, behind one upgrade"
