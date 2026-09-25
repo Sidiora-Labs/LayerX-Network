@@ -437,7 +437,7 @@ reqs = ["9.1","9.2","9.3","9.4","9.5"]
 [task.2.6]
 title = "Debit and refund gas in the account's fee denom at a governed rate"
 status = "done"
-revision = "pending"
+revision = "6f94592c82abf9d6ca665cf8e8b98e606c945d37"
 command = "timeout 20m sh -c 'go test -count=1 ./modules/evm/ante/...'"
 exit_code = 0
 log_path = "/root/lx-lanes/sid-t2-6b/.logs/verify.log"
