@@ -66,3 +66,17 @@ symbol = "_readRate"
 observed = "Review comment 4107937019 repeats the timestamp-unit mismatch recorded in observation.2.4.3; the contract remains unchanged."
 assumption = "Freshness validation requires matching units and coverage for keeper-produced rates; oracle availability remains a separate recorded blocker."
 severity = "note"
+
+[observation.2.1.1]
+revision = "974fcd706f687617f9b4a1e3aa6e2d0b85981143"
+command = "cat modules/layerxbridge/types/genesis.go"; exit_code = 0
+log_path = ".logs/scope-conflict.log"
+observed = "GenesisState.Validate requires every asset denom to equal the existing chain-derived Denom, which rejects the required Sidiora subdenom; the validator is outside task 2.1 touches."
+assumption = "The genesis compatibility change requires separately authorized scope; this task leaves the existing assertion intact."
+
+[observation.2.1.2]
+revision = "974fcd706f687617f9b4a1e3aa6e2d0b85981143"
+command = "timeout 2m go vet ./modules/layerxbridge/types ./modules/layerxbridge/keeper"; exit_code = 124
+log_path = ".logs/vet.log"
+observed = "Touched-package go vet exceeded its bounded run without emitting diagnostics."
+assumption = "Lint qualification remains incomplete; no unchanged lint rerun is performed."

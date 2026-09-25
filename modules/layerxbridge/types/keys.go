@@ -3,15 +3,20 @@ package types
 import (
 	"encoding/binary"
 
+	tokenfactorytypes "github.com/sidiora-labs/paxeer-network/modules/tokenfactory/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	authtypes "github.com/sidiora-labs/paxeer-network/sdk/x/auth/types"
 )
 
 const (
-	ModuleName   = "layerxbridge"
-	StoreKey     = ModuleName
-	RouterKey    = ModuleName
-	QuerierRoute = ModuleName
+	ModuleName           = "layerxbridge"
+	StoreKey             = ModuleName
+	RouterKey            = ModuleName
+	QuerierRoute         = ModuleName
+	SidioraSubdenom      = "usid"
+	SidioraSymbol        = "SID"
+	SidioraDecimals      = uint32(6)
+	SidioraRemoteAddress = "0x21f7b20a555199fa73A238B1a91FD0f549068fEe"
 
 	// BridgeAddress is the layerxBridge precompile address.
 	BridgeAddress = "0x0000000000000000000000000000000000001016"
@@ -39,6 +44,14 @@ var (
 // every bridged denom and holds a minted or returned amount only for the
 // duration of one bridgeIn or bridgeOut.
 func ModuleAddress() sdk.AccAddress { return bridgeModuleAddr }
+
+func SidioraDenom() string {
+	denom, err := tokenfactorytypes.GetTokenDenom(ModuleAddress().String(), SidioraSubdenom)
+	if err != nil {
+		panic(err)
+	}
+	return denom
+}
 
 func u64(value uint64) []byte {
 	out := make([]byte, 8)
