@@ -23,7 +23,7 @@ interface Props extends BoxProps {
 
 export const isNonNativeFeeToken = (token: Transaction['fee']['token']): token is TokenInfo => {
   return Boolean(token?.symbol && token.decimals != null && (
-    token.symbol !== config.chain.currency.symbol || Number(token.decimals) !== config.chain.currency.decimals
+    token.address_hash.toLowerCase() !== config.UI.views.address.nativeTokenAddress?.toLowerCase()
   ));
 };
 

@@ -26,6 +26,14 @@ const sidiora: TokenInfo = {
   reputation: null,
 };
 
+const nativeToken: TokenInfo = {
+  ...sidiora,
+  address_hash: '0x471EcE3750Da237f93B8E339c536989b8978a438',
+  name: 'Paxeer',
+  symbol: 'PAX',
+  decimals: '18',
+};
+
 const originalEnvs = window.__envs;
 
 afterAll(() => {
@@ -39,11 +47,12 @@ const transaction = (fee: Transaction['fee']): Transaction => ({
   historic_exchange_rate: null,
 });
 
-const render = async(props: React.ComponentProps<typeof TxDetailsTxFee>, groupedFees = false, hidden = false) => {
+const render = async(props: React.ComponentProps<typeof TxDetailsTxFee>, groupedFees = false, hidden = false): Promise<HTMLElement> => {
   window.__envs = {
     ...originalEnvs,
     NEXT_PUBLIC_NETWORK_CURRENCY_SYMBOL: 'PAX',
     NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS: '18',
+    NEXT_PUBLIC_VIEWS_ADDRESS_NATIVE_TOKEN_ADDRESS: nativeToken.address_hash.toLowerCase(),
     NEXT_PUBLIC_VIEWS_TX_GROUPED_FEES: String(groupedFees),
     NEXT_PUBLIC_VIEWS_TX_HIDDEN_FIELDS: hidden ? '["tx_fee"]' : '[]',
   };
@@ -64,6 +73,17 @@ describe('TxDetailsTxFee', () => {
     expect(container.textContent).not.toContain('Gwei');
   });
 
+  it.each([ false, true ])('keeps a distinct token with native display metadata ungrouped when grouped fees is %s', async(groupedFees) => {
+    const token = { ...sidiora, symbol: 'PAX', decimals: '18' };
+    const data = transaction({ type: 'actual', value: '1234567890123456789', token });
+    const container = await render({ data, isLoading: false }, groupedFees);
+
+    expect(container.textContent).toBe('Transaction fee1.234567890123456789PAX');
+    expect(container.querySelector('a')?.getAttribute('href')).toBe(`/token/${ token.address_hash }`);
+    expect(container.textContent).not.toContain('View details');
+    expect(container.textContent).not.toContain('Gwei');
+  });
+
   it('retains the smallest Sidiora base unit', async() => {
     const data = transaction({ type: 'actual', value: '1', token: sidiora });
 
@@ -72,7 +92,6 @@ describe('TxDetailsTxFee', () => {
 
   it.each([ false, true ])('keeps Paxeer and absent metadata unchanged with grouped fees set to %s', async(groupedFees) => {
     const fee = { type: 'actual', value: '1234567890123456789' };
-    const nativeToken = { ...sidiora, symbol: 'PAX', decimals: '18' };
     const explicit = await render({ data: transaction({ ...fee, token: nativeToken }), isLoading: false }, groupedFees);
     const implicit = await render({ data: transaction(fee), isLoading: false }, groupedFees);
     const expected = `Transaction fee1.234567890123456789\u2009PAX${ groupedFees ? 'View details' : '' }`;

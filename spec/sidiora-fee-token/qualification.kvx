@@ -275,3 +275,24 @@ command = "timeout 20m sh -c 'cd explorer/frontend && HUSKY=0 yarn install --fro
 exit_code = 1
 log_path = "/root/lx-lanes/sid-t1-6/.logs/verify.log"
 observed = "Compilation and 15 tests passed; six detail tests fail because Vitest imports icons/info.svg as a URL rather than a React component. Qualification assumes authorization to configure the existing SVG transformer outside the task file list; no production code or assertions were changed."
+
+[observation.1.6.7]
+revision = "82476214b7d2d71fde3813f18f3646cc82a041c3"
+file = "observation.1.6.4"
+observed = "Append-only attribution: the failed compilation checked the implementation published in this source revision; the original exit code remains 134."
+assumption = "This identifies the published source snapshot, not a commit that existed before verification."
+severity = "note"
+
+[observation.1.6.8]
+revision = "82476214b7d2d71fde3813f18f3646cc82a041c3"
+file = "observation.1.6.5"
+observed = "Append-only attribution: the media-query failures checked the implementation published in this source revision; the original exit code remains 1."
+assumption = "This identifies the published source snapshot, not a commit that existed before verification."
+severity = "note"
+
+[observation.1.6.9]
+revision = "4241f66f6bc99adc8258c0408886ab56ea18c9fa"
+file = "observation.1.6.6"
+observed = "Append-only attribution: the SVG import failures checked the test harness published in this source revision; the original exit code remains 1."
+assumption = "This identifies the published source snapshot, not a commit that existed before verification."
+severity = "note"
