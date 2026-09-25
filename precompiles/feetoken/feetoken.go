@@ -72,12 +72,6 @@ func (p PrecompileExecutor) RequiredGas(input []byte, method *abi.Method) uint64
 
 func (p PrecompileExecutor) Execute(ctx sdk.Context, method *abi.Method, caller common.Address, _ common.Address,
 	args []interface{}, value *big.Int, readOnly bool, _ *vm.EVM, _ *tracing.Hooks) (ret []byte, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			ret = nil
-			err = fmt.Errorf("feetoken: %v", recovered)
-		}
-	}()
 	if ctx.EVMPrecompileCalledFromDelegateCall() {
 		return nil, errors.New("cannot delegatecall feeToken")
 	}

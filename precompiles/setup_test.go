@@ -1,6 +1,8 @@
 package precompiles_test
 
 import (
+	"maps"
+	"slices"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -12,6 +14,32 @@ import (
 )
 
 func TestFeeTokenRegistration(t *testing.T) {
+	initialized := precompiles.Initialized
+	infoBefore := precompiles.PrecompileNamesToInfo
+	precompiles.Initialized = false
+	precompiles.PrecompileNamesToInfo = maps.Clone(infoBefore)
+	t.Cleanup(func() {
+		precompiles.Initialized = initialized
+		precompiles.PrecompileNamesToInfo = infoBefore
+	})
+	for _, contracts := range []*vm.PrecompiledContracts{
+		&vm.PrecompiledContractsHomestead, &vm.PrecompiledContractsByzantium,
+		&vm.PrecompiledContractsIstanbul, &vm.PrecompiledContractsBerlin,
+		&vm.PrecompiledContractsCancun, &vm.PrecompiledContractsBLS,
+	} {
+		before := *contracts
+		*contracts = maps.Clone(before)
+		t.Cleanup(func() { *contracts = before })
+	}
+	for _, addresses := range []*[]common.Address{
+		&vm.PrecompiledAddressesHomestead, &vm.PrecompiledAddressesByzantium,
+		&vm.PrecompiledAddressesIstanbul, &vm.PrecompiledAddressesBerlin,
+		&vm.PrecompiledAddressesCancun,
+	} {
+		before := *addresses
+		*addresses = slices.Clone(before)
+		t.Cleanup(func() { *addresses = before })
+	}
 	address := common.HexToAddress("0x0000000000000000000000000000000000001018")
 	require.Equal(t, address, common.HexToAddress(feetoken.FeeTokenAddress))
 	require.NoError(t, precompiles.InitializePrecompiles(true, testkeeper.EVMTestApp.GetPrecompileKeepers()))

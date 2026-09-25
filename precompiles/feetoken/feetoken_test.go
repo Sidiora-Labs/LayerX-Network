@@ -13,6 +13,7 @@ import (
 	pcommon "github.com/sidiora-labs/paxeer-network/precompiles/common"
 	"github.com/sidiora-labs/paxeer-network/precompiles/feetoken"
 	"github.com/sidiora-labs/paxeer-network/precompiles/utils"
+	storetypes "github.com/sidiora-labs/paxeer-network/sdk/store/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	testkeeper "github.com/sidiora-labs/paxeer-network/testutil/keeper"
 	"github.com/stretchr/testify/require"
@@ -216,6 +217,40 @@ func TestFeeDenomStaticClearAndRollback(t *testing.T) {
 	h.call(feetoken.SetFeeDenomMethod, "uasset")
 	h.db.RevertToSnapshot(snapshot)
 	require.Equal(t, "usid", h.denom(h.caller))
+}
+
+func TestFeeDenomStoreOutOfGasPropagates(t *testing.T) {
+	for _, name := range []string{feetoken.SetFeeDenomMethod, feetoken.ClearFeeDenomMethod} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			h.call(feetoken.SetFeeDenomMethod, "usid")
+			before := h.store()
+			var args []interface{}
+			var limit uint64
+			descriptor := storetypes.GasDeleteDesc
+			if name == feetoken.SetFeeDenomMethod {
+				args = []interface{}{"uasset"}
+				meter := sdk.NewInfiniteGasMeter(1, 1)
+				ctx := h.db.Ctx().WithGasMeter(meter)
+				k := &testkeeper.EVMTestApp.EvmKeeper
+				require.True(t, k.GetFeeTokenEnabled(ctx))
+				allowed, _ := k.IsAllowedFeeDenom(ctx, "uasset")
+				require.True(t, allowed)
+				limit = meter.GasConsumed()
+				descriptor = storetypes.GasWriteCostFlatDesc
+			}
+			input := h.input(name, args...)
+			meter := sdk.NewGasMeter(limit, 1, 1)
+			h.db.WithCtx(h.db.Ctx().WithGasMeter(meter))
+			require.PanicsWithValue(t, sdk.ErrorOutOfGas{Descriptor: descriptor}, func() {
+				_, _ = h.precompile.Run(h.evm, h.caller, h.caller, input, nil, false, false, nil)
+			})
+			require.True(t, meter.IsPastLimit())
+			h.db.WithCtx(h.db.Ctx().WithGasMeter(sdk.NewInfiniteGasMeter(1, 1)))
+			require.Equal(t, before, h.store())
+			require.Equal(t, "usid", h.denom(h.caller))
+		})
+	}
 }
 
 func TestFeeDenomMissingKeeper(t *testing.T) {

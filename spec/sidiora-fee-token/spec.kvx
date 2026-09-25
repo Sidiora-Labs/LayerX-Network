@@ -386,10 +386,10 @@ reqs = ["8.1","8.2","8.3","8.4","8.5"]
 [task.2.5]
 title = "Add the per-account fee-token preference precompile"
 status = "done"
-revision = "77c50d2b21d5b3d31131ad5976e9402ed5231500"
+revision = "pending"
 command = "timeout 20m sh -c 'go test -count=1 ./precompiles/ ./precompiles/feetoken/...'"
 exit_code = 0
-log_path = "/root/lx-lanes/sid-t2-5/.logs/verify.log"
+log_path = "/root/lx-lanes/sid-t2-5/.logs/verify-review.log"
 wave = 2
 requires = ["2.4"]
 do_1 = "Add precompiles/feetoken with FeeToken.sol declaring setFeeDenom, getFeeDenom and clearFeeDenom, the committed abi.json matching it, feetoken.go implementing the executor in the shape precompiles/layerxbridge/layerxbridge.go uses, and a versions directory; register it at 0x0000000000000000000000000000000000001018, an address no precompile in precompiles/setup.go occupies, and generate setup.go through scripts/bump_version rather than writing it by hand."
