@@ -75,3 +75,11 @@ symbol = "lose_consensus"
 observed = "The consensus-loss transaction updates blocks, transactions and token transfers only and calls no lx_ schema's lose_consensus_query/1, so every Paxeer X table keeps block_consensus true after its block is reorged out."
 assumption = "The gap is inherited by all seven lx_ tables rather than introduced here, the file is in no task's touches, and only_consensus_query/0 reads the authoritative flag through the block association so no read is wrong meanwhile."
 severity = "suspect"
+
+[observation.2.7.1]
+task       = "2.7"
+file       = "explorer/deploy/tools/mix-in-builder.sh"
+symbol     = "--reuse-db"
+observed   = "The task verify_cmd runs the fetcher suite once without --reuse-db and once with it, but the first invocation removes its own sidecar on exit and --reuse-db only adopts a sidecar a previous --reuse-db invocation left running, so both halves of a single invocation start on a freshly created database."
+assumption = "Requirement 10 ac_4's second pass over an already migrated database is reached by invoking the verify_cmd a second time, which adopts the sidecar the recorded run leaves behind; the recorded run proves the fresh-database case under two independent ExUnit seeds."
+severity   = "note"
