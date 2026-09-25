@@ -355,7 +355,7 @@ reqs = ["7.1","7.2","7.3","7.4","7.5"]
 [task.2.4]
 title = "Add the fee-token parameters to x/evm"
 status = "done"
-revision = "pending"
+revision = "bad7473398300f3565b856180a378609b4e86655"
 command = "timeout 20m sh -c 'go test -count=1 ./modules/evm/types/... && go test -count=1 -run FeeTokenParams ./modules/evm/keeper/...'"
 exit_code = 0
 log_path = "/root/lx-lanes/sid-t2-4/.logs/verify.log"
