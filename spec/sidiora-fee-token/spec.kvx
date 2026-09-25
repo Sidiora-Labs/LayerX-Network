@@ -207,7 +207,11 @@ status = "pending"
 
 [task.1.1]
 title = "Harden the sponsored batch into a Sidiora paymaster"
-status = "pending"
+status = "done"
+revision = "efe112babbb5577315cfe934effb71f3b435f203"
+command = "timeout 20m sh -c 'FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague --match-path contracts/test/BatchCallAndSponsorTest.t.sol -vvv'"
+exit_code = 0
+log_path = "/root/lx-lanes/sid-t1-1/.logs/verify.log"
 wave = 1
 requires = []
 do_1 = "In contracts/src/BatchCallAndSponsor.sol add a Quote struct carrying the sponsor address, the token address, the maximum token amount, the quoted token amount, the deadline and the quote nonce, and add an executeSponsored entry point taking the calls, the account's signature over the batch digest and the relayer's signature over the quote digest; keep execute and the existing signature-carrying path working exactly as they do, keep the nonce, the CallExecuted and BatchExecuted events and the payable fallback and receive."

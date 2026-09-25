@@ -29,3 +29,10 @@
 #
 # No record carries a hostname, an IP address, an internal URL, a credential or
 # the name of an agent or a working branch.
+
+[observation.1.1.1]
+revision = "17c8ed319f18cbe5a003614c4ee082c2c3c0b122"
+command = "cat precompiles/oracle/oracle.go"; exit_code = 0
+log_path = ".logs/context.log"
+observed = "The oracle precompile returns ErrOraclePrecompileRetired for every rate query."
+assumption = "Sponsorship must fail closed until an independently authorized change supplies oracle rates; this task does not alter the precompile."
