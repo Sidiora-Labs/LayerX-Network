@@ -88,6 +88,10 @@ message Params {
     (gogoproto.moretags) = "yaml:\"fee_token_enabled\"",
     (gogoproto.jsontag) = "fee_token_enabled"
   ];
+  bool fee_token_distribution = 19 [
+    (gogoproto.moretags) = "yaml:\"fee_token_distribution\"",
+    (gogoproto.jsontag) = "fee_token_distribution"
+  ];
 }
 
 message ParamsPreV580 {

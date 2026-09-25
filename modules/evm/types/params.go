@@ -10,7 +10,10 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+const FeeTokenHoldingAccount = "fee_token_holding"
+
 var (
+	KeyFeeTokenDistribution                = []byte("KeyFeeTokenDistribution")
 	KeyAllowedFeeDenoms                    = []byte("KeyAllowedFeeDenoms")
 	KeyMaxFeeTokenSpread                   = []byte("KeyMaxFeeTokenSpread")
 	KeyFeeTokenEnabled                     = []byte("KeyFeeTokenEnabled")
@@ -31,6 +34,7 @@ var (
 var DefaultAllowedFeeDenoms = []AllowedFeeDenom(nil)
 var DefaultMaxFeeTokenSpread = sdk.NewDecWithPrec(5, 2)
 var DefaultFeeTokenEnabled = false
+var DefaultFeeTokenDistribution = false
 
 var DefaultPriorityNormalizer = sdk.NewDec(1)
 
@@ -58,6 +62,7 @@ func ParamKeyTable() paramtypes.KeyTable {
 
 func DefaultParams() Params {
 	return Params{
+		FeeTokenDistribution:                   DefaultFeeTokenDistribution,
 		AllowedFeeDenoms:                       append([]AllowedFeeDenom(nil), DefaultAllowedFeeDenoms...),
 		MaxFeeTokenSpread:                      DefaultMaxFeeTokenSpread,
 		FeeTokenEnabled:                        DefaultFeeTokenEnabled,
@@ -77,6 +82,7 @@ func DefaultParams() Params {
 
 func (p *Params) ParamSetPairs() paramtypes.ParamSetPairs {
 	return paramtypes.ParamSetPairs{
+		paramtypes.NewParamSetPair(KeyFeeTokenDistribution, &p.FeeTokenDistribution, validateFeeTokenDistribution),
 		paramtypes.NewParamSetPair(KeyAllowedFeeDenoms, &p.AllowedFeeDenoms, validateAllowedFeeDenoms),
 		paramtypes.NewParamSetPair(KeyMaxFeeTokenSpread, &p.MaxFeeTokenSpread, validateMaxFeeTokenSpread),
 		paramtypes.NewParamSetPair(KeyFeeTokenEnabled, &p.FeeTokenEnabled, validateFeeTokenEnabled),
@@ -141,6 +147,9 @@ func (ppre606 *ParamsPreV606) ParamSetPairs() paramtypes.ParamSetPairs {
 }
 
 func (p Params) Validate() error {
+	if err := validateFeeTokenDistribution(p.FeeTokenDistribution); err != nil {
+		return err
+	}
 	if err := validateAllowedFeeDenoms(p.AllowedFeeDenoms); err != nil {
 		return err
 	}
@@ -356,6 +365,13 @@ func validateMaxFeeTokenSpread(i interface{}) error {
 func validateFeeTokenEnabled(i interface{}) error {
 	if _, ok := i.(bool); !ok {
 		return fmt.Errorf("invalid fee_token_enabled type %T: %v", i, i)
+	}
+	return nil
+}
+
+func validateFeeTokenDistribution(i interface{}) error {
+	if _, ok := i.(bool); !ok {
+		return fmt.Errorf("invalid fee_token_distribution type %T: %v", i, i)
 	}
 	return nil
 }

@@ -431,7 +431,11 @@ reqs = ["11.1","11.2","11.3","11.4","11.5"]
 
 [task.2.8]
 title = "Decide where collected Sidiora fees go"
-status = "pending"
+status = "done"
+revision = "12771ccf94a05073543bf09442c81cb1a608d202"
+command = "timeout 20m sh -c 'go test -count=1 -run SidioraFeeCollection ./modules/evm/keeper/...'"
+exit_code = 0
+log_path = "/root/lx-lanes/sid-t2-8/.logs/verify.log"
 wave = 2
 requires = ["2.4"]
 do_1 = "Add to the x/evm parameters, at an unused field number and with its own key, default and validator, the switch that chooses between distributing collected non-network-coin fees through the fee collector the distribution already reads and holding them at a named module account for governance to move, defaulting to holding."

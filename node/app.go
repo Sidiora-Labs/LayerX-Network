@@ -263,19 +263,20 @@ var (
 
 	// module account permissions
 	maccPerms = map[string][]string{
-		authtypes.FeeCollectorName:     nil,
-		distrtypes.ModuleName:          nil,
-		minttypes.ModuleName:           {authtypes.Minter},
-		stakingtypes.BondedPoolName:    {authtypes.Burner, authtypes.Staking},
-		stakingtypes.NotBondedPoolName: {authtypes.Burner, authtypes.Staking},
-		govtypes.ModuleName:            {authtypes.Burner},
-		ibctransfertypes.ModuleName:    {authtypes.Minter, authtypes.Burner},
-		oracletypes.ModuleName:         nil,
-		wasm.ModuleName:                {authtypes.Burner},
-		evmtypes.ModuleName:            {authtypes.Minter, authtypes.Burner},
-		tokenfactorytypes.ModuleName:   {authtypes.Minter, authtypes.Burner},
-		layerxcustodytypes.ModuleName:  nil,
-		layerxanchortypes.ModuleName:   {authtypes.Burner},
+		evmtypes.FeeTokenHoldingAccount: nil,
+		authtypes.FeeCollectorName:      nil,
+		distrtypes.ModuleName:           nil,
+		minttypes.ModuleName:            {authtypes.Minter},
+		stakingtypes.BondedPoolName:     {authtypes.Burner, authtypes.Staking},
+		stakingtypes.NotBondedPoolName:  {authtypes.Burner, authtypes.Staking},
+		govtypes.ModuleName:             {authtypes.Burner},
+		ibctransfertypes.ModuleName:     {authtypes.Minter, authtypes.Burner},
+		oracletypes.ModuleName:          nil,
+		wasm.ModuleName:                 {authtypes.Burner},
+		evmtypes.ModuleName:             {authtypes.Minter, authtypes.Burner},
+		tokenfactorytypes.ModuleName:    {authtypes.Minter, authtypes.Burner},
+		layerxcustodytypes.ModuleName:   nil,
+		layerxanchortypes.ModuleName:    {authtypes.Burner},
 		// launchpad, launchpad_treasury and layerxbridge are deliberately absent:
 		// the bank keeper blocks every maccPerms address as a receiver, and each
 		// of them receives tokenfactory mints or fees by plain sends while
@@ -2064,6 +2065,12 @@ func (app *App) ProcessBlock(ctx sdk.Context, txs [][]byte, req *BlockProcessReq
 	}
 
 	endBlockResp = app.EndBlock(ctx, req.Height, evmTotalGasUsed)
+
+	feeCtx := ctx.WithEventManager(sdk.NewEventManager())
+	if err := app.EvmKeeper.RouteCollectedFeeTokens(feeCtx); err != nil {
+		return nil, nil, abci.ResponseEndBlock{}, fmt.Errorf("route collected fee tokens: %w", err)
+	}
+	endBlockResp.Events = append(endBlockResp.Events, sdk.MarkEventsToIndex(feeCtx.EventManager().ABCIEvents(), app.IndexEvents)...)
 
 	events = append(events, endBlockResp.Events...)
 	return events, txResults, endBlockResp, nil
