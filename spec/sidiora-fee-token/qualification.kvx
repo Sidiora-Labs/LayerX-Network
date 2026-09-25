@@ -186,3 +186,31 @@ symbol = "observation.1.4.3, observation.1.4.4"
 observed = "Historical observations contain process-specific narrative, while the ledger rules prohibit rewriting or removing written records."
 assumption = "Existing records remain immutable; subsequent observations state repository facts without changing historical evidence."
 severity = "suspect"
+
+[observation.2.2.1]
+revision = "a9224a86520f442902062b3d8f71afb996646778"
+command = "cat modules/evm/gov.go"; exit_code = 0
+log_path = ".logs/scope-conflicts.log"
+observed = "The legacy native-pointer binding proposal is deprecated; V2 accepts metadata without pointer or version and deploys or overwrites pointer code, so no supported proposal safely binds the existing proxy."
+assumption = "The committed legacy binding fields are a non-executable artifact pending separately authorized governance support; no V2 deployment proposal is substituted."
+
+[observation.2.2.2]
+revision = "a9224a86520f442902062b3d8f71afb996646778"
+command = "rg -n -i 'sidiora|21f7b20' contracts test scripts --glob '!package-lock.json'"; exit_code = 0
+log_path = ".logs/scope-conflicts.log"
+observed = "The supplied contract sources contain no deployed Sidiora implementation layout; namespace and proxy-slot tests cannot certify existing implementation compatibility or preserve unknown allowance semantics."
+assumption = "Upgrade qualification requires the deployed layout and proxy mechanism; new allowances use isolated storage while legacy slots remain untouched."
+
+[observation.2.2.3]
+revision = "a9224a86520f442902062b3d8f71afb996646778"
+command = "FOUNDRY_CONFIG=foundry.paxeer.toml forge build contracts/test/SidioraNativeERC20Test.t.sol --evm-version=prague"; exit_code = 1
+log_path = ".logs/build.log"
+observed = "Foundry inferred forge-std/contracts/src instead of the pinned dependency's src directory and could not resolve Test.sol or Vm.sol."
+assumption = "The focused verify run uses explicit dependency remappings in the environment; the failed build is not rerun."
+
+[observation.2.2.4]
+revision = "a9224a86520f442902062b3d8f71afb996646778"
+command = "timeout 20m sh -c 'FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague --match-path contracts/test/SidioraNativeERC20Test.t.sol -vvv'"; exit_code = 0
+log_path = ".logs/verify.log"
+observed = "Compilation reported existing payable-fallback and unused-parameter warnings in ProxySwapTester.sol and a selfdestruct warning in SelfDestructTester.sol."
+assumption = "These unchanged files are outside the task scope; the focused gate passed and is not rerun."
