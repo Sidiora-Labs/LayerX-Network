@@ -4,7 +4,8 @@ defmodule Indexer.Block.FetcherTest do
   use Explorer.DataCase
 
   use Utils.CompileTimeEnvHelper,
-    chain_identity: [:explorer, :chain_identity]
+    chain_identity: [:explorer, :chain_identity],
+    chain_type: [:explorer, :chain_type]
 
   import Mox
   import EthereumJSONRPC, only: [integer_to_quantity: 1]
@@ -1295,6 +1296,213 @@ defmodule Indexer.Block.FetcherTest do
     else
       :timer.sleep(100)
       do_wait_until(parent, ref, producer)
+    end
+  end
+
+  if @chain_type == :paxeer_x do
+    alias Explorer.Chain.PaxeerX.{DepositRoot, GuarantorEvent}
+
+    @anchor_precompile "0x0000000000000000000000000000000000001014"
+    @custody_precompile "0x0000000000000000000000000000000000001013"
+    @guarantor_registered_topic "0x674824b594bdf3d0829ce02226b81f1a7bff5ae2f5cb90c58fea0d384d5d3e1f"
+    @deposit_root_registered_topic "0xdc7b7dbcfc1dc6570c57d3d6413b4a7fd3c1aa068b1a8a45910d76e65a35b0bc"
+    @disabled_fetcher_supervisors [
+      Indexer.Fetcher.CoinBalance.Catchup.Supervisor,
+      Indexer.Fetcher.InternalTransaction.Supervisor,
+      Indexer.Fetcher.ReplacedTransaction.Supervisor
+    ]
+
+    describe "fetch_and_import_range/2 paxeer_x" do
+      setup %{json_rpc_named_arguments: json_rpc_named_arguments} do
+        ContractCode.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
+        {:ok, _pid} = ContractCreatorOnDemand.start_link([[], []])
+        start_supervised!({Task.Supervisor, name: Indexer.TaskSupervisor})
+
+        for supervisor <- @disabled_fetcher_supervisors do
+          configuration = Application.get_env(:indexer, supervisor)
+          Application.put_env(:indexer, supervisor, disabled?: true)
+
+          on_exit(fn ->
+            case configuration do
+              nil -> Application.delete_env(:indexer, supervisor)
+              configuration -> Application.put_env(:indexer, supervisor, configuration)
+            end
+          end)
+        end
+
+        %{
+          block_fetcher: %Fetcher{
+            broadcast: false,
+            callback_module: Indexer.Block.Catchup.Fetcher,
+            json_rpc_named_arguments: json_rpc_named_arguments,
+            task_supervisor: Indexer.TaskSupervisor
+          }
+        }
+      end
+
+      @tag :no_geth
+      test "the decoded kernel precompile logs of a block reach lx_guarantor_events and lx_deposit_roots", %{
+        block_fetcher: %Fetcher{json_rpc_named_arguments: json_rpc_named_arguments} = block_fetcher
+      } do
+        block_number = @first_full_block_number
+        block_quantity = integer_to_quantity(block_number)
+        block_hash = "0xf6b4b8c88df3ebd252ec476328334dc026cf66606a84fb769b3d3cbccc8471bd"
+        transaction_hash = "0x53bd884872de3e488692881baeec262e7b95234d3965248c39fe992fffd433e5"
+
+        case Keyword.fetch!(json_rpc_named_arguments, :variant) do
+          EthereumJSONRPC.Nethermind ->
+            EthereumJSONRPC.Mox
+            |> expect(:json_rpc, fn [%{id: id, method: "eth_getBlockByNumber", params: [^block_quantity, true]}],
+                                    _options ->
+              {:ok, [%{id: id, jsonrpc: "2.0", result: paxeer_x_block(block_hash, transaction_hash)}]}
+            end)
+            |> expect(:json_rpc, fn [%{id: id, method: "eth_getTransactionReceipt", params: [^transaction_hash]}],
+                                    _options ->
+              {:ok, [%{id: id, jsonrpc: "2.0", result: paxeer_x_receipt(block_hash, transaction_hash)}]}
+            end)
+            |> expect(:json_rpc, fn [%{id: id, method: "trace_block", params: [^block_quantity]}], _options ->
+              {:ok, [%{id: id, jsonrpc: "2.0", result: []}]}
+            end)
+
+            assert {:ok, %{errors: []}} =
+                     Fetcher.fetch_and_import_range(block_fetcher, block_number..block_number)
+
+            guarantor_event = Repo.one!(GuarantorEvent)
+
+            assert guarantor_event.kind == :guarantor_registered
+            assert guarantor_event.event_name == "GuarantorRegistered"
+            assert guarantor_event.block_number == block_number
+            assert guarantor_event.log_index == 0
+            assert to_string(guarantor_event.guarantor_id) == "0x" <> String.duplicate("0", 62) <> "1a"
+            assert to_string(guarantor_event.signer_address_hash) == "0x" <> String.duplicate("0", 38) <> "21"
+            assert to_string(guarantor_event.operator_address_hash) == "0x" <> String.duplicate("0", 38) <> "22"
+            assert Decimal.equal?(guarantor_event.bond, Decimal.new(100))
+            assert guarantor_event.parameters["status"] == 1
+            assert guarantor_event.block_consensus == true
+
+            deposit_root = Repo.one!(DepositRoot)
+
+            assert deposit_root.event_name == "DepositRootRegistered"
+            assert deposit_root.block_number == block_number
+            assert deposit_root.log_index == 1
+            assert to_string(deposit_root.checkpoint_id) == "0x" <> String.duplicate("0", 62) <> "7a"
+            assert to_string(deposit_root.deposit_root) == "0x" <> String.duplicate("0", 62) <> "7b"
+            assert to_string(deposit_root.commitment) == "0x" <> String.duplicate("0", 62) <> "7c"
+            assert deposit_root.version == 1
+            assert deposit_root.block_consensus == true
+
+          variant ->
+            raise ArgumentError, "Unsupported variant (#{variant})"
+        end
+      end
+    end
+
+    defp paxeer_x_block(block_hash, transaction_hash) do
+      %{
+        "author" => "0xe8ddc5c7a2d2f0d7a9798459c0104fdf5e987aca",
+        "difficulty" => "0xfffffffffffffffffffffffffffffffe",
+        "extraData" => "0xd5830108048650617269747986312e32322e31826c69",
+        "gasLimit" => "0x69fe20",
+        "gasUsed" => "0xc512",
+        "hash" => block_hash,
+        "logsBloom" => "0x" <> String.duplicate("0", 512),
+        "miner" => "0xe8ddc5c7a2d2f0d7a9798459c0104fdf5e987aca",
+        "number" => "0x25",
+        "parentHash" => "0xc37bbad7057945d1bf128c1ff009fb1ad632110bf6a000aac025a80f7766b66e",
+        "receiptsRoot" => "0xd300311aab7dcc98c05ac3f1893629b2c9082c189a0a0c76f4f63e292ac419d5",
+        "sealFields" => [
+          "0x84120a71de",
+          "0xb841fcdb570511ec61edda93849bb7c6b3232af60feb2ea74e4035f0143ab66dfdd00f67eb3eda1adddbb6b572db1e0abd39ce00f9b3ccacb9f47973279ff306fe5401"
+        ],
+        "sha3Uncles" => "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+        "signature" =>
+          "fcdb570511ec61edda93849bb7c6b3232af60feb2ea74e4035f0143ab66dfdd00f67eb3eda1adddbb6b572db1e0abd39ce00f9b3ccacb9f47973279ff306fe5401",
+        "size" => "0x2cf",
+        "stateRoot" => "0x2cd84079b0d0c267ed387e3895fd1c1dc21ff82717beb1132adac64276886e19",
+        "step" => "302674398",
+        "timestamp" => "0x5a343956",
+        "totalDifficulty" => "0x24ffffffffffffffffffffffffedf78dfd",
+        "transactions" => [paxeer_x_transaction(block_hash, transaction_hash)],
+        "transactionsRoot" => "0x68e314a05495f390f9cd0c36267159522e5450d2adf254a74567b452e767bf34",
+        "uncles" => []
+      }
+    end
+
+    defp paxeer_x_transaction(block_hash, transaction_hash) do
+      %{
+        "blockHash" => block_hash,
+        "blockNumber" => "0x25",
+        "chainId" => "0x4d",
+        "condition" => nil,
+        "creates" => nil,
+        "from" => "0xe8ddc5c7a2d2f0d7a9798459c0104fdf5e987aca",
+        "gas" => "0x47b760",
+        "gasPrice" => "0x174876e800",
+        "hash" => transaction_hash,
+        "input" => "0x10855269000000000000000000000000862d67cb0773ee3f8ce7ea89b328ffea861ab3ef",
+        "nonce" => "0x4",
+        "publicKey" =>
+          "0xe5d196ad4ceada719d9e592f7166d0c75700f6eab2e3c3de34ba751ea786527cb3f6eb96ad9fdfdb9989ff572df50f1c42ef800af9c5207a38b929aff969b5c9",
+        "r" => "0xa7f8f45cce375bb7af8750416e1b03e0473f93c256da2285d1134fc97a700e01",
+        "raw" =>
+          "0xf88a0485174876e8008347b760948bf38d4764929064f2d4d3a56520a76ab3df415b80a410855269000000000000000000000000862d67cb0773ee3f8ce7ea89b328ffea861ab3ef81bea0a7f8f45cce375bb7af8750416e1b03e0473f93c256da2285d1134fc97a700e01a01f87a076f13824f4be8963e3dffd7300dae64d5f23c9a062af0c6ead347c135f",
+        "s" => "0x1f87a076f13824f4be8963e3dffd7300dae64d5f23c9a062af0c6ead347c135f",
+        "standardV" => "0x1",
+        "to" => "0x8bf38d4764929064f2d4d3a56520a76ab3df415b",
+        "transactionIndex" => "0x0",
+        "v" => "0xbe",
+        "value" => "0x0"
+      }
+    end
+
+    defp paxeer_x_receipt(block_hash, transaction_hash) do
+      %{
+        "blockHash" => block_hash,
+        "blockNumber" => "0x25",
+        "contractAddress" => nil,
+        "cumulativeGasUsed" => "0xc512",
+        "gasUsed" => "0xc512",
+        "logs" => [
+          %{
+            "address" => @anchor_precompile,
+            "blockHash" => block_hash,
+            "blockNumber" => "0x25",
+            "data" =>
+              "0x" <>
+                String.duplicate("0", 62) <>
+                "22" <> String.duplicate("0", 62) <> "64" <> String.duplicate("0", 63) <> "1",
+            "logIndex" => "0x0",
+            "topics" => [
+              @guarantor_registered_topic,
+              "0x" <> String.duplicate("0", 62) <> "1a",
+              "0x" <> String.duplicate("0", 62) <> "21"
+            ],
+            "transactionHash" => transaction_hash,
+            "transactionIndex" => "0x0",
+            "transactionLogIndex" => "0x0"
+          },
+          %{
+            "address" => @custody_precompile,
+            "blockHash" => block_hash,
+            "blockNumber" => "0x25",
+            "data" => "0x" <> String.duplicate("0", 62) <> "7c" <> String.duplicate("0", 63) <> "1",
+            "logIndex" => "0x1",
+            "topics" => [
+              @deposit_root_registered_topic,
+              "0x" <> String.duplicate("0", 62) <> "7a",
+              "0x" <> String.duplicate("0", 62) <> "7b"
+            ],
+            "transactionHash" => transaction_hash,
+            "transactionIndex" => "0x0",
+            "transactionLogIndex" => "0x1"
+          }
+        ],
+        "logsBloom" => "0x" <> String.duplicate("0", 512),
+        "root" => nil,
+        "status" => "0x1",
+        "transactionHash" => transaction_hash,
+        "transactionIndex" => "0x0"
+      }
     end
   end
 

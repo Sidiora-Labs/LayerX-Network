@@ -494,7 +494,11 @@ reqs = ["9.1","9.2","9.3"]
 
 [task.2.6]
 title = "Decode every kernel precompile event"
-status = "pending"
+status = "done"
+done_revision = "885de278d32ebc8fefb50ccb0f03da5612210d39"
+done_command = "timeout 20m sh -c 'explorer/deploy/tools/mix-in-builder.sh test apps/indexer/test/indexer/transform/paxeer_x_logs_test.exs'"
+done_exit_code = 0
+done_evidence = "46 tests, 0 failures"
 wave = 2
 requires = ["2.5"]
 do_1 = "In explorer/backend/apps/indexer/lib/indexer/transform/paxeer_x_logs.ex add topic constants and decoders for the nine guarantor and challenge events of the anchor precompile and for its availability attestation, from the signatures in precompiles/layerxanchor/abi.json, returning them under a new lx_guarantor_events key mapped to the columns the new schema declares."
@@ -504,7 +508,7 @@ do_4 = "Count and log by name any log from a kernel precompile address whose top
 do_5 = "Extend explorer/backend/apps/indexer/test/indexer/transform/paxeer_x_logs_test.exs with a real log fixture per newly handled event, asserting every decoded column and the topic-against-signature proof for each new constant, and add a case asserting the unmatched count is zero for the committed ABI set."
 verify_cmd = "timeout 20m sh -c 'explorer/deploy/tools/mix-in-builder.sh test apps/indexer/test/indexer/transform/paxeer_x_logs_test.exs'"
 symbols = ["Indexer.Transform.PaxeerXLogs","parse"]
-touches = ["explorer/backend/apps/indexer/lib/indexer/transform/paxeer_x_logs.ex","explorer/backend/apps/indexer/test/indexer/transform/paxeer_x_logs_test.exs"]
+touches = ["explorer/backend/apps/indexer/lib/indexer/transform/paxeer_x_logs.ex","explorer/backend/apps/indexer/test/indexer/transform/paxeer_x_logs_test.exs","explorer/backend/apps/indexer/lib/indexer/block/fetcher.ex","explorer/backend/apps/indexer/test/indexer/block/fetcher_test.exs","spec/paxeer-x-explorer/qualification.kvx"]
 reqs = ["9.4","9.5","9.6"]
 
 [task.2.7]
