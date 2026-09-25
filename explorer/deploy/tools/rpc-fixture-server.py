@@ -50,6 +50,11 @@ HTTP
     `{"calls": [{"method": ..., "params": [...], "matched": true|false}]}`, so a
     test can assert which requests the backend actually made.
 
+A request body is read only once its declared length is known to be at most
+`MAX_BODY_BYTES`; a larger one is refused with 413 and the connection is closed
+before any of it is read. Each connection also carries a read timeout, so a
+client that declares a body and then stops sending cannot hold a thread.
+
 Environment: `RPC_FIXTURE_DIR` (required), `RPC_FIXTURE_HOST` (default
 `0.0.0.0`), `RPC_FIXTURE_PORT` (default `8545`).
 """
@@ -61,6 +66,12 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 WILDCARD = "*"
+# Recorded calls are small - the largest batch the backend sends is a few
+# kilobytes - and the server publishes a port, so a body larger than this is
+# refused rather than read.
+MAX_BODY_BYTES = 1 << 20
+# A connection that stops sending mid-request releases its thread after this.
+CONNECTION_TIMEOUT_SECONDS = 30
 METHOD_NOT_RECORDED = -32601
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -182,6 +193,7 @@ class Journal:
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "paxeer-x-rpc-fixture"
+    timeout = CONNECTION_TIMEOUT_SECONDS
 
     fixtures = None
     journal = None
@@ -197,8 +209,32 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "no such path: %s" % path})
 
     def do_POST(self):  # noqa: N802 - the name is BaseHTTPRequestHandler's
-        length = int(self.headers.get("Content-Length") or 0)
+        declared = self.headers.get("Content-Length")
+
+        try:
+            length = int(declared) if declared is not None else 0
+        except ValueError:
+            length = -1
+
+        if length < 0:
+            self._send_json(
+                400, {"error": "Content-Length is not a length: %s" % declared}, close=True
+            )
+            return
+
+        if length > MAX_BODY_BYTES:
+            self._send_json(
+                413,
+                {"error": "a request body may be at most %d bytes" % MAX_BODY_BYTES},
+                close=True,
+            )
+            return
+
         body = self.rfile.read(length)
+
+        if len(body) != length:
+            self._send_json(400, {"error": "the request body ended early"}, close=True)
+            return
 
         try:
             payload = json.loads(body.decode("utf-8"))
@@ -266,12 +302,18 @@ class Handler(BaseHTTPRequestHandler):
             "error": {"code": code, "message": message},
         }
 
-    def _send_json(self, status, payload):
+    def _send_json(self, status, payload, close=False):
         body = json.dumps(payload).encode("utf-8")
 
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+
+        # A refused body is still unread, so the connection cannot be reused.
+        if close:
+            self.close_connection = True
+            self.send_header("Connection", "close")
+
         self.end_headers()
         self.wfile.write(body)
 

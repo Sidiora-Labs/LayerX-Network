@@ -12,8 +12,10 @@
 # The stack runs under its own compose project and its own published ports, so
 # it touches neither a production project nor anything else on the machine.
 #
-# Overridable: EXPLORER_IMAGE_TAG (default latest) and the three published
-# ports below.
+# Overridable: EXPLORER_IMAGE_TAG (default latest), the three published ports
+# below, and SMOKE_PROJECT_NAME. Two runs on one machine need a name and three
+# ports of their own; with the defaults a run owns the one project, and clears
+# whatever an interrupted earlier run of it left behind.
 
 set -euo pipefail
 
@@ -24,7 +26,7 @@ compose_file="${deploy_dir}/docker-compose.local.yml"
 fixture_server="${tools_dir}/rpc-fixture-server.py"
 fixture_dir="${tools_dir}/fixtures"
 
-project_name="paxeer-x-explorer-smoke"
+project_name="${SMOKE_PROJECT_NAME:-paxeer-x-explorer-smoke}"
 
 export EXPLORER_IMAGE_TAG="${EXPLORER_IMAGE_TAG:-latest}"
 export POSTGRES_PUBLISHED_PORT="${POSTGRES_PUBLISHED_PORT:-57432}"
@@ -110,7 +112,9 @@ require_command python3
 say "compose file ${compose_file}"
 say "image tag ${EXPLORER_IMAGE_TAG}"
 
-# A stale stack from an interrupted run would answer in place of this one.
+# A stale stack of this project, left behind by an interrupted run of it, would
+# answer in place of this one; nothing in that stack is worth keeping, since a
+# run creates its database volume and indexes nothing into it.
 compose down --volumes --remove-orphans --timeout 20 > /dev/null 2>&1 || true
 
 trap teardown EXIT
@@ -130,6 +134,46 @@ until curl -fsS --max-time 5 "http://127.0.0.1:${RPC_FIXTURE_PUBLISHED_PORT}/__h
   [ "${SECONDS}" -lt "${deadline}" ] || die "the recorded JSON-RPC server never answered /__health"
   sleep 2
 done
+
+say "checking that the recorded JSON-RPC server refuses an oversize body"
+python3 - "${RPC_FIXTURE_PUBLISHED_PORT}" <<'PY' || die "the recorded JSON-RPC server accepted an oversize body"
+import http.client
+import json
+import sys
+
+port = int(sys.argv[1])
+
+# The body is declared and never sent: the server has to refuse it on the
+# declared length alone, before it reads any of it and before the connection
+# can hold a thread waiting for the rest.
+connection = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+connection.putrequest("POST", "/")
+connection.putheader("Content-Type", "application/json")
+connection.putheader("Content-Length", str(64 * 1024 * 1024))
+connection.endheaders()
+
+response = connection.getresponse()
+status = response.status
+response.read()
+connection.close()
+
+if status != 413:
+    sys.stderr.write("an oversize body was answered %d, expected 413\n" % status)
+    sys.exit(1)
+
+# And the server is still serving afterwards.
+connection = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+connection.request("GET", "/__health")
+response = connection.getresponse()
+health = json.loads(response.read().decode("utf-8"))
+connection.close()
+
+if health.get("status") != "ok":
+    sys.stderr.write("the server stopped serving: %s\n" % json.dumps(health))
+    sys.exit(1)
+PY
+
+say "the recorded JSON-RPC server refuses an oversize body and keeps serving"
 
 say "waiting for ${liveness_url}"
 deadline=$((SECONDS + liveness_timeout_seconds))
