@@ -71,7 +71,7 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 | hosted-paxeer | Paxeer chain 125 node with its JSON-RPC boundary, chain initialisation and settlement contract deployment | hosted | deployment_proven | source_present | platform/hosted/paxeer |
 | hosted-human | Human HTTPS API and privileged components; readiness requires the production providers | hosted | deployment_proven | source_present | platform/hosted/human |
 | hosted-internal | layerx-internal aliases, Redis, KMS and event sources for the developer plane | hosted | deployment_proven | source_present | platform/hosted/internal |
-| hosted-indexer | decoded history of both halves of the network: LayerX canonical receipts and Paxeer blocks, receipts, logs and typed events into one checkpointed store with reorg rollback | hosted | deployment_proven | source_present | platform/hosted/indexer |
+| hosted-indexer | decoded history of both halves of the network: canonical receipts from the LayerX kernel domain and Paxeer blocks, receipts, logs and typed events into one checkpointed store with reorg rollback | hosted | deployment_proven | source_present | platform/hosted/indexer |
 | hosted-interop | interop gateway deployment: the x402, AP2, UCP and Visa TAP boundary in front of the hosted gateway and the receipt authority | hosted | deployment_proven | source_present | platform/hosted/interop |
 | hosted-tests | static topology check: every configured in-cluster URL resolves to an exposed Service port admitted by NetworkPolicy on both ends | hosted | deployment_proven | source_present | platform/hosted/tests |
 | middleware-buyer | @sidiora/layerx-buyer-middleware | functional | runtime_proven | source_present | platform/middleware/buyer |

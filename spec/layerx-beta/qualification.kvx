@@ -14537,13 +14537,6 @@ observed = "The binary running on every mainnet validator (sha256 prefix 1878260
 assumption = "Spec text updated from v6.5 to v6.6 wherever it names the fork upgrade; the rehearsal in 9.12 proves the v6.6 plan halts the old binary and resumes on the new one."
 severity = "note"
 
-# Follow-up records for the wave 8 findings above. The outcome of each earlier
-# finding was first written into the record it concerns under a 'resolution'
-# key, which is not one of the six observation keys this ledger defines, so
-# tools/ci/beta-ledger-check.sh rejected those records. The text is carried
-# here verbatim as its own observation, the shape the ledger documents for a
-# later finding, and the earlier records keep everything they observed.
-
 [observation.8.4.4]
 task = "8.4"
 file = "agent/crates/layerx-types/build.rs include/layerx/lxp_result.h agent/crates/layerx-types/src/result.rs"
