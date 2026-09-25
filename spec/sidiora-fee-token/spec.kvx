@@ -337,7 +337,7 @@ reqs = ["5.1","5.2","5.3","5.4","5.5"]
 [task.2.2]
 title = "Put a bank-backed implementation behind the existing Sidiora address"
 status = "done"
-revision = "pending"
+revision = "86514bb836cd7a84086ce66265eeef9ef8c40717"
 command = "timeout 20m sh -c 'FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague --match-path contracts/test/SidioraNativeERC20Test.t.sol -vvv'"
 exit_code = 0
 log_path = "/root/lx-lanes/sid-t2-2/.logs/verify.log"
