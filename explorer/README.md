@@ -48,15 +48,15 @@ explorer/deploy/tools/mix-in-builder.sh format --check-formatted
 explorer/deploy/tools/mix-in-builder.sh test apps/explorer/test/explorer
 ```
 
-It mounts `apps`, `config`, `rel`, `mix.exs`, `mix.lock` and `.formatter.exs`
-into the container, keeps the compiled artefacts in a named volume so a rerun
-does not recompile the dependencies, starts a disposable PostgreSQL 16 sidecar
-and joins the mix container to its network namespace so both reach the database
-over the same loopback interface, waits until the database accepts a connection
-over that interface, installs the headless browser driver when the run reaches
-`block_scout_web`, prints the command it resolved with the database password
-redacted, and exits with the mix exit code. The sidecar and its volume are
-removed when the command finishes and when it is interrupted.
+It mounts `apps`, `config`, `rel`, `mix.exs`, `mix.lock`, `.formatter.exs` and
+`.credo.exs` into the container, keeps the compiled artefacts in a named volume
+so a rerun does not recompile the dependencies, starts a disposable PostgreSQL
+16 sidecar and joins the mix container to its network namespace so both reach
+the database over the same loopback interface, waits until the database accepts
+a connection over that interface, installs the headless browser driver when the
+run reaches `block_scout_web`, prints the command it resolved with the database
+password redacted, and exits with the mix exit code. The sidecar and its volume
+are removed when the command finishes and when it is interrupted.
 
 The builder image is built on demand from
 `deploy/tools/Dockerfile.elixir-builder`, which pins the Elixir and Erlang

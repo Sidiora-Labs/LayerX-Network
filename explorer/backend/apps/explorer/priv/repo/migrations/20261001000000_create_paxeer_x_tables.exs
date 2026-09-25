@@ -59,11 +59,13 @@ defmodule Explorer.Repo.Migrations.CreatePaxeerXTables do
     create(index(:lx_account_bindings, [:block_number]))
     create(index(:lx_account_bindings, [:block_hash]))
     create(index(:lx_account_bindings, [:block_consensus]))
+
     create(
       index(:lx_account_bindings, [:evm_address_hash, :block_number, :log_index],
         name: :lx_account_bindings_evm_address_hash_position_index
       )
     )
+
     create(index(:lx_account_bindings, [:layerx_did]))
     create(index(:lx_account_bindings, [:layerx_account]))
     create(index(:lx_account_bindings, [:pax_address]))

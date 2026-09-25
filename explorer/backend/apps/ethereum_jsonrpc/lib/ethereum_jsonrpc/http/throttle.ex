@@ -170,7 +170,7 @@ defmodule EthereumJSONRPC.HTTP.Throttle do
 
     state =
       state
-      |> put_endpoint(url, %{endpoint | queue: endpoint.queue ++ [entry]})
+      |> put_endpoint(url, %{endpoint | queue: [entry | endpoint.queue]})
       |> put_waiter(entry.ref, {:queued, url})
       |> pump(url)
 
@@ -215,8 +215,7 @@ defmodule EthereumJSONRPC.HTTP.Throttle do
         endpoint = endpoint(state, url)
         queue = Enum.reject(endpoint.queue, &(&1.ref == ref))
 
-        {:noreply,
-         state |> drop_waiter(ref) |> put_endpoint(url, %{endpoint | queue: queue}) |> pump(url)}
+        {:noreply, state |> drop_waiter(ref) |> put_endpoint(url, %{endpoint | queue: queue}) |> pump(url)}
 
       {:ok, {:running, url, class, weight}} ->
         ticket = %{url: url, class: class, weight: weight, key: nil, ref: ref}
@@ -291,10 +290,8 @@ defmodule EthereumJSONRPC.HTTP.Throttle do
       max_inflight: positive(merged[:max_inflight], @default_max_inflight),
       rps: positive(merged[:rps], @default_rps),
       trace_max_inflight: positive(merged[:trace_max_inflight], @default_trace_max_inflight),
-      archive_max_inflight:
-        positive(merged[:archive_max_inflight], @default_archive_max_inflight),
-      coalesce?:
-        if(is_boolean(merged[:coalesce?]), do: merged[:coalesce?], else: @default_coalesce?)
+      archive_max_inflight: positive(merged[:archive_max_inflight], @default_archive_max_inflight),
+      coalesce?: if(is_boolean(merged[:coalesce?]), do: merged[:coalesce?], else: @default_coalesce?)
     }
   end
 
@@ -305,9 +302,10 @@ defmodule EthereumJSONRPC.HTTP.Throttle do
     config = state.config
     endpoint = state |> endpoint(url) |> refill(config)
 
-    {state, endpoint, kept} =
-      Enum.reduce(endpoint.queue, {state, endpoint, []}, fn entry,
-                                                            {acc_state, acc_endpoint, kept} ->
+    arrival_order = Enum.reverse(endpoint.queue)
+
+    {state, drained, kept} =
+      Enum.reduce(arrival_order, {state, endpoint, []}, fn entry, {acc_state, acc_endpoint, kept} ->
         cond do
           coalescable_entry?(acc_endpoint, entry) ->
             {acc_state, acc_endpoint} = attach_follower(acc_state, acc_endpoint, url, entry)
@@ -322,13 +320,11 @@ defmodule EthereumJSONRPC.HTTP.Throttle do
         end
       end)
 
-    endpoint =
-      %{endpoint | queue: Enum.reverse(kept)}
-      |> schedule_pump(url, config)
+    pumped = schedule_pump(%{drained | queue: kept}, url, config)
 
-    publish(endpoint)
+    publish(pumped)
 
-    put_endpoint(state, url, endpoint)
+    put_endpoint(state, url, pumped)
   end
 
   defp admissible?(endpoint, config, entry) do
@@ -350,7 +346,7 @@ defmodule EthereumJSONRPC.HTTP.Throttle do
 
     leaders =
       Map.update!(endpoint.leaders, entry.key, fn leader ->
-        %{leader | followers: leader.followers ++ [{entry.from, entry.ref}]}
+        %{leader | followers: [{entry.from, entry.ref} | leader.followers]}
       end)
 
     {put_waiter(state, entry.ref, {:follower, url, entry.key}), %{endpoint | leaders: leaders}}
@@ -436,8 +432,9 @@ defmodule EthereumJSONRPC.HTTP.Throttle do
     put_endpoint(state, url, release(endpoint, class))
   end
 
-  defp resolve_leader(state, url, endpoint, ticket, [{from, follower_ref} | rest], :promote) do
+  defp resolve_leader(state, url, endpoint, ticket, followers, :promote) do
     %{class: class, weight: weight, key: key} = ticket
+    [{from, follower_ref} | rest] = Enum.reverse(followers)
 
     GenServer.reply(
       from,
@@ -446,7 +443,7 @@ defmodule EthereumJSONRPC.HTTP.Throttle do
 
     endpoint = %{
       endpoint
-      | leaders: Map.put(endpoint.leaders, key, %{ref: follower_ref, followers: rest})
+      | leaders: Map.put(endpoint.leaders, key, %{ref: follower_ref, followers: Enum.reverse(rest)})
     }
 
     state

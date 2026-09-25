@@ -8,8 +8,7 @@ defmodule EthereumJSONRPC.Receipt do
 
   import EthereumJSONRPC, only: [quantity_to_integer: 1]
 
-  alias EthereumJSONRPC.Logs
-  alias EthereumJSONRPC.PaxeerX
+  alias EthereumJSONRPC.{Logs, PaxeerX}
 
   case @chain_type do
     :ethereum ->

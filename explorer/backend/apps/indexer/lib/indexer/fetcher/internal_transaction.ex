@@ -23,11 +23,10 @@ defmodule Indexer.Fetcher.InternalTransaction do
     ]
 
   alias EthereumJSONRPC.Utility.RangesHelper
-  alias Explorer.Chain
+  alias Explorer.{Chain, Repo}
   alias Explorer.Chain.{Block, Hash, PendingBlockOperation, PendingTransactionOperation, Transaction}
   alias Explorer.Chain.Cache.{Accounts, BlockNumber, Blocks}
   alias Explorer.Chain.Zilliqa.Helper, as: ZilliqaHelper
-  alias Explorer.Repo
   alias Indexer.{BufferedTask, Tracer}
   alias Indexer.Fetcher.InternalTransaction.Supervisor, as: InternalTransactionSupervisor
   alias Indexer.Transform.{AddressCoinBalances, Addresses, AddressTokenBalances}
@@ -275,17 +274,19 @@ defmodule Indexer.Fetcher.InternalTransaction do
 
       oldest_traceable_block_number ->
         {traceable, not_traceable} =
-          Enum.split_with(data, fn entry ->
-            case entry_block_number(entry, data_type) do
-              # entries without a block number are left to the existing validation
-              nil -> true
-              block_number -> block_number >= oldest_traceable_block_number
-            end
-          end)
+          Enum.split_with(data, &traceable_entry?(&1, data_type, oldest_traceable_block_number))
 
         mark_not_traceable(not_traceable, data_type, oldest_traceable_block_number)
 
         traceable
+    end
+  end
+
+  defp traceable_entry?(entry, data_type, oldest_traceable_block_number) do
+    case entry_block_number(entry, data_type) do
+      # entries without a block number are left to the existing validation
+      nil -> true
+      block_number -> block_number >= oldest_traceable_block_number
     end
   end
 

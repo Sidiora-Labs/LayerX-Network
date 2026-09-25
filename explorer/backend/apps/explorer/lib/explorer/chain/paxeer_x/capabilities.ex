@@ -70,7 +70,7 @@ defmodule Explorer.Chain.PaxeerX.Capabilities do
 
   @code_surface_names Keyword.keys(@code_surfaces)
 
-  @surfaces @code_surface_names ++ [:unified_account]
+  @surfaces [:unified_account | @code_surface_names]
 
   @get_unified_account_selector "0x357feed6"
   @probed_account "0x0000000000000000000000000000000000000000"
@@ -249,16 +249,16 @@ defmodule Explorer.Chain.PaxeerX.Capabilities do
         request(%{id: index, method: "eth_getCode", params: [address, block_quantity]})
       end)
 
-    code_requests ++
-      [
-        Contract.eth_call_request(
-          @get_unified_account_selector <> address_argument(@probed_account),
-          @addr_precompile,
-          @unified_account_request_id,
-          block_number,
-          nil
-        )
-      ]
+    unified_account_request =
+      Contract.eth_call_request(
+        @get_unified_account_selector <> address_argument(@probed_account),
+        @addr_precompile,
+        @unified_account_request_id,
+        block_number,
+        nil
+      )
+
+    [unified_account_request | code_requests]
   end
 
   defp address_argument("0x" <> digits),

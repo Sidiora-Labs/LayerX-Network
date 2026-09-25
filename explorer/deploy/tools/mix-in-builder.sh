@@ -188,7 +188,7 @@ ensure_runtime() {
 }
 
 ensure_mounts() {
-  for mount in apps config rel mix.exs mix.lock .formatter.exs; do
+  for mount in apps config rel mix.exs mix.lock .formatter.exs .credo.exs; do
     [ -e "$backend_dir/$mount" ] || die "mount source $backend_dir/$mount does not exist"
   done
 }
@@ -311,6 +311,7 @@ mix_in_container() {
     --volume "$backend_dir/mix.exs:$CONTAINER_WORKDIR/mix.exs" \
     --volume "$backend_dir/mix.lock:$CONTAINER_WORKDIR/mix.lock" \
     --volume "$backend_dir/.formatter.exs:$CONTAINER_WORKDIR/.formatter.exs" \
+    --volume "$backend_dir/.credo.exs:$CONTAINER_WORKDIR/.credo.exs" \
     --volume "$build_volume:$build_path" \
     --env MIX_ENV="$mix_env" \
     --env MIX_BUILD_PATH="$build_path" \
