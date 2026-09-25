@@ -165,3 +165,17 @@ file = "agent/sdk/typescript/test/trading-payload.test.ts"
 symbol = "typedMarket"
 observed = "The pre-existing TS2352 came from asserting an untyped fixture record directly as the market_create activity."
 assumption = "Decoding the same validated fixture and narrowing its activity discriminant preserves the parameter-bounds assertion while supplying its real type."
+
+[observation.1.4.3]
+task = "1.4"; file = "spec/sidiora-fee-token/spec.kvx"
+symbol = "log_path"
+observed = "Review comment 4107522668 identifies absolute evidence paths in task records and the qualification ledger that conflict with the naming rule."
+assumption = "Historical evidence is outside the task touches and append-only; the review instruction explicitly requires an absolute path for the new task evidence, so path normalization requires separate authorization."
+severity = "suspect"
+
+[observation.1.4.4]
+task = "1.4"; file = "spec/sidiora-fee-token/qualification.kvx"
+symbol = "observation.1.4.2"
+observed = "Review comment 4107698855 correctly identifies the missing severity field required by the documented observation schema."
+assumption = "The existing observation is outside the task touches and the ledger forbids editing written records; correcting its schema requires separate authorization."
+severity = "assumption"

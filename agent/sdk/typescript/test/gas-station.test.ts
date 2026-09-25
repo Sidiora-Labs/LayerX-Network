@@ -183,6 +183,8 @@ const envelope = { quote: wireQuote, relayerSignature };
 let responseBody = JSON.stringify(envelope);
 let responseStatus = 200;
 let requestCount = 0;
+let stallRequests = false;
+let onStalledRequest: (() => void) | undefined;
 const server = createServer(async (incoming, outgoing) => {
   try {
     assert.equal(incoming.method, "POST");
@@ -197,6 +199,10 @@ const server = createServer(async (incoming, outgoing) => {
     assert.equal(payload.maxTokenAmount, "2100000");
     assert.deepEqual(payload.calls, batch.calls.map((item) => ({ ...item, value: item.value.toString() })));
     requestCount++;
+    if (stallRequests) {
+      onStalledRequest?.();
+      return;
+    }
     outgoing.writeHead(responseStatus, { "content-type": "application/json" });
     outgoing.end(responseBody);
   } catch (error) {
@@ -235,6 +241,23 @@ try {
   refused(await requestGasQuote(httpConfig, request, { signal: AbortSignal.abort(), now: 999n }), "cancelled");
   refused(await requestGasQuote(config, request, { now: 999n }), "invalid_value");
   assert.equal(requestCount, 17);
+  stallRequests = true;
+  const controller = new AbortController();
+  const watchdog = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const results = await Promise.all([
+      requestGasQuote(httpConfig, request, { signal: controller.signal, now: 999n }),
+      requestGasQuote(httpConfig, request, { now: 999n }),
+    ]);
+    for (const result of results) refused(result, "unavailable");
+    assert.equal(controller.signal.aborted, false);
+  } finally {
+    clearTimeout(watchdog);
+  }
+  const cancellation = new AbortController();
+  onStalledRequest = () => cancellation.abort();
+  refused(await requestGasQuote(httpConfig, request, { signal: cancellation.signal, now: 999n }), "cancelled");
+  assert.equal(requestCount, 20);
 } finally {
   const closed = once(server, "close");
   server.close();

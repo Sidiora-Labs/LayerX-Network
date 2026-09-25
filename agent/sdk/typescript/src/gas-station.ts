@@ -339,7 +339,8 @@ export async function requestGasQuote(
   try {
     response = await fetch(config.quoteUrl, {
       method: "POST", headers: { "content-type": "application/json" }, body: prepared.value,
-      signal: options.signal ?? AbortSignal.timeout(15_000), redirect: "error",
+      signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
+      redirect: "error",
     });
   } catch {
     return { ok: false, refusal: { code: options.signal?.aborted ? "cancelled" : "unavailable", field: "quoteUrl" } };
