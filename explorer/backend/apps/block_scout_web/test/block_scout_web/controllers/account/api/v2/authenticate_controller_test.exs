@@ -581,6 +581,9 @@ defmodule BlockScoutWeb.Account.API.V2.AuthenticateControllerTest do
         Application.put_env(:explorer, Strategy, initial_strategy_env)
       end)
 
+      signing_key = JOSE.JWK.generate_key({:rsa, 2048})
+      key_id = "dynamic-test-signing-key"
+
       Tesla.Test.expect_tesla_call(
         times: 1,
         returns: fn %{url: "https://app.dynamic.xyz/api/v0/sdk/test_env/.well-known/jwks"}, _opts ->
@@ -588,10 +591,7 @@ defmodule BlockScoutWeb.Account.API.V2.AuthenticateControllerTest do
            %Tesla.Env{
              status: 200,
              headers: [{"content-type", "application/json"}],
-             # cspell:disable
-             body:
-               ~s|{"keys":[{"alg":"RS256","e":"AQAB","ext":true,"key_ops":["verify"],"kty":"RSA","n":"xoFNCjaQg7I6oFW1LP3H733NWnvXwHCz8igFgJ9VhyjZkHfbETNIEVOSHmIHrLZln10UrPM1lwUnjV_Q27mApf0k_mNIQlH94npvAt4K9sC9tVx1TOzylBIynTEJv0u7Q2feRjwku2th6yBx2pSZxthbXzcy2trIxQE8NZHzQXgll4vJynemGFcqBS-uxlM6zdJDzfJGgs2q2d8GgZ6izc5N410zmbh7rmEuiNhVRhdBaxv2YSslI-dZiXdrcLhjLBpczBvxjJ-T6rQ7SrJTy7ELlolvP84gE0InuWDK6-RMCC_W_xc44sxPj1JRSUcH7MsGP2rzISA-HdNlSrWJEw","kid":"3SLxTe6F2vUW71mEKH0/tbt3/GxDVSb/rwqsefdZVCM=","use":"sig"}]}|
-             # cspell:enable
+             body: JSON.encode!(%{"keys" => [public_jwk(signing_key, key_id)]})
            }}
         end
       )
@@ -604,8 +604,7 @@ defmodule BlockScoutWeb.Account.API.V2.AuthenticateControllerTest do
         conn
         |> put_req_header(
           "authorization",
-          # cspell:disable-next-line
-          "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IjNTTHhUZTZGMnZVVzcxbUVLSDAvdGJ0My9HeERWU2Ivcndxc2VmZFpWQ009In0.eyJraWQiOiI1ZDE0YzMzMS1lNWRjLTQwZDgtOGM5Yy00Zjc1N2YxMDYzMTgiLCJhdWQiOiJodHRwOi8vbG9jYWxob3N0OjMwMDAiLCJpc3MiOiJhcHAuZHluYW1pY2F1dGguY29tL3Rlc3RfZW52Iiwic3ViIjoiNDBhM2NkYTEtNjU2Yy00NzM3LTkyZjgtZWMwYzAzNjZjNTVhIiwic2lkIjoiNDkwZjA3MzgtY2IwNi00MjFkLWIxNGEtZDJhMzJhODA1NzdjIiwic2Vzc2lvbl9wdWJsaWNfa2V5IjoiMDMwNTY0OGI0Nzc4MzU3MzUwZmZhNDk3ZmJmNzQ5ZjAwOWQ3Njk2ODkzNmI5Y2E4ZGI3MzY4OGY2MzIwN2RhZGE0IiwiYWxpYXMiOiJhbGlhcyIsImVtYWlsIjoidGVzdEBleGFtcGxlLmNvbSIsImVudmlyb25tZW50X2lkIjoiOTA0ZTdiZmEtNDEyZi00NzY4LTk4YzUtOWEwMmY3Yzc0MTJkIiwiZmFtaWx5X25hbWUiOiJsbiIsImdpdmVuX25hbWUiOiJmbiIsImxpc3RzIjpbXSwibWlzc2luZ19maWVsZHMiOltdLCJ1c2VybmFtZSI6InVzZXJuYW1lIiwidmVyaWZpZWRfY3JlZGVudGlhbHMiOlt7ImFkZHJlc3MiOiIweDAzYzM2M2Y0OGM0RkUwRjJFYzZlZmJENDlGN2IxMTRiOEE2MWMxNGIiLCJjaGFpbiI6ImVpcDE1NSIsImlkIjoiNDQ2NDI4YTUtNTQxYS00OWY0LThkYmItYmIyYjhjODgwMjczIiwibmFtZV9zZXJ2aWNlIjp7fSwicHVibGljX2lkZW50aWZpZXIiOiIweDAzYzM2M2Y0OGM0RkUwRjJFYzZlZmJENDlGN2IxMTRiOEE2MWMxNGIiLCJ3YWxsZXRfbmFtZSI6Im1ldGFtYXNrIiwid2FsbGV0X3Byb3ZpZGVyIjoiYnJvd3NlckV4dGVuc2lvbiIsImZvcm1hdCI6ImJsb2NrY2hhaW4iLCJsYXN0U2VsZWN0ZWRBdCI6IjIwMjYtMDEtMDhUMDc6NDg6MTAuMzM0WiIsInNpZ25JbkVuYWJsZWQiOnRydWV9LHsiZW1haWwiOiJ0ZXN0QGV4YW1wbGUuY29tIiwiaWQiOiI2NDU4MWExMi0yZjMwLTRmZjgtOTU4OC1lMGM5NGVhMWM4OWIiLCJwdWJsaWNfaWRlbnRpZmllciI6InRlc3RAZXhhbXBsZS5jb20iLCJmb3JtYXQiOiJlbWFpbCIsInNpZ25JbkVuYWJsZWQiOnRydWUsInZlcmlmaWVkQXQiOiIyMDI1LTEyLTIzVDEwOjU1OjA5LjM2NVoifV0sImxhc3RfdmVyaWZpZWRfY3JlZGVudGlhbF9pZCI6IjQ0NjQyOGE1LTU0MWEtNDlmNC04ZGJiLWJiMmI4Yzg4MDI3MyIsImZpcnN0X3Zpc2l0IjoiMjAyNS0xMi0xOFQxMzo1Mjo1OC4yMDFaIiwibGFzdF92aXNpdCI6IjIwMjYtMDEtMDhUMDc6NDg6MTAuMzIxWiIsIm5ld191c2VyIjpmYWxzZSwibWV0YWRhdGEiOnt9LCJ2ZXJpZmllZENyZWRlbnRpYWxzSGFzaGVzIjp7ImJsb2NrY2hhaW4iOiI1NTAwMTUyZDMwMjc2MzIwMDNmZmUxOTRlMmM3YzFiYyIsImVtYWlsIjoiMjg1OGY0OWQ2YjE2Nzg3NTFlNTA0ZDQ3ODM0ZDcwMGEiLCJvYXV0aCI6ImZmMTA5N2I1MGVkMDNhNDA4MWRhMTA2NjBlMDEzMzg5In0sImhhc2hlZF9pcCI6ImMxNWE3NTgzNGVkY2JjZjI3NmQyYTQ3NmFmNmJjMTVmIiwicmVmcmVzaEV4cCI6MTc3MDQ1MDQ5MCwiaWF0IjoxNzY3ODU4NDkwLCJleHAiOjMwNjc4NjU2OTB9.S-9hkUbqr5P69xtu4qcSDbNrjUiUa4BnhvUHHSSCZ-7FHUvjRH8LXj4lGrbGIpoLAEMMdRzi8l9HkQSH7ASACP2-cm3JRDr5-p2-IN4Qm5GTo0o2ewzxxhqpNCQocUkPld6JUY-3O1XobaVCL7PNLnBUV4-jCGKkQbgpye50dezq7dqjV3CXxhpKt-80gmWxlVyIEkGENKawlvw6AUShtMYHhvqon-RqCtJsYRzGQXMdsAOkvV-0vXN8PVLk5fKJ6GInuW8hYB_i_V_HRChQnkvHsswMBj3-hEmwh5x6lZY2kq3fcoVsQI1lSaYK5ZctO-ij476o1VDgBIVmvw2Bug"
+          "Bearer " <> sign_dynamic_token(signing_key, key_id, dynamic_claims())
         )
         |> get("/api/account/v2/authenticate_via_dynamic")
         |> json_response(200)
@@ -665,5 +664,73 @@ defmodule BlockScoutWeb.Account.API.V2.AuthenticateControllerTest do
     payload = Base.url_encode64(JSON.encode!(claims), padding: false)
     signature = Base.url_encode64("test_signature", padding: false)
     "#{header}.#{payload}.#{signature}"
+  end
+
+  defp public_jwk(signing_key, key_id) do
+    {_modules, public_key} =
+      signing_key
+      |> JOSE.JWK.to_public()
+      |> JOSE.JWK.to_map()
+
+    Map.merge(public_key, %{
+      "alg" => "RS256",
+      "ext" => true,
+      "key_ops" => ["verify"],
+      "kid" => key_id,
+      "use" => "sig"
+    })
+  end
+
+  defp sign_dynamic_token(signing_key, key_id, claims) do
+    {_modules, token} =
+      signing_key
+      |> JOSE.JWT.sign(%{"alg" => "RS256", "kid" => key_id, "typ" => "JWT"}, claims)
+      |> JOSE.JWS.compact()
+
+    token
+  end
+
+  defp dynamic_claims do
+    issued_at = System.system_time(:second)
+    env_id = Application.get_env(:explorer, Dynamic)[:env_id]
+    wallet_address = "0x03c363f48c4FE0F2Ec6efbD49F7b114b8A61c14b"
+
+    %{
+      "alias" => "alias",
+      "email" => "test@example.com",
+      "environment_id" => env_id,
+      "exp" => issued_at + 300,
+      "family_name" => "ln",
+      "given_name" => "fn",
+      "iat" => issued_at,
+      "iss" => "app.dynamicauth.com/#{env_id}",
+      "lists" => [],
+      "metadata" => %{},
+      "missing_fields" => [],
+      "nbf" => issued_at,
+      "new_user" => false,
+      "sub" => "dynamic-test-user",
+      "username" => "username",
+      "verified_credentials" => [
+        %{
+          "address" => wallet_address,
+          "chain" => "eip155",
+          "format" => "blockchain",
+          "id" => "dynamic-test-wallet-credential",
+          "name_service" => %{},
+          "public_identifier" => wallet_address,
+          "signInEnabled" => true,
+          "wallet_name" => "metamask",
+          "wallet_provider" => "browserExtension"
+        },
+        %{
+          "email" => "test@example.com",
+          "format" => "email",
+          "id" => "dynamic-test-email-credential",
+          "public_identifier" => "test@example.com",
+          "signInEnabled" => true
+        }
+      ]
+    }
   end
 end

@@ -29,3 +29,19 @@
 #
 # No record carries a hostname, an IP address, an internal URL, a credential or
 # the name of an agent or a working branch.
+
+[observation.1.3.1]
+task = "1.3"
+file = ".github/workflows/codeql.yml"
+symbol = "public-audit"
+observed = "The publication audit stops before its secret scan: the CodeQL workflow references actions/checkout, github/codeql-action/init and github/codeql-action/analyze by mutable tag, and the audit requires immutable commit pins for external actions."
+assumption = "The repair is to pin those three references to immutable commit revisions, which no task of this feature is scoped to make: the one task that edits that workflow may change only the Go build mode. The publication audit stays red until a scope for the pinning exists."
+severity = "blocker"
+
+[observation.1.3.2]
+task = "1.3"
+file = "programs/fixtures/pay5/swap-cpmm.wasm"
+symbol = "public-audit"
+observed = "The audit's private-workspace check matches three committed WebAssembly fixtures - the two under programs/crates/layerx-programs-registry/tests/fixtures and the pay5 one - because each embeds the absolute build paths of the private workspace they were compiled in."
+assumption = "The repair is to rebuild those fixtures with their source paths remapped so no absolute build path reaches the publication set. No allowlist entry is added, because the audit documents none for this case, and the audit stays red until the fixtures are rebuilt."
+severity = "blocker"

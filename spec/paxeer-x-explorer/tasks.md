@@ -21,7 +21,7 @@
     - Write tools/ci/codeql-build-mode-check.sh, which parses the workflow's matrix and fails when a language appears twice, when go is not on a build mode Go supports, or when any other language has left the none build mode; make it executable and dependency-free beyond the tooling the repository already installs.
     - Run actionlint over the workflow as part of the same check script so a syntax error in the edit is caught without the CodeQL service.
     - _Requirements: 1.1, 1.8, 1.9_
-  - [ ] 1.3 Clear the publication audit
+  - [ ] 1.3 Clear the publication audit — **Implemented - qualification pending**
     - Diagnose from the job log: `gh run view --job 36149017847 --log` and read the Audit publication set step, which exits 2; list every finding it reports, not only the two already known.
     - Replace the credential-shaped strings in explorer/frontend/playwright/fixtures/rewards.ts and in explorer/backend/apps/block_scout_web/test/block_scout_web/controllers/account/api/v2/authenticate_controller_test.exs with values that are obviously synthetic and cannot be read as credentials, keeping each fixture exercising exactly the code path and the assertions it exercises now.
     - Update the tests that consume those fixtures so they assert the same behaviour against the new values, changing no assertion's strength.

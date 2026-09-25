@@ -238,7 +238,7 @@ reqs = ["1.1","1.8","1.9"]
 
 [task.1.3]
 title = "Clear the publication audit"
-status = "pending"
+status = "implemented"
 wave = 1
 requires = []
 do_1 = "Diagnose from the job log: `gh run view --job 36149017847 --log` and read the Audit publication set step, which exits 2; list every finding it reports, not only the two already known."
