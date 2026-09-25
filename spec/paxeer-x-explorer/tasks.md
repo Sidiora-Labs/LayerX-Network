@@ -118,7 +118,7 @@
     - Register the route in the metadata title and description templates, the page type map and the open-graph type map beside the existing Paxeer X entries, and regenerate explorer/frontend/nextjs/nextjs-routes.d.ts with the nextjs-routes generator rather than editing it.
     - Add explorer/frontend/ui/paxeerX/receipts/PaxeerXReceiptDetails.spec.tsx rendering the component from a fixture identical to the backend payload and asserting every field and both links.
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5_
-  - [ ] 2.4 Declare OpenAPI operations and schemas for the six Paxeer X paths
+  - [x] 2.4 Declare OpenAPI operations and schemas for the six Paxeer X paths
     - Add schema modules under explorer/backend/apps/block_scout_web/lib/block_scout_web/schemas/api/v2/paxeer_x/ for the unified account document, the capability probe, the transaction status, the anchors page, the receipts page and the single receipt, built from the general schema helpers the fork already uses for hashes, addresses and nullable strings, and describing exactly what the four Paxeer X views render including nullable fields, the status rung enumeration and the pagination parameters.
     - In each of the five Paxeer X controllers add the controller specification module and an operation declaration per action with its summary, its path and query parameters, its 200 response referencing the schema module and its error responses from the shared error-response schemas.
     - Confirm the operations reach the generated specification through the API router without further registration, and add the Paxeer X tag to the specification's tag list where the other chain-specific groups declare theirs.
