@@ -228,7 +228,11 @@ reqs = ["1.1","1.2","1.3","1.4","1.5","1.6","1.7"]
 
 [task.1.2]
 title = "Stand up the gas station crate with its quoting and pricing"
-status = "pending"
+status = "implemented"
+revision = "pending"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p layerx-gas-station --lib'"
+exit_code = 101
+log_path = "/root/lx-lanes/sid-t1-2/.logs/verify.log"
 wave = 1
 requires = ["1.1"]
 do_1 = "Add interop/crates/layerx-gas-station to the members of interop/Cargo.toml and give it a Cargo.toml in the shape interop/crates/layerx-bridge-relayer/Cargo.toml uses - workspace version, edition, rust-version, license and lints, a lib at src/lib.rs and a bin at src/main.rs - taking its dependencies from the workspace table and adding none that is not already declared there."

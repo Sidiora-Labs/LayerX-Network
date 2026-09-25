@@ -2,6 +2,7 @@
 members = [
     "crates/layerx-ap2",
     "crates/layerx-bridge-relayer",
+    "crates/layerx-gas-station",
     "crates/layerx-interop-gateway",
     "crates/layerx-interop-service",
     "crates/layerx-fiat",
