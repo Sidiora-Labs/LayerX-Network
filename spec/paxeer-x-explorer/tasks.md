@@ -110,7 +110,7 @@
     - Keep the feature flag that gates the Paxeer X surfaces controlling the new path exactly as it controls the current one, and keep the recent-keyword and suggestion behaviour unchanged.
     - Extend explorer/frontend/ui/snippets/searchBar/utils.spec.ts with the parser cases for each supported spelling and add explorer/frontend/ui/snippets/searchBar/useSearchRedirect.spec.tsx covering a pax address, a decentralised identifier, a kernel account id and a bare kernel key each resolving to an address, an unresolvable identity falling through to the search results route, and a plain address and a transaction hash keeping their existing routes.
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5_
-  - [ ] 2.3 Add the receipt detail page
+  - [x] 2.3 Add the receipt detail page
     - Add the single-receipt type to explorer/frontend/types/api/paxeerXLists.ts as PaxeerXReceipt, extending the list item with the verification status, the payload hash, the transaction hash and the timestamp, matching the backend receipt view field for field including which fields are nullable.
     - Register a paxeer_x_receipt resource for the single-receipt path with its id path parameter in explorer/frontend/lib/api/services/general/paxeerXLists.ts and map it to that payload type.
     - Add explorer/frontend/ui/paxeerX/receipts/PaxeerXReceiptDetails.tsx rendering every field of the payload, with the transaction hash linking to the transaction page, the block number to the block page and the settlement rung rendered through the shared status ladder component the list already uses.

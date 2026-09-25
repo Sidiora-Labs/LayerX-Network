@@ -440,7 +440,7 @@ reqs = ["6.1","6.2","6.3","6.4","6.5"]
 
 [task.2.3]
 title = "Add the receipt detail page"
-status = "pending"
+status = "done"
 wave = 2
 requires = []
 do_1 = "Add the single-receipt type to explorer/frontend/types/api/paxeerXLists.ts as PaxeerXReceipt, extending the list item with the verification status, the payload hash, the transaction hash and the timestamp, matching the backend receipt view field for field including which fields are nullable."
