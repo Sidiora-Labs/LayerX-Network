@@ -96,9 +96,10 @@ static int binding_checks(void)
     if (lxp_authority_check_debit(&scope, (lxp_authority_kind)0, asset,
                                   LXP_MODULE_ASSET, (lxp_u128){ 0U, 1U },
                                   100U) != LXP_ERR_UNKNOWN_AUTHORITY_KIND ||
-        lxp_authority_charge_debit(&scope, (lxp_authority_kind)7, asset,
-                                   LXP_MODULE_ASSET, (lxp_u128){ 0U, 1U },
-                                   100U) != LXP_ERR_UNKNOWN_AUTHORITY_KIND)
+        lxp_authority_charge_debit(
+            &scope, (lxp_authority_kind)(LXP_AUTHORITY_KIND_TIMELOCK + 1),
+            asset, LXP_MODULE_ASSET, (lxp_u128){ 0U, 1U }, 100U) !=
+            LXP_ERR_UNKNOWN_AUTHORITY_KIND)
         return 1;
     /* A module the grant scope does not cover, and a module index no mask can
      * hold, are both refused before any cap is consulted. */

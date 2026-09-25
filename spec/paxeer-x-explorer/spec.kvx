@@ -254,6 +254,10 @@ reqs = ["1.2","1.8","1.9"]
 [task.1.4]
 title = "Repair the C17 build and test job"
 status = "implemented"
+revision = "585f1c96a7db5a13464869b532094f0196b7025f"
+command = "timeout 20m sh -c 'CC=gcc make build test scan-consensus'"
+exit_code = 2
+log_path = "/tmp/ex-t1-4-review.log"
 wave = 1
 requires = []
 do_1 = "Diagnose from the job log: `gh run view --job 36149017847 --log` and read the Build and test step of the c17 job for both compilers; identify the first failing target and the exact assertion, diagnostic or scan finding it reports."

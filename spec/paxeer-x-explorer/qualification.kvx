@@ -29,11 +29,3 @@
 #
 # No record carries a hostname, an IP address, an internal URL, a credential or
 # the name of an agent or a working branch.
-
-[observation.1.4.1]
-revision = "885912cb301082278cfc748489bc79f62766b3b7"
-command = "timeout 20m sh -c 'CC=gcc make build test scan-consensus'"
-exit_code = 2
-log_path = "/root/lx-ops/explorer-spec-2026-09-25/logs/ex-t1-4.log"
-observed = "The exact task verification passed test-projection and the consensus symbol scan, then build/tests/lxp_test_authority_resolve returned 1 without a diagnostic; make exited 2 at Makefile target test-authority-resolve."
-assumption = "The later authority-resolution failure is unrelated to removing process-environment access from the kernel object and is left intact."

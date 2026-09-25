@@ -128,7 +128,7 @@ static int scope_checks(void)
     if (lxp_authority_resolve(&grant, actor, UINT32_C(0x00050003),
                               UINT64_C(1) << 5U, 1U, 5U, true, &first) !=
         LXP_ERR_AUTH_SCOPE) return 1;
-    grant.kind = (lxp_authority_kind)7;
+    grant.kind = (lxp_authority_kind)(LXP_AUTHORITY_KIND_TIMELOCK + 1);
     if (lxp_authority_resolve(&grant, actor, UINT32_C(0x00050003),
                               UINT64_MAX, 0U, UINT16_MAX, true, &first) !=
         LXP_ERR_UNKNOWN_AUTHORITY_KIND) return 1;
