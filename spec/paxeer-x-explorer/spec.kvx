@@ -338,7 +338,7 @@ reqs = ["2.1","2.5"]
 
 [task.1.10]
 title = "Make the frontend lint gate green"
-status = "pending"
+status = "done"
 wave = 1
 requires = []
 do_1 = "Write tools/explorer/lint-frontend.sh which installs the locked dependencies with husky disabled and runs `yarn lint:eslint` then `yarn lint:tsc` from explorer/frontend, returning the first non-zero exit code."

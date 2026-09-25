@@ -13,9 +13,7 @@ export const GENERAL_API_PAXEER_X_RESOURCES = {
 
 export type GeneralApiPaxeerXResourceName = `general:${ keyof typeof GENERAL_API_PAXEER_X_RESOURCES }`;
 
-/* eslint-disable @stylistic/indent */
 export type GeneralApiPaxeerXResourcePayload<R extends GeneralApiPaxeerXResourceName> =
-R extends 'general:paxeer_x_unified_account' ? PaxeerXUnifiedAccount :
-R extends 'general:paxeer_x_capabilities' ? PaxeerXCapabilities :
-never;
-/* eslint-enable @stylistic/indent */
+  R extends 'general:paxeer_x_unified_account' ? PaxeerXUnifiedAccount :
+    R extends 'general:paxeer_x_capabilities' ? PaxeerXCapabilities :
+      never;

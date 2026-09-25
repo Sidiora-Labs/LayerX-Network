@@ -3,13 +3,13 @@
 import React from 'react';
 
 import { PAXEER_X_STATUS_RUNGS } from 'types/api/paxeerXLists';
+
+import { Provider } from 'toolkit/chakra/provider';
 import { beforeAll, describe, it, expect } from 'vitest';
 import { render, screen } from 'vitest/lib';
 
-import { Provider } from 'toolkit/chakra/provider';
-
-import StatusLadderBadge from './StatusLadderBadge';
 import { RUNGS, RUNG_ORDER } from './rungs';
+import StatusLadderBadge from './StatusLadderBadge';
 
 // jsdom does not implement matchMedia, which Chakra's responsive hooks read on mount
 const createMediaQueryList = (query: string): MediaQueryList => ({
