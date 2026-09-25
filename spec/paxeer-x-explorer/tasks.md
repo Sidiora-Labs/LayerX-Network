@@ -15,7 +15,7 @@
     - Build the builder image from explorer/deploy/tools/Dockerfile.elixir-builder pinning the same Elixir and Erlang versions the explorer build workflow uses, and have the script build it on demand when the reference is absent.
     - Document the script and its flags in explorer/README.md under a heading for running backend commands, naming no host and no internal address.
     - _Requirements: 4.5_
-  - [ ] 1.2 Analyse Go with a build mode Go supports
+  - [x] 1.2 Analyse Go with a build mode Go supports
     - Diagnose from the job log first: find the failing run with `gh run list --workflow codeql.yml --branch main --limit 1`, then read the Analyze (go) job with `gh run view --job <job id> --log`; the recorded failure is that Go does not support the none build mode.
     - In .github/workflows/codeql.yml set the build mode of the go matrix entry to autobuild, leaving the c-cpp, javascript-typescript, python, rust and actions entries on none, and change nothing else about the matrix or the job.
     - Write tools/ci/codeql-build-mode-check.sh, which parses the workflow's matrix and fails when a language appears twice, when go is not on a build mode Go supports, or when any other language has left the none build mode; make it executable and dependency-free beyond the tooling the repository already installs.

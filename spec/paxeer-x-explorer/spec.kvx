@@ -224,7 +224,7 @@ reqs = ["4.5"]
 
 [task.1.2]
 title = "Analyse Go with a build mode Go supports"
-status = "pending"
+status = "done"
 wave = 1
 requires = []
 do_1 = "Diagnose from the job log first: find the failing run with `gh run list --workflow codeql.yml --branch main --limit 1`, then read the Analyze (go) job with `gh run view --job <job id> --log`; the recorded failure is that Go does not support the none build mode."
