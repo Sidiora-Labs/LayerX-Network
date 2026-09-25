@@ -22,7 +22,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node dist/test/integration.test.js && node dist/test/receipt-fixture.test.js && node dist/test/agent-http.test.js && node dist/test/program-lifecycle.test.js && node dist/test/native-capabilities.test.js && node dist/test/program-executed-v3.test.js && node dist/test/rpc.test.js && node dist/test/native-batch-header.test.js && node dist/test/native-receipt.test.js && node dist/test/account-bound-call.test.js && node dist/test/pre-runtime-refusal.test.js && node dist/test/program-response-code.test.js && node dist/test/intent.test.js && node dist/test/px.test.js && node dist/test/account-derivation.test.js && node dist/test/trading-payload.test.js && node dist/test/precompile-calls.test.js"
+    "test": "npm run build && node dist/test/integration.test.js && node dist/test/receipt-fixture.test.js && node dist/test/agent-http.test.js && node dist/test/program-lifecycle.test.js && node dist/test/native-capabilities.test.js && node dist/test/program-executed-v3.test.js && node dist/test/rpc.test.js && node dist/test/native-batch-header.test.js && node dist/test/native-receipt.test.js && node dist/test/account-bound-call.test.js && node dist/test/pre-runtime-refusal.test.js && node dist/test/program-response-code.test.js && node dist/test/intent.test.js && node dist/test/px.test.js && node dist/test/account-derivation.test.js && node dist/test/trading-payload.test.js && node dist/test/precompile-calls.test.js && node dist/test/gas-station.test.js"
   },
   "engines": {
     "node": ">=22"
