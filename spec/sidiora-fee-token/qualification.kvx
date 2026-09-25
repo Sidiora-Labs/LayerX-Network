@@ -57,5 +57,12 @@ assumption = "Publication remains restricted to the requested branch with no cha
 task = "2.4"
 file = "contracts/src/BatchCallAndSponsor.sol"
 observed = "The oracle keeper stores LastUpdateTimestamp in milliseconds, but _readRate compares it directly with block.timestamp in seconds and rejects a current keeper-produced timestamp with StaleOracleRate."
-assumption = "The contract owner must align timestamp units and add behavior coverage; this contract is outside task 2.4 touches, and the separate oracle availability blocker is already recorded."
+assumption = "Keeper-produced rates require matching timestamp units in the contract freshness check and behavior coverage; oracle availability remains a separate recorded blocker."
+severity = "note"
+
+[observation.2.4.4]
+task = "2.4"; file = "contracts/src/BatchCallAndSponsor.sol"
+symbol = "_readRate"
+observed = "Review comment 4107937019 repeats the timestamp-unit mismatch recorded in observation.2.4.3; the contract remains unchanged."
+assumption = "Freshness validation requires matching units and coverage for keeper-produced rates; oracle availability remains a separate recorded blocker."
 severity = "note"
