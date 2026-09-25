@@ -3,7 +3,6 @@ import { useRouter } from 'next/router';
 import type { FormEvent } from 'react';
 import React from 'react';
 
-import type { Route } from 'nextjs-routes';
 import { route } from 'nextjs-routes';
 
 import config from 'configs/app';
@@ -28,7 +27,7 @@ import SearchBarInput from 'ui/snippets/searchBar/SearchBarInput';
 import SearchBarRecentKeywords from './SearchBarRecentKeywords';
 import SearchBarSuggest from './SearchBarSuggest/SearchBarSuggest';
 import useQuickSearchQuery from './useQuickSearchQuery';
-import { getSearchRedirectRoute } from './utils';
+import { getSearchRedirectRoute, useSearchRedirect } from './utils';
 
 const paxeerXFeature = config.features.paxeerXLists;
 
@@ -44,12 +43,13 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
   const { open, onOpen, onClose, onOpenChange } = useDisclosure();
   const { searchTerm, debouncedSearchTerm, handleSearchTermChange, query, zetaChainCCTXQuery, externalSearchItem } = useQuickSearchQuery();
   const recentSearchKeywords = getRecentSearchKeywords();
+  const resolveSearchRoute = useSearchRedirect();
 
-  const navigateToResults = React.useCallback((redirect: boolean) => {
+  const navigateToResults = React.useCallback(async(redirect: boolean) => {
     if (searchTerm) {
-      const paxeerXRoute = paxeerXFeature.isEnabled ? getSearchRedirectRoute(searchTerm) : undefined;
-      const resultRoute: Route = paxeerXRoute ??
-        { pathname: '/search-results', query: { q: searchTerm, redirect: redirect ? 'true' : 'false' } };
+      const resultRoute = paxeerXFeature.isEnabled ?
+        await resolveSearchRoute(searchTerm, redirect) :
+        getSearchRedirectRoute(searchTerm, redirect);
       const url = route(resultRoute);
       mixpanel.logEvent(mixpanel.EventTypes.SEARCH_QUERY, {
         'Search query': searchTerm,
@@ -57,11 +57,11 @@ const SearchBarMobile = ({ isHeroBanner, onGoToSearchResults }: Props) => {
         'Result URL': url,
       });
       saveToRecentKeywords(searchTerm);
-      router.push(resultRoute, undefined, { shallow: !paxeerXRoute });
+      router.push(resultRoute, undefined, { shallow: resultRoute.pathname === '/search-results' });
       onGoToSearchResults?.(searchTerm);
       onClose();
     }
-  }, [ searchTerm, router, onGoToSearchResults, onClose ]);
+  }, [ searchTerm, router, onGoToSearchResults, onClose, resolveSearchRoute ]);
 
   const handleSubmit = React.useCallback((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

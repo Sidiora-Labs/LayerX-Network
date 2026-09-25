@@ -51,3 +51,11 @@ file = "explorer/frontend/toolkit/theme/foundations/colors.ts"
 observed = "The frontend review path instruction asks that no product-specific value be hard-coded outside the configs/envs presets, while req 5 ac_1 and ac_6 require the theme foundations to carry and to export the product tokens."
 assumption = "The acceptance criteria govern: the foundations hold the defaults a preset then overrides through the colour theme override the theme already merges, and radii and shadows gain no preset surface because that would be the second configuration system ac_5 forbids."
 severity = "note"
+
+[observation.2.2.1]
+task = "2.2"
+file = "explorer/frontend/ui/snippets/searchBar/utils.ts"
+symbol = "parsePaxeerXIdentifier"
+observed = "The frontend parser recognises a pax address, a did:layerx: identifier and a bare 32-byte kernel key, but not the agent:did:layerx:<key>:main account id spelling that Explorer.Chain.PaxeerX.Identity accepts, so that spelling never reaches the search path."
+assumption = "Task 2.2 requires the parser to recognise and reject exactly what it did before, so the gap is recorded here instead of closed."
+severity = "note"

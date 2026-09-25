@@ -425,7 +425,7 @@ reqs = ["5.1","5.2","5.3","5.4","5.5","5.6"]
 
 [task.2.2]
 title = "Resolve kernel identities through the search path"
-status = "pending"
+status = "done"
 wave = 2
 requires = []
 do_1 = "In explorer/frontend/ui/snippets/searchBar/utils.ts keep parsePaxeerXIdentifier recognising and rejecting exactly what it recognises and rejects now, and change getSearchRedirectRoute so a recognised kernel identity no longer returns the unified account route directly."
