@@ -71,6 +71,8 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 | hosted-paxeer | Paxeer chain 125 node with its JSON-RPC boundary, chain initialisation and settlement contract deployment | hosted | deployment_proven | source_present | platform/hosted/paxeer |
 | hosted-human | Human HTTPS API and privileged components; readiness requires the production providers | hosted | deployment_proven | source_present | platform/hosted/human |
 | hosted-internal | layerx-internal aliases, Redis, KMS and event sources for the developer plane | hosted | deployment_proven | source_present | platform/hosted/internal |
+| hosted-indexer | decoded history of both halves of the network: canonical receipts from the LayerX kernel domain and Paxeer blocks, receipts, logs and typed events into one checkpointed store with reorg rollback | hosted | deployment_proven | source_present | platform/hosted/indexer |
+| hosted-interop | interop gateway deployment: the x402, AP2, UCP and Visa TAP boundary in front of the hosted gateway and the receipt authority | hosted | deployment_proven | source_present | platform/hosted/interop |
 | hosted-tests | static topology check: every configured in-cluster URL resolves to an exposed Service port admitted by NetworkPolicy on both ends | hosted | deployment_proven | source_present | platform/hosted/tests |
 | middleware-buyer | @sidiora/layerx-buyer-middleware | functional | runtime_proven | source_present | platform/middleware/buyer |
 | middleware-seller | @sidiora/layerx-seller-middleware | functional | runtime_proven | source_present | platform/middleware/seller |
@@ -113,6 +115,8 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 | interop-mirror | mirror archives | functional | runtime_proven | source_present | interop/crates/layerx-mirror |
 | interop-gateway | interop gateway | functional | runtime_proven | source_present | interop/crates/layerx-interop-gateway |
 | interop-service | interop service | functional | runtime_proven | source_present | interop/crates/layerx-interop-service |
+| interop-bridge-relayer | bridge relayer: vault deposits into the Paxeer bridge precompile and bridge-out burns back into the vault, journalled and nullifier-checked | functional | runtime_proven | source_present | interop/crates/layerx-bridge-relayer |
+| interop-mirror-signer | reference remote signer for the mirror publisher: one handle per algorithm and policy domain over a local socket | functional | runtime_proven | source_present | interop/crates/layerx-mirror-signer |
 | ramps-toolkit | market-maker ramp toolkit | functional | runtime_proven | source_present | platform/ramps/toolkit |
 | reference-ramp | reference ramp service | hosted | deployment_proven | source_present | platform/ramps/deployment.yaml |
 | multichain-paxeer-boundary | Paxeer custody and guaranteed-withdrawal boundary | hosted | deployment_proven | source_present | human/crates/layerx-paxeer-client, go.mod, node/, modules/ |

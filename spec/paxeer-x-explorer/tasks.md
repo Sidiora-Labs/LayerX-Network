@@ -34,7 +34,7 @@
     - Extend or add the focused test under tests/ that covers the repaired behaviour so the same regression fails immediately next time, keeping its Makefile target beside the targets of its neighbours.
     - Change no compiler flag to suppress a diagnostic, exclude no target from `make build test scan-consensus`, and leave every other target untouched; record anything the log reports that is unrelated to the first failure in the qualification log.
     - _Requirements: 1.3, 1.9_
-  - [ ] 1.5 Repair the beta contract and ledger checks
+  - [x] 1.5 Repair the beta contract and ledger checks
     - Diagnose from the job log: `gh run view --job 36149017936 --log` and read the step that checks the beta contract and the executed-evidence ledger, which exits 2; note which of the two checks fails and on which record or field.
     - Repair the disagreement at its source: a contract statement that no longer matches the manifests, workflows or documentation it is checked against is corrected in platform/docs/content/beta.md; a ledger record whose revision, command or evidence path no longer resolves is corrected in spec/layerx-beta/qualification.kvx to what was actually executed, or recorded as an observation when the evidence is gone.
     - Leave every rule the two check scripts enforce exactly as it is: no relaxed pattern, no skipped record class, no early exit added to reach a zero status.
