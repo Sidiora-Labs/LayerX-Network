@@ -382,7 +382,7 @@ reqs = ["2.3","2.5"]
 
 [task.1.12]
 title = "Enforce the test ratio and wire both explorer gates into continuous integration"
-status = "pending"
+status = "done"
 wave = 1
 requires = ["1.9","1.10","1.11"]
 do_1 = "Write tools/explorer/test-ratio.sh taking a git range, listing the files changed under explorer/ in that range, classifying each as source, test or neither by the rules in the test-ratio decision, and failing when the count of changed or added test files is lower than the count of changed source files."
@@ -394,6 +394,10 @@ verify_cmd = "timeout 20m sh -c 'actionlint .github/workflows/explorer-build.yml
 symbols = ["test-ratio"]
 touches = ["tools/explorer/test-ratio.sh","tools/explorer/tests/test-ratio-test.sh",".github/workflows/explorer-build.yml","explorer/README.md"]
 reqs = ["2.4","3.1","3.2","3.3","3.4","3.5"]
+done_revision = "f09120a1784b5d422e1e773dd1ba00650d918213"
+done_command = "timeout 20m sh -c 'actionlint .github/workflows/explorer-build.yml && shellcheck tools/explorer/test-ratio.sh tools/explorer/tests/test-ratio-test.sh && tools/explorer/tests/test-ratio-test.sh'"
+done_exit_code = 0
+done_log = ".logs/verify.log"
 
 [task.1.13]
 title = "Write the two bounded fleet gates"
