@@ -1,0 +1,10 @@
+{
+  "method": "eth_getLogs",
+  "recorded_from": "the Paxeer X Network public JSON-RPC surface",
+  "responses": [
+    {
+      "match": [],
+      "result": []
+    }
+  ]
+}

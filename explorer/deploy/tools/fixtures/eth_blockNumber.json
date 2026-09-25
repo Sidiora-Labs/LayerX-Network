@@ -1,0 +1,11 @@
+{
+  "method": "eth_blockNumber",
+  "recorded_from": "the Paxeer X Network public JSON-RPC surface",
+  "note": "The head is pinned so every recorded answer describes one height.",
+  "responses": [
+    {
+      "match": [],
+      "result": "0x178e460"
+    }
+  ]
+}

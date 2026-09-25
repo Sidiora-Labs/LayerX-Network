@@ -1,0 +1,20 @@
+{
+  "method": "eth_call",
+  "recorded_from": "the Paxeer X Network public JSON-RPC surface",
+  "note": "getUnifiedAccount(address) at the addr precompile reverts on the chain as recorded, which is how the capability probe reads the surface as absent.",
+  "responses": [
+    {
+      "match": [
+        {
+          "to": "0x0000000000000000000000000000000000001004",
+          "data": "0x357feed60000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "*"
+      ],
+      "error": {
+        "code": -32000,
+        "message": "execution reverted"
+      }
+    }
+  ]
+}

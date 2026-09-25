@@ -1,0 +1,14 @@
+{
+  "method": "net_listening",
+  "recorded_from": "the Paxeer X Network public JSON-RPC surface",
+  "note": "The Paxeer X EVM RPC does not register net_listening; the refusal is the recorded answer.",
+  "responses": [
+    {
+      "match": [],
+      "error": {
+        "code": -32601,
+        "message": "the method net_listening does not exist/is not available"
+      }
+    }
+  ]
+}

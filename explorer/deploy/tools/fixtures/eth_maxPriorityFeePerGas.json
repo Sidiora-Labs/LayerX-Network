@@ -1,0 +1,10 @@
+{
+  "method": "eth_maxPriorityFeePerGas",
+  "recorded_from": "the Paxeer X Network public JSON-RPC surface",
+  "responses": [
+    {
+      "match": [],
+      "result": "0x3b9aca00"
+    }
+  ]
+}

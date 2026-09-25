@@ -1,13 +1,5 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
-  "build": {
-    "builder": "DOCKERFILE",
-    "dockerfilePath": "docker/Dockerfile",
-    "watchPatterns": [
-      "/explorer/backend/**",
-      "/explorer/deploy/railway/backend.railway.json"
-    ]
-  },
   "deploy": {
     "startCommand": "/bin/sh -c \"bin/blockscout eval 'Elixir.Explorer.ReleaseTasks.create_and_migrate()' && bin/blockscout start\"",
     "healthcheckPath": "/api/health/liveness",

@@ -1,0 +1,13 @@
+{
+  "method": "eth_getBalance",
+  "recorded_from": "the Paxeer X Network public JSON-RPC surface",
+  "responses": [
+    {
+      "match": [
+        "0x0000000000000000000000000000000000000000",
+        "*"
+      ],
+      "result": "0x0"
+    }
+  ]
+}

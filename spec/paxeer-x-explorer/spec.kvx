@@ -564,7 +564,7 @@ reqs = ["12.1","12.2","12.3","12.4","12.5"]
 
 [task.2.10]
 title = "Point the deployment definitions at the published images and prove them"
-status = "pending"
+status = "done"
 wave = 2
 requires = []
 do_1 = "Change explorer/deploy/railway/backend.railway.json and frontend.railway.json to deploy the published fork images for the backend and the frontend by the registry path the image workflow publishes to, with the tag taken from a documented variable, keeping the existing start command, health-check path, timeout and restart policy."

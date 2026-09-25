@@ -2,14 +2,15 @@ name: paxeer-x-explorer
 
 # Local, self-contained stack for the Paxeer X Network explorer.
 #
-# Everything is built from the sources in this repository; no image is pulled
-# from a registry except the Postgres base image. The backend talks to a node
-# that you provide through RPC_HTTP_URL / RPC_WS_URL (see env/README notes in
-# railway/README.md and the two example env files under env/).
+# The four explorer services run the images the repository publishes from
+# .github/workflows/explorer-images.yml, so what runs here is what a deployment
+# runs. EXPLORER_IMAGE_TAG picks the tag: `latest` and `main` follow the main
+# branch and `sha-<short commit>` pins one build.
 #
+#   EXPLORER_IMAGE_TAG=sha-abc1234 \
 #   RPC_HTTP_URL=<your node http endpoint> \
 #   RPC_WS_URL=<your node websocket endpoint> \
-#     docker compose -f explorer/deploy/docker-compose.local.yml up --build
+#     docker compose -f explorer/deploy/docker-compose.local.yml up
 #
 # The defaults below point at the Docker host gateway, so a node listening on
 # the machine that runs Docker is reachable without any extra configuration.
@@ -26,6 +27,11 @@ name: paxeer-x-explorer
 #
 # Leaving CHAIN_ID or SECRET_KEY_BASE empty is a hard startup error in the
 # backend and the frontend; nothing here silently falls back to a stand-in.
+#
+# The `fixture` profile adds rpc-fixture, the recorded JSON-RPC server under
+# tools/, in place of a node. It stays out of the stack unless the profile is
+# named, so an ordinary run is unaffected. tools/tests/compose-smoke-test.sh
+# brings the database, that server and the backend up under it and proves them.
 
 x-rpc-http: &rpc-http ${RPC_HTTP_URL:-http://host.docker.internal:8545/}
 x-rpc-ws: &rpc-ws ${RPC_WS_URL:-ws://host.docker.internal:8545/}
@@ -58,10 +64,36 @@ services:
       retries: 10
       start_period: 20s
 
+  rpc-fixture:
+    profiles:
+      - fixture
+    image: python:3.12-alpine
+    restart: unless-stopped
+    command:
+      - python3
+      - /opt/rpc-fixture/rpc-fixture-server.py
+    environment:
+      RPC_FIXTURE_DIR: /opt/rpc-fixture/fixtures
+      RPC_FIXTURE_HOST: 0.0.0.0
+      RPC_FIXTURE_PORT: "8545"
+    volumes:
+      - ./tools/rpc-fixture-server.py:/opt/rpc-fixture/rpc-fixture-server.py:ro
+      - ./tools/fixtures:/opt/rpc-fixture/fixtures:ro
+    ports:
+      - "${RPC_FIXTURE_PUBLISHED_PORT:-8545}:8545"
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8545/__health').read()
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
   smart-contract-verifier:
-    build:
-      context: ../services/smart-contract-verifier
-      dockerfile: Dockerfile
+    image: ghcr.io/sidiora-labs/paxeer-x-explorer-smart-contract-verifier:${EXPLORER_IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       SMART_CONTRACT_VERIFIER__SERVER__HTTP__ENABLED: "true"
@@ -85,9 +117,7 @@ services:
       start_period: 30s
 
   sig-provider:
-    build:
-      context: ../services/sig-provider
-      dockerfile: Dockerfile
+    image: ghcr.io/sidiora-labs/paxeer-x-explorer-sig-provider:${EXPLORER_IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       SIG_PROVIDER__SERVER__HTTP__ENABLED: "true"
@@ -103,20 +133,21 @@ services:
       start_period: 30s
 
   backend:
-    build:
-      context: ../backend
-      dockerfile: docker/Dockerfile
-      args:
-        RELEASE_VERSION: "10.2.6"
+    image: ghcr.io/sidiora-labs/paxeer-x-explorer-backend:${EXPLORER_IMAGE_TAG:-latest}
     restart: unless-stopped
     stop_grace_period: 5m
+    # The database has to be up before the release migrates it, and the
+    # recorded JSON-RPC server before the release asks the node anything; the
+    # server is only required when the `fixture` profile puts it in the stack.
+    # The two microservices are reached over HTTP when a request needs them, so
+    # they order nothing and are left out here - naming them would drag them
+    # into a run that asked for the backend alone.
     depends_on:
       db:
         condition: service_healthy
-      smart-contract-verifier:
-        condition: service_started
-      sig-provider:
-        condition: service_started
+      rpc-fixture:
+        condition: service_healthy
+        required: false
     command:
       - /bin/sh
       - -c
@@ -134,6 +165,14 @@ services:
       CHAIN_ID: ${CHAIN_ID:-}
       SECRET_KEY_BASE: ${SECRET_KEY_BASE:-}
       PORT: "4000"
+      # The settings a run may need to differ on. Each default repeats the
+      # value env/backend.example.env declares, so leaving the variable unset
+      # changes nothing.
+      CHAIN_TYPE: ${CHAIN_TYPE:-paxeer_x}
+      DISABLE_INDEXER: ${DISABLE_INDEXER:-false}
+      MICROSERVICE_SC_VERIFIER_ENABLED: ${MICROSERVICE_SC_VERIFIER_ENABLED:-true}
+      MICROSERVICE_SIG_PROVIDER_ENABLED: ${MICROSERVICE_SIG_PROVIDER_ENABLED:-true}
+      PAXEER_X_CAPABILITIES_ENABLED: ${PAXEER_X_CAPABILITIES_ENABLED:-false}
     extra_hosts:
       - host.docker.internal:host-gateway
     ports:
@@ -148,9 +187,7 @@ services:
       start_period: 120s
 
   frontend:
-    build:
-      context: ../frontend
-      dockerfile: Dockerfile
+    image: ghcr.io/sidiora-labs/paxeer-x-explorer-frontend:${EXPLORER_IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       backend:

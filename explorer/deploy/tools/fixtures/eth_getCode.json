@@ -1,0 +1,49 @@
+{
+  "method": "eth_getCode",
+  "recorded_from": "the Paxeer X Network public JSON-RPC surface",
+  "note": "The LayerX surface precompiles carry no code on the chain as recorded, so every capability reads as absent. The second parameter is the block the capability probe pins.",
+  "responses": [
+    {
+      "match": [
+        "0x0000000000000000000000000000000000001013",
+        "*"
+      ],
+      "result": "0x"
+    },
+    {
+      "match": [
+        "0x0000000000000000000000000000000000001014",
+        "*"
+      ],
+      "result": "0x"
+    },
+    {
+      "match": [
+        "0x0000000000000000000000000000000000001015",
+        "*"
+      ],
+      "result": "0x"
+    },
+    {
+      "match": [
+        "0x0000000000000000000000000000000000001016",
+        "*"
+      ],
+      "result": "0x"
+    },
+    {
+      "match": [
+        "0x0000000000000000000000000000000000001017",
+        "*"
+      ],
+      "result": "0x"
+    },
+    {
+      "match": [
+        "0x0000000000000000000000000000000000001004",
+        "*"
+      ],
+      "result": "0x"
+    }
+  ]
+}
