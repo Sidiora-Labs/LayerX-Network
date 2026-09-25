@@ -298,7 +298,7 @@ reqs = ["3.3","3.4","3.5"]
 [task.1.6]
 title = "Render a Sidiora fee as Sidiora in the explorer"
 status = "done"
-revision = "pending"
+revision = "c885d7840bfafeb1e19540c13cbe19ac4574d1aa"
 command = "timeout 20m sh -c 'cd explorer/frontend && HUSKY=0 yarn install --frozen-lockfile && yarn lint:tsc && yarn test:vitest run ui/shared/tx ui/tx/details'"
 exit_code = 0
 log_path = "/root/lx-lanes/sid-t1-6/.logs/verify-review2.log"
