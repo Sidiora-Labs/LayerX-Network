@@ -179,3 +179,10 @@ symbol = "observation.1.4.2"
 observed = "Review comment 4107698855 correctly identifies the missing severity field required by the documented observation schema."
 assumption = "The existing observation is outside the task touches and the ledger forbids editing written records; correcting its schema requires separate authorization."
 severity = "assumption"
+
+[observation.1.4.5]
+task = "1.4"; file = "spec/sidiora-fee-token/qualification.kvx"
+symbol = "observation.1.4.3, observation.1.4.4"
+observed = "Historical observations contain process-specific narrative, while the ledger rules prohibit rewriting or removing written records."
+assumption = "Existing records remain immutable; subsequent observations state repository facts without changing historical evidence."
+severity = "suspect"
