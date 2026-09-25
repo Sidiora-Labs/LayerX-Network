@@ -1,0 +1,600 @@
+# spec.kvx - Paxeer X Network explorer. SINGLE SOURCE OF TRUTH for this feature.
+#
+# requirements.md / design.md / tasks.md next to this file are GENERATED from it
+# by spec/specgen. Never hand-edit those; edit this file and regenerate.
+#
+# Drive the work with:  cg spec next -> cg spec start <id> -> cg spec done <id>
+#
+# Two bodies of work share one feature because they share one bar: the fork of
+# the explorer has to finish, and the repository's own continuous integration
+# has to be green while it does. Wave 1 closes every red job and builds the
+# gates the later work is measured by. Wave 2 finishes the fork. Wave 3 runs the
+# aggregate explorer suites once on the merged revision and records what ran.
+
+[meta]
+feature   = "paxeer-x-explorer"
+title     = "Paxeer X Network Explorer - Fork Completion and CI Closure"
+kind      = "product-feature-specification"
+version   = "0.1.0"
+status    = "active"
+language  = "Elixir (Blockscout backend umbrella), TypeScript and React (Next.js frontend), Rust (smart-contract-verifier and sig-provider services), Solidity, POSIX shell gates, GitHub Actions workflows, SQL migrations"
+repo_root = "explorer/ (the vendored Blockscout fork: backend, frontend, services, deploy); tools/explorer/ (the explorer gates); .github/workflows/ (continuous integration); contracts/ and human/apps/web/ (the two surfaces outside the fork this feature repairs); spec/paxeer-x-explorer/ (this feature and its qualification log)"
+upstream  = "Blockscout backend v10.2.6 umbrella, Blockscout frontend v2.7.2 and the blockscout-rs smart-contract-verifier and sig-provider, vendored under explorer/ with their GPL licence, module layout and coding conventions intact (explorer/UPSTREAM.md records the vendored revisions); spec/layerx-beta remains binding for the human control plane and the beta contract, and nothing here relaxes one of its requirements"
+intro     = "The explorer of Paxeer X Network is a GPL fork of Blockscout carried in explorer/: an Elixir umbrella backend, a Next.js frontend and two Rust services, indexing the Paxeer X chain and, through the kernel precompiles, the LayerX kernel entities the chain anchors. The fork already carries the chain adapter, the status ladder, the lx_* tables and their import runners, the unified account, anchor, receipt, capability and transaction-status API paths, and the frontend presets, list pages and unified account page. This feature finishes it and pays the debt around it. It closes every continuous-integration job that is red on the main branch - CodeQL's Go analysis, the publication audit, the C17 build, the platform contract and ledger checks, the agent workspace build and its sanitizer variants, the human workspace lint gate and its web image, and the documentation site build - by fixing the cause each job names, never by skipping, relaxing or allow-listing it. It adds the gates the explorer has been missing: a lint job over the backend, the frontend and the services; a test-ratio gate that requires a changed source file under explorer/ to be accompanied by a test file that references it; and the two bounded fleet gates the workflow contract already names. It then completes the fork itself: the product design tokens applied to the frontend theme, search that resolves pax addresses, decentralised identifiers and kernel account ids through the backend search path instead of guessing a route, a receipt detail page for the receipt endpoint that has one, OpenAPI schemas for all six Paxeer X paths, decoding for every kernel precompile event rather than most of them, an upstream test-isolation defect repaired without weakening an assertion, the wrapped-coin contract named for the coin, a database copy tool that is idempotent and resumable against a pinned block ceiling, deployment definitions that name the published fork images with a compose smoke test behind them, a backend that binds its port after migration, and one explorer surface instead of two. Throughout, the product is Paxeer X Network and LayerX names only the kernel domain: chain-side modules and configuration read paxeer_x or PaxeerX, and kernel-side entities keep their lx_ prefix."
+
+# Decisions locked before implementation begins. They bind every task in this
+# feature; where they touch the human control plane or the beta contract they
+# defer to spec/layerx-beta, which stays normative.
+[decision]
+code_quality        = "A+ on every changed path: real code paths, real types, real fixtures. No stub, mock or fake test double on a production path, no placeholder implementation, no TODO, FIXME or 'for now' comment, no dead branch left behind to be cleaned up later. A test exercises the module it names through its public interface with data shaped like production data; a test that would need a fake to pass is a signal that the implementation is wrong, not that the test needs a double."
+no_weakening        = "Inherited from workflow.kvx and restated because this feature's whole first wave is failing checks: no assertion is relaxed, no bound loosened, no type widened, no silent fallback added, no test skipped, deleted or marked pending, no lint rule disabled on a file this fork owns, and no continue-on-error added to a workflow to make a job report success. Where the code and a check disagree, both stay exactly as written and the conflict is recorded in spec/paxeer-x-explorer/qualification.kvx."
+test_ratio          = "Every task's touches list names its test files explicitly, and a task that changes a source file under explorer/ changes or adds at least one test file that references it - an Elixir *_test.exs, a TypeScript *.test.ts, *.test.tsx, *.spec.ts, *.spec.tsx or *.pw.tsx, or a Rust #[cfg(test)] module or tests/ file. tools/explorer/test-ratio.sh enforces the ratio over a git range in continuous integration. Shell scripts, YAML workflows, environment presets, JSON deployment definitions, SVG marks and Markdown are not source files for the ratio and need no test file; the script that enforces the ratio has its own test."
+testing_allowance   = "Testing time is bounded on purpose. Every task's verify_cmd is one command wrapped in `timeout 20m`, run from the repository root. A task gets one build of its declared targets and one verify_cmd run, then at most two task-scoped repair cycles, each followed by exactly one rerun. Aggregate suites, the full explorer test matrix and the lint matrix run once, in the wave gate task of wave 3, never per task and never per rebase. A task whose verify_cmd exceeds its timeout stops and reports implemented-not-qualified with the exact command, exit code and log path; that is an acceptable outcome and is never dressed up as a pass."
+naming              = "The product is Paxeer X Network. LayerX is the name of the kernel domain only. Chain-side modules, configuration keys, chain-type values and asset paths read paxeer_x, PaxeerX or paxeer-x; kernel-side database entities, columns and schema modules keep the lx_ prefix that the migrations already use. The coin is Paxeer, its symbol is PAX and it has 18 decimals. No file, comment, commit message or log line introduced by this feature carries a date, a hostname, an IP address, a port of an internal host, an internal URL or the name of an agent or a working branch."
+generated_files     = "CLAUDE.md, AGENTS.md, .github/copilot-instructions.md, .codify/agent-context.md and the requirements.md, design.md and tasks.md mirrors under spec/*/ are generated and off limits: edit spec/workflow.kvx or this file and regenerate. explorer/frontend/nextjs/nextjs-routes.d.ts is generated by the nextjs-routes plugin and is regenerated by its generator, never hand-edited."
+production_safety   = "No task touches the production deployment project, its services, its variables or its domains, and no task reads, writes or commits a .env file or any secret. Deployment work in this feature changes only the definitions committed under explorer/deploy. Credentials and endpoints enter a task through an environment variable name documented in explorer/deploy/env, never through a literal value."
+upstream_conventions = "explorer/ is a fork, not a rewrite. Upstream Blockscout file layout, module naming, formatter settings and idioms are preserved so the fork can take upstream changes: an Elixir module lives where its name says it lives, a frontend component follows the toolkit and Chakra recipe conventions already in the tree, a Rust service keeps its workspace shape. Files this fork owns - anything named paxeer_x, PaxeerX, paxeer-x or lx_* - carry the fork's naming; upstream files are changed only where the task requires it and as narrowly as the change allows."
+publication         = "A qualified task is published immediately: one commit per task from the repository root describing the change honestly and naming the gates that actually ran, pushed before the next task starts, with a co-author trailer naming the model that ran the task. Several tasks are never batched into one commit and a finished task is never left unpushed."
+lint_policy         = "A lint finding in a file this fork owns is fixed in the code. A finding inherited from upstream that would require a mass edit of vendored files is silenced only by a scoped configuration entry - a credo file or check exclusion, an eslint override with an explicit file glob - that names the upstream path it covers and carries a one-line reason in the configuration itself. A rule is never disabled globally, never disabled on a fork-owned file, and a job is never marked continue-on-error."
+
+[design]
+overview = "Three waves with one shape each. Wave 1 is repair plus scaffolding: seven tasks that each own one red continuous-integration job or job pair and fix what it names, and six tasks that build the explorer's own gates - the containerised mix runner every later Elixir task qualifies through, one lint script per language, the test-ratio script, the two CI jobs and the two bounded fleet gates. Wave 2 is the fork's remaining surface, twelve tasks whose touched paths are disjoint so they run in parallel: the frontend theme owns the toolkit theme, the presets and the marks; search owns the search bar and its routing helper; the receipt detail page owns its route, its view and its types; the API schema task owns the Paxeer X controllers and the schema modules; the event-decoding pair owns first the new tables and their runners and then the transform; the isolation task owns the factory and the fetcher it defeats; and the copy tool, the deployment definitions, the boot fix, the wrapped-coin contract and the retirement of the duplicate explorer surface each own their own tree. Wave 3 runs the aggregate explorer suites once on the merged revision and writes the gate records."
+
+[tasks]
+heading = "Implementation Plan: Paxeer X Network Explorer"
+
+# --------------------------------------------------------------------------
+# REQUIREMENTS
+# --------------------------------------------------------------------------
+
+[req.1]
+title = "Continuous Integration Green on Main"
+story = "As anyone reading this repository, I want every workflow on the main branch to pass for the reason it exists, so that a red check means something broke and a green check means something works."
+ac_1 = "THE CodeQL workflow SHALL analyse Go with a build mode Go supports, SHALL keep every other analysed language on the build mode it already declares, and SHALL declare each language exactly once, proven by a check over .github/workflows/codeql.yml that runs without the CodeQL service."
+ac_2 = "THE publication audit SHALL pass with the two upstream fixtures that carry credential-shaped strings replaced by obviously synthetic values that keep their tests meaningful, and the audit's own allowlist SHALL NOT be widened unless the audit tool documents an allowlist for exactly that case; the secret-scan allowlist SHALL NOT be touched."
+ac_3 = "THE C17 build-and-test job SHALL pass under both declared compilers with the defect the job log names fixed in the core or in its test, and SHALL NOT be made to pass by suppressing a diagnostic, excluding a test or narrowing the target set."
+ac_4 = "THE platform contract and ledger step SHALL pass with the disagreement it reports repaired at its source - the contract, the ledger record or the check's input - and the two checks SHALL keep every rule they enforce."
+ac_5 = "THE agent workspace build, lint and boundary step SHALL pass and the two named daemon tests - the terminal transition case in the native protocol-evidence suite and the confirmed-creation budget case - SHALL pass for the behaviour they assert, with no assertion relaxed and no case ignored; the sanitizer variants SHALL run the same tests clean."
+ac_6 = "THE human workspace lint step SHALL pass with the four reported eslint errors fixed in their source files, the workspace dependency installation the job depends on SHALL be present in the workflow, and the human web image SHALL build from the repository's tracked sources so the browser-performance job can bring its cluster up."
+ac_7 = "THE documentation site job SHALL install its pinned tooling with a valid installer invocation and SHALL build the site under strict mode."
+ac_8 = "THE explorer build and image workflows SHALL stay green through every change this feature makes, and no job in any workflow SHALL be marked continue-on-error, skipped by a condition added for this purpose, or deleted to reach a green run."
+ac_9 = "EVERY repair in this requirement SHALL start from the failing job's own log, and the task SHALL record the exact failing command and exit code it observed; a repair that cannot be traced to the log is out of scope and SHALL be recorded in the qualification log instead."
+
+[req.2]
+title = "Explorer Lint Gates"
+story = "As a maintainer taking upstream changes into the fork, I want formatting and static analysis enforced on every explorer pull request, so that the fork's own code stays clean and an upstream merge does not quietly regress it."
+ac_1 = "THE backend SHALL pass `mix format --check-formatted` and `mix credo --strict` from explorer/backend, run through the containerised builder, with every finding in a fork-owned module fixed in that module."
+ac_2 = "THE frontend SHALL pass `yarn lint:eslint` and `yarn lint:tsc` from explorer/frontend with every finding in a fork-owned file fixed in that file."
+ac_3 = "EACH Rust service SHALL pass `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` from its own directory."
+ac_4 = "THE explorer build workflow SHALL carry an explorer-lint job that runs those three checks on every pull request that touches explorer/, with no continue-on-error and no conditional skip, and each check SHALL be invocable locally through one script per language so a developer runs exactly what the job runs."
+ac_5 = "WHERE a finding is inherited from vendored upstream code and fixing it would require a mass edit THE silencing SHALL be a scoped configuration entry naming the upstream path it covers together with a one-line reason recorded in the configuration; no rule SHALL be disabled globally or on a fork-owned file."
+
+[req.3]
+title = "Test Ratio Gate"
+story = "As the owner of this fork, I want a changed source file to arrive with a test that references it, so that the fork's coverage grows with the fork instead of behind it."
+ac_1 = "THE repository SHALL carry tools/explorer/test-ratio.sh which, for a git range given as its argument, counts the non-test source files changed under explorer/ and the test files changed or added in the same range, and fails when the test files are fewer than the source files."
+ac_2 = "THE script SHALL count as a source file an Elixir .ex, a TypeScript or TSX file that is not a test, and a Rust .rs that is not a test module, and SHALL count as a test file an Elixir *_test.exs, a TypeScript *.test.ts, *.test.tsx, *.spec.ts, *.spec.tsx or *.pw.tsx, and a Rust file under a tests/ directory or carrying a #[cfg(test)] module; shell, YAML, JSON, environment presets, SVG and Markdown SHALL be counted as neither."
+ac_3 = "THE script SHALL require each counted test file to reference at least one of the changed source files by module name, component name or path, SHALL name in its failure output every source file left without a referencing test, and SHALL exit zero when the range changes no explorer source file."
+ac_4 = "THE explorer build workflow SHALL run the script on pull requests over the range from the merge base to the head commit, and explorer/README.md SHALL document the rule, the file classifications and how to run the script locally."
+ac_5 = "THE script SHALL have its own test that builds a throwaway git history covering a satisfied ratio, an unsatisfied ratio, a test that references nothing changed and a range with no explorer source change, and asserts the script's exit code for each."
+
+[req.4]
+title = "Bounded Fleet Gates"
+story = "As the integrator landing a wave, I want one test gate and one lint gate that run the explorer suites the same way everywhere and stop at a known bound, so that landing a branch is a decision, not an open-ended session."
+ac_1 = "THE repository SHALL carry tools/explorer/gate-test.sh and tools/explorer/gate-lint.sh, the two paths the workflow contract already names as the test and lint gates, each executable from the repository root and each returning a non-zero exit code on any failure of the work it gates."
+ac_2 = "THE test gate SHALL run the backend Paxeer X suites and the frontend vitest suite through the containerised builder with a fresh database sidecar per invocation, and the lint gate SHALL run the same three language checks the explorer-lint job runs."
+ac_3 = "EACH gate SHALL be bounded by a budget in seconds taken from the environment with a documented default, SHALL stop at that budget, and SHALL report the command, the exit code and the log path of whatever it stopped on rather than continuing."
+ac_4 = "EACH gate SHALL support a check mode that validates its own syntax, its required tooling and its container recipe without running a suite, so that the gate itself can be qualified inside a task budget."
+ac_5 = "THE containerised builder invocation SHALL live in one script, explorer/deploy/tools/mix-in-builder.sh, used identically by the gates, by the lint scripts and by every task that runs a mix command, so there is one recipe to fix when the toolchain moves."
+
+[req.5]
+title = "Frontend Theme"
+story = "As a person arriving at the explorer from the rest of the product, I want it to look like the same product, so that nothing suggests I have left it."
+ac_1 = "THE explorer frontend theme foundations - colours, typography, borders, shadows and semantic tokens - SHALL carry the product design tokens: the product typeface, the black pill primary button, the accent blue with its strong and soft variants, the page background, the white surface and the sunken surface, the two border tones, the three text tones, the success, destructive and warning pairs, the declared radii and the card and overlay shadows."
+ac_2 = "THE global styles and the toolkit recipes that render buttons, inputs, tables, tabs, badges, links and dialogs SHALL consume those tokens through the theme rather than through literal values, and both the light and the dark appearance SHALL resolve every token they use."
+ac_3 = "THE Paxeer X environment presets SHALL set the colour theme override and the font family variables to the same values the theme declares, so a deployment rendered from a preset matches the theme."
+ac_4 = "THE marks under the Paxeer X static asset directory SHALL be the product marks in their light and dark variants and SHALL be referenced by the presets."
+ac_5 = "THE change SHALL add no dependency and SHALL introduce no second styling system; the theme stays the Chakra theme the fork already uses."
+ac_6 = "A test SHALL assert the token values the theme exports for the primary button, the accent, the surfaces, the text tones, the radii and the shadows, so a later edit that drifts from the product tokens fails."
+
+[req.6]
+title = "Search That Resolves Kernel Identities"
+story = "As someone pasting a pax address, a decentralised identifier or a kernel account id into the search bar, I want to land on the account it belongs to, so that an identity I hold resolves like any other."
+ac_1 = "WHEN the search bar receives a pax bech32 address, a decentralised identifier, a kernel account id or a bare 32-byte kernel key THE frontend SHALL query the backend search path, which resolves those spellings through the recorded account bindings, instead of routing straight to the unified account page."
+ac_2 = "WHEN the search path resolves the term to an address THE frontend SHALL navigate to that address's unified account view; WHEN it resolves to nothing THE frontend SHALL render the ordinary empty search result, never a page that can only fail."
+ac_3 = "THE identifier parser SHALL keep recognising each supported spelling and SHALL keep rejecting anything it does not recognise, and its existing cases SHALL remain unchanged."
+ac_4 = "BOTH the desktop and the mobile search entry points SHALL follow the same resolution path so the two cannot diverge."
+ac_5 = "A test SHALL cover each supported spelling resolving to an address, an unresolvable identity rendering the empty result, and an ordinary address or transaction hash keeping its existing route."
+
+[req.7]
+title = "Receipt Detail"
+story = "As someone reading a kernel receipt in the list, I want to open it, so that I can see its verification status, its payload hash, the transaction that carried it and when it happened."
+ac_1 = "THE frontend SHALL carry a receipt detail route under the Paxeer X receipts path that reads the single-receipt API endpoint by receipt id."
+ac_2 = "THE detail view SHALL render every field the endpoint returns - the receipt id, the kernel account, the settlement rung, the block number, the verification status, the payload hash, the transaction hash and the timestamp - with the transaction hash linking to the transaction page and the block number to the block page."
+ac_3 = "THE types describing the single-receipt payload SHALL be declared in the frontend API types and SHALL match the backend view field for field, including which fields are nullable."
+ac_4 = "THE receipts list SHALL link each row to its detail route, and a request for an unknown receipt id SHALL render the not-found state the endpoint's 404 already produces."
+ac_5 = "A test SHALL render the detail view from a fixture matching the backend payload and assert every rendered field and both links."
+
+[req.8]
+title = "Declared Schemas for the Paxeer X API"
+story = "As a client author, I want the Paxeer X endpoints described in the published API specification like every other endpoint, so that I can generate a client and have my responses validated."
+ac_1 = "EACH of the six Paxeer X API paths - the unified account read, the capability probe, the transaction status read, the anchors list, the receipts list and the single receipt - SHALL declare an OpenAPI operation with its parameters, its success response schema and its error responses, in the same style the fork's other controllers already use."
+ac_2 = "THE response schemas SHALL be defined as schema modules beside the existing API schema modules and SHALL describe exactly what the views render, including nullable fields, enumerated status values and pagination parameters."
+ac_3 = "THE declared operations SHALL appear in the generated specification for the API router, so the specification lists the six paths without any further registration step."
+ac_4 = "THE existing controller tests SHALL validate their responses against the declared schemas through the test helper that already performs schema assertions, and a response that drifts from its schema SHALL fail the test."
+ac_5 = "NO schema SHALL be widened to accept a shape the view does not produce; where a view's shape is wrong, the view is corrected and its test updated to the corrected shape."
+
+[req.9]
+title = "Every Kernel Precompile Event Decoded"
+story = "As someone following the kernel through the explorer, I want every event the kernel precompiles emit to reach a row I can query, so that guarantor bonds, challenges, availability attestations and deposit roots are as visible as checkpoints and custody movements."
+ac_1 = "THE schema SHALL carry a table for the guarantor, challenge, availability and sequencer-authorisation events of the anchor precompile, with the columns those events actually carry - the guarantor id, the signer and operator addresses, the bond and slash amounts, the batch number, the challenge id and kind, the evidence hash, the challenger, the class and availability masks, the sequencer id and public key and the batch range, the unbond amount and completion time - and with the same key, block and provenance columns the other lx_ tables use."
+ac_2 = "THE deposit-root registration of the custody precompile SHALL be persisted with its checkpoint id, deposit root, commitment and version, without inventing a custody movement kind for it and without widening the custody kind enumeration to a value that does not describe a movement."
+ac_3 = "EACH new table SHALL have an Ecto schema with a changeset that validates its required columns, an import runner registered in the chain-type-specific import stage in the same shape as the existing runners, and conflict handling that makes a replayed block idempotent."
+ac_4 = "THE log transform SHALL decode all twenty-eight kernel precompile events from the committed ABI definitions, SHALL return each in the list of the table that holds it, SHALL keep every event it already decodes on the row shape it already produces, and SHALL keep its lossless parameter map for every event."
+ac_5 = "THE transform's topic constants SHALL continue to be proven against the keccak hash of the ABI signatures, and the test SHALL decode each newly handled event from a real log fixture and assert every decoded column."
+ac_6 = "NO event SHALL be dropped silently: an event the transform cannot place SHALL be counted and logged by name, and the test SHALL assert that the count is zero for the committed ABI set."
+
+[req.10]
+title = "Upstream Test Isolation"
+story = "As anyone running the backend suite, I want it to pass on a fresh database and to pass again on the same database, so that a failure means a defect rather than an order of execution."
+ac_1 = "THE block factory SHALL produce blocks that are not the configured first traceable block, so that a test inserting a block does not hand the genesis block to the fetcher under test and have its expectation consumed by the genesis filter."
+ac_2 = "THE genesis filter in the internal-transaction fetcher SHALL keep its behaviour exactly - it still drops the first traceable block when the node reports no transactions for it - and SHALL NOT be relaxed, conditioned on the test environment or bypassed by a flag."
+ac_3 = "THE heavy primary-key migration SHALL record its completion in the migration status table as its own contract requires, so that a second run against the same database does not attempt a conflict resolution the constraint no longer supports."
+ac_4 = "THE internal-transaction fetcher suite SHALL pass on a fresh database and SHALL pass again when run a second time against that same database, proven by running it twice in one qualification."
+ac_5 = "NO test SHALL be skipped, tagged out, reordered by a sleep or made to pass by lowering an assertion; where the upstream test and the upstream code genuinely disagree the conflict SHALL be recorded in the qualification log with both left intact."
+
+[req.11]
+title = "Wrapped Coin Named for the Coin"
+story = "As someone reading the wrapped-coin contract's name in a wallet, I want it to name the coin, so that the token and the network agree."
+ac_1 = "THE wrapped-coin contract SHALL carry the display name of the wrapped Paxeer coin and SHALL keep its symbol and its eighteen decimals unchanged."
+ac_2 = "NO storage slot, function selector, event signature or constructor argument of the contract SHALL change."
+ac_3 = "A contract test SHALL assert the display name, the symbol, the decimals, a deposit crediting the sender, a withdrawal debiting the sender and paying out, and a transfer, so the rename is proven not to have moved anything else."
+ac_4 = "THE unrelated wrapped-coin fixtures carried under the JSON-RPC test trees SHALL be left alone and SHALL be recorded in the qualification log as out of scope rather than renamed opportunistically."
+
+[req.12]
+title = "Idempotent, Resumable Database Copy"
+story = "As an operator seeding a fresh explorer database from an older one, I want a copy that ends in a state I can verify and resume, so that a growing source does not make the result unverifiable."
+ac_1 = "THE copy tool SHALL pin a block ceiling before it copies anything - the source's highest fully written block at that moment - SHALL copy no row above that ceiling, and SHALL compare source and target counts at that same ceiling so that growth of the source during the copy cannot be read as a mismatch."
+ac_2 = "THE copy of each table SHALL be idempotent and resumable: a rerun SHALL copy only what is missing under the ceiling, SHALL leave already copied rows unchanged, and SHALL record per table the highest key it has copied so an interrupted run continues from there."
+ac_3 = "THE internal-transaction copy SHALL derive the target's trace address from the source representation rather than copying a null into a column that forbids it, and the source-only columns of the internal-transaction and transaction tables SHALL be reported by name as not copied rather than silently dropped."
+ac_4 = "THE tool SHALL exit non-zero when any table's verification at the pinned ceiling does not match, and its summary SHALL name every mismatching table with both counts."
+ac_5 = "A test SHALL run the tool against two local database containers seeded with fixture rows that exercise a full copy, a resumed copy after an interruption, a rerun that copies nothing, a source that grows after the ceiling is pinned, and an internal-transaction row whose trace address must be derived, asserting the tool's exit code and the resulting row counts in each case."
+
+[req.13]
+title = "Deployment Definitions and a Compose Smoke Test"
+story = "As an operator bringing the explorer up, I want the committed definitions to name the images this repository publishes and to be provable locally, so that the deployment I read is the deployment that runs."
+ac_1 = "THE deployment definitions and the local compose stack SHALL name the published fork images for the backend, the frontend, the smart-contract verifier and the signature provider, by the registry path the image workflow publishes to, with the tag taken from a documented variable."
+ac_2 = "THE environment examples SHALL declare the Paxeer X chain type, the Paxeer X JSON-RPC variant and the capability probe setting per environment, with the capability probe off unless a deployment explicitly enables it, and SHALL carry no literal endpoint, credential or host."
+ac_3 = "THE compose stack SHALL bring the backend and its database up against a recorded JSON-RPC fixture server carried in the repository, requiring no external node."
+ac_4 = "A smoke test SHALL start that stack, wait for the backend to answer its liveness path, assert that the capability endpoint answers with the documented body, and tear the stack down, returning non-zero on any step."
+ac_5 = "NO deployment definition SHALL point at a production project, and no secret SHALL be committed; every credential enters through a named variable documented in the environment examples."
+
+[req.14]
+title = "Backend Boot Binds Its Port"
+story = "As an operator deploying the backend, I want it to serve requests after it migrates, so that a deployment either works or fails visibly rather than hanging."
+ac_1 = "THE backend SHALL bind its HTTP listener and answer its liveness path after migration completes, under the documented environment of a deployment whose node applies the configured JSON-RPC throttles."
+ac_2 = "THE cause SHALL be found by reproducing the hang locally from the committed image and the documented environment variables, and SHALL be fixed where it is - a start-up path that blocks on a remote call, a supervision child that never reports started, or an initialisation that waits on a throttled node - never by raising a timeout or by moving the failure behind a retry."
+ac_3 = "THE capability probe SHALL do its first remote call outside its initialisation callback, SHALL keep its documented refresh interval, SHALL stay disabled by default, and SHALL leave the rest of the application starting when the node is unreachable or throttled."
+ac_4 = "A regression test SHALL start the affected process against a node that never answers and assert that it reaches its started state within a bounded time and that its state reports the probe as unavailable rather than raising."
+
+[req.15]
+title = "One Explorer Surface"
+story = "As someone following a chain link from the control plane, I want to land in the explorer, so that there is one place where chain and kernel data are rendered and one place to keep correct."
+ac_1 = "THE control plane pages that render batch and checkpoint listings and details themselves SHALL be replaced by links into the explorer's anchor surfaces, addressed through a documented base-URL variable with no literal host."
+ac_2 = "THE journeys the beta contract requires of the control plane SHALL be kept: the account journey, the receipt lookup, and the independent receipt verification with its overload, refusal and retry states exactly as spec/layerx-beta requires them."
+ac_3 = "THE route performance budgets, the copy catalogue entries and the navigation of the control plane SHALL be updated to the routes that remain, with no entry left pointing at a route that no longer exists."
+ac_4 = "THE tests that covered the retired pages SHALL be changed to assert the link surface that replaces them, and no test SHALL be deleted to make the change pass; the verification and account tests SHALL keep asserting what they assert now."
+ac_5 = "IF the beta contract, its consistency check or a documentation journey names a retired route THEN the contradiction SHALL be recorded in the qualification log and the contract SHALL be left intact for its owner rather than edited from inside this feature."
+
+[req.16]
+title = "Wave Qualification and Recorded Evidence"
+story = "As the person deciding whether this feature is done, I want the aggregate suites run once on the merged revision with what ran written down, so that the feature's state is a record rather than a recollection."
+ac_1 = "THE aggregate explorer suites - the backend Paxeer X suites, the frontend type check and vitest suite, and the three lint checks - SHALL be run once, on the merged revision of the feature's waves, through the fleet gates, and never per task."
+ac_2 = "THE run SHALL be recorded in spec/paxeer-x-explorer/qualification.kvx as gate records carrying the task, the requirements the gate qualifies, the revision, the exact command, the exit code and the log path, written only by having executed the command they name."
+ac_3 = "ANY failure the run exposes that belongs to no task in this feature SHALL be recorded once as an observation with its revision, command, exit code, log path, one sentence of what was observed and one sentence of what is assumed, and SHALL NOT be chased."
+ac_4 = "NO gate record SHALL be written for a command that did not run, and no gate that passed at the recorded revision SHALL be rerun to confirm it."
+
+# --------------------------------------------------------------------------
+# TASKS
+#   wave 1  red continuous-integration jobs, and the explorer's own gates
+#   wave 2  the remaining fork surface, disjoint touches, parallel
+#   wave 3  one aggregate run on the merged revision, recorded
+# --------------------------------------------------------------------------
+
+[task.1]
+section = "Wave 1 - Green Checks and the Gates That Keep Them Green"
+title = "Close every red job and build the explorer's gates"
+status = "pending"
+
+[task.1.1]
+title = "Give every mix command one containerised recipe"
+status = "pending"
+wave = 1
+requires = []
+do_1 = "Write explorer/deploy/tools/mix-in-builder.sh, an executable POSIX shell script run from the repository root as `explorer/deploy/tools/mix-in-builder.sh <mix args>`, that runs the given mix invocation inside the pinned Elixir builder image against explorer/backend."
+do_2 = "Mount apps, config, rel, mix.exs, mix.lock and .formatter.exs from explorer/backend into the container work directory, keep the build artefacts in a named volume so a rerun does not recompile dependencies, and set MIX_ENV=test, MIX_BUILD_PATH to the volume, CHAIN_TYPE=paxeer_x and ETHEREUM_JSONRPC_VARIANT=paxeer_x unless the caller already set them."
+do_3 = "Start a disposable PostgreSQL 16 sidecar per invocation, join the mix container to its network namespace so the database answers on localhost, pass PGUSER and PGPASSWORD matching explorer/backend/apps/explorer/config/test.exs, install the headless browser driver the block_scout_web test helper starts before running a test under that application, and remove the sidecar and its volume on exit including on interrupt."
+do_4 = "Support `--reuse-db` to keep and reuse the previous invocation's sidecar and database so a suite can be run twice against one database, `--image <ref>` to override the builder image reference, and `--check` to verify only that the runtime, the image and the mounts resolve; print the resolved command before running it and exit with the mix exit code."
+do_5 = "Build the builder image from explorer/deploy/tools/Dockerfile.elixir-builder pinning the same Elixir and Erlang versions the explorer build workflow uses, and have the script build it on demand when the reference is absent."
+do_6 = "Document the script and its flags in explorer/README.md under a heading for running backend commands, naming no host and no internal address."
+verify_cmd = "timeout 20m sh -c 'explorer/deploy/tools/mix-in-builder.sh test apps/explorer/test/explorer/chain/paxeer_x/status_test.exs'"
+symbols = ["mix-in-builder"]
+touches = ["explorer/deploy/tools/mix-in-builder.sh","explorer/deploy/tools/Dockerfile.elixir-builder","explorer/README.md"]
+reqs = ["4.5"]
+
+[task.1.2]
+title = "Analyse Go with a build mode Go supports"
+status = "pending"
+wave = 1
+requires = []
+do_1 = "Diagnose from the job log first: find the failing run with `gh run list --workflow codeql.yml --branch main --limit 1`, then read the Analyze (go) job with `gh run view --job <job id> --log`; the recorded failure is that Go does not support the none build mode."
+do_2 = "In .github/workflows/codeql.yml set the build mode of the go matrix entry to autobuild, leaving the c-cpp, javascript-typescript, python, rust and actions entries on none, and change nothing else about the matrix or the job."
+do_3 = "Write tools/ci/codeql-build-mode-check.sh, which parses the workflow's matrix and fails when a language appears twice, when go is not on a build mode Go supports, or when any other language has left the none build mode; make it executable and dependency-free beyond the tooling the repository already installs."
+do_4 = "Run actionlint over the workflow as part of the same check script so a syntax error in the edit is caught without the CodeQL service."
+verify_cmd = "timeout 20m sh -c 'actionlint .github/workflows/codeql.yml && tools/ci/codeql-build-mode-check.sh'"
+symbols = ["codeql-build-mode-check"]
+touches = [".github/workflows/codeql.yml","tools/ci/codeql-build-mode-check.sh"]
+reqs = ["1.1","1.8","1.9"]
+
+[task.1.3]
+title = "Clear the publication audit"
+status = "pending"
+wave = 1
+requires = []
+do_1 = "Diagnose from the job log: `gh run view --job 36149017847 --log` and read the Audit publication set step, which exits 2; list every finding it reports, not only the two already known."
+do_2 = "Replace the credential-shaped strings in explorer/frontend/playwright/fixtures/rewards.ts and in explorer/backend/apps/block_scout_web/test/block_scout_web/controllers/account/api/v2/authenticate_controller_test.exs with values that are obviously synthetic and cannot be read as credentials, keeping each fixture exercising exactly the code path and the assertions it exercises now."
+do_3 = "Update the tests that consume those fixtures so they assert the same behaviour against the new values, changing no assertion's strength."
+do_4 = "Handle every other finding the log reports at its source; do not touch the secret-scan allowlist, and add a path to the audit's own allowlist only where tools/ci/public-repo-audit.sh documents an allowlist for that exact case, with the reason in the same line."
+do_5 = "Record in spec/paxeer-x-explorer/qualification.kvx any finding that belongs to neither this feature nor an allowlist the tool documents."
+verify_cmd = "timeout 20m sh -c 'make public-audit'"
+symbols = ["public-audit"]
+touches = ["explorer/frontend/playwright/fixtures/rewards.ts","explorer/backend/apps/block_scout_web/test/block_scout_web/controllers/account/api/v2/authenticate_controller_test.exs","tools/ci/public-repo-audit.sh","spec/paxeer-x-explorer/qualification.kvx"]
+reqs = ["1.2","1.8","1.9"]
+
+[task.1.4]
+title = "Repair the C17 build and test job"
+status = "pending"
+wave = 1
+requires = []
+do_1 = "Diagnose from the job log: `gh run view --job 36149017847 --log` and read the Build and test step of the c17 job for both compilers; identify the first failing target and the exact assertion, diagnostic or scan finding it reports."
+do_2 = "Fix the defect in the core source or in the test that names it, so that the behaviour the test asserts holds under both declared compilers; a difference between the two compilers is a defect in the code, not a reason to narrow the matrix."
+do_3 = "Extend or add the focused test under tests/ that covers the repaired behaviour so the same regression fails immediately next time, keeping its Makefile target beside the targets of its neighbours."
+do_4 = "Change no compiler flag to suppress a diagnostic, exclude no target from `make build test scan-consensus`, and leave every other target untouched; record anything the log reports that is unrelated to the first failure in the qualification log."
+verify_cmd = "timeout 20m sh -c 'CC=gcc make build test scan-consensus'"
+symbols = ["build","test","scan-consensus"]
+touches = ["src","include/layerx","tests","Makefile","spec/paxeer-x-explorer/qualification.kvx"]
+reqs = ["1.3","1.9"]
+
+[task.1.5]
+title = "Repair the beta contract and ledger checks"
+status = "pending"
+wave = 1
+requires = []
+do_1 = "Diagnose from the job log: `gh run view --job 36149017936 --log` and read the step that checks the beta contract and the executed-evidence ledger, which exits 2; note which of the two checks fails and on which record or field."
+do_2 = "Repair the disagreement at its source: a contract statement that no longer matches the manifests, workflows or documentation it is checked against is corrected in platform/docs/content/beta.md; a ledger record whose revision, command or evidence path no longer resolves is corrected in spec/layerx-beta/qualification.kvx to what was actually executed, or recorded as an observation when the evidence is gone."
+do_3 = "Leave every rule the two check scripts enforce exactly as it is: no relaxed pattern, no skipped record class, no early exit added to reach a zero status."
+do_4 = "Where the failure is a missing evidence file rather than a wrong statement, record it in spec/paxeer-x-explorer/qualification.kvx with the revision, the command, the exit code and the path, and leave the record intact."
+verify_cmd = "timeout 20m sh -c 'make beta-contract-check beta-ledger-check'"
+symbols = ["beta_contract_check","beta_ledger_check"]
+touches = ["platform/docs/content/beta.md","spec/layerx-beta/qualification.kvx","tools/ci/beta-contract-check.sh","tools/ci/beta-ledger-check.sh","spec/paxeer-x-explorer/qualification.kvx"]
+reqs = ["1.4","1.9"]
+
+[task.1.6]
+title = "Repair the two failing agent daemon tests"
+status = "pending"
+wave = 1
+requires = []
+do_1 = "Diagnose from the job log: `gh run view --job 36149017828 --log` and read both the Build, lint, and enforce boundaries step and the Run sanitizer variants step; the two named failures are the terminal-transition case in the native protocol-evidence tests and the confirmed-creation budget case."
+do_2 = "For the terminal-transition case in agent/crates/layerx-agentd/src/protocol_evidence_native_tests.rs, establish from the assertion which transition the daemon actually produces and repair agent/crates/layerx-agentd/src/protocol_evidence.rs so the complete maintained transition is required and produced; do not relax the assertion."
+do_3 = "For the confirmed-creation case in agent/crates/layerx-agentd/tests/budget_create.rs, establish why the core-keyed budget is not returned or is cached on trust, and repair the creation path in the daemon so the confirmed creation returns the core-keyed budget without caching on trust."
+do_4 = "Keep both tests asserting exactly what they assert now; if the code and a test genuinely contradict each other, leave both intact and record the contradiction in spec/paxeer-x-explorer/qualification.kvx."
+verify_cmd = "timeout 20m sh -c 'sh tools/runtime/run-with-clock.sh cargo test --locked --manifest-path agent/Cargo.toml -p layerx-agentd --lib protocol_evidence && make agent-test-agentd-budget-create'"
+symbols = ["protocol_evidence","actual_daemon_terminal_requires_the_complete_maintained_transition","confirmed_creation_returns_the_core_keyed_budget_without_caching_on_trust"]
+touches = ["agent/crates/layerx-agentd/src/protocol_evidence.rs","agent/crates/layerx-agentd/src/protocol_evidence_native_tests.rs","agent/crates/layerx-agentd/src/protocol_evidence","agent/crates/layerx-agentd/tests/budget_create.rs","agent/crates/layerx-agentd/tests/protocol_evidence.rs","spec/paxeer-x-explorer/qualification.kvx"]
+reqs = ["1.5","1.9"]
+
+[task.1.7]
+title = "Repair the human workspace lint gate and its web image"
+status = "pending"
+wave = 1
+requires = []
+do_1 = "Diagnose from the job log: `gh run view --job 36149017895 --log` and read both the step that enforces component-library integrity, copy, policies and strict lints and the browser-performance job's image build; the recorded findings are four eslint errors in the web application and a failed image build for the human web image."
+do_2 = "Fix the four eslint errors at their source in human/apps/web/src/api/abi-read.ts, human/apps/web/src/app/launchpad/actions.ts and human/apps/web/src/app/launchpad/launchpad-client.tsx, changing behaviour only where the rule proves the behaviour wrong; add no eslint-disable comment and lower no rule."
+do_3 = "Add the workspace dependency installation the lint step depends on to .github/workflows/human.yml so the job installs what it lints before it lints it, keeping the existing install of the web dependencies."
+do_4 = "Write tools/ci/human-web-image-build.sh that packs the tracked sources into a build context exactly as the cluster bring-up does and builds human/apps/web/Dockerfile from it, failing with the build log path on error; fix whatever that build reports - a missing workspace package, a build script that needs a dependency the image does not install, or a stage that copies a path that is not tracked - in the Dockerfile or in the sources it needs."
+do_5 = "Leave the browser-performance job's own steps untouched; the image is what fails, not the job."
+verify_cmd = "timeout 20m sh -c 'make human-js-install && npm --prefix human/apps/web run lint && tools/ci/human-web-image-build.sh'"
+symbols = ["human-web-image-build"]
+touches = ["human/apps/web/src/api/abi-read.ts","human/apps/web/src/app/launchpad/actions.ts","human/apps/web/src/app/launchpad/launchpad-client.tsx","human/apps/web/Dockerfile","human/apps/web/Dockerfile.dockerignore",".github/workflows/human.yml","tools/ci/human-web-image-build.sh"]
+reqs = ["1.6","1.9"]
+
+[task.1.8]
+title = "Repair the documentation site build"
+status = "pending"
+wave = 1
+requires = []
+do_1 = "Diagnose from the job log: `gh run view --job 36149018057 --log` and read the Install documentation tools step, which exits 2 before the site is built."
+do_2 = "Fix the installer invocation in .github/workflows/docs-site.yml so the pinned requirements install with a valid command; the hash-checking option carries no value and either enables hash checking for every pinned requirement or is absent."
+do_3 = "Install into an isolated environment inside the job rather than the runner's system interpreter, so the pinned versions are the ones that build the site."
+do_4 = "Repair whatever the strict site build then reports - a broken internal link, a missing navigation entry or a page outside the navigation - in docs/site, and leave the strict flag in place."
+verify_cmd = "timeout 20m sh -c 'python3 -m venv build/docs-site-venv && build/docs-site-venv/bin/pip install -r docs/site/requirements.txt && build/docs-site-venv/bin/mkdocs build --strict -f docs/site/mkdocs.yml'"
+symbols = ["docs-site"]
+touches = [".github/workflows/docs-site.yml","docs/site/mkdocs.yml","docs/site/requirements.txt","docs/site"]
+reqs = ["1.7","1.9"]
+
+[task.1.9]
+title = "Make the backend lint gate green"
+status = "pending"
+wave = 1
+requires = ["1.1"]
+do_1 = "Write tools/explorer/lint-backend.sh which runs `mix format --check-formatted` and `mix credo --strict` through explorer/deploy/tools/mix-in-builder.sh, returns the first non-zero exit code, and prints the failing command and log path."
+do_2 = "Fix every formatting finding in fork-owned modules by formatting them with the committed .formatter.exs settings; do not reformat vendored upstream files the fork has not modified."
+do_3 = "Fix every credo finding in fork-owned modules - the Paxeer X chain, controller, view, import runner, transform and configuration modules - in the code: missing module documentation, alias ordering, function complexity, nesting depth and naming."
+do_4 = "For findings inherited from vendored upstream files, add a scoped entry to explorer/backend/.credo.exs that names the upstream path it covers with a one-line reason in the file; never disable a check globally and never exclude a fork-owned path."
+verify_cmd = "timeout 20m sh -c 'tools/explorer/lint-backend.sh'"
+symbols = ["lint-backend"]
+touches = ["tools/explorer/lint-backend.sh","explorer/backend/.credo.exs","explorer/backend/.formatter.exs","explorer/backend/apps/explorer/lib/explorer/chain/paxeer_x","explorer/backend/apps/explorer/lib/explorer/chain/import/runner/paxeer_x","explorer/backend/apps/indexer/lib/indexer/transform/paxeer_x_logs.ex","explorer/backend/apps/ethereum_jsonrpc/lib/ethereum_jsonrpc/paxeer_x.ex","explorer/backend/apps/block_scout_web/lib/block_scout_web/controllers/api/v2/paxeer_x","explorer/backend/apps/block_scout_web/lib/block_scout_web/views/api/v2/paxeer_x"]
+reqs = ["2.1","2.5"]
+
+[task.1.10]
+title = "Make the frontend lint gate green"
+status = "pending"
+wave = 1
+requires = []
+do_1 = "Write tools/explorer/lint-frontend.sh which installs the locked dependencies with husky disabled and runs `yarn lint:eslint` then `yarn lint:tsc` from explorer/frontend, returning the first non-zero exit code."
+do_2 = "Fix every eslint and type finding in fork-owned frontend files - the Paxeer X pages, views, components, API services, types, mocks, stubs and the search bar helpers - in the code, with no eslint-disable comment and no any."
+do_3 = "For findings inherited from vendored upstream files, add an override block to explorer/frontend/eslint.config.mjs whose files globs name the upstream paths it covers, with a one-line reason in the file; never relax a rule for the whole project and never for a fork-owned path."
+do_4 = "Leave the lint scripts in package.json exactly as upstream defines them so the job and a developer run the same commands."
+verify_cmd = "timeout 20m sh -c 'cd explorer/frontend && HUSKY=0 yarn install --frozen-lockfile && yarn lint:eslint && yarn lint:tsc'"
+symbols = ["lint-frontend"]
+touches = ["tools/explorer/lint-frontend.sh","explorer/frontend/eslint.config.mjs","explorer/frontend/ui/paxeerX","explorer/frontend/ui/pages/PaxeerXAccount.tsx","explorer/frontend/ui/pages/PaxeerXAnchors.tsx","explorer/frontend/ui/pages/PaxeerXReceipts.tsx","explorer/frontend/pages/paxeer-x","explorer/frontend/lib/api/services/general/paxeerX.ts","explorer/frontend/lib/api/services/general/paxeerXLists.ts","explorer/frontend/types/api/paxeerX.ts","explorer/frontend/types/api/paxeerXLists.ts","explorer/frontend/mocks/paxeerX","explorer/frontend/stubs/paxeerXLists.ts","explorer/frontend/configs/app/features/paxeerXLists.ts"]
+reqs = ["2.2","2.5"]
+
+[task.1.11]
+title = "Make the services lint gate green"
+status = "pending"
+wave = 1
+requires = []
+do_1 = "Write tools/explorer/lint-services.sh which, for each of explorer/services/smart-contract-verifier and explorer/services/sig-provider, runs `cargo fmt --all --check` and `cargo clippy --all-targets --locked -- -D warnings` from that service directory and returns the first non-zero exit code."
+do_2 = "Fix every formatting difference by running the formatter over the service workspaces, and fix every clippy warning in the code."
+do_3 = "Where a clippy lint is inherited from vendored upstream code and cannot be fixed without a mass edit, add the allow at the narrowest scope that covers it with a one-line reason beside it; never add a crate-wide allow and never pass an allow flag from the script."
+do_4 = "Install the protocol-buffer compiler the services need in the script when it is absent from the environment, exactly as the explorer build workflow does, so the script runs the same way locally and in continuous integration."
+verify_cmd = "timeout 20m sh -c 'tools/explorer/lint-services.sh'"
+symbols = ["lint-services"]
+touches = ["tools/explorer/lint-services.sh","explorer/services/smart-contract-verifier","explorer/services/sig-provider"]
+reqs = ["2.3","2.5"]
+
+[task.1.12]
+title = "Enforce the test ratio and wire both explorer gates into continuous integration"
+status = "pending"
+wave = 1
+requires = ["1.9","1.10","1.11"]
+do_1 = "Write tools/explorer/test-ratio.sh taking a git range, listing the files changed under explorer/ in that range, classifying each as source, test or neither by the rules in the test-ratio decision, and failing when the count of changed or added test files is lower than the count of changed source files."
+do_2 = "Require every counted test file to reference at least one changed source file by module name, exported component name or path fragment, and make the failure output name each source file that no changed test references; exit zero when the range changes no explorer source file."
+do_3 = "Write tools/explorer/tests/test-ratio-test.sh that builds a throwaway git repository in a temporary directory with commits covering a satisfied ratio, an unsatisfied ratio, a test that references nothing changed, a shell-and-documentation-only change and an empty range, asserting the script's exit code and the named files for each case."
+do_4 = "Add to .github/workflows/explorer-build.yml an explorer-lint job with one leg per language calling tools/explorer/lint-backend.sh, tools/explorer/lint-frontend.sh and tools/explorer/lint-services.sh, and an explorer-test-ratio job running tools/explorer/test-ratio.sh over the range from the merge base to the head commit on pull requests; give neither job a continue-on-error and no conditional skip, and leave the existing build jobs untouched."
+do_5 = "Document in explorer/README.md the ratio rule, the file classifications, how to run the ratio script and the three lint scripts locally, and what a scoped upstream exemption must carry."
+verify_cmd = "timeout 20m sh -c 'actionlint .github/workflows/explorer-build.yml && shellcheck tools/explorer/test-ratio.sh tools/explorer/tests/test-ratio-test.sh && tools/explorer/tests/test-ratio-test.sh'"
+symbols = ["test-ratio"]
+touches = ["tools/explorer/test-ratio.sh","tools/explorer/tests/test-ratio-test.sh",".github/workflows/explorer-build.yml","explorer/README.md"]
+reqs = ["2.4","3.1","3.2","3.3","3.4","3.5"]
+
+[task.1.13]
+title = "Write the two bounded fleet gates"
+status = "pending"
+wave = 1
+requires = ["1.1","1.9","1.10","1.11"]
+do_1 = "Write tools/explorer/gate-test.sh, the test gate the workflow contract names: run the backend Paxeer X suites through explorer/deploy/tools/mix-in-builder.sh with a fresh database sidecar, then the frontend type check and vitest suite from explorer/frontend, and return non-zero on the first failure with its command, exit code and log path."
+do_2 = "Write tools/explorer/gate-lint.sh, the lint gate: run tools/explorer/lint-backend.sh, tools/explorer/lint-frontend.sh and tools/explorer/lint-services.sh in that order with the same reporting."
+do_3 = "Bound both gates by EXPLORER_GATE_BUDGET_SECONDS, defaulting to 1500, applied per leg through the shell timeout utility; on expiry stop and report the leg, its command and its log path as a timeout rather than continuing to the next leg."
+do_4 = "Give both gates a `--check` mode that validates the script syntax, the presence of the container runtime, the builder image recipe, the node toolchain and the three lint scripts, and exits without running a suite; write every log under build/explorer-gates/ and print the directory."
+do_5 = "Document both gates and their budget variable in explorer/README.md; the workflow contract already names these two paths as the test and lint gates, so neither spec/workflow.kvx nor any generated pointer file is edited."
+verify_cmd = "timeout 20m sh -c 'shellcheck tools/explorer/gate-test.sh tools/explorer/gate-lint.sh && tools/explorer/gate-lint.sh --check && tools/explorer/gate-test.sh --check'"
+symbols = ["gate-test","gate-lint"]
+touches = ["tools/explorer/gate-test.sh","tools/explorer/gate-lint.sh","explorer/README.md"]
+reqs = ["4.1","4.2","4.3","4.4"]
+
+[task.2]
+section = "Wave 2 - The Remaining Fork Surface"
+title = "Finish the explorer fork"
+status = "pending"
+
+[task.2.1]
+title = "Apply the product design tokens to the explorer theme"
+status = "pending"
+wave = 2
+requires = []
+do_1 = "Read the product tokens in human/apps/web/packages/layerx-ui/src/styles/tokens.css and carry their values into explorer/frontend/toolkit/theme/foundations: the typeface into typography.ts, the neutral and accent scales, the surface, background, border and text tones and the success, destructive and warning pairs into colors.ts and semanticTokens.ts, the radii into borders.ts and the card and overlay shadows into shadows.ts, keeping the existing token names the recipes already consume."
+do_2 = "Update explorer/frontend/toolkit/theme/globalCss.ts so the page background, the default text colour and the default font family come from those tokens, and update the button, input, table, tabs, badge, link and dialog recipes so the primary button is the black pill, the accent is the product accent and no recipe carries a literal colour."
+do_3 = "Resolve every token in both the light and the dark appearance; where the product tokens define only one appearance, derive the other from the existing semantic token structure rather than inventing a second palette."
+do_4 = "Set the colour theme override and font family variables in explorer/frontend/configs/envs/paxeer-x.env and paxeer-x-dev.env to the same values the theme declares, and point the network logo and icon variables at the marks under explorer/frontend/public/static/paxeer-x."
+do_5 = "Replace the marks under explorer/frontend/public/static/paxeer-x with the product marks in their light and dark variants, keeping the existing file names so the presets keep resolving."
+do_6 = "Add explorer/frontend/toolkit/theme/foundations/tokens.spec.ts asserting the exported values for the primary button background and its hover, the accent and its strong and soft variants, the page background, the white and sunken surfaces, the two border tones, the three text tones, the success, destructive and warning pairs, the five radii and the two shadows; add no dependency and no second styling system."
+verify_cmd = "timeout 20m sh -c 'cd explorer/frontend && HUSKY=0 yarn install --frozen-lockfile && yarn lint:tsc && yarn test:vitest run toolkit/theme'"
+symbols = ["colors","semanticTokens","typography","borders","shadows","globalCss"]
+touches = ["explorer/frontend/toolkit/theme/foundations/colors.ts","explorer/frontend/toolkit/theme/foundations/semanticTokens.ts","explorer/frontend/toolkit/theme/foundations/typography.ts","explorer/frontend/toolkit/theme/foundations/borders.ts","explorer/frontend/toolkit/theme/foundations/shadows.ts","explorer/frontend/toolkit/theme/globalCss.ts","explorer/frontend/toolkit/theme/recipes/button.recipe.ts","explorer/frontend/toolkit/theme/recipes/input.recipe.ts","explorer/frontend/toolkit/theme/recipes/table.recipe.ts","explorer/frontend/toolkit/theme/recipes/tabs.recipe.ts","explorer/frontend/toolkit/theme/recipes/badge.recipe.ts","explorer/frontend/toolkit/theme/recipes/link.recipe.ts","explorer/frontend/toolkit/theme/recipes/dialog.recipe.ts","explorer/frontend/toolkit/theme/foundations/tokens.spec.ts","explorer/frontend/configs/envs/paxeer-x.env","explorer/frontend/configs/envs/paxeer-x-dev.env","explorer/frontend/public/static/paxeer-x"]
+reqs = ["5.1","5.2","5.3","5.4","5.5","5.6"]
+
+[task.2.2]
+title = "Resolve kernel identities through the search path"
+status = "pending"
+wave = 2
+requires = []
+do_1 = "In explorer/frontend/ui/snippets/searchBar/utils.ts keep parsePaxeerXIdentifier recognising and rejecting exactly what it recognises and rejects now, and change getSearchRedirectRoute so a recognised kernel identity no longer returns the unified account route directly."
+do_2 = "Add a resolver beside it that queries the general search resource with the identity as its term and returns the address hash of the first address result, or nothing when the search returns no address; the backend resolves pax addresses, decentralised identifiers, kernel account ids and bare kernel keys through the recorded account bindings on that path."
+do_3 = "In explorer/frontend/ui/snippets/searchBar/SearchBarDesktop.tsx and SearchBarMobile.tsx await that resolution before navigating: on a resolved address navigate to the unified account route for that address, on no result fall through to the ordinary search results route, and keep the existing behaviour for every term the parser does not recognise."
+do_4 = "Keep the feature flag that gates the Paxeer X surfaces controlling the new path exactly as it controls the current one, and keep the recent-keyword and suggestion behaviour unchanged."
+do_5 = "Extend explorer/frontend/ui/snippets/searchBar/utils.spec.ts with the parser cases for each supported spelling and add explorer/frontend/ui/snippets/searchBar/useSearchRedirect.spec.tsx covering a pax address, a decentralised identifier, a kernel account id and a bare kernel key each resolving to an address, an unresolvable identity falling through to the search results route, and a plain address and a transaction hash keeping their existing routes."
+verify_cmd = "timeout 20m sh -c 'cd explorer/frontend && HUSKY=0 yarn install --frozen-lockfile && yarn lint:tsc && yarn test:vitest run ui/snippets/searchBar'"
+symbols = ["parsePaxeerXIdentifier","getSearchRedirectRoute","SearchBarDesktop","SearchBarMobile"]
+touches = ["explorer/frontend/ui/snippets/searchBar/utils.ts","explorer/frontend/ui/snippets/searchBar/utils.spec.ts","explorer/frontend/ui/snippets/searchBar/SearchBarDesktop.tsx","explorer/frontend/ui/snippets/searchBar/SearchBarMobile.tsx","explorer/frontend/ui/snippets/searchBar/useSearchRedirect.spec.tsx"]
+reqs = ["6.1","6.2","6.3","6.4","6.5"]
+
+[task.2.3]
+title = "Add the receipt detail page"
+status = "pending"
+wave = 2
+requires = []
+do_1 = "Add the single-receipt type to explorer/frontend/types/api/paxeerXLists.ts as PaxeerXReceipt, extending the list item with the verification status, the payload hash, the transaction hash and the timestamp, matching the backend receipt view field for field including which fields are nullable."
+do_2 = "Register a paxeer_x_receipt resource for the single-receipt path with its id path parameter in explorer/frontend/lib/api/services/general/paxeerXLists.ts and map it to that payload type."
+do_3 = "Add explorer/frontend/ui/paxeerX/receipts/PaxeerXReceiptDetails.tsx rendering every field of the payload, with the transaction hash linking to the transaction page, the block number to the block page and the settlement rung rendered through the shared status ladder component the list already uses."
+do_4 = "Add explorer/frontend/ui/pages/PaxeerXReceipt.tsx and the route file explorer/frontend/pages/paxeer-x/receipts/[id].tsx following the shape of the anchors and receipts pages, rendering the not-found state on the endpoint's 404, and link each row of PaxeerXReceiptsTableItem.tsx and PaxeerXReceiptsListItem.tsx to the new route."
+do_5 = "Register the route in the metadata title and description templates, the page type map and the open-graph type map beside the existing Paxeer X entries, and regenerate explorer/frontend/nextjs/nextjs-routes.d.ts with the nextjs-routes generator rather than editing it."
+do_6 = "Add explorer/frontend/ui/paxeerX/receipts/PaxeerXReceiptDetails.spec.tsx rendering the component from a fixture identical to the backend payload and asserting every field and both links."
+verify_cmd = "timeout 20m sh -c 'cd explorer/frontend && HUSKY=0 yarn install --frozen-lockfile && yarn lint:tsc && yarn test:vitest run ui/paxeerX/receipts'"
+symbols = ["PaxeerXReceipt","PaxeerXReceiptDetails","paxeer_x_receipt"]
+touches = ["explorer/frontend/types/api/paxeerXLists.ts","explorer/frontend/lib/api/services/general/paxeerXLists.ts","explorer/frontend/ui/paxeerX/receipts/PaxeerXReceiptDetails.tsx","explorer/frontend/ui/paxeerX/receipts/PaxeerXReceiptDetails.spec.tsx","explorer/frontend/ui/paxeerX/receipts/PaxeerXReceiptsTableItem.tsx","explorer/frontend/ui/paxeerX/receipts/PaxeerXReceiptsListItem.tsx","explorer/frontend/ui/pages/PaxeerXReceipt.tsx","explorer/frontend/pages/paxeer-x/receipts/[id].tsx","explorer/frontend/lib/metadata/templates/title.ts","explorer/frontend/lib/metadata/templates/description.ts","explorer/frontend/lib/metadata/getPageOgType.ts","explorer/frontend/lib/mixpanel/getPageType.ts","explorer/frontend/nextjs/nextjs-routes.d.ts"]
+reqs = ["7.1","7.2","7.3","7.4","7.5"]
+
+[task.2.4]
+title = "Declare OpenAPI operations and schemas for the six Paxeer X paths"
+status = "pending"
+wave = 2
+requires = ["1.1"]
+do_1 = "Add schema modules under explorer/backend/apps/block_scout_web/lib/block_scout_web/schemas/api/v2/paxeer_x/ for the unified account document, the capability probe, the transaction status, the anchors page, the receipts page and the single receipt, built from the general schema helpers the fork already uses for hashes, addresses and nullable strings, and describing exactly what the four Paxeer X views render including nullable fields, the status rung enumeration and the pagination parameters."
+do_2 = "In each of the five Paxeer X controllers add the controller specification module and an operation declaration per action with its summary, its path and query parameters, its 200 response referencing the schema module and its error responses from the shared error-response schemas."
+do_3 = "Confirm the operations reach the generated specification through the API router without further registration, and add the Paxeer X tag to the specification's tag list where the other chain-specific groups declare theirs."
+do_4 = "Make the existing controller tests read their responses through the schema-asserting test helper so each response is validated against its declared schema, and add a case per endpoint that asserts the nullable fields are accepted as null and absent fields are rejected."
+do_5 = "Where a view produces a shape a faithful schema cannot describe, correct the view and its test; never widen a schema to accept a shape the view should not produce."
+verify_cmd = "timeout 20m sh -c 'explorer/deploy/tools/mix-in-builder.sh test apps/block_scout_web/test/block_scout_web/controllers/api/v2/paxeer_x'"
+symbols = ["BlockScoutWeb.API.V2.PaxeerX.UnifiedAccountController","BlockScoutWeb.API.V2.PaxeerX.CapabilitiesController","BlockScoutWeb.API.V2.PaxeerX.TransactionStatusController","BlockScoutWeb.API.V2.PaxeerX.AnchorController","BlockScoutWeb.API.V2.PaxeerX.ReceiptController"]
+touches = ["explorer/backend/apps/block_scout_web/lib/block_scout_web/schemas/api/v2/paxeer_x","explorer/backend/apps/block_scout_web/lib/block_scout_web/controllers/api/v2/paxeer_x","explorer/backend/apps/block_scout_web/lib/block_scout_web/views/api/v2/paxeer_x","explorer/backend/apps/block_scout_web/lib/block_scout_web/specs/public.ex","explorer/backend/apps/block_scout_web/lib/block_scout_web/specs/private.ex","explorer/backend/apps/block_scout_web/test/block_scout_web/controllers/api/v2/paxeer_x"]
+reqs = ["8.1","8.2","8.3","8.4","8.5"]
+
+[task.2.5]
+title = "Add the guarantor and deposit-root tables with their runners"
+status = "pending"
+wave = 2
+requires = ["1.1"]
+do_1 = "Write a migration under explorer/backend/apps/explorer/priv/repo/migrations creating lx_guarantor_events with the key, block and provenance columns the other lx_ tables carry and the columns the anchor precompile's guarantor, challenge, availability and sequencer-authorisation events supply - guarantor id, signer and operator addresses, bond and amount, batch number, challenge id, challenge kind, upheld flag, evidence hash, challenger, reporter and reporter reward, class and availability masks, sequencer id, sequencer public key, first and last batch number, unbond amount and completion time - with an enumerated kind column naming each event and indexes on the guarantor id and the batch number."
+do_2 = "In the same migration create lx_deposit_roots with the key, block and provenance columns, the checkpoint id, the deposit root, the commitment and the version, indexed on the checkpoint id; leave the custody kind enumeration exactly as it is."
+do_3 = "Add Explorer.Chain.PaxeerX.GuarantorEvent and Explorer.Chain.PaxeerX.DepositRoot beside the existing schemas, each with a changeset validating its required columns and its enumerated values, following the shape of Explorer.Chain.PaxeerX.Anchor."
+do_4 = "Add import runners Explorer.Chain.Import.Runner.PaxeerX.GuarantorEvents and DepositRoots modelled on the anchors runner with the same conflict handling so a replayed block is idempotent, and register both in the chain-type-specific import stage beside the existing Paxeer X runners."
+do_5 = "Add explorer/backend/apps/explorer/test/explorer/chain/paxeer_x/guarantor_event_test.exs and deposit_root_test.exs covering the changeset's required columns, each enumerated value, and an import that inserts and then replays the same rows without duplicating them."
+verify_cmd = "timeout 20m sh -c 'explorer/deploy/tools/mix-in-builder.sh test apps/explorer/test/explorer/chain/paxeer_x'"
+symbols = ["Explorer.Chain.PaxeerX.GuarantorEvent","Explorer.Chain.PaxeerX.DepositRoot","Explorer.Chain.Import.Runner.PaxeerX.GuarantorEvents","Explorer.Chain.Import.Runner.PaxeerX.DepositRoots"]
+touches = ["explorer/backend/apps/explorer/priv/repo/migrations","explorer/backend/apps/explorer/lib/explorer/chain/paxeer_x/guarantor_event.ex","explorer/backend/apps/explorer/lib/explorer/chain/paxeer_x/deposit_root.ex","explorer/backend/apps/explorer/lib/explorer/chain/import/runner/paxeer_x/guarantor_events.ex","explorer/backend/apps/explorer/lib/explorer/chain/import/runner/paxeer_x/deposit_roots.ex","explorer/backend/apps/explorer/lib/explorer/chain/import/stage/chain_type_specific.ex","explorer/backend/apps/explorer/test/explorer/chain/paxeer_x/guarantor_event_test.exs","explorer/backend/apps/explorer/test/explorer/chain/paxeer_x/deposit_root_test.exs","explorer/backend/apps/explorer/test/explorer/chain/paxeer_x/import_test.exs"]
+reqs = ["9.1","9.2","9.3"]
+
+[task.2.6]
+title = "Decode every kernel precompile event"
+status = "pending"
+wave = 2
+requires = ["2.5"]
+do_1 = "In explorer/backend/apps/indexer/lib/indexer/transform/paxeer_x_logs.ex add topic constants and decoders for the nine guarantor and challenge events of the anchor precompile and for its availability attestation, from the signatures in precompiles/layerxanchor/abi.json, returning them under a new lx_guarantor_events key mapped to the columns the new schema declares."
+do_2 = "Add the decoder for the deposit-root registration of the custody precompile from precompiles/layerxcustody/abi.json under a new lx_deposit_roots key, and remove the moduledoc paragraph that records these events as undecodable, replacing it with the mapping now implemented."
+do_3 = "Keep every event already decoded producing exactly the row it produces now, keep the lossless parameter map on every row, and keep the address, hash and integer conversions the module already applies."
+do_4 = "Count and log by name any log from a kernel precompile address whose topic matches no decoder, and expose that count in the parse result so a caller can assert it."
+do_5 = "Extend explorer/backend/apps/indexer/test/indexer/transform/paxeer_x_logs_test.exs with a real log fixture per newly handled event, asserting every decoded column and the topic-against-signature proof for each new constant, and add a case asserting the unmatched count is zero for the committed ABI set."
+verify_cmd = "timeout 20m sh -c 'explorer/deploy/tools/mix-in-builder.sh test apps/indexer/test/indexer/transform/paxeer_x_logs_test.exs'"
+symbols = ["Indexer.Transform.PaxeerXLogs","parse"]
+touches = ["explorer/backend/apps/indexer/lib/indexer/transform/paxeer_x_logs.ex","explorer/backend/apps/indexer/test/indexer/transform/paxeer_x_logs_test.exs"]
+reqs = ["9.4","9.5","9.6"]
+
+[task.2.7]
+title = "Repair the upstream test isolation defects"
+status = "pending"
+wave = 2
+requires = ["1.1"]
+do_1 = "In explorer/backend/apps/explorer/test/support/factory.ex make the block number sequence start above the configured first traceable block so an inserted block is never the genesis block the internal-transaction fetcher filters, and leave every other factory field as it is."
+do_2 = "Leave the genesis filter in explorer/backend/apps/indexer/lib/indexer/fetcher/internal_transaction.ex exactly as written - it still drops the first traceable block when the node reports no transactions for it - and add no environment condition or flag to it."
+do_3 = "Make the heavy primary-key migration record its completion through the migration status module as its own contract requires, so a second run against an already migrated database does not attempt a conflict resolution the replaced constraint no longer supports."
+do_4 = "Add explorer/backend/apps/explorer/test/explorer/migrator/heavy_db_index_operation/update_internal_transactions_primary_key_test.exs asserting that after the operation completes the migration status records it and that running it again is a no-op."
+do_5 = "Leave every assertion in the internal-transaction fetcher suite unchanged; if the suite and the fetcher genuinely disagree, record the contradiction in spec/paxeer-x-explorer/qualification.kvx with both intact."
+verify_cmd = "timeout 20m sh -c 'explorer/deploy/tools/mix-in-builder.sh test apps/indexer/test/indexer/fetcher/internal_transaction_test.exs && explorer/deploy/tools/mix-in-builder.sh --reuse-db test apps/indexer/test/indexer/fetcher/internal_transaction_test.exs'"
+symbols = ["Explorer.Factory","block_number","drop_genesis","Explorer.Migrator.HeavyDbIndexOperation.UpdateInternalTransactionsPrimaryKey","Explorer.Migrator.MigrationStatus"]
+touches = ["explorer/backend/apps/explorer/test/support/factory.ex","explorer/backend/apps/explorer/lib/explorer/migrator/heavy_db_index_operation/update_internal_transactions_primary_key.ex","explorer/backend/apps/explorer/test/explorer/migrator/heavy_db_index_operation/update_internal_transactions_primary_key_test.exs","explorer/backend/apps/indexer/test/indexer/fetcher/internal_transaction_test.exs","spec/paxeer-x-explorer/qualification.kvx"]
+reqs = ["10.1","10.2","10.3","10.4","10.5"]
+
+[task.2.8]
+title = "Name the wrapped coin for the coin"
+status = "pending"
+wave = 2
+requires = []
+do_1 = "In contracts/src/WPAX.sol change the public name to the wrapped Paxeer display name, leaving the symbol, the decimals, every storage slot, every function and every event exactly as they are."
+do_2 = "Add contracts/test/WPAXTest.t.sol asserting the display name, the symbol and the decimals, a deposit crediting the sender's balance and emitting its event, a withdrawal debiting the sender and paying out, a transfer between accounts and an approved transfer, so the rename is proven to have moved nothing else."
+do_3 = "Record in spec/paxeer-x-explorer/qualification.kvx that the wrapped-coin fixtures under the JSON-RPC test trees carry the same old display name and are deliberately out of scope for this task."
+verify_cmd = "timeout 20m sh -c 'test -d contracts/lib/forge-std || git clone --depth 1 --branch v1.9.6 https://github.com/foundry-rs/forge-std contracts/lib/forge-std; FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague --match-path contracts/test/WPAXTest.t.sol'"
+symbols = ["WPAX"]
+touches = ["contracts/src/WPAX.sol","contracts/test/WPAXTest.t.sol","spec/paxeer-x-explorer/qualification.kvx"]
+reqs = ["11.1","11.2","11.3","11.4"]
+
+[task.2.9]
+title = "Make the database copy idempotent, resumable and verifiable"
+status = "pending"
+wave = 2
+requires = []
+do_1 = "In explorer/deploy/tools/copy-blockscout-11-to-10.sh pin a block ceiling before the first table is copied - the source's highest fully written block number at that moment - record it in the run summary, restrict every table's copy predicate to rows at or below it, and make the verification count both sides at that same ceiling."
+do_2 = "Make each table's copy resumable and idempotent: read the target's highest already copied key for the table, copy only rows above it and below the ceiling, insert with conflict handling that leaves an existing row untouched, and write the table's progress so an interrupted run continues rather than restarting."
+do_3 = "Derive the target's trace address for internal transactions from the source's representation instead of copying a null into the column that forbids it, and report by name the source-only columns of the internal-transaction and transaction tables as not copied."
+do_4 = "Exit non-zero when any table's verification at the ceiling does not match, and print a summary naming each mismatching table with the source and target counts; keep the existing environment contract, the dry-run mode and the refusal to append to a non-empty destination without the explicit flag."
+do_5 = "Add explorer/deploy/tools/tests/copy-blockscout-test.sh that starts two disposable PostgreSQL containers, creates the source and target schemas for the tables under test, seeds fixture rows including an internal transaction whose trace address must be derived, and asserts the tool's exit code and the resulting row counts for a full copy, a copy interrupted and resumed, a rerun that copies nothing, and a source that grows after the ceiling is pinned; remove both containers on exit."
+verify_cmd = "timeout 20m sh -c 'explorer/deploy/tools/tests/copy-blockscout-test.sh'"
+symbols = ["copy-blockscout-11-to-10"]
+touches = ["explorer/deploy/tools/copy-blockscout-11-to-10.sh","explorer/deploy/tools/tests/copy-blockscout-test.sh","explorer/deploy/db/README.md"]
+reqs = ["12.1","12.2","12.3","12.4","12.5"]
+
+[task.2.10]
+title = "Point the deployment definitions at the published images and prove them"
+status = "pending"
+wave = 2
+requires = []
+do_1 = "Change explorer/deploy/railway/backend.railway.json and frontend.railway.json to deploy the published fork images for the backend and the frontend by the registry path the image workflow publishes to, with the tag taken from a documented variable, keeping the existing start command, health-check path, timeout and restart policy."
+do_2 = "Change explorer/deploy/docker-compose.local.yml so the backend, frontend, smart-contract-verifier and sig-provider services use those published images with the same tag variable, keeping the database service, the volumes and the health checks as they are."
+do_3 = "In explorer/deploy/env/backend.example.env and frontend.example.env declare the Paxeer X chain type, the Paxeer X JSON-RPC variant, the Cosmos transaction type, the native coin decimals and the capability probe setting, with the probe off by default, and document the image tag variable; carry no literal endpoint, credential or host."
+do_4 = "Add explorer/deploy/tools/rpc-fixture-server.py, a dependency-free JSON-RPC server that answers the calls the backend makes during boot and the capability probe from recorded responses in explorer/deploy/tools/fixtures/, and add it to the compose stack behind a profile so the ordinary stack is unaffected."
+do_5 = "Add explorer/deploy/tools/tests/compose-smoke-test.sh that brings the database, the fixture server and the backend up from the compose file under that profile, waits for the liveness path, asserts the capability endpoint answers with the documented body, prints the compose logs on failure and tears the stack down on every exit path."
+verify_cmd = "timeout 20m sh -c 'explorer/deploy/tools/tests/compose-smoke-test.sh'"
+symbols = ["compose-smoke-test","rpc-fixture-server"]
+touches = ["explorer/deploy/railway/backend.railway.json","explorer/deploy/railway/frontend.railway.json","explorer/deploy/railway/README.md","explorer/deploy/docker-compose.local.yml","explorer/deploy/env/backend.example.env","explorer/deploy/env/frontend.example.env","explorer/deploy/tools/rpc-fixture-server.py","explorer/deploy/tools/fixtures","explorer/deploy/tools/tests/compose-smoke-test.sh"]
+reqs = ["13.1","13.2","13.3","13.4","13.5"]
+
+[task.2.11]
+title = "Make the backend bind its port after migration"
+status = "pending"
+wave = 2
+requires = ["1.1"]
+do_1 = "Reproduce the hang from the committed backend image under the environment documented in explorer/deploy/env/backend.example.env with the node JSON-RPC throttles set as a deployment sets them and the node slow to answer, and capture which supervision child never reports started."
+do_2 = "Move the first remote call of Explorer.Chain.PaxeerX.Capabilities out of its initialisation callback into a continuation or an immediate scheduled refresh, so the process reports started at once, keeps its documented refresh interval, stays disabled by default and answers its state as unavailable until a probe succeeds."
+do_3 = "Fix any other start-up path the reproduction implicates in the same way - a supervision child that performs a blocking remote call before reporting started - without raising a timeout, without wrapping a failure in a retry that hides it and without changing the application's child order for anything else."
+do_4 = "Add explorer/backend/apps/explorer/test/explorer/chain/paxeer_x/capabilities_boot_test.exs starting the process against a JSON-RPC endpoint that never answers, asserting it reaches its started state within a bounded time, that its state reports the probe unavailable rather than raising, and that a later successful probe fills the state."
+do_5 = "Record in explorer/deploy/env/backend.example.env the variables the reproduction needed, with names only."
+verify_cmd = "timeout 20m sh -c 'explorer/deploy/tools/mix-in-builder.sh test apps/explorer/test/explorer/chain/paxeer_x/capabilities_test.exs apps/explorer/test/explorer/chain/paxeer_x/capabilities_boot_test.exs'"
+symbols = ["Explorer.Chain.PaxeerX.Capabilities","init","handle_continue","Explorer.Application"]
+touches = ["explorer/backend/apps/explorer/lib/explorer/chain/paxeer_x/capabilities.ex","explorer/backend/apps/explorer/lib/explorer/application.ex","explorer/backend/apps/explorer/test/explorer/chain/paxeer_x/capabilities_test.exs","explorer/backend/apps/explorer/test/explorer/chain/paxeer_x/capabilities_boot_test.exs","explorer/deploy/env/backend.example.env"]
+reqs = ["14.1","14.2","14.3","14.4"]
+
+[task.2.12]
+title = "Leave one explorer surface and link to it"
+status = "pending"
+wave = 2
+requires = []
+do_1 = "Add a documented explorer base-URL variable to the control plane's server configuration and a helper in human/apps/web/src/explorer/client.ts that builds an explorer link for an anchor, a batch, a checkpoint, a receipt, a transaction and an address from it, carrying no literal host and failing closed with the unavailable state when the variable is unset."
+do_2 = "Replace the batch and checkpoint listing and detail pages under human/apps/web/src/app/explorer with a panel that links into the explorer's anchor surfaces through that helper, removing the client calls those pages made and the components that existed only for them."
+do_3 = "Keep the explorer landing page with its lookup forms, the receipt lookup route, the account journey and the verification page with its overload, refusal and retry states exactly as spec/layerx-beta requires them, and keep the programs page, which the explorer has no counterpart for."
+do_4 = "Update the route performance budgets, the navigation list in human/apps/web/src/explorer/components.tsx and the copy catalogue so no entry names a route that no longer exists, and add the copy entries the link panel needs."
+do_5 = "Change human/apps/web/e2e/explorer.spec.ts and e2e/explorer-admission.test.ts to assert the link surface that replaces the retired pages, keeping every assertion in e2e/explorer-verifier.test.ts and e2e/explorer-account.test.ts as it is; delete no test."
+do_6 = "If the beta contract, its consistency check or a documentation journey names a retired route, record the contradiction in spec/paxeer-x-explorer/qualification.kvx and leave the contract intact."
+verify_cmd = "timeout 20m sh -c 'npm --prefix human/apps/web ci --ignore-scripts --no-audit --no-fund && npm --prefix human/apps/web run typecheck && cd human/apps/web && node --test e2e/explorer.spec.ts e2e/explorer-admission.test.ts e2e/explorer-verifier.test.ts e2e/explorer-account.test.ts'"
+symbols = ["explorerLink","ExplorerPlanePage","EXPLORER_NAVIGATION"]
+touches = ["human/apps/web/src/explorer/client.ts","human/apps/web/src/explorer/components.tsx","human/apps/web/src/app/explorer","human/apps/web/src/kit/explorer.tsx","human/apps/web/src/perf/budgets.ts","human/apps/web/copy/catalog.ts","human/apps/web/e2e/explorer.spec.ts","human/apps/web/e2e/explorer-admission.test.ts","spec/paxeer-x-explorer/qualification.kvx"]
+reqs = ["15.1","15.2","15.3","15.4","15.5"]
+
+[task.3]
+section = "Wave 3 - One Aggregate Run, Recorded"
+title = "Qualify the merged waves once and write down what ran"
+status = "pending"
+
+[task.3.1]
+title = "Run the explorer gates once on the merged revision and record the evidence"
+status = "pending"
+wave = 3
+requires = ["1.1","1.9","1.10","1.11","1.12","1.13","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12"]
+do_1 = "On the revision that merges waves 1 and 2, run tools/explorer/gate-test.sh once with its budget set to fit this task's timeout, writing its logs under build/explorer-gates/."
+do_2 = "Append one gate record per leg to spec/paxeer-x-explorer/qualification.kvx - the backend Paxeer X suites, the frontend type check and vitest suite - carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code and the log path, written only from a command that actually ran."
+do_3 = "Append one observation per failure the run exposes that belongs to no task in this feature: revision, command, exit code, log path, one sentence of what was observed and one sentence of what is assumed; do not investigate it further and do not rerun it."
+do_4 = "Rerun nothing that already passed at this revision, spawn no review of a task whose verify_cmd passed, and write no gate record for a command that did not run."
+verify_cmd = "timeout 20m sh -c 'EXPLORER_GATE_BUDGET_SECONDS=1080 tools/explorer/gate-test.sh'"
+symbols = ["gate-test"]
+touches = ["spec/paxeer-x-explorer/qualification.kvx"]
+reqs = ["16.1","16.2","16.3","16.4"]

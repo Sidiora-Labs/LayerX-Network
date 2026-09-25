@@ -16,7 +16,7 @@ kind            = "portable-agent-operating-contract"
 version         = "1.3.0"
 status          = "active"
 source_of_truth = "spec/ (kvx). Per-IDE rule files are GENERATED pointers — never hand-edit; run cg spec render && cg commit -m \"Specgen re-render\" to regenerate."
-active_feature  = "layerx-beta"
+active_feature  = "paxeer-x-explorer"
 
 [principle]
 task_driven      = "Work is driven by the active feature's spec.kvx task list — not ad-hoc. Pick the next eligible task by dependency wave, do it, mark it, move on."
@@ -124,8 +124,37 @@ name = "parallel"
 
 [agents]
 driver      = "claude"
-max         = 8
+max         = 12
 ttl         = 14400
 codex_args  = ""
-claude_args = ""
+claude_args = "--model opus"
 cmd         = ""
+# Fleet hierarchy: main integrator, one feature manager per feature, one wave
+# worker per wave. Branches are cut by cg fleet begin; pull requests are opened
+# by cg fleet pr and merged by the owner.
+[hierarchy]
+enabled       = true
+main          = "main"
+remote        = "origin"
+worktrees     = ".codegraph/worktrees"
+test_gate     = "tools/explorer/gate-test.sh"
+lint_gate     = "tools/explorer/gate-lint.sh"
+pr            = "manual"
+checkpoint    = "manual"
+
+[role.main]
+title  = "Main integrator"
+agent  = "gideon"
+branch = "{main}"
+
+[role.feature]
+title  = "Feature manager"
+agent  = "fm-{feature}"
+branch = "feature/{feature}"
+base   = "{main}"
+
+[role.worker]
+title  = "Wave worker"
+agent  = "w-{feature}-{wave}"
+branch = "wave/{feature}/{wave}"
+base   = "feature/{feature}"
