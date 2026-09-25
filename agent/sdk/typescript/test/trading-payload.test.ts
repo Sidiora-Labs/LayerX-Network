@@ -115,7 +115,8 @@ const marketBytes = bytes(market.bytes);
 const padding = marketBytes.slice();
 padding[32 * 7 + 16 * 4 + 4 * 6 + 8 * 2 + 16 * 2 + 1 + 32 * 7] = 1;
 refuses(() => decodePerpsActivity(market.activity_type, padding), "non_canonical");
-const typedMarket = activity(market) as Extract<PerpsActivity, { activity: "market_create" }>;
+const typedMarket = decodePerpsActivity(market.activity_type, marketBytes);
+assert.equal(typedMarket.activity, "market_create");
 refuses(
   () => encodePerpsActivity({ ...typedMarket, initialMarginRatioBps: typedMarket.maintenanceMarginRatioBps }),
   "parameter_bounds",
