@@ -71,7 +71,7 @@ export function LaunchpadActions({
   const receiveDenom = side === "buy" ? "token" : quoteDenom;
 
   const previewQuote = () => {
-    if (!validTrade || slippage === undefined) {
+    if (!validTrade) {
       return;
     }
     const request = { token, side, amountIn, slippageBps: slippage };

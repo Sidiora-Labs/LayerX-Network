@@ -2208,6 +2208,7 @@ agent-build:
 
 .PHONY: human-js-install
 human-js-install:
+	npm --prefix agent/sdk/typescript ci --ignore-scripts --no-audit --no-fund
 	$(HUMAN_NPM) ci --ignore-scripts --no-audit --no-fund
 
 human-gen-api:
