@@ -285,7 +285,7 @@ reqs = ["1.4","1.9"]
 
 [task.1.6]
 title = "Repair the two failing agent daemon tests"
-status = "pending"
+status = "in_progress"
 wave = 1
 requires = []
 do_1 = "Diagnose from the job log: `gh run view --job 36149017828 --log` and read both the Build, lint, and enforce boundaries step and the Run sanitizer variants step; the two named failures are the terminal-transition case in the native protocol-evidence tests and the confirmed-creation budget case."
