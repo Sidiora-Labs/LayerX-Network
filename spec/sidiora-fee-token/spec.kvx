@@ -393,6 +393,7 @@ reqs = ["9.1","9.2","9.3","9.4","9.5"]
 [task.2.6]
 title = "Debit and refund gas in the account's fee denom at an oracle price"
 status = "pending"
+revision = "30b63fbe7a827556a00f3e3f834a1cac57c07a8b"
 wave = 2
 requires = ["2.4","2.5"]
 do_1 = "In modules/evm/ante/fee.go, inside EVMFeeCheckDecorator.AnteHandle and after the existing fee cap, minimum fee, tip cap and blob fee cap checks have run unchanged, read the sender's fee denom through the x/evm keeper; when the fee-token path is on and that denom is an allowed fee denom, convert the transaction's maximum fee from Paxeer terms into that denom at the x/oracle rate for its configured pair before geth's BuyGas runs, and debit that denom."
