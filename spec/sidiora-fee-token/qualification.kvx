@@ -52,3 +52,10 @@ exit_code = 127
 log_path = ".logs/guard.log"
 observed = "The required guard executable is unavailable."
 assumption = "Publication remains restricted to the requested branch with no chain interaction."
+
+[observation.2.7.1]
+revision = "d1eb0ba1740688198d57530458a5c4e139f58e16"
+command = "rg -n 'ConvertFeeToDenom|GetMaxFeeTokenSpread|GetFeeTokenEnabled|GetAllowedFeeDenoms|IsAllowedFeeDenom' modules/evm --glob '*.go'"; exit_code = 0
+log_path = ".logs/context.log"
+observed = "Fee-token parameters and readers exist, but the EVM fee path does not use them and no shared ConvertFeeToDenom implementation exists."
+assumption = "Task 2.7 requires the shared EVM oracle conversion and spread policy before implementation; creating that policy requires files outside its allowed scope."
