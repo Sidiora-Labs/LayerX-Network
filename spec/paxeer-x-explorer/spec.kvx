@@ -521,7 +521,7 @@ reqs = ["11.1","11.2","11.3","11.4"]
 
 [task.2.9]
 title = "Make the database copy idempotent, resumable and verifiable"
-status = "pending"
+status = "done"
 wave = 2
 requires = []
 do_1 = "In explorer/deploy/tools/copy-blockscout-11-to-10.sh pin a block ceiling before the first table is copied - the source's highest fully written block number at that moment - record it in the run summary, restrict every table's copy predicate to rows at or below it, and make the verification count both sides at that same ceiling."
