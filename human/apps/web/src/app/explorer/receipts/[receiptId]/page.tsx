@@ -13,12 +13,16 @@ export default async function ReceiptPage({
   params,
 }: Readonly<{ params: Promise<{ receiptId: string }> }>) {
   let record;
-  let anchors;
   try {
     record = await receiptRecord((await params).receiptId);
-    anchors = explorerLink({ kind: "batch" });
   } catch {
     return <ExplorerUnavailable />;
+  }
+  let anchors: string | undefined;
+  try {
+    anchors = explorerLink({ kind: "batch" });
+  } catch {
+    anchors = undefined;
   }
   if (record.value === undefined) {
     return (
@@ -54,9 +58,13 @@ export default async function ReceiptPage({
             id: "batch",
             cells: [
               copyEntry("explorer.column.batch").message,
-              <ExplorerExternalLink key="batch" href={anchors}>
-                {receipt.batchNumber}
-              </ExplorerExternalLink>,
+              anchors === undefined
+                ? receipt.batchNumber
+                : (
+                  <ExplorerExternalLink key="batch" href={anchors}>
+                    {receipt.batchNumber}
+                  </ExplorerExternalLink>
+                ),
               verification,
             ],
           },

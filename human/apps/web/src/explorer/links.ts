@@ -52,6 +52,34 @@ export function explorerLinkPath(target: ExplorerLinkTarget): string {
   }
 }
 
+/// The explorer's public base URL, as the control plane reads it from its environment. A base URL
+/// is accepted only when it is an origin on its own: HTTPS, or HTTP for a loopback host in local
+/// development, carrying no credentials, no path, no query and no fragment. Anything else, and an
+/// unset variable, yields undefined so the caller fails closed instead of guessing an origin.
+export function parseExplorerBaseUrl(configured: string | undefined): URL | undefined {
+  if (configured === undefined) {
+    return undefined;
+  }
+  let base: URL;
+  try {
+    base = new URL(configured);
+  } catch {
+    return undefined;
+  }
+  const loopback = base.hostname === "127.0.0.1" || base.hostname === "localhost";
+  if (
+    (base.protocol !== "https:" && !(loopback && base.protocol === "http:"))
+    || base.username !== ""
+    || base.password !== ""
+    || base.pathname !== "/"
+    || base.search !== ""
+    || base.hash !== ""
+  ) {
+    return undefined;
+  }
+  return base;
+}
+
 /// The control plane's own explorer routes, in the order they are offered. Every entry names a
 /// route the control plane still serves; the anchor listings it used to serve are linked to the
 /// explorer from the overview instead.

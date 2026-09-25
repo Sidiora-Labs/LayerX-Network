@@ -1,6 +1,6 @@
 import "server-only";
 
-import { explorerLinkPath, type ExplorerLinkTarget } from "./links";
+import { explorerLinkPath, parseExplorerBaseUrl, type ExplorerLinkTarget } from "./links";
 import {
   decodeAccountActivity,
   decodeNameResolution,
@@ -75,25 +75,8 @@ function explorerOrigin(): URL {
 /// the explorer's host is configured: no host is written into this repository, and an unset or
 /// malformed value fails closed with the unavailable state rather than guessing an origin.
 function explorerBaseUrl(): URL {
-  const configured = process.env.PAXEER_X_EXPLORER_BASE_URL;
-  if (configured === undefined) {
-    throw new ExplorerUnavailableError();
-  }
-  let base: URL;
-  try {
-    base = new URL(configured);
-  } catch {
-    throw new ExplorerUnavailableError();
-  }
-  const loopback = base.hostname === "127.0.0.1" || base.hostname === "localhost";
-  if (
-    (base.protocol !== "https:" && !(loopback && base.protocol === "http:"))
-    || base.username !== ""
-    || base.password !== ""
-    || base.pathname !== "/"
-    || base.search !== ""
-    || base.hash !== ""
-  ) {
+  const base = parseExplorerBaseUrl(process.env.PAXEER_X_EXPLORER_BASE_URL);
+  if (base === undefined) {
     throw new ExplorerUnavailableError();
   }
   return base;

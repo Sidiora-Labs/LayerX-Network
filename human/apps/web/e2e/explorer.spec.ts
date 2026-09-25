@@ -8,6 +8,7 @@ import {
   EXPLORER_LINK_KINDS,
   EXPLORER_NAVIGATION,
   explorerLinkPath,
+  parseExplorerBaseUrl,
   type ExplorerLinkTarget,
 } from "../src/explorer/links.ts";
 import { ROUTE_SCRIPT_BUDGETS } from "../src/perf/budgets.ts";
@@ -91,6 +92,46 @@ test("a link path never carries a host of its own", () => {
     assert.ok(path.startsWith("/"), path);
     assert.doesNotMatch(path, /^\/\//u, path);
     assert.doesNotMatch(path, /:\/\//u, path);
+  }
+});
+
+test("a base URL is accepted only when it is an origin the explorer can be reached at", () => {
+  const accepted = parseExplorerBaseUrl("https://explorer.example/");
+  assert.equal(accepted?.origin, "https://explorer.example");
+  assert.equal(parseExplorerBaseUrl("http://127.0.0.1:3000/")?.origin, "http://127.0.0.1:3000");
+  assert.equal(parseExplorerBaseUrl("http://localhost:3000")?.origin, "http://localhost:3000");
+});
+
+test("a base URL the explorer cannot be trusted at yields no origin at all", () => {
+  for (const refused of [
+    undefined,
+    "",
+    "explorer.example",
+    "http://explorer.example/",
+    "ftp://explorer.example/",
+    "https://user:secret@explorer.example/",
+    "https://explorer.example/paxeer-x",
+    "https://explorer.example/?tab=anchors",
+    "https://explorer.example/#anchors",
+  ]) {
+    assert.equal(parseExplorerBaseUrl(refused), undefined, String(refused));
+  }
+});
+
+test("an absolute link joins the configured origin to the path of its target", () => {
+  const base = parseExplorerBaseUrl("https://explorer.example/");
+  if (base === undefined) {
+    throw new Error("the explorer base URL fixture must parse");
+  }
+  for (const target of [
+    { kind: "anchor" },
+    { kind: "receipt", receiptId: RECEIPT },
+    { kind: "transaction", transactionHash: TRANSACTION },
+    { kind: "address", address: ADDRESS },
+  ] as const) {
+    const link: URL = new URL(explorerLinkPath(target), base);
+    assert.equal(link.origin, "https://explorer.example");
+    assert.equal(link.pathname, explorerLinkPath(target));
   }
 });
 

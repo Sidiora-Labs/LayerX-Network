@@ -123,3 +123,11 @@ symbol = "human-js-install"
 observed = "human/apps/web/src/api/sdk.ts imports the TypeScript agent SDK by relative path, which pulls agent/sdk/typescript into the web type-check graph, but human-js-install installs only human/apps/web, so npm run typecheck fails with TS2307 on @noble/curves, @noble/hashes, @scure/bip32 and @scure/bip39 until the agent SDK's own locked dependencies are installed."
 assumption = "The install target's owner adds the agent SDK workspace install ahead of the human type check, since the Makefile is in no task's touched set and this task installed those dependencies in its lane only to let its verify_cmd run."
 severity = "blocker"
+
+[observation.2.12.5]
+task = "2.12"
+file = "human/apps/web/src/app/explorer/layout.tsx, human/apps/web/src/explorer/client.ts"
+symbol = "PAXEER_X_EXPLORER_BASE_URL"
+observed = "The explorer layout is force-static with a sixty-second revalidation, so the first prerender of /explorer reads the explorer base URL from the build environment and a container that learns the value only at start-up serves the unavailable state until the first regeneration."
+assumption = "The owner of the control plane's image build passes the explorer base URL as a build argument as well as a runtime variable, since the image definition is in no task's touched set here."
+severity = "note"
