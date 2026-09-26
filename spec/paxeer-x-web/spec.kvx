@@ -878,7 +878,11 @@ reqs = ["17.2","17.3","17.6"]
 
 [task.2.18]
 title = "Register the web module with the kernel and route its activities through dispatch"
-status = "pending"
+status = "done"
+revision = "a570f44efec8e5c7e8eb14eecf4ded1ffcae9d9b"
+command = "timeout 20m sh -c 'make test-dispatch test-kernel && make test-web-program-path'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.2"]
 do_1 = "In include/layerx/lxp_module.h add LXP_MODULE_WEB = 11 and raise LXP_MODULE_RESERVED_COUNT to 11, and follow every bound and ordered table that uses it in src/protocol/lxp_genesis.c and src/protocol/lxp_handover.c, so a genesis manifest, a handover and a registration may name module 11 while module 12 stays refused."

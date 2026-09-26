@@ -46,6 +46,7 @@ symbol = "lx_web_root"
 observed = "The web root is computed from committed observations, but include/layerx/lx_batch.h is outside the task touches, so no batch header field carries it and the new activity ids are not yet routed by kernel dispatch."
 assumption = "Binding the web root into the batch header and routing LX_WEB_OBSERVATION_ACTIVITY and LX_WEB_ATTESTOR_SET_ACTIVITY is a later integration change owned by the feature."
 severity = "suspect"
+closed = "Task 2.18 at a570f44efec8e5c7e8eb14eecf4ded1ffcae9d9b registers the web module as module 11 so kernel dispatch routes LX_WEB_OBSERVATION_ACTIVITY and LX_WEB_ATTESTOR_SET_ACTIVITY in the Programs module context, and the batch header takes the web root of the kernel-bound store; its verify_cmd passed."
 
 [observation.1.6.1]
 task = "1.6"
@@ -321,6 +322,7 @@ symbol = "lxp_kernel_dispatch"
 observed = "Kernel dispatch accepts module ids up to 10 while the web module is 11, so the web observation and attestor-set activities cannot be routed through dispatch beside the oracle's from inside this task's touches."
 assumption = "The dispatch bound is raised by the kernel's owner, after which the web activities route through it."
 severity = "blocker"
+closed = "Task 2.18 at a570f44efec8e5c7e8eb14eecf4ded1ffcae9d9b raises LXP_MODULE_RESERVED_COUNT to 11 with LXP_MODULE_WEB, so registration, genesis and handover accept module 11 while module 12 stays refused, and both web activities route through lxp_kernel_dispatch; its verify_cmd passed."
 
 [observation.2.2.4]
 task = "2.2"

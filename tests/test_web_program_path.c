@@ -4,6 +4,7 @@ int web_program_path_reference_main(int argc, char **argv);
 #include "programs/test_call_activity.c"
 #undef main
 
+#include "layerx/lx_batch.h"
 #include "layerx/lx_web.h"
 
 #include <openssl/bn.h>
@@ -310,7 +311,6 @@ static int web_program_path(const char *wasm_path)
     static lx_web_store fresh_store;
     static lx_web_attestor_set attestors;
     static lx_web_observation observation;
-    static lx_web_committed committed;
     static lx_web_answer answer;
     static uint8_t observation_bytes[LX_WEB_OBSERVATION_MAX_BYTES];
     path_attestor signers[PATH_ATTESTORS];
@@ -326,10 +326,14 @@ static int web_program_path(const char *wasm_path)
     uint8_t payload_hash[32];
     uint8_t digest[32];
     uint8_t amount_be[16];
+    uint8_t attestor_bytes[LX_WEB_ATTESTOR_SET_MAX_BYTES];
     lxp_arena web_arena;
     lxp_module_ctx web_ctx;
     lxp_effect_buffer web_effects;
-    lx_web_intake_request intake;
+    lxp_authority_resolved governance;
+    lxp_activity web_activity;
+    const lxp_module_registration *web_registration;
+    lxp_result web_result;
     lx_account *actor;
     lx_account *treasury;
     lx_account *fee_account;
@@ -342,6 +346,7 @@ static int web_program_path(const char *wasm_path)
     size_t length;
     size_t index;
     size_t observation_length;
+    size_t attestor_length;
 
     PATH_CHECK(path_read_file(wasm_path, wasm, sizeof(wasm),
                               &wasm_length) == 0);
@@ -476,6 +481,12 @@ static int web_program_path(const char *wasm_path)
         programs_module_registration_v4()) == LXP_OK);
     PATH_CHECK(lxp_kernel_bind_module_runtime(&chain.kernel,
         LXP_MODULE_PROGRAMS, &chain.runtime) == LXP_OK);
+    PATH_CHECK(lxp_kernel_register_module(&chain.kernel,
+        lx_web_module_iface()) == LXP_OK);
+    (void)memset(&store, 0, sizeof(store));
+    store.network_id = PATH_NETWORK;
+    PATH_CHECK(lxp_kernel_bind_module_runtime(&chain.kernel, LXP_MODULE_WEB,
+                                              &store) == LXP_OK);
     PATH_CHECK(lxp_programs_bind_fee_transaction(&chain.kernel) == LXP_OK);
     PATH_CHECK(lxp_kernel_set_capabilities(&chain.kernel, NULL,
         lxp_kernel_canonical_ledger_apply) == LXP_OK);
@@ -598,12 +609,28 @@ static int web_program_path(const char *wasm_path)
     PATH_CHECK(lx_web_observation_encode(&observation, observation_bytes,
                                          sizeof(observation_bytes),
                                          &observation_length) == LXP_OK);
-    (void)memset(&store, 0, sizeof(store));
-    store.network_id = PATH_NETWORK;
-    intake.store = &store;
-    intake.attestors = &attestors;
-    intake.payload = observation_bytes;
-    intake.payload_length = observation_length;
+
+    /* The attestor set is registered by governance through dispatch before
+     * any observation is delivered. */
+    chain.kernel.handover.enabled = true;
+    (void)memset(chain.kernel.handover.governance_public_key, 0x42, 32U);
+    (void)memset(&governance, 0, sizeof(governance));
+    governance.kind = LXP_AUTHORITY_OWNER;
+    (void)memcpy(governance.verified_key,
+                 chain.kernel.handover.governance_public_key, 32U);
+    PATH_CHECK(lx_web_attestor_set_encode(&attestors, attestor_bytes,
+                                          sizeof(attestor_bytes),
+                                          &attestor_length) == LXP_OK);
+    (void)memset(&web_activity, 0, sizeof(web_activity));
+    web_activity.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+    web_activity.network_id = PATH_NETWORK;
+    web_activity.activity_type = LX_WEB_ATTESTOR_SET_ACTIVITY;
+    web_activity.payload = (lxp_byte_span){attestor_bytes, attestor_length};
+    PATH_CHECK(lxp_hash_payload(attestor_bytes, attestor_length,
+                                web_activity.payload_hash) == LXP_OK);
+    PATH_CHECK(lxp_kernel_module_for_activity(&chain.kernel,
+        LX_WEB_ATTESTOR_SET_ACTIVITY, chain.kernel.epoch,
+        &web_registration) == LXP_OK);
     PATH_CHECK(lxp_state_journal_open(&chain.state, chain.state.next_sequence,
                                       &chain.journal) == LXP_OK);
     PATH_CHECK(lxp_arena_init(&web_arena, web_arena_bytes,
@@ -614,8 +641,40 @@ static int web_program_path(const char *wasm_path)
     web_ctx.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
     PATH_CHECK(lxp_effect_buffer_init(&web_effects) == LXP_OK);
     PATH_CHECK(lxp_module_ctx_bind_effects(&web_ctx, &web_effects) == LXP_OK);
-    PATH_CHECK(lx_web_intake(&web_ctx, &intake, &committed) == LXP_OK);
-    PATH_CHECK(committed.signer_count == PATH_ATTESTORS &&
+    PATH_CHECK(lxp_kernel_dispatch(web_registration, &web_ctx, &web_activity,
+                                   &governance, &web_effects,
+                                   &web_result) == LXP_OK &&
+               web_result == LXP_OK);
+    PATH_CHECK(lxp_module_ctx_prepare_commit(&web_ctx) == LXP_OK);
+    PATH_CHECK(lxp_state_journal_commit(&chain.journal) == LXP_OK);
+    PATH_CHECK(lxp_module_ctx_commit(&web_ctx) == LXP_OK);
+
+    /* The observation activity is delivered through kernel dispatch in the
+     * programs module context. */
+    web_activity.activity_type = LX_WEB_OBSERVATION_ACTIVITY;
+    web_activity.payload = (lxp_byte_span){observation_bytes,
+                                           observation_length};
+    PATH_CHECK(lxp_hash_payload(observation_bytes, observation_length,
+                                web_activity.payload_hash) == LXP_OK);
+    PATH_CHECK(lxp_kernel_module_for_activity(&chain.kernel,
+        LX_WEB_OBSERVATION_ACTIVITY, chain.kernel.epoch,
+        &web_registration) == LXP_OK);
+    PATH_CHECK(lxp_state_journal_open(&chain.state, chain.state.next_sequence,
+                                      &chain.journal) == LXP_OK);
+    PATH_CHECK(lxp_arena_init(&web_arena, web_arena_bytes,
+                              sizeof(web_arena_bytes)) == LXP_OK);
+    PATH_CHECK(lxp_module_ctx_init(&web_ctx, &chain.kernel,
+        LXP_MODULE_PROGRAMS, 10U, 0U, chain.state.next_sequence, 100000U,
+        &web_arena, true) == LXP_OK);
+    web_ctx.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+    PATH_CHECK(lxp_effect_buffer_init(&web_effects) == LXP_OK);
+    PATH_CHECK(lxp_module_ctx_bind_effects(&web_ctx, &web_effects) == LXP_OK);
+    PATH_CHECK(lxp_kernel_dispatch(web_registration, &web_ctx, &web_activity,
+                                   &chain.authority, &web_effects,
+                                   &web_result) == LXP_OK &&
+               web_result == LXP_OK);
+    PATH_CHECK(store.committed_count == 1U &&
+               store.committed[0].signer_count == PATH_ATTESTORS &&
                store.pending_count == 1U && store.pending[0].fulfilled &&
                store.committed_count == 1U);
     PATH_CHECK(lxp_module_ctx_prepare_commit(&web_ctx) == LXP_OK);
@@ -623,6 +682,19 @@ static int web_program_path(const char *wasm_path)
     PATH_CHECK(lxp_module_ctx_commit(&web_ctx) == LXP_OK);
     PATH_CHECK(lxp_state_root(&chain.kernel,
                               chain.kernel.current_state_root) == LXP_OK);
+    /* The batch header carries the root of the committed observation. */
+    {
+        static lx_batch_header header;
+        uint8_t web_root[32];
+        PATH_CHECK(lxp_arena_init(&web_arena, web_arena_bytes,
+                                  sizeof(web_arena_bytes)) == LXP_OK);
+        PATH_CHECK(lx_web_root(&store, &web_arena, web_root) == LXP_OK);
+        PATH_CHECK(lxp_arena_reset(&web_arena, 0U) == LXP_OK);
+        PATH_CHECK(lx_batch_header_set_web_root(&header,
+            (const lx_web_store *)chain.kernel.module_runtime[LXP_MODULE_WEB],
+            &web_arena) == LXP_OK);
+        PATH_CHECK(memcmp(header.web_root, web_root, 32U) == 0);
+    }
 
     /* The fee split equally, the remainder to the lowest signer. */
     fee_account = path_account(&chain.accounts, fee_account_id);
@@ -664,7 +736,8 @@ static int web_program_path(const char *wasm_path)
      * the fulfilled record alone. */
     (void)memset(&fresh_store, 0, sizeof(fresh_store));
     fresh_store.network_id = PATH_NETWORK;
-    intake.store = &fresh_store;
+    PATH_CHECK(lxp_kernel_bind_module_runtime(&chain.kernel, LXP_MODULE_WEB,
+                                              &fresh_store) == LXP_OK);
     PATH_CHECK(lxp_state_journal_open(&chain.state, chain.state.next_sequence,
                                       &chain.journal) == LXP_OK);
     PATH_CHECK(lxp_arena_init(&web_arena, web_arena_bytes,
@@ -674,16 +747,23 @@ static int web_program_path(const char *wasm_path)
         &web_arena, true) == LXP_OK);
     web_ctx.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
     PATH_CHECK(lxp_module_ctx_bind_effects(&web_ctx, &web_effects) == LXP_OK);
-    PATH_CHECK(lx_web_intake(&web_ctx, &intake, &committed) ==
-               LXP_ERR_SEQUENCE_REUSED);
+    PATH_CHECK(lxp_kernel_dispatch(web_registration, &web_ctx, &web_activity,
+                                   &chain.authority, &web_effects,
+                                   &web_result) == LXP_OK &&
+               web_result == LXP_ERR_SEQUENCE_REUSED);
     /* An observation for a request no call recorded is unknown. */
     observation.request_id = path_unpaid_request;
     PATH_CHECK(lx_web_observation_encode(&observation, observation_bytes,
                                          sizeof(observation_bytes),
                                          &observation_length) == LXP_OK);
-    intake.payload_length = observation_length;
-    PATH_CHECK(lx_web_intake(&web_ctx, &intake, &committed) ==
-               LXP_ERR_UNKNOWN_FIELD);
+    web_activity.payload = (lxp_byte_span){observation_bytes,
+                                           observation_length};
+    PATH_CHECK(lxp_hash_payload(observation_bytes, observation_length,
+                                web_activity.payload_hash) == LXP_OK);
+    PATH_CHECK(lxp_kernel_dispatch(web_registration, &web_ctx, &web_activity,
+                                   &chain.authority, &web_effects,
+                                   &web_result) == LXP_OK &&
+               web_result == LXP_ERR_UNKNOWN_FIELD);
     PATH_CHECK(fresh_store.pending_count == 0U &&
                fresh_store.committed_count == 0U);
     PATH_CHECK(lxp_state_store_destroy(&chain.state) == LXP_OK);

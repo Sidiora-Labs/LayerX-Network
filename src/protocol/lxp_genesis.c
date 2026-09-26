@@ -63,7 +63,9 @@ static const lxp_genesis_module_entry module_table[] = {
     {LXP_MODULE_PERPS, LXP_GENESIS_MODULE_GATE_ENABLE_FLAG, false,
      lx_perps_module_iface},
     {LXP_MODULE_SPOT, LXP_GENESIS_MODULE_GATE_ENABLE_FLAG, false,
-     lx_spot_module_iface}
+     lx_spot_module_iface},
+    {LXP_MODULE_WEB, LXP_GENESIS_MODULE_GATE_ENABLE_FLAG, false,
+     lx_web_module_iface}
 };
 
 const lxp_genesis_module_entry *lxp_genesis_module_table(size_t *count)
