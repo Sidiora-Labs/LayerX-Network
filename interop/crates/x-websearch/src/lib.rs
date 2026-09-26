@@ -11,11 +11,14 @@ pub mod assets;
 pub mod canonical;
 pub mod config;
 pub mod content;
+pub mod crawl;
 pub mod extract;
 pub mod fetch;
+pub mod index;
 pub mod keys;
 pub mod payment;
 pub mod robots;
+pub mod search;
 pub mod server;
 
 pub use config::{load, Config, ConfigError};

@@ -1,0 +1,125 @@
+{
+  "query": "harbour",
+  "documents": [
+    {
+      "url": "http://127.0.0.1/log/07.html",
+      "title": "Harbour log 07",
+      "body": "Harbour log entry 07 moorings checked at dusk."
+    },
+    {
+      "url": "http://127.0.0.1/log/02.html",
+      "title": "Harbour log 02",
+      "body": "Harbour log entry 02 moorings checked at dusk."
+    },
+    {
+      "url": "http://127.0.0.1/weather.html",
+      "title": "Weather desk",
+      "body": "Fog expected over the bay tonight."
+    },
+    {
+      "url": "http://127.0.0.1/pilot.html",
+      "title": "Harbour pilot notes",
+      "body": "Harbour harbour harbour pilot boarding at north mole."
+    },
+    {
+      "url": "http://127.0.0.1/log/10.html",
+      "title": "Harbour log 10",
+      "body": "Harbour log entry 10 moorings checked at dusk."
+    },
+    {
+      "url": "http://127.0.0.1/log/04.html",
+      "title": "Harbour log 04",
+      "body": "Harbour log entry 04 moorings checked at dusk."
+    },
+    {
+      "url": "http://127.0.0.1/log/01.html",
+      "title": "Harbour log 01",
+      "body": "Harbour log entry 01 moorings checked at dusk."
+    },
+    {
+      "url": "http://127.0.0.1/log/09.html",
+      "title": "Harbour log 09",
+      "body": "Harbour log entry 09 moorings checked at dusk."
+    },
+    {
+      "url": "http://127.0.0.1/channel.html",
+      "title": "Harbour channel marks",
+      "body": "Harbour channel harbour buoys lit at north mole."
+    },
+    {
+      "url": "http://127.0.0.1/log/05.html",
+      "title": "Harbour log 05",
+      "body": "Harbour log entry 05 moorings checked at dusk."
+    },
+    {
+      "url": "http://127.0.0.1/log/03.html",
+      "title": "Harbour log 03",
+      "body": "Harbour log entry 03 moorings checked at dusk."
+    },
+    {
+      "url": "http://127.0.0.1/log/08.html",
+      "title": "Harbour log 08",
+      "body": "Harbour log entry 08 moorings checked at dusk."
+    },
+    {
+      "url": "http://127.0.0.1/log/06.html",
+      "title": "Harbour log 06",
+      "body": "Harbour log entry 06 moorings checked at dusk."
+    }
+  ],
+  "results": [
+    {
+      "url": "http://127.0.0.1/pilot.html",
+      "title": "Harbour pilot notes",
+      "snippet": "Harbour harbour harbour pilot boarding at north mole"
+    },
+    {
+      "url": "http://127.0.0.1/channel.html",
+      "title": "Harbour channel marks",
+      "snippet": "Harbour channel harbour buoys lit at north mole"
+    },
+    {
+      "url": "http://127.0.0.1/log/01.html",
+      "title": "Harbour log 01",
+      "snippet": "Harbour log entry 01 moorings checked at dusk"
+    },
+    {
+      "url": "http://127.0.0.1/log/02.html",
+      "title": "Harbour log 02",
+      "snippet": "Harbour log entry 02 moorings checked at dusk"
+    },
+    {
+      "url": "http://127.0.0.1/log/03.html",
+      "title": "Harbour log 03",
+      "snippet": "Harbour log entry 03 moorings checked at dusk"
+    },
+    {
+      "url": "http://127.0.0.1/log/04.html",
+      "title": "Harbour log 04",
+      "snippet": "Harbour log entry 04 moorings checked at dusk"
+    },
+    {
+      "url": "http://127.0.0.1/log/05.html",
+      "title": "Harbour log 05",
+      "snippet": "Harbour log entry 05 moorings checked at dusk"
+    },
+    {
+      "url": "http://127.0.0.1/log/06.html",
+      "title": "Harbour log 06",
+      "snippet": "Harbour log entry 06 moorings checked at dusk"
+    },
+    {
+      "url": "http://127.0.0.1/log/07.html",
+      "title": "Harbour log 07",
+      "snippet": "Harbour log entry 07 moorings checked at dusk"
+    },
+    {
+      "url": "http://127.0.0.1/log/08.html",
+      "title": "Harbour log 08",
+      "snippet": "Harbour log entry 08 moorings checked at dusk"
+    }
+  ],
+  "text": "[{\"url\":\"http://127.0.0.1/pilot.html\",\"title\":\"Harbour pilot notes\",\"snippet\":\"Harbour harbour harbour pilot boarding at north mole\"},{\"url\":\"http://127.0.0.1/channel.html\",\"title\":\"Harbour channel marks\",\"snippet\":\"Harbour channel harbour buoys lit at north mole\"},{\"url\":\"http://127.0.0.1/log/01.html\",\"title\":\"Harbour log 01\",\"snippet\":\"Harbour log entry 01 moorings checked at dusk\"},{\"url\":\"http://127.0.0.1/log/02.html\",\"title\":\"Harbour log 02\",\"snippet\":\"Harbour log entry 02 moorings checked at dusk\"},{\"url\":\"http://127.0.0.1/log/03.html\",\"title\":\"Harbour log 03\",\"snippet\":\"Harbour log entry 03 moorings checked at dusk\"},{\"url\":\"http://127.0.0.1/log/04.html\",\"title\":\"Harbour log 04\",\"snippet\":\"Harbour log entry 04 moorings checked at dusk\"},{\"url\":\"http://127.0.0.1/log/05.html\",\"title\":\"Harbour log 05\",\"snippet\":\"Harbour log entry 05 moorings checked at dusk\"},{\"url\":\"http://127.0.0.1/log/06.html\",\"title\":\"Harbour log 06\",\"snippet\":\"Harbour log entry 06 moorings checked at dusk\"},{\"url\":\"http://127.0.0.1/log/07.html\",\"title\":\"Harbour log 07\",\"snippet\":\"Harbour log entry 07 moorings checked at dusk\"},{\"url\":\"http://127.0.0.1/log/08.html\",\"title\":\"Harbour log 08\",\"snippet\":\"Harbour log entry 08 moorings checked at dusk\"}]",
+  "canonical": "504158454552585f5745425f434f4e54454e545f56310200000007686172626f7572000000106170706c69636174696f6e2f6a736f6e00000000000004da5b7b2275726c223a22687474703a2f2f3132372e302e302e312f70696c6f742e68746d6c222c227469746c65223a22486172626f75722070696c6f74206e6f746573222c22736e6970706574223a22486172626f757220686172626f757220686172626f75722070696c6f7420626f617264696e67206174206e6f727468206d6f6c65227d2c7b2275726c223a22687474703a2f2f3132372e302e302e312f6368616e6e656c2e68746d6c222c227469746c65223a22486172626f7572206368616e6e656c206d61726b73222c22736e6970706574223a22486172626f7572206368616e6e656c20686172626f75722062756f7973206c6974206174206e6f727468206d6f6c65227d2c7b2275726c223a22687474703a2f2f3132372e302e302e312f6c6f672f30312e68746d6c222c227469746c65223a22486172626f7572206c6f67203031222c22736e6970706574223a22486172626f7572206c6f6720656e747279203031206d6f6f72696e677320636865636b6564206174206475736b227d2c7b2275726c223a22687474703a2f2f3132372e302e302e312f6c6f672f30322e68746d6c222c227469746c65223a22486172626f7572206c6f67203032222c22736e6970706574223a22486172626f7572206c6f6720656e747279203032206d6f6f72696e677320636865636b6564206174206475736b227d2c7b2275726c223a22687474703a2f2f3132372e302e302e312f6c6f672f30332e68746d6c222c227469746c65223a22486172626f7572206c6f67203033222c22736e6970706574223a22486172626f7572206c6f6720656e747279203033206d6f6f72696e677320636865636b6564206174206475736b227d2c7b2275726c223a22687474703a2f2f3132372e302e302e312f6c6f672f30342e68746d6c222c227469746c65223a22486172626f7572206c6f67203034222c22736e6970706574223a22486172626f7572206c6f6720656e747279203034206d6f6f72696e677320636865636b6564206174206475736b227d2c7b2275726c223a22687474703a2f2f3132372e302e302e312f6c6f672f30352e68746d6c222c227469746c65223a22486172626f7572206c6f67203035222c22736e6970706574223a22486172626f7572206c6f6720656e747279203035206d6f6f72696e677320636865636b6564206174206475736b227d2c7b2275726c223a22687474703a2f2f3132372e302e302e312f6c6f672f30362e68746d6c222c227469746c65223a22486172626f7572206c6f67203036222c22736e6970706574223a22486172626f7572206c6f6720656e747279203036206d6f6f72696e677320636865636b6564206174206475736b227d2c7b2275726c223a22687474703a2f2f3132372e302e302e312f6c6f672f30372e68746d6c222c227469746c65223a22486172626f7572206c6f67203037222c22736e6970706574223a22486172626f7572206c6f6720656e747279203037206d6f6f72696e677320636865636b6564206174206475736b227d2c7b2275726c223a22687474703a2f2f3132372e302e302e312f6c6f672f30382e68746d6c222c227469746c65223a22486172626f7572206c6f67203038222c22736e6970706574223a22486172626f7572206c6f6720656e747279203038206d6f6f72696e677320636865636b6564206174206475736b227d5d",
+  "digest": "8ebb626400b5b92ef7a80f9f9750f43e1c936ffa43026950e6578ee0b3115744"
+}
