@@ -13,6 +13,7 @@ name = "layerx-bridge-relayer"
 path = "src/main.rs"
 
 [dependencies]
+ed25519-dalek.workspace = true
 k256.workspace = true
 layerx-crypto.workspace = true
 layerx-mirror.workspace = true

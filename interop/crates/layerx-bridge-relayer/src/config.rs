@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use layerx_mirror::rpc::{RpcCluster, RpcQuorumConfig};
-use layerx_mirror::signer::{RemoteChainSigner, RemoteSignerConfig, SignerEndpoint};
+use layerx_mirror::signer::{
+    RemoteChainSigner, RemoteSignerConfig, SignerEndpoint, SigningAlgorithm,
+};
 use layerx_paxeer_verifier::{EndpointConfig, EndpointTransport};
 use serde::Deserialize;
 
@@ -18,10 +20,10 @@ use crate::hex;
 use crate::journal::Journal;
 use crate::relayer::{
     ChainLink, ChainSettings, GasPolicy, PaxeerLink, PaxeerSettings, RelayerAssembly, RelayerError,
-    RelayerParts, SolanaLink,
+    RelayerParts, RelayerSetup, SolanaLink, SolanaRelease,
 };
 use crate::rpc::PaxeerRpc;
-use crate::signer::{Attestor, Submitter, ALGORITHM};
+use crate::signer::{Attestor, FeePayer, Submitter, ALGORITHM, FEE_PAYER_ALGORITHM};
 use crate::solana::observe::SolanaSettings;
 use crate::solana::rpc::{Commitment, SolanaRpc};
 use crate::solana::{base58_fixed, SOLANA_CHAIN_ID};
@@ -137,6 +139,11 @@ pub struct SolanaConfig {
     pub program_id: String,
     /// `confirmed` or `finalized`; `processed` is refused.
     pub commitment: Commitment,
+    /// Mints, base58, whose Paxeer burns this relayer releases on Solana;
+    /// each is matched to a burn's asset id through its asset PDA. Empty, the
+    /// relayer does not release on Solana.
+    #[serde(default)]
+    pub release_mints: Vec<String>,
 }
 
 impl SolanaConfig {
@@ -187,7 +194,29 @@ impl SolanaConfig {
         if settings.program_id == [0; 32] {
             return Err(invalid("solana program id must not be the zero key"));
         }
+        let mints = self.mints()?;
+        let distinct: std::collections::BTreeSet<[u8; 32]> = mints.iter().copied().collect();
+        if distinct.len() != mints.len() || distinct.contains(&[0; 32]) {
+            return Err(invalid(
+                "solana release mints must be distinct non-zero keys",
+            ));
+        }
         Ok(())
+    }
+
+    /// The release mints as keys.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a mint that is not a base58 32-byte key.
+    pub fn mints(&self) -> Result<Vec<[u8; 32]>, RelayerError> {
+        self.release_mints
+            .iter()
+            .map(|mint| {
+                base58_fixed::<32>(mint)
+                    .map_err(|_| invalid("a solana release mint is not a base58 32-byte key"))
+            })
+            .collect()
     }
 }
 
@@ -307,9 +336,17 @@ impl RelayerConfig {
     }
 
     fn remote_signer(&self, key: &KeyHandleConfig) -> Result<RemoteChainSigner, RelayerError> {
+        self.remote_signer_for(key, ALGORITHM)
+    }
+
+    fn remote_signer_for(
+        &self,
+        key: &KeyHandleConfig,
+        algorithm: SigningAlgorithm,
+    ) -> Result<RemoteChainSigner, RelayerError> {
         RemoteChainSigner::new(RemoteSignerConfig {
             endpoint: self.signer_endpoint(),
-            algorithm: ALGORITHM,
+            algorithm,
             key_handle: key.handle.clone(),
             public_key: key.public_key.clone(),
             timeout: Duration::from_millis(self.signer.timeout_ms),
@@ -339,12 +376,14 @@ impl RelayerConfig {
             .collect()
     }
 
-    /// Opens the journal and connects every transport and key handle.
+    /// Opens the journal and connects every transport and key handle, the
+    /// Solana fee payer as an ed25519 handle when release mints are
+    /// configured.
     ///
     /// # Errors
     ///
     /// Returns the first transport, signer or journal failure.
-    pub fn build(&self) -> Result<RelayerAssembly, RelayerError> {
+    pub fn build(&self) -> Result<RelayerSetup, RelayerError> {
         self.validate()?;
         let attestor = Attestor::new(self.remote_signer(&self.attestor)?)
             .map_err(|error| invalid(format!("attestor: {error:?}")))?;
@@ -389,7 +428,14 @@ impl RelayerConfig {
             }),
             None => None,
         };
-        Ok(RelayerAssembly {
+        let release = match &self.solana {
+            Some(solana) if !solana.release_mints.is_empty() => Some(SolanaRelease {
+                fee_payer: self.fee_payer(solana)?,
+                mints: solana.mints()?,
+            }),
+            _ => None,
+        };
+        let assembly = RelayerAssembly {
             parts: RelayerParts {
                 attestor,
                 paxeer,
@@ -399,7 +445,13 @@ impl RelayerConfig {
                 max_submissions: self.max_submissions,
             },
             solana,
-        })
+        };
+        Ok(RelayerSetup { assembly, release })
+    }
+
+    fn fee_payer(&self, solana: &SolanaConfig) -> Result<FeePayer, RelayerError> {
+        FeePayer::new(self.remote_signer_for(&solana.fee_payer, FEE_PAYER_ALGORITHM)?)
+            .map_err(|error| invalid(format!("solana fee payer: {error:?}")))
     }
 }
 
@@ -510,6 +562,49 @@ mod tests {
             1,
         );
         assert!(serde_json::from_str::<RelayerConfig>(&processed).is_err());
+    }
+
+    #[test]
+    fn solana_release_mints_are_optional_distinct_base58_keys() {
+        let config = with_solana();
+        let solana = config
+            .solana
+            .as_ref()
+            .unwrap_or_else(|| panic!("solana entry"));
+        assert!(solana.release_mints.is_empty());
+        assert_eq!(solana.mints(), Ok(Vec::new()));
+
+        let releasing = EXAMPLE.replacen(
+            r#""chains": ["#,
+            &SOLANA.replace(
+                r#""commitment": "finalized""#,
+                r#""commitment": "finalized", "release_mints": ["5w3wVdJaESaJKyLmStM6Hv9UyUkmZ1b9DLQquAqqpump"]"#,
+            ),
+            1,
+        );
+        let mut config: RelayerConfig =
+            serde_json::from_str(&releasing).unwrap_or_else(|error| panic!("releasing: {error}"));
+        assert_eq!(config.validate(), Ok(()));
+        let mints = config
+            .solana
+            .as_ref()
+            .map_or_else(|| panic!("solana entry"), SolanaConfig::mints)
+            .unwrap_or_else(|error| panic!("mints: {error}"));
+        assert_eq!(mints.len(), 1);
+        assert_eq!(mints[0][0], 0x49);
+
+        if let Some(solana) = config.solana.as_mut() {
+            solana.release_mints.push(solana.release_mints[0].clone());
+        }
+        assert!(config.validate().is_err());
+        if let Some(solana) = config.solana.as_mut() {
+            solana.release_mints = vec!["not-a-key".to_owned()];
+        }
+        assert!(config.validate().is_err());
+        if let Some(solana) = config.solana.as_mut() {
+            solana.release_mints = vec!["11111111111111111111111111111111".to_owned()];
+        }
+        assert!(config.validate().is_err());
     }
 
     #[test]

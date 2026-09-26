@@ -427,7 +427,11 @@ reqs = ["7.1","7.2","7.3","7.4","7.5","7.6"]
 
 [task.2.3]
 title = "Submit Solana releases from the relayer with an ed25519 fee payer"
-status = "pending"
+status = "done"
+revision = "308683b4e5bb4abde8df42993137d91fee7e6b42"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p layerx-bridge-relayer --test solana_release'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.2"]
 do_1 = "Write interop/crates/layerx-bridge-relayer/src/solana/release.rs building the release instruction with the recipient's full 32-byte pubkey, the mint, the amount, the paxeerTxHash and the paxeerNonce, and prepending the native secp256k1 instruction carrying at least threshold attestor signatures over the outbound preimage, laid out so every message, signature and address offset resolves inside that instruction's own data."

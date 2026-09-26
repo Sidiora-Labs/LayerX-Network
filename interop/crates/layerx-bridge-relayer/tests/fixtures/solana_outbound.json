@@ -1,0 +1,469 @@
+{
+ "endpoints": {
+  "ethereum-1": {
+   "*": [
+    {
+     "method": "eth_chainId",
+     "params": [],
+     "result": "0x1"
+    }
+   ]
+  },
+  "paxeer": {
+   "*": [
+    {
+     "method": "eth_chainId",
+     "params": [],
+     "result": "0xe5"
+    },
+    {
+     "method": "eth_call",
+     "params": [
+      {
+       "data": "0xa1a6d5080000000000000000000000000000000000000000000000000000000000000001",
+       "to": "0x0000000000000000000000000000000000001016"
+      },
+      "latest"
+     ],
+     "result": "0x00000000000000000000000000000000000000000000000000000000000000010000000000000000000000001111111111111111111111111111111111111111000000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000000000001"
+    },
+    {
+     "method": "eth_call",
+     "params": [
+      {
+       "data": "0xa1a6d5080000000000000000000000000000000000000000000000000000534f4c414e41",
+       "to": "0x0000000000000000000000000000000000001016"
+      },
+      "latest"
+     ],
+     "result": "0x0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000334121a65b47bd45c3f6381537d9180e98e445bc00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000001"
+    },
+    {
+     "method": "eth_blockNumber",
+     "params": [],
+     "result": "0x20"
+    },
+    {
+     "method": "eth_getLogs",
+     "params": [
+      {
+       "address": "0x0000000000000000000000000000000000001016",
+       "fromBlock": "0x19",
+       "toBlock": "0x1e",
+       "topics": [
+        "0x3e990eb54009dcdca53d8fa87307210f07097f37dcf6185dee71a42f8e7d524e",
+        [
+         "0x0000000000000000000000000000000000000000000000000000000000000001",
+         "0x0000000000000000000000000000000000000000000000000000534f4c414e41"
+        ]
+       ]
+      }
+     ],
+     "result": [
+      {
+       "address": "0x0000000000000000000000000000000000001016",
+       "topics": [
+        "0x3e990eb54009dcdca53d8fa87307210f07097f37dcf6185dee71a42f8e7d524e",
+        "0x0000000000000000000000000000000000000000000000000000534f4c414e41",
+        "0x00000000000000000000000021f7b20a555199fa73a238b1a91fd0f549068fee",
+        "0x000000000000000000000000000000000000000000000000000000000000000b"
+       ],
+       "data": "0x0000000000000000000000000000000000000000000000000000000000401640000000000000000000000000fb02125a3275d53a9f6538626b49894d2aae80cc",
+       "blockNumber": "0x1c",
+       "blockHash": "0x1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c",
+       "transactionHash": "0x6f79d9a61a77030bbeba5f435907f53b09321779310326b9faaebb391b3b5d5f",
+       "logIndex": "0x0",
+       "removed": false
+      }
+     ]
+    },
+    {
+     "method": "eth_getBlockByNumber",
+     "params": [
+      "0x1c",
+      false
+     ],
+     "result": {
+      "number": "0x1c",
+      "hash": "0x1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c"
+     }
+    }
+   ]
+  },
+  "solana": {
+   "*": [
+    {
+     "method": "getAccountInfo",
+     "params": [
+      "6REcAK7m9b1v6qZV5wV3aFPawCStHvrTGYNGbGqXF4Q7",
+      {
+       "commitment": "finalized",
+       "encoding": "base64"
+      }
+     ],
+     "result": {
+      "context": {
+       "apiVersion": "2.2.0",
+       "slot": 4990
+      },
+      "value": {
+       "data": [
+        "UFhCUkNGRzAAASIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQH8/wAAAAAAAAAD0kMco4c1wv1DjiyqI/CUGR2JZ1sAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "base64"
+       ],
+       "executable": false,
+       "lamports": 10407360,
+       "owner": "A7SZbByPYuHpunZ9pyMDMrhMYvK44ANT1AVqb8U1FpM9",
+       "rentEpoch": 18446744073709551615,
+       "space": 1367
+      }
+     }
+    },
+    {
+     "method": "getAccountInfo",
+     "params": [
+      "5XvCgGUysuU85ut4iTLDjiShTJWLzhqwJ3azMjPrknQ1",
+      {
+       "commitment": "finalized",
+       "encoding": "base64"
+      }
+     ],
+     "result": {
+      "context": {
+       "apiVersion": "2.2.0",
+       "slot": 4990
+      },
+      "value": {
+       "data": [
+        "UFhCUkFTVDAAAUlHb2XjG4QvZV47Og2Pl6x4SVhM5XEVfJgxvCp7wRAPIfeyClVRmfpzojixqR/Q9UkGj+4GAf8AAADo1KUQAAAACRhOcqAAAAAAAAD8eeY=",
+        "base64"
+       ],
+       "executable": false,
+       "lamports": 1510320,
+       "owner": "A7SZbByPYuHpunZ9pyMDMrhMYvK44ANT1AVqb8U1FpM9",
+       "rentEpoch": 18446744073709551615,
+       "space": 89
+      }
+     }
+    },
+    {
+     "method": "getAccountInfo",
+     "params": [
+      "J8Rf9GPpeneA3AcgVTSvCEDCKyztYqrzD6S5NqWHU2nw",
+      {
+       "commitment": "finalized",
+       "encoding": "base64"
+      }
+     ],
+     "result": {
+      "context": {
+       "apiVersion": "2.2.0",
+       "slot": 4990
+      },
+      "value": {
+       "data": [
+        "SUdvZeMbhC9lXjs6DY+XrHhJWEzlcRV8mDG8KnvBEA/tNJ2ElqX1NLO7j10kDYYzrPUCQn7KN1BOx89odmqnHQAQpdToAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "base64"
+       ],
+       "executable": false,
+       "lamports": 2039280,
+       "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+       "rentEpoch": 18446744073709551615,
+       "space": 165
+      }
+     }
+    },
+    {
+     "method": "getAccountInfo",
+     "params": [
+      "5Yc2Ahn1FPMtG4fhXzPi9LbfhJADa3YRZkibiGmS1kNt",
+      {
+       "commitment": "finalized",
+       "encoding": "base64"
+      }
+     ],
+     "result": {
+      "context": {
+       "apiVersion": "2.2.0",
+       "slot": 4990
+      },
+      "value": {
+       "data": [
+        "SUdvZeMbhC9lXjs6DY+XrHhJWEzlcRV8mDG8KnvBEA89mS4dydHMHFMR15xpo4AdQAmQRglNEl/Gh8bFfDleiAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "base64"
+       ],
+       "executable": false,
+       "lamports": 2039280,
+       "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+       "rentEpoch": 18446744073709551615,
+       "space": 165
+      }
+     }
+    },
+    {
+     "method": "getAccountInfo",
+     "params": [
+      "DukbFHcKu14W4ntjxws5sAG4NWgHWgTT7VuJrkGNif7r",
+      {
+       "commitment": "finalized",
+       "encoding": "base64"
+      }
+     ],
+     "result": {
+      "context": {
+       "apiVersion": "2.2.0",
+       "slot": 4990
+      },
+      "value": {
+       "data": [
+        "UFhCUlJFQzAAAfsCEloyddU6n2U4YmtJiU0qroDMPZkuHcnRzBxTEdecaaOAHUAJkEYJTRJfxofGxXw5Xog=",
+        "base64"
+       ],
+       "executable": false,
+       "lamports": 1322880,
+       "owner": "A7SZbByPYuHpunZ9pyMDMrhMYvK44ANT1AVqb8U1FpM9",
+       "rentEpoch": 18446744073709551615,
+       "space": 62
+      }
+     }
+    },
+    {
+     "method": "getAccountInfo",
+     "params": [
+      "FSACiQWvDWbuuarWkWmWik9diuERNadDv6EpasgWYrUk",
+      {
+       "commitment": "finalized",
+       "encoding": "base64"
+      }
+     ],
+     "result": {
+      "context": {
+       "apiVersion": "2.2.0",
+       "slot": 4990
+      },
+      "value": null
+     }
+    },
+    {
+     "method": "getLatestBlockhash",
+     "params": [
+      {
+       "commitment": "confirmed"
+      }
+     ],
+     "result": {
+      "context": {
+       "apiVersion": "2.2.0",
+       "slot": 4990
+      },
+      "value": {
+       "blockhash": "FrLFSoxDaT2FroN4k7ZE7uettrVRLzn3DQN8p6hBcjCT",
+       "lastValidBlockHeight": 2000
+      }
+     }
+    },
+    {
+     "method": "getLatestBlockhash",
+     "params": [
+      {
+       "commitment": "finalized"
+      }
+     ],
+     "result": {
+      "context": {
+       "apiVersion": "2.2.0",
+       "slot": 4990
+      },
+      "value": {
+       "blockhash": "FrLFSoxDaT2FroN4k7ZE7uettrVRLzn3DQN8p6hBcjCT",
+       "lastValidBlockHeight": 1900
+      }
+     }
+    },
+    {
+     "method": "sendTransaction",
+     "params": [
+      "$release:first:transaction",
+      {
+       "encoding": "base64"
+      }
+     ],
+     "result": "$release:first:signature"
+    },
+    {
+     "method": "getSignatureStatuses",
+     "params": [
+      [
+       "$release:first:signature"
+      ],
+      {
+       "searchTransactionHistory": true
+      }
+     ],
+     "result": {
+      "context": {
+       "apiVersion": "2.2.0",
+       "slot": 5010
+      },
+      "value": [
+       null
+      ]
+     }
+    }
+   ],
+   "down": [
+    {
+     "method": "sendTransaction",
+     "params": "$any",
+     "fault": "unavailable"
+    }
+   ],
+   "finalized": [
+    {
+     "method": "getSignatureStatuses",
+     "params": [
+      [
+       "$release:first:signature"
+      ],
+      {
+       "searchTransactionHistory": true
+      }
+     ],
+     "result": {
+      "context": {
+       "apiVersion": "2.2.0",
+       "slot": 5010
+      },
+      "value": [
+       {
+        "slot": 1850,
+        "confirmations": null,
+        "err": null,
+        "status": {
+         "Ok": null
+        },
+        "confirmationStatus": "finalized"
+       }
+      ]
+     }
+    }
+   ],
+   "consumed": [
+    {
+     "method": "getAccountInfo",
+     "params": [
+      "FSACiQWvDWbuuarWkWmWik9diuERNadDv6EpasgWYrUk",
+      {
+       "commitment": "finalized",
+       "encoding": "base64"
+      }
+     ],
+     "result": {
+      "context": {
+       "apiVersion": "2.2.0",
+       "slot": 4990
+      },
+      "value": {
+       "data": [
+        "",
+        "base64"
+       ],
+       "executable": false,
+       "lamports": 890880,
+       "owner": "A7SZbByPYuHpunZ9pyMDMrhMYvK44ANT1AVqb8U1FpM9",
+       "rentEpoch": 18446744073709551615,
+       "space": 0
+      }
+     }
+    }
+   ],
+   "unregistered": [
+    {
+     "method": "getAccountInfo",
+     "params": [
+      "DukbFHcKu14W4ntjxws5sAG4NWgHWgTT7VuJrkGNif7r",
+      {
+       "commitment": "finalized",
+       "encoding": "base64"
+      }
+     ],
+     "result": {
+      "context": {
+       "apiVersion": "2.2.0",
+       "slot": 4990
+      },
+      "value": null
+     }
+    }
+   ],
+   "expired": [
+    {
+     "method": "getLatestBlockhash",
+     "params": [
+      {
+       "commitment": "finalized"
+      }
+     ],
+     "result": {
+      "context": {
+       "apiVersion": "2.2.0",
+       "slot": 4990
+      },
+      "value": {
+       "blockhash": "79cu2QNvp92chEmBhBgcUfERDT9KHnUcr8eiJb5WzKML",
+       "lastValidBlockHeight": 2300
+      }
+     }
+    },
+    {
+     "method": "getLatestBlockhash",
+     "params": [
+      {
+       "commitment": "confirmed"
+      }
+     ],
+     "result": {
+      "context": {
+       "apiVersion": "2.2.0",
+       "slot": 4990
+      },
+      "value": {
+       "blockhash": "79cu2QNvp92chEmBhBgcUfERDT9KHnUcr8eiJb5WzKML",
+       "lastValidBlockHeight": 2450
+      }
+     }
+    },
+    {
+     "method": "sendTransaction",
+     "params": [
+      "$release:second:transaction",
+      {
+       "encoding": "base64"
+      }
+     ],
+     "result": "$release:second:signature"
+    },
+    {
+     "method": "getSignatureStatuses",
+     "params": [
+      [
+       "$release:second:signature"
+      ],
+      {
+       "searchTransactionHistory": true
+      }
+     ],
+     "result": {
+      "context": {
+       "apiVersion": "2.2.0",
+       "slot": 5010
+      },
+      "value": [
+       null
+      ]
+     }
+    }
+   ]
+  }
+ }
+}

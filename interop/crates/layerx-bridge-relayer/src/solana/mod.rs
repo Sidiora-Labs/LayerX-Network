@@ -11,8 +11,15 @@
 //! last 20 bytes of its keccak256, the inbound txHash is keccak256 of the
 //! 64-byte transaction signature, and Solana's chain id on the Paxeer side is
 //! the reserved constant [`SOLANA_CHAIN_ID`].
+//!
+//! Paxeer burns addressed to Solana travel the other way: the relayer reads
+//! the 32-byte key a burn's recipient handle stands for from the program's
+//! recipient PDA and pays it out with the custody program's release, built by
+//! [`release::build_release_transaction`] and paid for by the ed25519 fee
+//! payer the remote signer holds.
 
 pub mod observe;
+pub mod release;
 pub mod rpc;
 
 use std::fmt;
@@ -252,6 +259,12 @@ mod tests {
         assert_eq!(
             hex::prefixed(&handle(&wrapped)),
             "0xcf996523b5d068a26f0aa8a116602fe5033ee3a1"
+        );
+        let recipient = base58_fixed::<32>("59TLtNdRpCZysEHkGDMPFHkHiHXkBqQVqAVxAupzNoQb")
+            .unwrap_or_else(|error| panic!("recipient: {error}"));
+        assert_eq!(
+            hex::prefixed(&handle(&recipient)),
+            "0xfb02125a3275d53a9f6538626b49894d2aae80cc"
         );
         let authority = base58_fixed::<32>("GxxA9Cs9v5pAGVsaCe2jjDrtmieeBijcY4S5HHTY8Vq6")
             .unwrap_or_else(|error| panic!("authority: {error}"));

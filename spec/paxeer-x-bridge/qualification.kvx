@@ -236,4 +236,11 @@ file = "bridge/README.md"
 symbol = "-proposals"
 observed = "Section 6 of the runbook still says the module registers no message service and no command carries the bodies, and does not name the generator's -proposals output, whose 04-proposal-open-chain.json and, for Solana, 05-proposal-sidiora-cap.json are the content a submit-proposal transaction carries."
 assumption = "The runbook belongs to the documentation task; the proposals are written apart from the bodies because checklist.sh counts every JSON file in the bodies directory, and Sidiora's cap travels in its own proposal so it is submitted only after the usid pair reads back."
+
+[observation.2.3.1]
+task = "2.3"
+file = "interop/crates/layerx-bridge-relayer/src/config.rs"
+symbol = "release_mints"
+observed = "BridgeOut carries only the 20-byte asset id and nothing on either chain maps it to a mint, so the relayer needs the configured mints (solana.release_mints) to find the asset PDA, and its fee payer is built from the remote signer in config.rs; ed25519-dalek joins the crate's Cargo.toml and interop/Cargo.lock for the off-curve PDA check."
+assumption = "These three files sit outside the task's touches but are the only way to configure and derive a release, so they change with their own tests; the relayer releases only to the recipient's associated token account and waits while it does not exist, and one legacy transaction holds about four attestor signatures."
 severity = "note"
