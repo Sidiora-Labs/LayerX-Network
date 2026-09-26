@@ -1078,7 +1078,11 @@ reqs = ["11.2"]
 
 [task.2.29]
 title = "Restore the module context test after the web module registration and qualify the prepare pass staging"
-status = "pending"
+status = "implemented"
+implemented_revision = "5ff0d17cdd3ba8c027e226701689b1b573afaefe"
+implemented_command = "timeout 20m sh -c 'make test-module-ctx test-kernel && make test-web-program-path'"
+implemented_exit_code = 2
+implemented_log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.18","2.23"]
 do_1 = "test-module-ctx stops in its opening block, where lxp_ctx_emit_transfer_set returns LXP_FATAL_INVARIANT, on every revision since the web module was registered with the kernel; run the test once at that registration commit's parent to confirm the cause, then fix it where it lives, whether a bound or table in src/protocol/lxp_module_ctx.c or include/layerx/lxp_module.h that still assumes ten reserved modules or an expectation in the test that the registration made stale; every existing assertion stays exactly as strong."

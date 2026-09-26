@@ -261,7 +261,7 @@
     - List lx_getProgramEvents with its parameters and result shape in platform/hosted/gateway/openrpc.json, matching the method task 2.21 wrote in platform/hosted/gateway/src/rpc.rs.
     - Extend platform/hosted/gateway/tests/local/events.rs so the local qualification runs the reference web-reader program's request through a real node and core and reads the request event with its raw bytes through lx_getProgramEvents; close observation 2.21.2 naming the revision.
     - _Requirements: 11.2_
-  - [ ] 2.29 Restore the module context test after the web module registration and qualify the prepare pass staging
+  - [ ] 2.29 Restore the module context test after the web module registration and qualify the prepare pass staging — **Implemented - qualification pending**
     - test-module-ctx stops in its opening block, where lxp_ctx_emit_transfer_set returns LXP_FATAL_INVARIANT, on every revision since the web module was registered with the kernel; run the test once at that registration commit's parent to confirm the cause, then fix it where it lives, whether a bound or table in src/protocol/lxp_module_ctx.c or include/layerx/lxp_module.h that still assumes ten reserved modules or an expectation in the test that the registration made stale; every existing assertion stays exactly as strong.
     - Run task 2.23's verify_cmd once; on exit 0 record task 2.23 done with that revision, command, exit code and log, and close observations 2.2.2 and 2.23.1 naming the revision.
     - _Requirements: 11.1_
