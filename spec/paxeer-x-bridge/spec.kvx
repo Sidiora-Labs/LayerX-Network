@@ -343,7 +343,11 @@ reqs = ["9.1","9.2","9.3","9.4","9.5","9.6"]
 
 [task.1.6]
 title = "Add the one bridge workflow and prove its filters and jobs are true"
-status = "pending"
+status = "done"
+revision = "360f86f7a3abc9bbfdb780345d3b5dfb9ef75737"
+command = "timeout 20m sh -c 'bash bridge/deploy/tests/workflow-check.sh'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 1
 requires = []
 do_1 = "Write .github/workflows/bridge-test.yml running on pull requests, the merge group and pushes to main and release branches, filtered to bridge/**, interop/crates/layerx-bridge-relayer/** and the workflow file itself and to nothing else."
