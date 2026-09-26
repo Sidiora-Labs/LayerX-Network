@@ -4,7 +4,7 @@
 
 mod support;
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use layerx_bridge_relayer::abi::{encode_bridge_in, LAYERX_BRIDGE_PRECOMPILE};
 use layerx_bridge_relayer::attestation::{
@@ -117,7 +117,7 @@ fn signer(name: &str) -> SignerServer {
     )
 }
 
-fn parts(recording: &Recording, signer: &SignerServer, journal: &PathBuf) -> RelayerParts {
+fn parts(recording: &Recording, signer: &SignerServer, journal: &Path) -> RelayerParts {
     RelayerParts {
         attestor: Attestor::new(signer.remote("attestor-1", &key(ATTESTOR)))
             .unwrap_or_else(|error| panic!("attestor: {error:?}")),
@@ -142,7 +142,7 @@ fn parts(recording: &Recording, signer: &SignerServer, journal: &PathBuf) -> Rel
 fn start(
     recording: &Recording,
     signer: &SignerServer,
-    journal: &PathBuf,
+    journal: &Path,
     solana: SolanaSettings,
 ) -> Result<Relayer, RelayerError> {
     Relayer::new(RelayerAssembly {
@@ -540,22 +540,26 @@ fn an_unreadable_transaction_stops_the_scan_without_moving_the_cursor() {
     assert!(recording.sent().is_empty());
 }
 
-#[test]
-fn solana_deposits_are_observed_and_submitted_as_bridge_in_exactly_once() {
-    let recording = Recording::load(FIXTURE);
-    let signer = signer("solana-cycle");
-    let directory = work_directory("solana-cycle");
-    let journal = directory.join("relayer.jsonl");
-    let stream = inbound_stream(SOLANA_CHAIN_ID);
-    let vector_key = inbound_key(SOLANA_CHAIN_ID, &fixed(VECTOR_TX_HASH), 7);
-    let refused_key = inbound_key(SOLANA_CHAIN_ID, &inbound_tx_hash(&base58(SIGNATURE_B)), 8);
-    let later_key = inbound_key(SOLANA_CHAIN_ID, &later_deposit().tx_hash, 9);
-    assert_eq!(stream, format!("in:{SOLANA_CHAIN_ID}"));
+/// The journal keys and the inbound stream of the Solana observe-and-submit
+/// cycle.
+struct CycleKeys {
+    stream: String,
+    vector: String,
+    refused: String,
+    later: String,
+}
 
+/// The first scan of the cycle; returns the bridgeIn bytes sent to Paxeer.
+fn scan_the_first_deposits(
+    recording: &Recording,
+    signer: &SignerServer,
+    journal: &Path,
+    keys: &CycleKeys,
+) -> Vec<u8> {
     // Head 1100 at depth 32: slots up to 1068 are observed, the deposit in
     // slot 1090 is not yet.
     recording.set_phase("scan");
-    let mut relayer = start(&recording, &signer, &journal, settings())
+    let mut relayer = start(recording, signer, journal, settings())
         .unwrap_or_else(|error| panic!("relayer startup: {error}"));
     let report = relayer
         .solana_step()
@@ -571,15 +575,15 @@ fn solana_deposits_are_observed_and_submitted_as_bridge_in_exactly_once() {
         }
     );
     assert_eq!(recording.unmatched(), Vec::<String>::new());
-    let sent = recording.sent();
+    let mut sent = recording.sent();
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].0, "paxeer");
     assert_eq!(sent[0].1, bridge_in(5, &vector_deposit()));
     let state = relayer.journal().state();
-    assert_eq!(state.cursors.get(&stream), Some(&1069));
+    assert_eq!(state.cursors.get(&keys.stream), Some(&1069));
     let vector_item = state
         .items
-        .get(&vector_key)
+        .get(&keys.vector)
         .unwrap_or_else(|| panic!("the vector deposit is journaled"));
     assert_eq!(
         vector_item.observation.inbound_attestation(),
@@ -589,13 +593,35 @@ fn solana_deposits_are_observed_and_submitted_as_bridge_in_exactly_once() {
     assert_eq!(
         state
             .items
-            .get(&refused_key)
+            .get(&keys.refused)
             .and_then(|item| item.refusal.clone()),
         Some(DISAGREEMENT.to_owned())
     );
-    assert!(!state.items.contains_key(&later_key));
-    assert_eq!(attestor_requests(&signer), 1);
+    assert!(!state.items.contains_key(&keys.later));
+    assert_eq!(attestor_requests(signer), 1);
     drop(relayer);
+    sent.swap_remove(0).1
+}
+
+#[test]
+fn solana_deposits_are_observed_and_submitted_as_bridge_in_exactly_once() {
+    let recording = Recording::load(FIXTURE);
+    let signer = signer("solana-cycle");
+    let directory = work_directory("solana-cycle");
+    let journal = directory.join("relayer.jsonl");
+    let stream = inbound_stream(SOLANA_CHAIN_ID);
+    let vector_key = inbound_key(SOLANA_CHAIN_ID, &fixed(VECTOR_TX_HASH), 7);
+    let refused_key = inbound_key(SOLANA_CHAIN_ID, &inbound_tx_hash(&base58(SIGNATURE_B)), 8);
+    let later_key = inbound_key(SOLANA_CHAIN_ID, &later_deposit().tx_hash, 9);
+    assert_eq!(stream, format!("in:{SOLANA_CHAIN_ID}"));
+    let keys = CycleKeys {
+        stream: stream.clone(),
+        vector: vector_key.clone(),
+        refused: refused_key,
+        later: later_key,
+    };
+
+    let first_bridge_in = scan_the_first_deposits(&recording, &signer, &journal, &keys);
 
     // Restart on the same journal: nothing new is final, the vector deposit's
     // transaction is included and nothing is signed again.
@@ -626,7 +652,7 @@ fn solana_deposits_are_observed_and_submitted_as_bridge_in_exactly_once() {
             .get(&vector_key)
             .and_then(|item| item.completion),
         Some(Completion::Included {
-            tx_hash: Keccak256::digest(&sent[0].1).into(),
+            tx_hash: Keccak256::digest(&first_bridge_in).into(),
             block_number: 0x10,
         })
     );
@@ -642,8 +668,10 @@ fn solana_deposits_are_observed_and_submitted_as_bridge_in_exactly_once() {
     let solana = results
         .iter()
         .find(|(name, _)| *name == stream)
-        .map(|(_, result)| result.clone())
-        .unwrap_or_else(|| panic!("the tick runs the solana stream"));
+        .map_or_else(
+            || panic!("the tick runs the solana stream"),
+            |(_, result)| result.clone(),
+        );
     assert_eq!(
         solana,
         Ok(StepReport {

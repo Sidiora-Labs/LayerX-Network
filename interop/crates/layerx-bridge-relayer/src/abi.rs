@@ -306,11 +306,10 @@ fn text<'a>(value: &'a Value, field: &str) -> Result<&'a str, AbiError> {
         .ok_or(AbiError::Malformed)
 }
 
-fn log_parts(
-    value: &Value,
-    emitter: &[u8; 20],
-    topic: &[u8; 32],
-) -> Result<(LogPosition, Vec<[u8; 32]>, Vec<u8>), AbiError> {
+/// A log's position, its topics and its data, as `log_parts` validates them.
+type LogParts = (LogPosition, Vec<[u8; 32]>, Vec<u8>);
+
+fn log_parts(value: &Value, emitter: &[u8; 20], topic: &[u8; 32]) -> Result<LogParts, AbiError> {
     if value.get("removed").and_then(Value::as_bool) == Some(true) {
         return Err(AbiError::RemovedLog);
     }

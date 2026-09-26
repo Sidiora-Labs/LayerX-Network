@@ -23,6 +23,8 @@
 #   PAXEER_BRIDGE_SOLANA_ADMIN_CLI      the program's admin client, which encodes the
 #                                       initialise and register-asset instructions
 #   PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE  optional program keypair, so a redeploy keeps its id
+#   PAXEER_BRIDGE_SOLANA_EXECUTABLE_WAIT_SECONDS  optional bound, in seconds, on the wait for the
+#                                       deployed program to become executable (default 120)
 #   PAXEER_BRIDGE_SOLANA_CHAINS_ROOT    optional chains root, for a run-local configuration
 #
 # The Solana CLI addresses an endpoint by URL alone and has no option for an
@@ -37,6 +39,19 @@
 # client initialises only the program the configuration names. A filled id must
 # be reproduced by the program keypair the run deploys with and stops the run if
 # the deployment lands elsewhere.
+#
+# A first deployment with no PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE generates
+# the program keypair beside the deployment record, at the record's path with
+# -program-keypair.json in place of .json, names that path in the record and
+# prints it, so the repeated run with the filled solana.program_id is handed the
+# keypair of that program. An existing file at that path is never overwritten:
+# the run stops naming it before the cluster is reached.
+#
+# A program is invocable only from the slot after the one that deployed it, so
+# once the deployment is rooted the run polls the program account at the
+# configured commitment until it is executable, owned by the upgradeable loader
+# and read at a slot past the deploy slot, and stops naming the program id when
+# that does not happen within the bounded wait.
 #
 # The program is built with the platform tools release PLATFORM_TOOLS_VERSION
 # names, passed to cargo-build-sbf as --tools-version, and not with the release
@@ -74,6 +89,7 @@ SIDIORA_DECIMALS=6
 UPGRADEABLE_LOADER=BPFLoaderUpgradeab1e11111111111111111111111
 VAULT_AUTHORITY_SEED=vault-authority
 PLATFORM_TOOLS_VERSION=v1.56
+DEFAULT_EXECUTABLE_WAIT_SECONDS=120
 
 fail() {
     printf 'deploy-solana-program: error: %s\n' "$*" >&2
@@ -274,9 +290,20 @@ record_directory=$(dirname "$record")
 [ -d "$record_directory" ] || fail "$record_directory does not exist, so the deployment record cannot be written"
 [ -w "$record_directory" ] || fail "$record_directory is not writable, so the deployment record cannot be written"
 
-if [ -n "${PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE:-}" ]; then
-    [ -r "$PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE" ] \
+executable_wait_seconds=${PAXEER_BRIDGE_SOLANA_EXECUTABLE_WAIT_SECONDS:-$DEFAULT_EXECUTABLE_WAIT_SECONDS}
+[[ $executable_wait_seconds =~ ^[1-9][0-9]{0,3}$ ]] \
+    || fail "PAXEER_BRIDGE_SOLANA_EXECUTABLE_WAIT_SECONDS: $executable_wait_seconds is not a wait between 1 and 9999 seconds"
+
+program_keypair=${PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE:-}
+kept_keypair=""
+if [ -n "$program_keypair" ]; then
+    [ -r "$program_keypair" ] \
         || fail "PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE is not readable"
+else
+    kept_keypair="${record%.json}-program-keypair.json"
+    if [ -e "$kept_keypair" ] || [ -L "$kept_keypair" ]; then
+        fail "$kept_keypair already exists and a first deployment never overwrites a program keypair; name it in PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE to deploy that program, or move it away"
+    fi
 fi
 
 configured_program_id=$(jq -r '.solana.program_id // empty' "$config")
@@ -285,7 +312,7 @@ case $configured_program_id in
 "$PLACEHOLDER_PREFIX"*) ;;
 *)
     require_pubkey solana.program_id "$configured_program_id"
-    [ -n "${PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE:-}" ] \
+    [ -n "$program_keypair" ] \
         || fail "$config names program $configured_program_id, so PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE must name the keypair of that program id"
     ;;
 esac
@@ -331,11 +358,19 @@ elf=${built[0]}
 elf_sha256=$(sha256sum "$elf" | cut -d ' ' -f 1)
 elf_bytes=$(wc -c < "$elf" | tr -d ' ')
 
-deploy=("$SOLANA" program deploy "$elf" --url "$rpc" --keypair "$keypair"
-    --upgrade-authority "$keypair" --output json)
-if [ -n "${PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE:-}" ]; then
-    deploy+=(--program-id "$PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE")
+if [ -n "$kept_keypair" ]; then
+    (umask 077 && "$KEYGEN" new --no-bip39-passphrase --silent --outfile "$kept_keypair") \
+        > /dev/null 2> "$work/keygen.log" || {
+        grep -iF 'overwrite' "$work/keygen.log" >&2 || true
+        fail "solana-keygen could not write the program keypair of this first deployment to $kept_keypair"
+    }
+    program_keypair=$kept_keypair
+    printf 'deploy-solana-program: the program keypair of this first deployment is kept in %s\n' \
+        "$kept_keypair" >&2
 fi
+
+deploy=("$SOLANA" program deploy "$elf" --url "$rpc" --keypair "$keypair"
+    --upgrade-authority "$keypair" --output json --program-id "$program_keypair")
 "${deploy[@]}" > "$work/deploy.json" 2> "$work/deploy.log" || {
     cat "$work/deploy.log" >&2
     fail "solana program deploy failed"
@@ -380,6 +415,40 @@ rooted_slot=$("$SOLANA" slot --url "$rpc" --commitment finalized) \
 [ "$rooted_slot" -ge "$deployed_slot" ] \
     || fail "the finalized slot $rooted_slot is behind the deploy slot $deployed_slot; the deployment is not rooted yet"
 
+# Polls the program account at the configured commitment until it is executable,
+# owned by the upgradeable loader and read at a slot past the deploy slot, the
+# first slot in which the program can be invoked.
+wait_executable() {
+    local program=$1 deploy_slot=$2 attempt executable owner slot last
+    last="no answer yet"
+    for ((attempt = 1; attempt <= executable_wait_seconds; attempt++)); do
+        if "$SOLANA" account "$program" --url "$rpc" --commitment "$commitment" --output json \
+            > "$work/account.json" 2> "$work/account.log"; then
+            executable=$(jq -r '.account.executable // false' "$work/account.json")
+            owner=$(jq -r '.account.owner // empty' "$work/account.json")
+            [ "$owner" = "$UPGRADEABLE_LOADER" ] \
+                || fail "the program account $program is owned by ${owner:-nothing}, not the upgradeable loader $UPGRADEABLE_LOADER"
+            if slot=$("$SOLANA" slot --url "$rpc" --commitment "$commitment" 2> "$work/slot.log") \
+                && [[ $slot =~ ^[0-9]+$ ]]; then
+                if [ "$executable" = true ] && [ "$slot" -gt "$deploy_slot" ]; then
+                    printf 'deploy-solana-program: %s is executable at the %s slot %s\n' \
+                        "$program" "$commitment" "$slot" >&2
+                    return 0
+                fi
+                last="executable $executable at the $commitment slot $slot"
+            else
+                last="no $commitment slot"
+            fi
+        else
+            last="no account at the $commitment commitment"
+        fi
+        sleep 1
+    done
+    fail "program $program did not become executable past its deploy slot $deploy_slot at the $commitment commitment within $executable_wait_seconds seconds ($last)"
+}
+
+wait_executable "$program_id" "$deployed_slot"
+
 vault_authority=$("$SOLANA" find-program-derived-address "$program_id" "string:$VAULT_AUTHORITY_SEED" \
     2> "$work/pda.log" | head -n 1) || {
     cat "$work/pda.log" >&2
@@ -400,17 +469,20 @@ case $configured_program_id in
         --argjson rooted_slot "$rooted_slot" --arg publisher "$publisher" \
         --arg upgrade_authority "$authority" --arg commitment "$commitment" \
         --arg vault_authority "$vault_authority" --arg vault_handle "$vault_handle" \
+        --arg program_keypair_file "$program_keypair" \
         '{chain: $chain, chain_id: $chain_id, kind: $kind, configuration: $configuration,
           genesis_hash: $genesis_hash, program_id: $program_id,
           program_data_account: $program_data_account, upgradeable_loader_id: $upgradeable_loader_id,
           program_elf_sha256: $program_elf_sha256, program_elf_bytes: $program_elf_bytes,
           deployment_signature: $deployment_signature, deployment_slot: $deployment_slot,
           rooted_slot: $rooted_slot, publisher: $publisher, upgrade_authority: $upgrade_authority,
-          commitment: $commitment, vault_authority: $vault_authority, vault_handle: $vault_handle}' \
+          commitment: $commitment, vault_authority: $vault_authority, vault_handle: $vault_handle,
+          program_keypair_file: $program_keypair_file}' \
         > "$record"
     printf 'deploy-solana-program: %s deployed and recorded in %s, vault authority %s, handle %s\n' \
         "$program_id" "$record" "$vault_authority" "$vault_handle" >&2
-    refuse "solana.program_id: $configured_program_id is still a placeholder, so the run stops before the initialise step; set solana.program_id to $program_id, the program this run deployed"
+    printf 'deploy-solana-program: the keypair of %s is %s\n' "$program_id" "$program_keypair" >&2
+    refuse "solana.program_id: $configured_program_id is still a placeholder, so the run stops before the initialise step; set solana.program_id to $program_id, the program this run deployed, and PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE to $program_keypair"
     ;;
 esac
 

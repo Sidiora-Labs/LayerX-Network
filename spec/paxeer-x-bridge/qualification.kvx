@@ -50,6 +50,7 @@ symbol = "PAXEER_BRIDGE_SOLANA_ADMIN_CLI"
 observed = "Initialising the deployed program with its owner, attestor set and threshold and registering each asset needs a client that encodes those instructions, and no task in this feature creates one, so the script requires it through PAXEER_BRIDGE_SOLANA_ADMIN_CLI and refuses to deploy without an executable."
 assumption = "The bridge/solana program's own client is delivered elsewhere; until it exists the Solana deployment cannot be completed past the program upload, and the refusal names the variable rather than defaulting to anything."
 severity = "blocker"
+closed = "Task 2.8 delivered the admin client at bridge/solana/admin in revision 93405f5a87f056c6ce185d03d42a33bd541e4d43, and deploy-solana-program.sh runs it through PAXEER_BRIDGE_SOLANA_ADMIN_CLI for the initialise and register-asset steps."
 
 [observation.1.4.3]
 task = "1.4"
@@ -66,6 +67,7 @@ symbol = "modules/layerxbridge/types/attestation.go"
 observed = "Both files name interop/contracts/ethereum-bridge for the Solidity attestation source and its document, which this task moved to bridge/evm with git mv, so the two references now point at a path that no longer exists."
 assumption = "The chain freeze forbids editing anything under modules/, so both files are left exactly as written and the references stay stale until the first authorised chain change corrects them."
 severity = "note"
+closed = "Revision d51a9e11282eb1f12db8b4774ddda0193baedaaa pointed both references at bridge/evm, and at revision ab0b3de5dc718381c7d4e0a62b8ef2e9b0ee60cf neither modules/layerxbridge/ATTESTATION.md nor modules/layerxbridge/types/attestation.go names interop/contracts/ethereum-bridge."
 
 [observation.1.1.2]
 task = "1.1"
@@ -98,6 +100,7 @@ symbol = "cargo build-sbf"
 observed = "cargo build-sbf cannot resolve the dependency graph: the cargo shipped in platform-tools rejects the 35 transitive manifests that declare edition 2024, failing first on zeroize_derive with 'feature edition2024 is required'."
 assumption = "Pre-existing and environment-level, not introduced here: interop/contracts/solana-mirror pins the identical 35 manifests and fails the same way, so the SBF leg of the wave 3 gate needs a newer platform-tools on the gate runner rather than a change to this crate."
 severity = "blocker"
+closed = "Task 2.12 pinned the platform tools to v1.56 through --tools-version in revision cd83438aec094b9971faa17fbdd7b28df6928682, and deploy-solana-program.sh, the cargo build-sbf step of .github/workflows/bridge-test.yml and the task 3.1 verify_cmd all pass it."
 
 [observation.1.6.1]
 task = "1.6"
@@ -131,6 +134,7 @@ file = "interop/crates/layerx-bridge-relayer/src/abi.rs"
 symbol = "cargo clippy -D warnings"
 observed = "cargo clippy --locked --manifest-path interop/Cargo.toml -p layerx-bridge-relayer --all-targets -- -D warnings exits 101 on five lints in code this task did not change (abi.rs:313 type_complexity, attestation.rs:1 doc_markdown, relayer.rs scan_inbound and scan_outbound single_match_else, rpc.rs:132 map_unwrap_or); the build passes and log .logs/build.log names them."
 assumption = "Pre-existing under the clippy 0.1.91 toolchain rather than introduced here, so they are left for the wave gate instead of being edited from this task."
+closed = "Revision d51a9e11282eb1f12db8b4774ddda0193baedaaa restructured the five src findings, and the clippy --all-targets -D warnings leg of the task 2.17 verify_cmd passed on revision ab0b3de5dc718381c7d4e0a62b8ef2e9b0ee60cf; log .logs/verify.log."
 
 [observation.2.1.1]
 task = "2.1"
@@ -139,6 +143,7 @@ symbol = "libsecp256k1"
 observed = "The release tests must produce real secp256k1 signatures, and the crate's only reachable signer is solana_sdk::secp256k1_instruction, which is deprecated and would need an allow(deprecated) to pass clippy -D warnings, so bridge/solana/tests/release.rs signs with libsecp256k1 =0.6.0, already in Cargo.lock, which Cargo.toml does not yet list as a dev-dependency."
 assumption = "Cargo.toml and Cargo.lock belong to task 2.8 in this wave, so the dev-dependency libsecp256k1 = { version = \"=0.6.0\", default-features = false, features = [\"std\", \"static-context\", \"hmac\"] } is added by that file's owner before task 2.1 is qualified."
 severity = "blocker"
+closed = "Revision 35f7aecab533c2e2bc1b4a2fdaac8b946a48ac61 added the libsecp256k1 =0.6.0 dev-dependency with the std, static-context and hmac features to bridge/solana/Cargo.toml."
 
 [observation.2.1.2]
 task = "2.1"
@@ -196,6 +201,7 @@ symbol = "PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE"
 observed = "A first deployment with no PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE deploys under the program keypair the build leaves in the run's temporary directory, which is removed on exit, while the rerun with a filled solana.program_id requires that keypair."
 assumption = "Out of this task's scope; the operator supplies a program keypair on the first deployment, and keeping or requiring it belongs to the script's owner."
 severity = "note"
+closed = "Task 2.16 made a first deployment with no PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE generate the program keypair beside the deployment record, name it in the record, print its path and refuse to overwrite an existing one, and deploy-scripts-check.sh covers the repeated run with it; the verify_cmd passed at revision c165961b77317cc89a9c5b3025fddb6d8ada372a."
 
 [observation.2.9.1]
 task = "2.9"
@@ -213,6 +219,7 @@ symbol = "forge script"
 observed = "The deploy script hands forge script the relative path script/DeployPaxeerXVault.s.sol beside --root, and the pinned forge resolves it against the working directory, so the script deploys only when run from bridge/evm and otherwise stops with 'No such file or directory'."
 assumption = "The script belongs to task 1.4 and is left as written; the dry run invokes it from bridge/evm, and an operator must do the same until the path is made absolute."
 severity = "note"
+closed = "Task 2.16 made deploy-evm-chain.sh hand forge script the Foundry script path under its own EVM_ROOT, and deploy-scripts-check.sh drives a deployment from a directory other than bridge/evm; the verify_cmd passed at revision c165961b77317cc89a9c5b3025fddb6d8ada372a."
 
 [observation.2.6.2]
 task = "2.6"
@@ -229,6 +236,7 @@ symbol = "cargo-build-sbf"
 observed = "The dry run built the admin client, started solana-test-validator on the loopback interface with the run's Sidiora mint and stopped at deploy-solana-program.sh, whose cargo-build-sbf (platform tools cargo 1.84.0) failed on zeroize_derive 1.5.0 with 'feature edition2024 is required', so no program was deployed and no fixture was recorded."
 assumption = "The environment-level blocker of observation 1.2.1; the dry run names it and stops, and bridge/deploy/tests/fixtures/solana_dry_run.json is written by the first --record run on platform tools whose cargo accepts edition 2024."
 severity = "blocker"
+closed = "Task 2.12 pinned the platform tools to v1.56 through --tools-version in revision cd83438aec094b9971faa17fbdd7b28df6928682, and deploy-solana-program.sh, the cargo build-sbf step of .github/workflows/bridge-test.yml and the task 3.1 verify_cmd all pass it."
 
 [observation.2.11.1]
 task = "2.11"
@@ -262,6 +270,7 @@ symbol = "initialise"
 observed = "With platform tools v1.56 the program builds and deploys on solana-test-validator 3.0.10, and one run initialised and registered both assets, but a later run had the admin client's initialise refused with 'Unsupported program id' right after the deploy was rooted, so no fixture was recorded."
 assumption = "The program is not yet usable by the slot the initialise lands in, which is intermittent; waiting for the deployed program to become executable before the initialise step belongs to the deploy script and was not changed within this run's repair cycles."
 severity = "blocker"
+closed = "Task 2.16 made deploy-solana-program.sh wait until the program account is executable, owned by the upgradeable loader and read past its deploy slot at the configured commitment before the initialise step; the Solana dry run then deployed, initialised and registered both assets, its --record and verify_cmd both passed at revision c165961b77317cc89a9c5b3025fddb6d8ada372a."
 
 [observation.2.7.3]
 task = "2.6"
@@ -270,3 +279,21 @@ symbol = "TestPaxeerSide"
 observed = "The Solana dry run's Paxeer side refused 01-register-chain.json with 'unknown field \"@type\"' because the generator now writes each body under its type URL, and it now reads the bodies through proposals.DecodeBody; the EVM dry run's Paxeer side still decodes them with a plain JSON decoder that disallows unknown fields."
 assumption = "Not run here; the EVM dry run is expected to stop the same way until it reads the bodies through proposals.DecodeBody."
 severity = "suspect"
+closed = "Task 2.15 on c165961b77317cc89a9c5b3025fddb6d8ada372a makes the EVM dry run read every generated body through proposals.DecodeBody, asserts a wrong type URL and an unknown field are refused by name, and re-records its fixture; the record run and the replay both pass."
+
+[observation.2.17.1]
+task = "2.17"
+file = "interop/crates/layerx-bridge-relayer/tests"
+symbol = "cargo clippy -D warnings"
+observed = "With every src target clean, clippy --all-targets -D warnings exits 101 on seven lints in the integration tests outside this task's touches (support/mod.rs:133 assigning_clones and :336 type_complexity, loops.rs:231 too_many_lines, solana.rs:120 ptr_arg, :544 too_many_lines and :642 map_unwrap_or, solana_release.rs:223 type_complexity); log .logs/verify.log."
+assumption = "The touches list names only the crate's src, so the tests directory needs a task that owns it before the all-targets clippy leg can pass."
+severity = "blocker"
+closed = "The integration tests were restructured without an allow attribute (type aliases for the signer request tuples, clone_into, a Path parameter, map_or_else, and the long cycle tests split into phase helpers with their assertions unchanged), and the clippy --all-targets -D warnings leg of the verify_cmd passed on revision ab0b3de5dc718381c7d4e0a62b8ef2e9b0ee60cf with those changes; log .logs/verify.log."
+
+[observation.2.17.2]
+task = "2.17"
+file = "interop/crates/layerx-bridge-relayer/src/journal.rs"
+symbol = "journal::tests::a_solana_release_replays_through_pending_recipient_expiry_and_release"
+observed = "At revision ab0b3de5dc718381c7d4e0a62b8ef2e9b0ee60cf the verify_cmd exits 101 after its clippy leg passes: this unit test, never run by task 2.3's verify_cmd, asserts pending_release() is None after a Completed Released entry, but apply leaves the matching release Pending; log .logs/verify.log."
+assumption = "Pre-existing and outside this lint task: the code and the test disagree on release completion semantics, so both stay as written for the journal's owner to decide."
+severity = "blocker"

@@ -227,6 +227,38 @@ fn journal_path(directory: &Path, name: &str) -> PathBuf {
     directory.join(format!("{name}.jsonl"))
 }
 
+/// Restart: the first transaction is final, the second is unknown to the node
+/// and is rebroadcast byte for byte without being signed again. Returns every
+/// transaction sent so far.
+fn restart_and_rebroadcast_the_unknown_deposit(
+    recording: &Recording,
+    signer: &SignerServer,
+    instance: &Instance<'_>,
+) -> Vec<(String, Vec<u8>)> {
+    recording.set_phase("restart");
+    let mut relayer = start(recording, signer, instance);
+    let report = relayer
+        .inbound_step(0)
+        .unwrap_or_else(|error| panic!("restart: {error}"));
+    assert_eq!(
+        report,
+        StepReport {
+            observed: 0,
+            submitted: 0,
+            completed: 1,
+            waiting: 1,
+            refused: 0,
+        }
+    );
+    assert_all_matched(recording);
+    let sent = recording.sent();
+    assert_eq!(sent.len(), 3);
+    assert_eq!(sent[2], sent[1]);
+    assert_eq!(recording.count("ethereum-1", "eth_getLogs"), 1);
+    drop(relayer);
+    sent
+}
+
 #[test]
 fn inbound_deposits_are_submitted_exactly_once_across_a_restart() {
     let recording = Recording::load("inbound_threshold_one.json");
@@ -286,29 +318,7 @@ fn inbound_deposits_are_submitted_exactly_once_across_a_restart() {
     assert_eq!(handle_requests(&signer, "paxeer-fees-1"), 2);
     drop(relayer);
 
-    // Restart: the first transaction is final, the second is unknown to the
-    // node and is rebroadcast byte for byte without being signed again.
-    recording.set_phase("restart");
-    let mut relayer = start(&recording, &signer, &instance);
-    let report = relayer
-        .inbound_step(0)
-        .unwrap_or_else(|error| panic!("restart: {error}"));
-    assert_eq!(
-        report,
-        StepReport {
-            observed: 0,
-            submitted: 0,
-            completed: 1,
-            waiting: 1,
-            refused: 0,
-        }
-    );
-    assert_all_matched(&recording);
-    let sent = recording.sent();
-    assert_eq!(sent.len(), 3);
-    assert_eq!(sent[2], sent[1]);
-    assert_eq!(recording.count("ethereum-1", "eth_getLogs"), 1);
-    drop(relayer);
+    let sent = restart_and_rebroadcast_the_unknown_deposit(&recording, &signer, &instance);
 
     recording.set_phase("included");
     let mut relayer = start(&recording, &signer, &instance);

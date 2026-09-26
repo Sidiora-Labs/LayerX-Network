@@ -6,8 +6,8 @@ prefix and no EIP-712 domain separator or struct hashing. Every integer is
 big-endian and fixed width; addresses are their 20 raw bytes; the domain is the
 ASCII string with no length prefix and no terminator. This is exactly
 Solidity `abi.encodePacked` of the listed types
-(`interop/contracts/ethereum-bridge/src/BridgeAttestation.sol`). This file is the
-Paxeer-side copy of `interop/contracts/ethereum-bridge/ATTESTATION.md`;
+(`bridge/evm/src/BridgeAttestation.sol`). This file is the
+Paxeer-side copy of `bridge/evm/ATTESTATION.md`;
 `types.InboundPreimage` / `types.OutboundPreimage` build these bytes and
 `keeper/attestation_test.go` recomputes the vectors below.
 

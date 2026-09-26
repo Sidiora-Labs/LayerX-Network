@@ -19,13 +19,21 @@
 # the cluster recorded in fixtures/solana-deploy, whose toolchain answers only the
 # invocations the script makes and only for a .invalid endpoint: the vault
 # authority the script records must be the PDA of the seed the program declares
-# as VAULT_SEED, pinned by the bridge/vectors Solana vector, a script that names
-# any other seed is caught, and a placeholder solana.program_id stops the run
-# before the initialise step. The platform tools release the Solana script
-# declares must be no older than the first whose cargo accepts edition 2024, it
-# must reach cargo-build-sbf as --tools-version, and every cargo build-sbf the
-# bridge workflow runs must name the same release. A deployment against a real
-# cluster is the Solana dry run's job, not this check's.
+# as VAULT_SEED, derived by the arithmetic the bridge/vectors Solana vector pins,
+# a script that names any other seed is caught, and a placeholder
+# solana.program_id stops the run before the initialise step. The program keypair
+# a first deployment generates is kept beside the deployment record, named by it
+# and never overwritten, and the repeated run with the filled program id deploys
+# with it and reaches the initialise step. The run waits for the deployed program
+# to be executable past its deploy slot and stops naming the program when it is
+# not. The platform tools release the Solana script declares must be no older
+# than the first whose cargo accepts edition 2024, it must reach cargo-build-sbf
+# as --tools-version, and every cargo build-sbf the bridge workflow runs must name
+# the same release. A deployment against a real cluster is the Solana dry run's
+# job, not this check's. The EVM deployment is driven from a directory other than
+# bridge/evm, against stand-ins for forge, cast and git that answer only the
+# invocations the script makes, in a copy of the tree whose script is the
+# committed one byte for byte, and it finds the Foundry script from there.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -556,6 +564,17 @@ DIGEST=$(cast keccak "0x$(python3 "$SOLANA_KEYS" hex "$VAULT_AUTHORITY")")
 [ "$(jq -r .program_id "$SOLANA_FIXTURES/cluster.json")" = "$VAULT_PROGRAM" ] \
     || fail "the recorded cluster deploys another program than the vault fixture's"
 
+# The program, vault authority and handle a program id derives under the
+# program's seed, by the arithmetic just checked against the fixture.
+program_vault() {
+    local program=$1 vault digest
+    read -r vault _ < <(python3 "$SOLANA_KEYS" pda "$program" "string:$PROGRAM_SEED") || return 1
+    digest=$(cast keccak "0x$(python3 "$SOLANA_KEYS" hex "$vault")") || return 1
+    printf '%s %s 0x%s\n' "$program" "$vault" "${digest: -40}"
+}
+[ "$(program_vault "$VAULT_PROGRAM")" = "$VAULT_PROGRAM $VAULT_AUTHORITY $VAULT_HANDLE" ] \
+    || fail "the vault arithmetic derives $(program_vault "$VAULT_PROGRAM"), and the fixture records $VAULT_AUTHORITY $VAULT_HANDLE"
+
 # A deployment script names the program's seed when its VAULT_AUTHORITY_SEED is
 # that seed and every PDA it derives is derived from VAULT_AUTHORITY_SEED.
 names_program_seed() {
@@ -575,17 +594,23 @@ names_program_seed() {
     fi
 }
 
-# A deployment record carries the vault when its program, vault authority and
-# handle are the recorded fixture's.
+# A deployment record carries the vault when its program is the one named and
+# its vault authority and handle are the ones that program derives.
 records_program_vault() {
-    local record=$1 field expected found
+    local record=$1 program=$2 field found index=0
+    local -a expected
+    read -r -a expected < <(program_vault "$program")
+    [ "${#expected[@]}" -eq 3 ] || {
+        printf 'no vault derives from %s\n' "$program"
+        return 1
+    }
     for field in program_id vault_authority vault_handle; do
-        expected=$(jq -r --arg field "$field" '.[$field]' "$VAULT_FIXTURE")
         found=$(jq -r --arg field "$field" '.[$field] // "nothing"' "$record")
-        if [ "$found" != "$expected" ]; then
-            printf '%s records %s as %s, and the program derives %s\n' "$record" "$field" "$found" "$expected"
+        if [ "$found" != "${expected[index]}" ]; then
+            printf '%s records %s as %s, and the program derives %s\n' "$record" "$field" "$found" "${expected[index]}"
             return 1
         fi
+        index=$((index + 1))
     done
 }
 
@@ -687,12 +712,91 @@ done
 
 # The recorded cluster's toolchain, behind a cargo-build-sbf that answers only a
 # build asked for the declared platform tools, so the first deployment below
-# proves the script hands its cargo-build-sbf the pinned release.
+# proves the script hands its cargo-build-sbf the pinned release. The solana in
+# front of it answers the program account at the configured commitment from the
+# program the replay deployed: executable from the first read, or, as
+# DEPLOY_CHECK_PROGRAM_ACCOUNT asks, absent for the first two reads (late), never
+# executable (never), or read at the deploy slot itself (deploy-slot); every read
+# is counted in the replay directory. The solana-keygen in front of it writes a
+# real Ed25519 keypair for new, as the Solana CLI does, and refuses to overwrite
+# an existing file.
 PINNED_TOOLCHAIN="$WORK/pinned-toolchain"
 mkdir -p "$PINNED_TOOLCHAIN"
-for tool in solana solana-keygen; do
-    printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$REPLAY_TOOLCHAIN/$tool" > "$PINNED_TOOLCHAIN/$tool"
-done
+{
+    printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+    printf 'REPLAY=%q\nCLUSTER=%q\n' "$REPLAY_TOOLCHAIN/solana" "$SOLANA_FIXTURES/cluster.json"
+    cat << 'WRAPPER'
+LOADER=BPFLoaderUpgradeab1e11111111111111111111111
+refuse() {
+    printf 'replayed solana: %s\n' "$*" >&2
+    exit 64
+}
+mode=${DEPLOY_CHECK_PROGRAM_ACCOUNT:-executable}
+state=${DEPLOY_CHECK_REPLAY_STATE:-}
+{ [ -n "$state" ] && [ -d "$state" ]; } || refuse "DEPLOY_CHECK_REPLAY_STATE must name this run's replay directory"
+case ${1:-} in
+account)
+    if [ $# -ne 8 ] || [ "$3" != --url ] || [ "$5" != --commitment ] || [ "$6" != finalized ] \
+        || [ "$7" != --output ] || [ "$8" != json ]; then
+        refuse "no recorded answer for: $*"
+    fi
+    case $4 in
+    https://*.invalid | https://*.invalid/*) ;;
+    *) refuse "$4 is not an endpoint on the reserved .invalid domain" ;;
+    esac
+    reads=$(($(cat "$state/$2.reads" 2> /dev/null || printf 0) + 1))
+    printf '%s\n' "$reads" > "$state/$2.reads"
+    if [ ! -r "$state/$2.so" ] || { [ "$mode" = late ] && [ "$reads" -le 2 ]; }; then
+        printf 'Error: AccountNotFound: pubkey=%s\n' "$2" >&2
+        exit 1
+    fi
+    executable=true
+    [ "$mode" != never ] || executable=false
+    jq -n --arg program "$2" --arg loader "$LOADER" --argjson executable "$executable" \
+        '{pubkey: $program, account: {lamports: 1141440, data: ["", "base64"], owner: $loader,
+          executable: $executable, rentEpoch: 18446744073709551615, space: 36}}'
+    exit 0
+    ;;
+slot)
+    if [ "$mode" = deploy-slot ]; then
+        if [ $# -ne 5 ] || [ "$2" != --url ] || [ "$4" != --commitment ] || [ "$5" != finalized ]; then
+            refuse "no recorded answer for: $*"
+        fi
+        jq -r .deployment_slot "$CLUSTER"
+        exit 0
+    fi
+    ;;
+esac
+exec "$REPLAY" "$@"
+WRAPPER
+} > "$PINNED_TOOLCHAIN/solana"
+{
+    printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+    printf 'REPLAY=%q\n' "$REPLAY_TOOLCHAIN/solana-keygen"
+    cat << 'WRAPPER'
+if [ "${1:-}" != new ]; then
+    exec "$REPLAY" "$@"
+fi
+if [ $# -ne 5 ] || [ "$2" != --no-bip39-passphrase ] || [ "$3" != --silent ] || [ "$4" != --outfile ]; then
+    printf 'replayed solana-keygen: no recorded answer for: %s\n' "$*" >&2
+    exit 64
+fi
+if [ -e "$5" ]; then
+    printf 'Refusing to overwrite %s without --force flag\n' "$5" >&2
+    exit 1
+fi
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+openssl genpkey -algorithm ed25519 -out "$scratch/key.pem" 2> /dev/null
+openssl pkey -in "$scratch/key.pem" -outform DER 2> /dev/null | tail -c 32 > "$scratch/seed"
+openssl pkey -in "$scratch/key.pem" -pubout -outform DER 2> /dev/null | tail -c 32 > "$scratch/pub"
+python3 -c 'import json, sys
+raw = open(sys.argv[1], "rb").read() + open(sys.argv[2], "rb").read()
+if len(raw) != 64:
+    raise SystemExit("the generated keypair holds %d bytes, not 64" % len(raw))
+print(json.dumps(list(raw)))' "$scratch/seed" "$scratch/pub" > "$5"
+WRAPPER
+} > "$PINNED_TOOLCHAIN/solana-keygen"
 # shellcheck disable=SC2016 # the stand-in is written as literal shell text
 {
     printf '#!/usr/bin/env bash\n'
@@ -710,6 +814,7 @@ chmod 0755 "$PINNED_TOOLCHAIN"/*
 # that went on to initialise would be refused for that instead.
 first_deployment() {
     local script=$1 name=$2 root state
+    shift 2
     root=$(solana_configuration "$name")
     state="$WORK/replay-$name"
     mkdir -p "$state"
@@ -720,8 +825,11 @@ first_deployment() {
         "PAXEER_BRIDGE_DEPLOYMENT_RECORD=$WORK/records/$name.json" \
         "PAXEER_BRIDGE_SOLANA_ADMIN_CLI=$ADMIN" \
         "DEPLOY_CHECK_REPLAY_STATE=$state" \
-        bash "$script"
+        "$@" bash "$script"
 }
+
+# The keypair a first deployment of the named case keeps beside its record.
+kept_keypair() { printf '%s' "$WORK/records/$1-program-keypair.json"; }
 
 accepts 'is ready to deploy' 'a first Solana deployment against the recorded cluster, at --preflight' \
     env "PAXEER_BRIDGE_SOLANA_CHAINS_ROOT=$SOLANA_ROOT" "PAXEER_BRIDGE_SOLANA_RPC_URL=$ENDPOINT" \
@@ -733,6 +841,13 @@ accepts 'is ready to deploy' 'a first Solana deployment against the recorded clu
 
 first_deployment "$DEPLOY_SOLANA" solana-first-deployment
 FIRST_RECORD="$WORK/records/solana-first-deployment.json"
+FIRST_KEYPAIR=$(kept_keypair solana-first-deployment)
+[ -r "$FIRST_KEYPAIR" ] || {
+    quote
+    fail "a first Solana deployment with no program keypair kept none at $FIRST_KEYPAIR"
+}
+FIRST_PROGRAM=$(python3 "$SOLANA_KEYS" pubkey "$FIRST_KEYPAIR") \
+    || fail "a first Solana deployment kept $FIRST_KEYPAIR, which is not a Solana keypair"
 if grep -qF 'was not asked for platform tools' "$WORK/last.log"; then
     quote
     fail "a first Solana deployment ran cargo-build-sbf without platform tools $PLATFORM_TOOLS"
@@ -742,7 +857,10 @@ fi
     fail 'a first Solana deployment with a placeholder solana.program_id went on to the initialise step'
 }
 for needle in "solana.program_id: PLACEHOLDER:program-id is still a placeholder" \
-    'stops before the initialise step' "set solana.program_id to $VAULT_PROGRAM"; do
+    'stops before the initialise step' "set solana.program_id to $FIRST_PROGRAM" \
+    "PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE to $FIRST_KEYPAIR" \
+    "the program keypair of this first deployment is kept in $FIRST_KEYPAIR" \
+    "is executable at the finalized slot $(jq -r .rooted_slot "$SOLANA_FIXTURES/cluster.json")"; do
     grep -qF -- "$needle" "$WORK/last.log" || {
         quote
         fail "a first Solana deployment was refused without naming: $needle"
@@ -756,14 +874,107 @@ fi
     quote
     fail 'a first Solana deployment wrote no deployment record'
 }
-REASON=$(records_program_vault "$FIRST_RECORD") || fail "a first Solana deployment: $REASON"
+REASON=$(records_program_vault "$FIRST_RECORD" "$FIRST_PROGRAM") || fail "a first Solana deployment: $REASON"
+[ "$(jq -r .program_keypair_file "$FIRST_RECORD")" = "$FIRST_KEYPAIR" ] \
+    || fail "a first Solana deployment records the program keypair as $(jq -r .program_keypair_file "$FIRST_RECORD"), not $FIRST_KEYPAIR"
+[ "$(stat -c %a "$FIRST_KEYPAIR")" = 600 ] \
+    || fail "a first Solana deployment kept $FIRST_KEYPAIR readable beyond its owner ($(stat -c %a "$FIRST_KEYPAIR"))"
+FIRST_SECRET=$(jq -r '.[0:32][]' "$FIRST_KEYPAIR" | awk '{printf "%02x", $1}')
+for text in "$FIRST_SECRET" "$(jq -c '.[0:32]' "$FIRST_KEYPAIR")" "$(jq -c . "$FIRST_KEYPAIR")"; do
+    ! grep -qiF -- "$text" "$WORK/last.log" "$FIRST_RECORD" \
+        || fail 'a first Solana deployment printed or recorded the key material of its program keypair'
+done
 for field in owner attestors threshold assets; do
     [ "$(jq --arg field "$field" 'has($field)' "$FIRST_RECORD")" = false ] \
         || fail "a first Solana deployment records $field, which only an initialised program has"
 done
 [ "$(jq -r .program_data_account "$FIRST_RECORD")" = "$(python3 "$SOLANA_KEYS" pda \
-    BPFLoaderUpgradeab1e11111111111111111111111 "pubkey:$VAULT_PROGRAM" | cut -d ' ' -f 1)" ] \
+    BPFLoaderUpgradeab1e11111111111111111111111 "pubkey:$FIRST_PROGRAM" | cut -d ' ' -f 1)" ] \
     || fail 'a first Solana deployment records a program data account the loader does not derive'
+
+# The kept keypair is never overwritten: a second first deployment to the same
+# record stops naming it, at --preflight and before the cluster is reached, and
+# leaves the file as it was.
+FIRST_KEYPAIR_SUM=$(sha256sum "$FIRST_KEYPAIR")
+refuses "$FIRST_KEYPAIR already exists and a first deployment never overwrites a program keypair" \
+    'a first Solana deployment at --preflight whose program keypair is already kept' \
+    env "PAXEER_BRIDGE_SOLANA_CHAINS_ROOT=$SOLANA_ROOT" "${SOLANA_ENVIRONMENT[@]}" \
+    "PAXEER_BRIDGE_DEPLOYMENT_RECORD=$FIRST_RECORD" \
+    bash "$DEPLOY_SOLANA" --preflight
+rm -f "$WORK/replay-solana-first-deployment/$FIRST_PROGRAM.reads"
+first_deployment "$DEPLOY_SOLANA" solana-first-deployment
+[ "$STATUS" -ne 0 ] || fail 'a second first Solana deployment overwrote the kept program keypair'
+grep -qF -- "$FIRST_KEYPAIR already exists and a first deployment never overwrites a program keypair" \
+    "$WORK/last.log" || {
+    quote
+    fail 'a second first Solana deployment was not refused for the kept program keypair'
+}
+[ ! -e "$WORK/replay-solana-first-deployment/$FIRST_PROGRAM.reads" ] || {
+    quote
+    fail 'a second first Solana deployment reached the cluster before refusing the kept program keypair'
+}
+[ "$(sha256sum "$FIRST_KEYPAIR")" = "$FIRST_KEYPAIR_SUM" ] \
+    || fail "a second first Solana deployment changed $FIRST_KEYPAIR"
+
+# The repeated run with the filled program id deploys with the kept keypair,
+# waits for the program and goes on to the initialise step, which the admin
+# client stand-in refuses.
+REPEAT_ROOT=$(solana_configuration solana-repeated ".solana.program_id = \"$FIRST_PROGRAM\"")
+mkdir -p "$WORK/replay-solana-repeated"
+refuses "could not initialise $FIRST_PROGRAM" \
+    'the repeated Solana deployment with the kept program keypair' \
+    env "PAXEER_BRIDGE_SOLANA_CHAINS_ROOT=$REPEAT_ROOT" "PAXEER_BRIDGE_SOLANA_RPC_URL=$ENDPOINT" \
+    "PAXEER_BRIDGE_SOLANA_KEYPAIR_FILE=$WORK/publisher.json" \
+    "PAXEER_BRIDGE_SOLANA_TOOLCHAIN_BIN=$PINNED_TOOLCHAIN" \
+    "PAXEER_BRIDGE_DEPLOYMENT_RECORD=$WORK/records/solana-repeated.json" \
+    "PAXEER_BRIDGE_SOLANA_ADMIN_CLI=$ADMIN" \
+    "PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE=$FIRST_KEYPAIR" \
+    "DEPLOY_CHECK_REPLAY_STATE=$WORK/replay-solana-repeated" \
+    bash "$DEPLOY_SOLANA"
+grep -qF -- "$FIRST_PROGRAM is executable at the finalized slot" "$WORK/last.log" || {
+    quote
+    fail 'the repeated Solana deployment reached the initialise step without waiting for its program'
+}
+[ ! -e "$(kept_keypair solana-repeated)" ] \
+    || fail 'the repeated Solana deployment, handed its program keypair, generated another'
+[ "$(sha256sum "$FIRST_KEYPAIR")" = "$FIRST_KEYPAIR_SUM" ] \
+    || fail "the repeated Solana deployment changed $FIRST_KEYPAIR"
+
+# The wait for an executable program: a program account that appears only on the
+# third read is waited for, one that never becomes executable and one read only
+# at its deploy slot stop the run naming the program within the bound, and a
+# bound that is not a number of seconds is refused.
+first_deployment "$DEPLOY_SOLANA" solana-late DEPLOY_CHECK_PROGRAM_ACCOUNT=late
+LATE_PROGRAM=$(python3 "$SOLANA_KEYS" pubkey "$(kept_keypair solana-late)")
+grep -qF -- 'solana.program_id: PLACEHOLDER:program-id is still a placeholder' "$WORK/last.log" || {
+    quote
+    fail 'a Solana deployment whose program account appears late did not wait for it'
+}
+[ "$(cat "$WORK/replay-solana-late/$LATE_PROGRAM.reads")" = 3 ] \
+    || fail "a Solana deployment whose program account appears on the third read read it $(cat "$WORK/replay-solana-late/$LATE_PROGRAM.reads") times"
+
+DEPLOY_SLOT=$(jq -r .deployment_slot "$SOLANA_FIXTURES/cluster.json")
+for case_mode in never deploy-slot; do
+    name="solana-wait-$case_mode"
+    first_deployment "$DEPLOY_SOLANA" "$name" "DEPLOY_CHECK_PROGRAM_ACCOUNT=$case_mode" \
+        PAXEER_BRIDGE_SOLANA_EXECUTABLE_WAIT_SECONDS=2
+    [ "$STATUS" -ne 0 ] || fail "a Solana deployment whose program account is $case_mode was accepted"
+    program=$(python3 "$SOLANA_KEYS" pubkey "$(kept_keypair "$name")")
+    grep -qF -- "program $program did not become executable past its deploy slot $DEPLOY_SLOT at the finalized commitment within 2 seconds" \
+        "$WORK/last.log" || {
+        quote
+        fail "a Solana deployment whose program account is $case_mode was refused without naming the program"
+    }
+    [ "$(cat "$WORK/replay-$name/$program.reads")" = 2 ] \
+        || fail "a Solana deployment bounded to 2 seconds read its program account $(cat "$WORK/replay-$name/$program.reads") times"
+    [ ! -e "$WORK/records/$name.json" ] \
+        || fail "a Solana deployment whose program account is $case_mode wrote a deployment record"
+done
+solana_with 'PAXEER_BRIDGE_SOLANA_EXECUTABLE_WAIT_SECONDS: 0 is not a wait between 1 and 9999 seconds' \
+    'a wait for the program bounded to no time' PAXEER_BRIDGE_SOLANA_EXECUTABLE_WAIT_SECONDS=0
+solana_with 'PAXEER_BRIDGE_SOLANA_EXECUTABLE_WAIT_SECONDS: 2m is not a wait between 1 and 9999 seconds' \
+    'a wait for the program bounded by a duration that is not seconds' \
+    PAXEER_BRIDGE_SOLANA_EXECUTABLE_WAIT_SECONDS=2m
 
 # A deployment script that names any other seed is caught twice: by its source,
 # and by the vault its first deployment records. The seed the program declared
@@ -779,16 +990,217 @@ for mutation in 's/^VAULT_AUTHORITY_SEED=.*/VAULT_AUTHORITY_SEED=vault/' \
     if names_program_seed "$OTHER_SEED_SCRIPT" > /dev/null; then
         fail "a deployment script changed by $mutation was taken to name the program's seed"
     fi
-    rm -f "$WORK/records/solana-other-seed.json"
+    rm -f "$WORK/records/solana-other-seed.json" "$(kept_keypair solana-other-seed)"
     first_deployment "$OTHER_SEED_SCRIPT" solana-other-seed
     [ -r "$WORK/records/solana-other-seed.json" ] || {
         quote
         fail "a deployment script changed by $mutation wrote no record to compare"
     }
-    if records_program_vault "$WORK/records/solana-other-seed.json" > /dev/null; then
+    if records_program_vault "$WORK/records/solana-other-seed.json" \
+        "$(python3 "$SOLANA_KEYS" pubkey "$(kept_keypair solana-other-seed)")" > /dev/null; then
         fail "a deployment script changed by $mutation recorded the program's own vault"
     fi
 done
 
-printf 'deploy-scripts-check: the %d committed chain configurations are refused while they carry their placeholders, a filled one is ready to deploy, every argument, placeholder, missing variable and inconsistent record is refused, a first Solana deployment builds with platform tools %s, which the workflow names too, records the vault the program derives from %s and stops before the initialise step\n' \
+# deploy-evm-chain.sh: a deployment driven from a directory other than
+# bridge/evm. It runs in a copy of the tree whose deploy script is the committed
+# one byte for byte and whose bridge/evm links the committed sources, against
+# stand-ins for forge, cast and git that answer only the invocations the script
+# makes and only for a .invalid endpoint. The forge stand-in resolves the script
+# path it is handed against the working directory, as the pinned forge does, and
+# fails with "No such file or directory" when that path does not lead to the
+# vault's deploy script; the chain it answers for holds the vault the deploy
+# script configured, at the code forge inspect reports.
+EVM_TREE="$WORK/evm-tree"
+EVM_TREE_ROOT="$EVM_TREE/bridge/evm"
+EVM_TREE_SCRIPT="$EVM_TREE/bridge/deploy/deploy-evm-chain.sh"
+EVM_TOOLS="$WORK/evm-tools"
+EVM_STATE="$WORK/evm-chain"
+ELSEWHERE="$WORK/elsewhere"
+mkdir -p "$EVM_TREE/bridge/deploy" "$EVM_TREE_ROOT" "$EVM_TOOLS" "$EVM_STATE" "$ELSEWHERE"
+cp "$DEPLOY_EVM" "$EVM_TREE_SCRIPT"
+cp "$REPO_ROOT/bridge/evm/bootstrap-libs.sh" "$EVM_TREE_ROOT/bootstrap-libs.sh"
+for entry in foundry.toml src script; do
+    ln -s "$REPO_ROOT/bridge/evm/$entry" "$EVM_TREE_ROOT/$entry"
+done
+cmp -s "$DEPLOY_EVM" "$EVM_TREE_SCRIPT" || fail "the copy of $DEPLOY_EVM is not the committed script"
+REAL_CAST=$(command -v cast)
+VAULT_CODE=0x608060405234801561001057600080fd5b50600436106100365760003560e01c80638da5cb5b1461003b578063e3d670d714610059575b600080fd
+{
+    printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+    printf 'TREE=%q\n' "$EVM_TREE"
+    cat << 'WRAPPER'
+refuse() {
+    printf 'replayed git: %s\n' "$*" >&2
+    exit 64
+}
+if [ $# -ne 7 ] || [ "$1" != clone ] || [ "$2" != --depth ] || [ "$3" != 1 ] || [ "$4" != --branch ]; then
+    refuse "no recorded answer for: $*"
+fi
+case $6 in
+https://github.com/foundry-rs/forge-std | https://github.com/OpenZeppelin/openzeppelin-contracts) ;;
+*) refuse "$6 is not a pinned library" ;;
+esac
+case $7 in
+"$TREE"/bridge/evm/lib/*) mkdir -p "$7" ;;
+*) refuse "$7 lies outside the tree under check" ;;
+esac
+WRAPPER
+} > "$EVM_TOOLS/git"
+{
+    printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+    printf 'EVM_ROOT=%q\nSTATE=%q\nCODE=%q\nVAULT=%q\nDEPLOYER=%q\n' \
+        "$EVM_TREE_ROOT" "$EVM_STATE" "$VAULT_CODE" "$VAULT" "$DEPLOYER"
+    cat << 'WRAPPER'
+refuse() {
+    printf 'replayed forge: %s\n' "$*" >&2
+    exit 64
+}
+# The arguments of a forge script carry the deploy key, so a refusal names the
+# subcommand and never echoes them.
+{ [ "${2:-}" = --root ] && [ "${3:-}" = "$EVM_ROOT" ]; } || refuse "no recorded answer for forge ${1:-}"
+case ${1:-} in
+build)
+    [ $# -eq 3 ] || refuse "no recorded answer for forge ${1:-}"
+    ;;
+inspect)
+    { [ $# -eq 5 ] && [ "$4" = PaxeerXVault ] && [ "$5" = deployedBytecode ]; } \
+        || refuse "no recorded answer for forge ${1:-}"
+    printf '"%s"\n' "$CODE"
+    ;;
+script)
+    if [ $# -ne 10 ] || [ "$5" != --rpc-url ] || [ "$7" != --private-key ] || [ "$9" != --broadcast ] \
+        || [ "${10}" != --slow ]; then
+        refuse "no recorded answer for forge script"
+    fi
+    case $6 in
+    https://*.invalid | https://*.invalid/*) ;;
+    *) refuse "$6 is not an endpoint on the reserved .invalid domain" ;;
+    esac
+    target=${4%:*}
+    [ "${4##*:}" = DeployPaxeerXVault ] || refuse "$4 names no DeployPaxeerXVault contract"
+    if [ ! -r "$target" ]; then
+        printf 'Error: failed to read %s: No such file or directory (os error 2)\n' "$target" >&2
+        exit 1
+    fi
+    [ "$(realpath "$target")" = "$(realpath "$EVM_ROOT/script/DeployPaxeerXVault.s.sol")" ] \
+        || refuse "$target is not the vault's deploy script"
+    printf '%s\n' "$PAXEER_BRIDGE_VAULT_OWNER" > "$STATE/owner"
+    printf '%s\n' "$PAXEER_BRIDGE_VAULT_THRESHOLD" > "$STATE/threshold"
+    printf '%s\n' "$PAXEER_BRIDGE_VAULT_ATTESTORS" > "$STATE/attestors"
+    tr ',' '\n' <<< "$PAXEER_BRIDGE_VAULT_ASSETS" > "$STATE/assets"
+    tr ',' '\n' <<< "$PAXEER_BRIDGE_VAULT_PER_TX_CAPS" > "$STATE/per_tx_caps"
+    tr ',' '\n' <<< "$PAXEER_BRIDGE_VAULT_TOTAL_CAPS" > "$STATE/total_caps"
+    mkdir -p "$FOUNDRY_BROADCAST/DeployPaxeerXVault.s.sol/1"
+    jq -n --arg vault "$VAULT" --arg deployer "$DEPLOYER" \
+        '{transactions: [{transactionType: "CREATE", contractAddress: $vault, transaction: {from: $deployer}}],
+          receipts: [{contractAddress: $vault, blockNumber: "0x2a"}]}' \
+        > "$FOUNDRY_BROADCAST/DeployPaxeerXVault.s.sol/1/run-latest.json"
+    ;;
+*)
+    refuse "no recorded answer for forge ${1:-}"
+    ;;
+esac
+WRAPPER
+} > "$EVM_TOOLS/forge"
+{
+    printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+    printf 'REAL_CAST=%q\nSTATE=%q\nCODE=%q\nVAULT=%q\n' "$REAL_CAST" "$EVM_STATE" "$VAULT_CODE" "$VAULT"
+    cat << 'WRAPPER'
+refuse() {
+    printf 'replayed cast: %s\n' "$*" >&2
+    exit 64
+}
+case ${1:-} in
+keccak | to-dec)
+    exec "$REAL_CAST" "$@"
+    ;;
+esac
+case ${ETH_RPC_URL:-} in
+https://*.invalid | https://*.invalid/*) ;;
+*) refuse "ETH_RPC_URL is not an endpoint on the reserved .invalid domain" ;;
+esac
+case ${1:-} in
+chain-id)
+    [ $# -eq 1 ] || refuse "no recorded answer for: $*"
+    printf '1\n'
+    ;;
+code)
+    { [ $# -eq 2 ] && [ "$2" = "$VAULT" ]; } || refuse "no recorded answer for: $*"
+    printf '%s\n' "$CODE"
+    ;;
+call)
+    [ "${2:-}" = "$VAULT" ] || refuse "no recorded answer for: $*"
+    case ${3:-}/$# in
+    'owner()(address)/3') cat "$STATE/owner" ;;
+    'threshold()(uint256)/3') cat "$STATE/threshold" ;;
+    'attestors()(address[])/3') printf '[%s]\n' "$(sed -e 's/,/, /g' "$STATE/attestors")" ;;
+    'caps(address)(uint256,uint256)/4')
+        line=$(grep -nixF -- "$4" "$STATE/assets" | cut -d : -f 1) || refuse "$4 was not configured"
+        sed -n "${line}p" "$STATE/per_tx_caps"
+        sed -n "${line}p" "$STATE/total_caps"
+        ;;
+    *) refuse "no recorded answer for: $*" ;;
+    esac
+    ;;
+*)
+    refuse "no recorded answer for: $*"
+    ;;
+esac
+WRAPPER
+} > "$EVM_TOOLS/cast"
+chmod 0755 "$EVM_TOOLS"/*
+
+evm_elsewhere() {
+    local script=$1 directory=$2 name=$3
+    rm -rf "${EVM_TREE_ROOT:?}/lib" "${EVM_STATE:?}"/*
+    attempt env -C "$directory" "PATH=$EVM_TOOLS:$PATH" \
+        "PAXEER_BRIDGE_EVM_CHAINS_ROOT=$ELSEWHERE_ROOT" "PAXEER_BRIDGE_ETHEREUM_RPC_URL=$ENDPOINT" \
+        "PAXEER_BRIDGE_ETHEREUM_DEPLOY_KEY=0x$(openssl rand -hex 32)" \
+        "PAXEER_BRIDGE_DEPLOYMENT_RECORD=$WORK/records/$name.json" \
+        bash "$script" ethereum
+}
+
+ELSEWHERE_ROOT=$(evm_configuration ethereum-elsewhere ethereum)
+evm_elsewhere "$EVM_TREE_SCRIPT" "$ELSEWHERE" ethereum-elsewhere
+if [ "$STATUS" -ne 0 ]; then
+    quote
+    fail "an EVM deployment driven from $ELSEWHERE was refused (exit $STATUS)"
+fi
+grep -qF -- "record written to $WORK/records/ethereum-elsewhere.json" "$WORK/last.log" || {
+    quote
+    fail "an EVM deployment driven from $ELSEWHERE wrote no deployment record"
+}
+ELSEWHERE_RECORD="$WORK/records/ethereum-elsewhere.json"
+[ "$(jq -r .vault "$ELSEWHERE_RECORD")" = "$VAULT" ] \
+    || fail "an EVM deployment driven from $ELSEWHERE records the vault $(jq -r .vault "$ELSEWHERE_RECORD"), not $VAULT"
+[ "$(jq -r .code_hash "$ELSEWHERE_RECORD")" = "$(cast keccak "$VAULT_CODE")" ] \
+    || fail "an EVM deployment driven from $ELSEWHERE records a code hash that is not the vault's"
+[ "$(jq -r .block "$ELSEWHERE_RECORD")" = 42 ] \
+    || fail "an EVM deployment driven from $ELSEWHERE records the block $(jq -r .block "$ELSEWHERE_RECORD")"
+[ "$(jq -r .ownership "$ELSEWHERE_RECORD")" = held ] \
+    || fail "an EVM deployment driven from $ELSEWHERE records ownership $(jq -r .ownership "$ELSEWHERE_RECORD")"
+
+# The script path the stand-in resolves is the one the deploy script hands it: a
+# deploy script that names the Foundry script relative to bridge/evm deploys from
+# bridge/evm and is refused from anywhere else.
+RELATIVE_SCRIPT="$EVM_TREE/bridge/deploy/deploy-evm-chain-relative.sh"
+# shellcheck disable=SC2016 # a sed expression matching the script's literal text
+sed -e 's|"$EVM_ROOT/script/DeployPaxeerXVault.s.sol:DeployPaxeerXVault"|script/DeployPaxeerXVault.s.sol:DeployPaxeerXVault|' \
+    "$DEPLOY_EVM" > "$RELATIVE_SCRIPT"
+! cmp -s "$DEPLOY_EVM" "$RELATIVE_SCRIPT" || fail "the relative script path mutation changed nothing in $DEPLOY_EVM"
+evm_elsewhere "$RELATIVE_SCRIPT" "$EVM_TREE_ROOT" ethereum-relative-in-evm
+if [ "$STATUS" -ne 0 ]; then
+    quote
+    fail "a deploy script naming the Foundry script relative to bridge/evm was refused from bridge/evm (exit $STATUS)"
+fi
+evm_elsewhere "$RELATIVE_SCRIPT" "$ELSEWHERE" ethereum-relative-elsewhere
+[ "$STATUS" -ne 0 ] \
+    || fail "a deploy script naming the Foundry script relative to bridge/evm deployed from $ELSEWHERE"
+grep -qF -- 'No such file or directory' "$WORK/last.log" || {
+    quote
+    fail "a deploy script naming the Foundry script relative to bridge/evm was refused from $ELSEWHERE for another reason"
+}
+
+printf 'deploy-scripts-check: the %d committed chain configurations are refused while they carry their placeholders, a filled one is ready to deploy, every argument, placeholder, missing variable and inconsistent record is refused, an EVM deployment runs from any directory, a first Solana deployment builds with platform tools %s, which the workflow names too, keeps its program keypair beside its record without overwriting one, waits for the program to be executable, records the vault the program derives from %s and stops before the initialise step\n' \
     $((${#EVM_CHAIN_NAMES[@]} + 1)) "$PLATFORM_TOOLS" "$PROGRAM_SEED" >&2

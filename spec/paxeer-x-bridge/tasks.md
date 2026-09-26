@@ -102,7 +102,7 @@
     - Record the RPC exchange as a fixture under bridge/deploy/tests/fixtures in the format the relayer's fixtures use, carrying no key material, no endpoint but the local one the run started, and no date or hostname, and make the fixture replayable so a later run can assert the same exchange without a node.
     - Stop the run with a message naming the missing tool when anvil or forge is absent, and skip nothing: a missing tool is a failure, not an omitted step.
     - _Requirements: 13.1, 13.3, 13.4, 13.5_
-  - [ ] 2.7 Dry-run the Solana deployment against solana-test-validator and record it — **Implemented - qualification pending**
+  - [x] 2.7 Dry-run the Solana deployment against solana-test-validator and record it
     - Write bridge/deploy/tests/solana-dry-run-check.sh starting solana-test-validator, writing a run-local configuration whose placeholder owner and attestors are replaced by that run's own generated local values, and deploying and initialising the program with bridge/deploy/deploy-solana-program.sh against it.
     - Register the wrapped SOL asset and a run-local six-decimal mint standing for Sidiora with the asset id 0x21f7b20a555199fa73A238B1a91FD0f549068fEe, make a deposit, and release against real attestor signatures verified by the real native secp256k1 program, asserting the recipient's balance, the receipt PDA and the nullifier PDA.
     - Run bridge/deploy/checklist.sh against the local deployment and assert every check passes, with the wrapped SOL asset checked first, and assert the deployment record names the program id, the program data account, the ELF hash and the vault-authority PDA with the handle bridge/vectors derives.
@@ -150,6 +150,31 @@
     - Test it: modules/layerxbridge/client/cli/tx_test.go parses the generator's committed testdata proposals into MsgSubmitProposal and asserts the content equals what proposals.go emits and that a malformed file, an unknown field and a missing deposit are refused; node/gov_bridge_test.go asserts the handler is mounted and that the message it builds executes through the stored route.
     - Update section 6 of bridge/README.md to show the command with the generated file as its argument, remove the sentence that no command submits the proposals, and make bridge/deploy/tests/docs-check.sh assert the command and its file argument and fail on the removed sentence.
     - _Requirements: 9.1, 12.1, 12.5_
+  - [x] 2.15 Read the generated bodies through DecodeBody in the EVM dry run
+    - Make the Paxeer side of bridge/deploy/tests/evm-dry-run-check.sh read every generated body through bridge/deploy/proposals DecodeBody, as the Solana dry run does, so bodies written under their type URL apply to the real keeper (observation 2.7.3), and assert one body with a wrong type URL and one with an unknown field are refused by name.
+    - Re-record bridge/deploy/tests/fixtures/evm_dry_run.json once through --record on this revision and keep the replay passing without a node.
+    - _Requirements: 13.1, 13.5_
+  - [x] 2.16 Make the deploy scripts wait for an executable program, keep its keypair and run from any directory
+    - In bridge/deploy/deploy-solana-program.sh, after the deploy transaction is rooted, poll the program account at the configured commitment until it reports executable, with a bounded wait that fails by naming the program id, before the initialise step (observation 2.7.2).
+    - On a first deployment with no PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE, write the generated program keypair to the path the deployment record names beside it and print that path, so the rerun with a filled solana.program_id finds it (observation 2.10.1); refuse to overwrite an existing keypair file.
+    - In bridge/deploy/deploy-evm-chain.sh resolve the Foundry script path from the script's own location so it deploys from any working directory (observation 2.6.1).
+    - Extend bridge/deploy/tests/deploy-scripts-check.sh to cover the executable wait, the kept keypair and its overwrite refusal, and an EVM deploy driven from a directory other than bridge/evm.
+    - With these in place, re-qualify task 2.7 on this revision: run its --record once to write bridge/deploy/tests/fixtures/solana_dry_run.json, run its verify_cmd once, and set task 2.7 to done with its four evidence fields only when that run passes.
+    - _Requirements: 10.1, 10.3, 10.4, 13.2_
+  - [ ] 2.17 Clear the relayer's clippy findings and point the attestation references at the moved contract — **Implemented - qualification pending**
+    - Fix every clippy finding in interop/crates/layerx-bridge-relayer, the five observation 2.2.1 names under src and the ones under tests observation 2.17.1 names, by restructuring the code, never by an allow attribute or a lint-level change, so cargo clippy with -D warnings passes on the crate with all targets.
+    - Update modules/layerxbridge/ATTESTATION.md and the comment in modules/layerxbridge/types/attestation.go to the contract path wave 1 moved to bridge/evm (observation 1.1.1), and make the existing check that compares the two attestation documents, if there is one, assert the new path.
+    - _Requirements: 7.1, 8.1_
+  - [ ] 2.18 Register the Solana Sidiora pair through governance
+    - Add a message to api/layerxbridge/tx.proto that registers the Sidiora pair for a chain by calling the keeper's EnsureSidioraDenom under the governance authority, generate it with the toolchain task 2.9 used, serve it in keeper/msg_server.go, carry it in the BridgeProposal content and validate it like the others, so the bridge no longer depends on another upgrade handler to register the pair (observation 1.5.2).
+    - Make bridge/deploy/proposals emit it for Solana inside 05-proposal-sidiora-cap.json ahead of the cap message, so one proposal registers the pair and then caps it, and keep the proposal refused for any chain that is not Sidiora's foreign home.
+    - Update section 6 and the Sidiora section of bridge/README.md so the ordering rule reads from the proposal itself, and extend bridge/deploy/tests/docs-check.sh, keeper_test.go, proposals_test.go and the cli tests for the new message; re-record bridge/deploy/tests/fixtures/solana_dry_run.json only if the Solana dry run's Paxeer side applies a body this task changes.
+    - _Requirements: 9.1, 12.1_
+  - [ ] 2.19 Replay a completion out of the pending set in the relayer journal
+    - In interop/crates/layerx-bridge-relayer/src/journal.rs add SubmissionStatus::Landed and make the Completed replay arm apply it: Completion::Included marks the submission whose tx_hash it names, Completion::Released marks the release whose signature it names, and a completion naming a transaction the item never submitted is refused as a JournalError::Conflict naming the item; Completion::AlreadyBridged names nothing and marks nothing; pending() and pending_release() keep matching Pending only, so the unit test observation 2.17.2 records passes as written.
+    - Extend the journal tests beside it: the EVM item has no pending submission after Completed Included and still replays to the same state, the refusal fires for an unknown tx_hash and an unknown release signature, and the existing release test stays byte for byte; keep src/relayer.rs behaviour unchanged except where it relied on a landed transaction still reading as pending, and cover any such change in the relayer's tests.
+    - Run task 2.17's verify_cmd once on the result; on exit 0 record task 2.17 done with that revision, command, exit code and log, and close observation 2.17.2 naming the revision.
+    - _Requirements: 8.1, 8.4_
 
 ## Wave 3 - One Run, Recorded
 
@@ -168,7 +193,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }
