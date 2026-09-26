@@ -2447,6 +2447,7 @@ void lxp_prepared_module_transition_destroy(
     if (prepared == NULL) return;
     free((void *)prepared->program_outcome.terminal_payload.bytes);
     free((void *)prepared->program_outcome.call_graph_payload.bytes);
+    free((void *)prepared->program_outcome.event_envelope_payload.bytes);
     for (i = 0U; i < prepared->blob_count; ++i)
         free(prepared->blobs[i].bytes);
     (void)memset(prepared, 0, sizeof(*prepared));
@@ -2500,14 +2501,17 @@ lxp_result lxp_module_ctx_export_prepared(
     result->program_outcome = ctx->program_outcome;
     result->program_outcome.terminal_payload.bytes = NULL;
     result->program_outcome.call_graph_payload.bytes = NULL;
+    result->program_outcome.event_envelope_payload.bytes = NULL;
     {
-        lxp_byte_span *destinations[2] = {
+        lxp_byte_span *destinations[3] = {
             &result->program_outcome.terminal_payload,
-            &result->program_outcome.call_graph_payload};
-        const lxp_byte_span sources[2] = {
+            &result->program_outcome.call_graph_payload,
+            &result->program_outcome.event_envelope_payload};
+        const lxp_byte_span sources[3] = {
             ctx->program_outcome.terminal_payload,
-            ctx->program_outcome.call_graph_payload};
-        for (i = 0U; i < 2U; ++i) {
+            ctx->program_outcome.call_graph_payload,
+            ctx->program_outcome.event_envelope_payload};
+        for (i = 0U; i < 3U; ++i) {
             uint8_t *bytes;
             if (sources[i].length == 0U) continue;
             bytes = (uint8_t *)malloc(sources[i].length);

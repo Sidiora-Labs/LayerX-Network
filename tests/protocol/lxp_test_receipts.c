@@ -141,6 +141,48 @@ int main(void)
             bound.program_outcome.event_envelope_payload.length != 0U ||
             bound.program_outcome.terminal_payload.length != 0U)
             return 1;
+        /* A copied outcome owns its list: once the buffer the call hashed
+         * is reused, the owned copy still binds with the receipt unchanged,
+         * while a span still sharing the reused buffer is refused. */
+        {
+            uint8_t owned[sizeof(event_list)];
+            lxp_program_outcome copied_outcome;
+            lxp_receipt copied;
+            lxp_receipt shared;
+            bound = program;
+            if (lxp_receipt_bind_program_artifacts(&bound,
+                    (lxp_byte_span){ terminal, sizeof(terminal) },
+                    (lxp_byte_span){ graph, sizeof(graph) },
+                    (lxp_byte_span){ event_list, sizeof(event_list) }) !=
+                LXP_OK)
+                return 1;
+            copied_outcome = bound.program_outcome;
+            (void)memcpy(owned, copied_outcome.event_envelope_payload.bytes,
+                         copied_outcome.event_envelope_payload.length);
+            copied_outcome.event_envelope_payload.bytes = owned;
+            (void)memset(event_list, 0xa5, sizeof(event_list));
+            copied = program;
+            shared = program;
+            if (lxp_receipt_bind_program_artifacts(&copied,
+                    copied_outcome.terminal_payload,
+                    copied_outcome.call_graph_payload,
+                    copied_outcome.event_envelope_payload) != LXP_OK ||
+                copied.program_outcome.event_envelope_payload.bytes != owned ||
+                copied.program_outcome.event_envelope_payload.length !=
+                    sizeof(owned) ||
+                lxp_arena_reset(&arena, 0U) != LXP_OK ||
+                lxp_receipt_encode(&copied, false, &arena, &after) != LXP_OK ||
+                after.length != before_length ||
+                memcmp(after.bytes, before_bytes, before_length) != 0)
+                return 1;
+            if (lxp_receipt_bind_program_artifacts(&shared,
+                    bound.program_outcome.terminal_payload,
+                    bound.program_outcome.call_graph_payload,
+                    bound.program_outcome.event_envelope_payload) !=
+                    LXP_ERR_NON_CANONICAL ||
+                shared.program_outcome.event_envelope_payload.length != 0U)
+                return 1;
+        }
     }
     {
         static const uint8_t unchanged_supply[] = { 2U, 3U, 4U, 5U, 6U, 7U, 8U };

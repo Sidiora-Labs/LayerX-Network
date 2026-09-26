@@ -77,6 +77,36 @@ struct lxp_kernel_prepared_batch {
     bool simulation;
 };
 
+enum { KERNEL_OUTCOME_ARTIFACTS = 3 };
+
+/* A prepared batch owns its receipts' outcome artifacts: every span the
+ * receipt carries beside its committed bytes is copied out of the arena the
+ * activity ran in, so it outlives that arena exactly as the receipt does. */
+static lxp_result kernel_batch_own_artifacts(lxp_program_outcome *outcome,
+                                             uint8_t **slots)
+{
+    lxp_byte_span *spans[KERNEL_OUTCOME_ARTIFACTS] = {
+        &outcome->terminal_payload, &outcome->call_graph_payload,
+        &outcome->event_envelope_payload};
+    const size_t limits[KERNEL_OUTCOME_ARTIFACTS] = {
+        LXP_MAX_ACTIVITY_BYTES, LXP_MAX_ACTIVITY_BYTES,
+        LXP_PROGRAM_EVENT_LIST_MAX_BYTES};
+    size_t artifact;
+    for (artifact = 0U; artifact < KERNEL_OUTCOME_ARTIFACTS; ++artifact) {
+        uint8_t *bytes;
+        if (spans[artifact]->length == 0U) continue;
+        if (spans[artifact]->bytes == NULL ||
+            spans[artifact]->length > limits[artifact])
+            return LXP_ERR_LENGTH_LIMIT;
+        bytes = (uint8_t *)malloc(spans[artifact]->length);
+        if (bytes == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+        (void)memcpy(bytes, spans[artifact]->bytes, spans[artifact]->length);
+        slots[artifact] = bytes;
+        spans[artifact]->bytes = bytes;
+    }
+    return LXP_OK;
+}
+
 static lxp_result kernel_program_signer_binding(
     const lxp_activity *activity, const lxp_kernel_execution *execution,
     const lxp_identity *identity)
@@ -4138,7 +4168,8 @@ lxp_result lxp_kernel_prepare_serial_activity_batch(
     batch->receipts = calloc(1U, sizeof(*batch->receipts));
     batch->events = calloc(1U, sizeof(*batch->events));
     batch->event_bytes = calloc(1U, sizeof(*batch->event_bytes));
-    batch->artifact_bytes = calloc(2U, sizeof(*batch->artifact_bytes));
+    batch->artifact_bytes = calloc(KERNEL_OUTCOME_ARTIFACTS,
+                                   sizeof(*batch->artifact_bytes));
     if (batch->receipts == NULL || batch->events == NULL ||
         batch->event_bytes == NULL || batch->artifact_bytes == NULL) {
         status = LXP_ERR_ARENA_EXHAUSTED;
@@ -4201,21 +4232,9 @@ lxp_result lxp_kernel_prepare_serial_activity_batch(
             batch->events[0].bytes = batch->event_bytes[0];
         }
     }
-    for (size_t i = 0U; status == LXP_OK && i < 2U; ++i) {
-        lxp_byte_span *span = i == 0U ? &batch->receipts[0].program_outcome.terminal_payload :
-            &batch->receipts[0].program_outcome.call_graph_payload;
-        if (span->length == 0U) continue;
-        if (span->bytes == NULL || span->length > LXP_MAX_ACTIVITY_BYTES) {
-            status = LXP_ERR_LENGTH_LIMIT;
-            break;
-        }
-        batch->artifact_bytes[i] = malloc(span->length);
-        if (batch->artifact_bytes[i] == NULL) status = LXP_ERR_ARENA_EXHAUSTED;
-        else {
-            (void)memcpy(batch->artifact_bytes[i], span->bytes, span->length);
-            span->bytes = batch->artifact_bytes[i];
-        }
-    }
+    if (status == LXP_OK)
+        status = kernel_batch_own_artifacts(&batch->receipts[0].program_outcome,
+                                            batch->artifact_bytes);
     if (status == LXP_OK) status = lxp_state_snapshot_seal_level(batch->settled->state);
     if (status == LXP_OK) status = kernel_prepared_batch_digest(activity, execution, batch);
     if (status == LXP_OK) {
@@ -4958,32 +4977,13 @@ assemble_batch:
     if (status == LXP_OK) {
         batch->count = count;
         batch->artifact_bytes = (uint8_t **)calloc(
-            count * 2U, sizeof(*batch->artifact_bytes));
+            count * KERNEL_OUTCOME_ARTIFACTS, sizeof(*batch->artifact_bytes));
         if (batch->artifact_bytes == NULL) status = LXP_ERR_ARENA_EXHAUSTED;
     }
-    for (index = 0U; status == LXP_OK && index < count; ++index) {
-        lxp_byte_span *spans[2] = {
-            &staged_receipts[index].program_outcome.terminal_payload,
-            &staged_receipts[index].program_outcome.call_graph_payload};
-        size_t artifact;
-        for (artifact = 0U; artifact < 2U; ++artifact) {
-            uint8_t *bytes;
-            if (spans[artifact]->length == 0U) continue;
-            if (spans[artifact]->bytes == NULL ||
-                spans[artifact]->length > LXP_MAX_ACTIVITY_BYTES) {
-                status = LXP_ERR_LENGTH_LIMIT;
-                break;
-            }
-            bytes = (uint8_t *)malloc(spans[artifact]->length);
-            if (bytes == NULL) {
-                status = LXP_ERR_ARENA_EXHAUSTED;
-                break;
-            }
-            (void)memcpy(bytes, spans[artifact]->bytes, spans[artifact]->length);
-            batch->artifact_bytes[index * 2U + artifact] = bytes;
-            spans[artifact]->bytes = bytes;
-        }
-    }
+    for (index = 0U; status == LXP_OK && index < count; ++index)
+        status = kernel_batch_own_artifacts(
+            &staged_receipts[index].program_outcome,
+            batch->artifact_bytes + index * KERNEL_OUTCOME_ARTIFACTS);
     for (index = 0U; status == LXP_OK && index < count; ++index) {
         if (staged_events[index].length == 0U) continue;
         if (staged_events[index].bytes == NULL) {
@@ -5047,7 +5047,6 @@ lxp_result lxp_kernel_simulate_activity(
     uint8_t *storage = NULL;
     lxp_arena arena;
     lxp_result status;
-    size_t artifact;
     if (snapshot == NULL || snapshot->state == NULL || activity == NULL ||
         execution == NULL || execution->authority == NULL ||
         batch_out == NULL ||
@@ -5067,7 +5066,7 @@ lxp_result lxp_kernel_simulate_activity(
     batch->event_bytes = (uint8_t **)calloc(1U,
                                             sizeof(*batch->event_bytes));
     batch->artifact_bytes = (uint8_t **)calloc(
-        2U, sizeof(*batch->artifact_bytes));
+        KERNEL_OUTCOME_ARTIFACTS, sizeof(*batch->artifact_bytes));
     if (batch->receipts == NULL || batch->events == NULL ||
         batch->event_bytes == NULL || batch->artifact_bytes == NULL) {
         status = LXP_ERR_ARENA_EXHAUSTED;
@@ -5116,24 +5115,9 @@ lxp_result lxp_kernel_simulate_activity(
             }
         }
     }
-    for (artifact = 0U; status == LXP_OK && artifact < 2U; ++artifact) {
-        lxp_byte_span *span = artifact == 0U ?
-            &batch->receipts[0].program_outcome.terminal_payload :
-            &batch->receipts[0].program_outcome.call_graph_payload;
-        if (span->length == 0U) continue;
-        if (span->bytes == NULL || span->length > LXP_MAX_ACTIVITY_BYTES) {
-            status = LXP_ERR_LENGTH_LIMIT;
-            break;
-        }
-        batch->artifact_bytes[artifact] = (uint8_t *)malloc(span->length);
-        if (batch->artifact_bytes[artifact] == NULL) {
-            status = LXP_ERR_ARENA_EXHAUSTED;
-            break;
-        }
-        (void)memcpy(batch->artifact_bytes[artifact], span->bytes,
-                     span->length);
-        span->bytes = batch->artifact_bytes[artifact];
-    }
+    if (status == LXP_OK)
+        status = kernel_batch_own_artifacts(
+            &batch->receipts[0].program_outcome, batch->artifact_bytes);
     if (status == LXP_OK)
         status = lxp_state_snapshot_seal_level(batch->settled->state);
     if (status == LXP_OK)
@@ -5559,7 +5543,8 @@ void lxp_kernel_prepared_batch_destroy(lxp_kernel_prepared_batch *batch)
         for (index = 0U; index < batch->count; ++index)
             free(batch->event_bytes[index]);
     if (batch->artifact_bytes != NULL)
-        for (index = 0U; index < batch->count * 2U; ++index)
+        for (index = 0U;
+             index < batch->count * KERNEL_OUTCOME_ARTIFACTS; ++index)
             free(batch->artifact_bytes[index]);
     free(batch->maintenance_storage);
     free(batch->artifact_bytes);
@@ -6293,7 +6278,8 @@ lxp_result lxp_kernel_prepare_terminal_rejection(
     batch->receipts = calloc(1U, sizeof(*batch->receipts));
     batch->events = calloc(1U, sizeof(*batch->events));
     batch->event_bytes = calloc(1U, sizeof(*batch->event_bytes));
-    batch->artifact_bytes = calloc(2U, sizeof(*batch->artifact_bytes));
+    batch->artifact_bytes = calloc(KERNEL_OUTCOME_ARTIFACTS,
+                                   sizeof(*batch->artifact_bytes));
     if (batch->receipts == NULL || batch->events == NULL ||
         batch->event_bytes == NULL || batch->artifact_bytes == NULL) {
         status = LXP_ERR_ARENA_EXHAUSTED;
@@ -6348,6 +6334,9 @@ lxp_result lxp_kernel_prepare_terminal_rejection(
             batch->events[0].bytes = batch->event_bytes[0];
         }
     }
+    if (status == LXP_OK)
+        status = kernel_batch_own_artifacts(
+            &batch->receipts[0].program_outcome, batch->artifact_bytes);
     if (status == LXP_OK)
         status = lxp_state_snapshot_seal_level(batch->settled->state);
     if (status == LXP_OK)

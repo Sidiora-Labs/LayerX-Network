@@ -318,6 +318,7 @@ symbol = "lxp_ctx_account_stage_module_value"
 observed = "Module value staging requires an open journal, but lxp_kernel_prepare_activity runs a program call on a snapshot without opening one, so the web fee account cannot be created by the first paying call and tests/test_web_program_path.c provisions it at genesis."
 assumption = "The fee account is provisioned at genesis until the prepare pass supports module value staging."
 severity = "suspect"
+closed = "Task 2.23 lets the prepare pass stage module values and task 2.31's verify_cmd at 418f25459cfeeb26a957e8b8fdac64c6e1fd098f passes the run whose first paying call creates the web fee account."
 
 [observation.2.2.3]
 task = "2.2"
@@ -423,6 +424,7 @@ exit_code = 2
 log_path = ".logs/verify.log"
 observed = "test-module-ctx stops in its unchanged opening block, where lxp_ctx_emit_transfer_set returns LXP_FATAL_INVARIANT (-1001) against the test's apply_transfer fixture exactly as the unmodified test does, so the new prepare staging checks after it never run, while test-kernel and test-web-program-path, including the run whose first paying call creates the web fee account, pass (.logs/verify-rest.log, exit 0)."
 assumption = "The module-ctx fixture's owner restores that transfer emit check without weakening it, after which this verify_cmd runs unchanged."
+closed = "Task 2.29's transfer fixture repair and task 2.31's event list ownership fix at 418f25459cfeeb26a957e8b8fdac64c6e1fd098f let test-module-ctx, test-kernel and test-web-program-path pass together in task 2.31's verify_cmd."
 
 [observation.2.25.1]
 task = "2.25"
@@ -440,6 +442,7 @@ exit_code = 2
 log_path = ".logs/verify.log"
 observed = "test-receipts passes, but after the reference program's request call the event list bound to the receipt does not hash to the call outcome event's event_envelope_digest (tests/test_web_program_path.c line 207)."
 assumption = "Something between the SHA-256 in terminal_publish and the receipt the kernel returns changes the list bytes or the digest source, and a follow-up diagnosis within these touches closes it."
+closed = "Task 2.31 at 418f25459cfeeb26a957e8b8fdac64c6e1fd098f found the prepared module transition and the kernel's prepared batches copied the terminal and call graph spans but left the event list span pointing into the reset activity arena; they now own a copy of it and release it with the other artifacts, and the verify_cmd passed."
 
 [observation.2.16.1]
 task = "2.16"
@@ -456,3 +459,4 @@ exit_code = 2
 log_path = ".logs/verify.log"
 observed = "test-module-ctx failed identically at the registration commit's parent, because its transfer capability fixture predates the ledger balance check in emit_transfer_set and moved no balances; with the fixture applying the set through lxp_apply_transfer_set, test-module-ctx and test-kernel pass, and test-web-program-path fails only at the event list checks of lines 207 and 667 recorded in observation 2.26.1."
 assumption = "Once observation 2.26.1 is resolved this verify_cmd reruns unchanged and records tasks 2.29 and 2.23 done."
+closed = "Task 2.31 at 418f25459cfeeb26a957e8b8fdac64c6e1fd098f made the event list outlive the prepare arena, so the event list checks of tests/test_web_program_path.c pass and this verify_cmd, run within task 2.31's, exits 0."
