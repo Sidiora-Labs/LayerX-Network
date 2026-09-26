@@ -1,7 +1,10 @@
 use serde_json::Value;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use x_websearch::config::{AssetSymbol, Config, ConfigError, Refusal, MAX_CONFIG_BYTES};
+use x_websearch::config::{
+    AssetSymbol, Config, ConfigError, PaymentConfig, Refusal, DEFAULT_DRAW_FEE_LIMIT,
+    MAX_CONFIG_BYTES,
+};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -338,6 +341,273 @@ fn unreadable_oversized_and_non_json_files_are_refused() -> Result<(), Box<dyn s
     assert_eq!(
         directory_result.err(),
         Some(refusal("config", Refusal::Unreadable))
+    );
+    Ok(())
+}
+
+#[test]
+fn absent_payment_settings_keep_the_defaults() -> Result<(), Box<dyn std::error::Error>> {
+    let config = x_websearch::load(&fixture("valid.json"))?;
+    assert_eq!(config.payment, PaymentConfig::default());
+    assert_eq!(config.payment.payer_did, None);
+    assert_eq!(config.payment.draw_fee_limit, DEFAULT_DRAW_FEE_LIMIT);
+    assert_eq!(DEFAULT_DRAW_FEE_LIMIT, 1_000_000_000_000);
+    assert_eq!(config.payment.conformance_suite, None);
+    let mut value = valid_json()?;
+    value["payment"] = serde_json::json!({});
+    assert_eq!(Config::parse(&value.to_string())?, config);
+    Ok(())
+}
+
+#[test]
+fn payment_settings_are_read_from_the_payment_object() -> Result<(), Box<dyn std::error::Error>> {
+    let payer = format!("did:layerx:{}", "3c".repeat(32));
+    let mut value = valid_json()?;
+    value["payment"] = serde_json::json!({
+        "payer_did": payer,
+        "draw_fee_limit": "340282366920938463463374607431768211455",
+        "conformance_suite": "/var/lib/x-websearch/conformance",
+    });
+    let config = Config::parse(&value.to_string())?;
+    assert_eq!(config.payment.payer_did.as_deref(), Some(payer.as_str()));
+    assert_eq!(config.payment.draw_fee_limit, u128::MAX);
+    assert_eq!(
+        config.payment.conformance_suite,
+        Some(PathBuf::from("/var/lib/x-websearch/conformance"))
+    );
+    for (name, setting) in [
+        ("payer_did", serde_json::json!("did:web:paxeer.app")),
+        ("draw_fee_limit", serde_json::json!("1")),
+        ("conformance_suite", serde_json::json!("/srv/suite")),
+    ] {
+        let mut value = valid_json()?;
+        value["payment"] = serde_json::json!({ name: setting });
+        let payment = Config::parse(&value.to_string())?.payment;
+        let defaults = PaymentConfig::default();
+        match name {
+            "payer_did" => {
+                assert_eq!(payment.payer_did.as_deref(), Some("did:web:paxeer.app"));
+                assert_eq!(payment.draw_fee_limit, defaults.draw_fee_limit);
+                assert_eq!(payment.conformance_suite, defaults.conformance_suite);
+            }
+            "draw_fee_limit" => {
+                assert_eq!(payment.draw_fee_limit, 1);
+                assert_eq!(payment.payer_did, defaults.payer_did);
+                assert_eq!(payment.conformance_suite, defaults.conformance_suite);
+            }
+            _ => {
+                assert_eq!(payment.conformance_suite, Some(PathBuf::from("/srv/suite")));
+                assert_eq!(payment.payer_did, defaults.payer_did);
+                assert_eq!(payment.draw_fee_limit, defaults.draw_fee_limit);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Each malformed `payment` setting, the field its refusal names and the
+/// refusal.
+fn malformed_payment_settings() -> Vec<(&'static str, Value, Refusal)> {
+    let mut cases = Vec::new();
+    cases.extend(malformed_object());
+    cases.extend(malformed_payer_did());
+    cases.extend(malformed_draw_fee_limit());
+    cases.extend(malformed_conformance_suite());
+    cases
+}
+
+fn malformed_object() -> Vec<(&'static str, Value, Refusal)> {
+    vec![
+        ("payment", serde_json::json!("payer"), Refusal::Invalid),
+        ("payment", serde_json::json!(null), Refusal::Invalid),
+        ("payment", serde_json::json!([]), Refusal::Invalid),
+    ]
+}
+
+fn malformed_payer_did() -> Vec<(&'static str, Value, Refusal)> {
+    vec![
+        (
+            "payment.payer_did",
+            serde_json::json!(null),
+            Refusal::Invalid,
+        ),
+        ("payment.payer_did", serde_json::json!(7), Refusal::Invalid),
+        (
+            "payment.payer_did",
+            serde_json::json!("did:Upper"),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.payer_did",
+            serde_json::json!("layerx:payer"),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.payer_did",
+            serde_json::json!("did:layerx:"),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.payer_did",
+            serde_json::json!("did::layerx"),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.payer_did",
+            serde_json::json!("did:layerx:payer:asset:sid"),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.payer_did",
+            serde_json::json!(format!("did:{}", "a".repeat(252))),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.payer_did",
+            serde_json::json!("<payer did>"),
+            Refusal::Placeholder,
+        ),
+        (
+            "payment.payer_did",
+            serde_json::json!(""),
+            Refusal::Placeholder,
+        ),
+    ]
+}
+
+fn malformed_draw_fee_limit() -> Vec<(&'static str, Value, Refusal)> {
+    vec![
+        (
+            "payment.draw_fee_limit",
+            serde_json::json!(null),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.draw_fee_limit",
+            serde_json::json!(1000),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.draw_fee_limit",
+            serde_json::json!("0"),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.draw_fee_limit",
+            serde_json::json!("01"),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.draw_fee_limit",
+            serde_json::json!("+1"),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.draw_fee_limit",
+            serde_json::json!("-1"),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.draw_fee_limit",
+            serde_json::json!("1e12"),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.draw_fee_limit",
+            serde_json::json!("1 000"),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.draw_fee_limit",
+            serde_json::json!("340282366920938463463374607431768211456"),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.draw_fee_limit",
+            serde_json::json!("replace_me"),
+            Refusal::Placeholder,
+        ),
+    ]
+}
+
+fn malformed_conformance_suite() -> Vec<(&'static str, Value, Refusal)> {
+    vec![
+        (
+            "payment.conformance_suite",
+            serde_json::json!(null),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.conformance_suite",
+            serde_json::json!(true),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.conformance_suite",
+            serde_json::json!("tests/fixtures/gateway"),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.conformance_suite",
+            serde_json::json!("/"),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.conformance_suite",
+            serde_json::json!("/srv/../etc"),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.conformance_suite",
+            serde_json::json!("/srv/su\u{7}ite"),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.conformance_suite",
+            serde_json::json!(format!("/{}", "s".repeat(4_096))),
+            Refusal::Invalid,
+        ),
+        (
+            "payment.conformance_suite",
+            serde_json::json!("/path/to/suite"),
+            Refusal::Placeholder,
+        ),
+        (
+            "payment.conformance_suite",
+            serde_json::json!(" "),
+            Refusal::Placeholder,
+        ),
+    ]
+}
+
+#[test]
+fn malformed_payment_settings_are_refused_naming_the_field(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let cases = malformed_payment_settings();
+    for (field, setting, expected) in cases {
+        let mut value = valid_json()?;
+        if let Some(name) = field.strip_prefix("payment.") {
+            value["payment"] = serde_json::json!({ name: setting });
+        } else {
+            value["payment"] = setting.clone();
+        }
+        assert_eq!(
+            Config::parse(&value.to_string()).err(),
+            Some(refusal(field, expected)),
+            "{field} = {setting}"
+        );
+    }
+    let mut value = valid_json()?;
+    value["payment"] = serde_json::json!({ "draw_fee_limit": "5", "payer": "did:layerx:a" });
+    assert_eq!(
+        Config::parse(&value.to_string()).err(),
+        Some(refusal("payment.payer", Refusal::Unknown))
+    );
+    let mut value = valid_json()?;
+    value["payment"] = serde_json::json!({ "payer_did": "did:layerx:payer", "receiver_key": "k" });
+    assert_eq!(
+        Config::parse(&value.to_string()).err(),
+        Some(refusal("payment.receiver_key", Refusal::KeyMaterial))
     );
     Ok(())
 }

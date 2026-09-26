@@ -731,7 +731,11 @@ reqs = ["9.1","9.2"]
 
 [task.2.10]
 title = "Settle the metered draw signer and the sidecar's payment configuration"
-status = "pending"
+status = "done"
+revision = "a9171bc99760fe8d1709ace1bba34d3db5cf9db6"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p layerx-x402 && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test config --test payment'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["1.15","1.17"]
 do_1 = "Amend spec/402lxp/protocol.md so the metered flow reads as the code and the recorded exchanges already work: the buyer authorises a purpose-bound grant with a fee limit, and the receiver draws against it per request, signing each draw with its receiver key and repeating the challenge's purposeHash in the settlement; remove the sentence that has the buyer author a receive payload the receiver signs (observation 1.4.1), and keep every vector and conformance answer the suite pins unchanged."

@@ -86,6 +86,7 @@ symbol = "metered_payload"
 observed = "spec/402lxp/protocol.md has the metered buyer send a receive payload whose ordinal-6 draw the receiver signs, which a buyer cannot author; the task has the receiver key sign the draw."
 assumption = "The metered PAYMENT-SIGNATURE payload carries the payer-signed canonical grant and the draw's idempotencyKey, and the sidecar signs and submits the draw."
 severity = "suspect"
+closed = "Task 2.10 amends spec/402lxp/protocol.md so the metered payload carries the payer-signed grant and idempotencyKey and the receiver signs each draw with its receiver key and repeats purposeHash in the settlement; the layerx-x402 suite and the recorded exchange replayed in its verify_cmd at revision a9171bc99760fe8d1709ace1bba34d3db5cf9db6."
 
 [observation.1.4.2]
 task = "1.4"
@@ -103,6 +104,7 @@ symbol = "PaymentGate::new"
 observed = "The configuration has no field naming the payer, the draw fee limit or the adapter conformance suite, and src/main.rs is outside this task's touches."
 assumption = "The payer names itself in the LAYERX-PAYER-DID header, every asset including PAX settles to its per-asset account, the draw fee limit is a fixed constant, and the binary wires PaymentGate with its pinned suite in a later task."
 severity = "assumption"
+closed = "Task 2.10 adds payment.payer_did, payment.draw_fee_limit and payment.conformance_suite to the configuration with defaults reproducing the prior behaviour, and PaymentGate reads them; tests/config.rs and tests/payment.rs passed in its verify_cmd at revision a9171bc99760fe8d1709ace1bba34d3db5cf9db6."
 
 [observation.1.4.4]
 task = "1.4"

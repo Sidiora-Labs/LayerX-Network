@@ -17,6 +17,7 @@ pub const MAX_DEPTH: u32 = 32;
 pub const MAX_POLITENESS_DELAY_MS: u64 = 3_600_000;
 pub const MAX_CONFIRMATIONS: u32 = 1_024;
 const MAX_PATH_BYTES: usize = 4_096;
+pub const MAX_DID_BYTES: usize = 255;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Refusal {
@@ -157,6 +158,55 @@ pub struct EvmConfig {
     pub confirmations: u32,
 }
 
+// Payment settings: the optional `payment` object. Every field in it may be
+// left out, and its default then reproduces the sidecar's behaviour without it.
+
+/// The fee limit the receiver binds into every signed draw when
+/// `payment.draw_fee_limit` is absent, in base units of the fee asset.
+pub const DEFAULT_DRAW_FEE_LIMIT: u128 = 1_000_000_000_000;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentConfig {
+    /// `payment.payer_did`: the DID whose accounts every metered draw is
+    /// taken from. Absent: each request names its payer in the
+    /// `LAYERX-PAYER-DID` header.
+    pub payer_did: Option<String>,
+    /// `payment.draw_fee_limit`: the fee limit, as a canonical decimal
+    /// string, the receiver signs into each draw and the most a draw's
+    /// receipt may charge. Absent: [`DEFAULT_DRAW_FEE_LIMIT`].
+    pub draw_fee_limit: u128,
+    /// `payment.conformance_suite`: the absolute path of the directory of
+    /// recorded gateway exchanges the x402 adapter's pinned conformance suite
+    /// digests. Absent: the pinned suite is registered without reading it.
+    pub conformance_suite: Option<PathBuf>,
+}
+
+impl Default for PaymentConfig {
+    fn default() -> Self {
+        Self {
+            payer_did: None,
+            draw_fee_limit: DEFAULT_DRAW_FEE_LIMIT,
+            conformance_suite: None,
+        }
+    }
+}
+
+/// Whether `did` is a DID a payer may be named by: `did:` followed by
+/// lowercase ASCII letters, digits, `.`, `_`, `-` and `:`, with no empty
+/// segment, no trailing `:`, no `:asset:` segment, and at most
+/// [`MAX_DID_BYTES`] bytes.
+#[must_use]
+pub fn payer_did_valid(did: &str) -> bool {
+    did.len() <= MAX_DID_BYTES
+        && did.starts_with("did:")
+        && !did.ends_with(':')
+        && !did.contains("::")
+        && !did.contains(":asset:")
+        && did
+            .bytes()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b':' | b'-'))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
     pub listen: SocketAddr,
@@ -166,6 +216,7 @@ pub struct Config {
     pub fetch: FetchLimits,
     pub assets: [AssetConfig; 4],
     pub gateway: GatewayConfig,
+    pub payment: PaymentConfig,
     pub evm: EvmConfig,
     pub kernel_network_id: u32,
     pub peers: Vec<String>,
@@ -190,6 +241,7 @@ impl Config {
         let crawl = crawl(&mut root)?;
         let assets = assets(&mut root)?;
         let gateway = gateway(&mut root)?;
+        let payment = payment(&mut root)?;
         let evm = evm(&mut root)?;
         let kernel_network_id = positive_u32(&mut root, "kernel_network_id", u32::MAX)?;
         let peers = peers(&mut root)?;
@@ -202,6 +254,7 @@ impl Config {
             fetch,
             assets,
             gateway,
+            payment,
             evm,
             kernel_network_id,
             peers,
@@ -268,6 +321,17 @@ impl Object {
         match self.map.remove(name) {
             None | Some(Value::Null) => Err(ConfigError::new(path, Refusal::Missing)),
             Some(value) => Ok((value, path)),
+        }
+    }
+
+    /// A field that may be left out: `None` when absent. A present `null` is
+    /// malformed.
+    fn optional(&mut self, name: &str) -> Result<Option<(Value, String)>, ConfigError> {
+        let path = self.field_path(name);
+        match self.map.remove(name) {
+            None => Ok(None),
+            Some(Value::Null) => Err(ConfigError::new(path, Refusal::Invalid)),
+            Some(value) => Ok(Some((value, path))),
         }
     }
 
@@ -460,7 +524,12 @@ fn data_dir(root: &mut Object) -> Result<PathBuf, ConfigError> {
     if placeholder_text(&text) || text.starts_with("/path/to") {
         return Err(ConfigError::new(path, Refusal::Placeholder));
     }
-    let directory = PathBuf::from(&text);
+    absolute_directory(&text).ok_or_else(|| ConfigError::new(path, Refusal::Invalid))
+}
+
+/// An absolute path below the root with only normal components.
+fn absolute_directory(text: &str) -> Option<PathBuf> {
+    let directory = PathBuf::from(text);
     let valid = text.len() <= MAX_PATH_BYTES
         && !text.chars().any(char::is_control)
         && directory.is_absolute()
@@ -468,10 +537,7 @@ fn data_dir(root: &mut Object) -> Result<PathBuf, ConfigError> {
         && directory
             .components()
             .all(|component| matches!(component, Component::RootDir | Component::Normal(_)));
-    if !valid {
-        return Err(ConfigError::new(path, Refusal::Invalid));
-    }
-    Ok(directory)
+    valid.then_some(directory)
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -748,6 +814,55 @@ fn gateway(root: &mut Object) -> Result<GatewayConfig, ConfigError> {
             public_key,
         },
     })
+}
+
+fn payment(root: &mut Object) -> Result<PaymentConfig, ConfigError> {
+    let mut config = PaymentConfig::default();
+    let Some((value, path)) = root.optional("payment")? else {
+        return Ok(config);
+    };
+    let Value::Object(map) = value else {
+        return Err(ConfigError::new(path, Refusal::Invalid));
+    };
+    let mut object = Object { path, map };
+    if let Some((value, path)) = object.optional("payer_did")? {
+        let text = optional_text(value, &path)?;
+        if !payer_did_valid(&text) {
+            return Err(ConfigError::new(path, Refusal::Invalid));
+        }
+        config.payer_did = Some(text);
+    }
+    if let Some((value, path)) = object.optional("draw_fee_limit")? {
+        let text = optional_text(value, &path)?;
+        config.draw_fee_limit = text
+            .parse::<u128>()
+            .ok()
+            .filter(|limit| *limit != 0 && limit.to_string() == text)
+            .ok_or_else(|| ConfigError::new(path, Refusal::Invalid))?;
+    }
+    if let Some((value, path)) = object.optional("conformance_suite")? {
+        let text = optional_text(value, &path)?;
+        if text.starts_with("/path/to") {
+            return Err(ConfigError::new(path, Refusal::Placeholder));
+        }
+        config.conformance_suite = Some(
+            absolute_directory(&text).ok_or_else(|| ConfigError::new(path, Refusal::Invalid))?,
+        );
+    }
+    object.finish()?;
+    Ok(config)
+}
+
+/// The text of an optional string field, refusing another JSON type as
+/// malformed and a placeholder as a placeholder.
+fn optional_text(value: Value, path: &str) -> Result<String, ConfigError> {
+    let Value::String(text) = value else {
+        return Err(ConfigError::new(path, Refusal::Invalid));
+    };
+    if placeholder_text(&text) {
+        return Err(ConfigError::new(path, Refusal::Placeholder));
+    }
+    Ok(text)
 }
 
 fn evm(root: &mut Object) -> Result<EvmConfig, ConfigError> {

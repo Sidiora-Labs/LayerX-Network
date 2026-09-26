@@ -7,7 +7,10 @@
 //! draw, the gateway executes it through `lx_sendActivity`, a pending result
 //! is recovered with `lx_getActivityStatus` or `lx_getReceipt`, and the
 //! receipt's sequencer signature is verified against the configured trust
-//! before the route releases anything. The association of payer, request,
+//! before the route releases anything. The `payment` configuration names
+//! the payer every draw is taken from, the fee limit each draw is signed
+//! with and may be charged, and the directory the pinned conformance suite
+//! is checked against. The association of payer, request,
 //! offer, activity, idempotency key and receipt is kept in the data
 //! directory so a retry reuses the same signed activity and a receipt never
 //! releases a second request.
@@ -51,7 +54,7 @@ use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
 use crate::assets::{AcceptedAsset, AcceptedAssets, AssetRefusal};
-use crate::config::{AssetSymbol, Config, SequencerTrust};
+use crate::config::{payer_did_valid, AssetSymbol, Config, SequencerTrust};
 use crate::server::{Request, Response, Route, RouteError, RouteTable};
 
 pub const PAYMENT_REQUIRED: &str = "PAYMENT-REQUIRED";
@@ -66,7 +69,6 @@ pub const EXACT: &str = "exact";
 /// are derived under.
 pub const PROTOCOL_VERSION: u16 = layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION;
 pub const OFFER_TIMEOUT_SECONDS: u32 = 60;
-pub const DRAW_FEE_LIMIT: u128 = 1_000_000_000_000;
 pub const DRAW_VALIDITY_MS: u64 = 60_000;
 pub const GRANT_BYTES: usize = 346;
 
@@ -81,7 +83,6 @@ const PENDING_CODE: i64 = -32001;
 const ASSET_MODULE: u16 = 1;
 const SEND_OPERATION: u8 = 5;
 const RECEIVE_OPERATION: u8 = 6;
-const MAX_DID_BYTES: usize = 255;
 const MAX_HOST_BYTES: usize = 255;
 
 /// Milliseconds since the Unix epoch, as the gate reads its clock.
@@ -201,6 +202,8 @@ pub struct DrawRequest<'a> {
     pub idempotency_key: [u8; 32],
     pub network_id: u32,
     pub now_ms: u64,
+    /// The fee limit the enclosing activity binds.
+    pub fee_limit: u128,
 }
 
 /// A signed ordinal-6 Asset activity and its id.
@@ -313,7 +316,7 @@ pub fn sign_draw(receiver: &SigningKey, draw: &DrawRequest<'_>) -> Result<Signed
             network_id: draw.network_id,
             identity_sequence: draw.identity_sequence,
             idempotency_key: draw.idempotency_key,
-            fee_limit: DRAW_FEE_LIMIT,
+            fee_limit: draw.fee_limit,
             not_before: draw.now_ms.saturating_sub(1_000),
             not_after: draw.now_ms.saturating_add(DRAW_VALIDITY_MS),
         },
@@ -638,6 +641,8 @@ pub enum GateError {
     Endpoint,
     Adapter,
     Store(io::Error),
+    Payer,
+    Conformance,
 }
 
 impl std::fmt::Display for GateError {
@@ -647,6 +652,10 @@ impl std::fmt::Display for GateError {
             Self::Endpoint => f.write_str("the gateway endpoint is not an http or https URL"),
             Self::Adapter => f.write_str("the 402LXP adapter cannot be registered"),
             Self::Store(error) => write!(f, "the payment store cannot be opened: {error}"),
+            Self::Payer => f.write_str("payment.payer_did does not derive a payer account"),
+            Self::Conformance => {
+                f.write_str("payment.conformance_suite does not hold the pinned conformance suite")
+            }
         }
     }
 }
@@ -667,6 +676,8 @@ pub struct PaymentGate {
     network: String,
     network_id: u32,
     trust: SequencerTrust,
+    payer: Option<String>,
+    draw_fee_limit: u128,
     rpc: GatewayRpc,
     store: PaymentStore,
     clock: Clock,
@@ -679,8 +690,10 @@ impl PaymentGate {
     ///
     /// # Errors
     /// Refuses the configured assets, an unusable gateway endpoint, a
-    /// payment store that cannot be opened and an adapter that cannot be
-    /// registered.
+    /// payment store that cannot be opened, an adapter that cannot be
+    /// registered, a configured payer that derives no account, and a
+    /// configured conformance suite directory whose recorded exchanges are
+    /// not the ones `conformance` pins.
     pub fn new(
         config: &Config,
         receiver: &SigningKey,
@@ -688,6 +701,24 @@ impl PaymentGate {
         clock: Clock,
     ) -> Result<Self, GateError> {
         let assets = AcceptedAssets::new(&config.assets).map_err(GateError::Assets)?;
+        let payment = &config.payment;
+        if let Some(payer) = payment.payer_did.as_deref() {
+            if !payer_did_valid(payer)
+                || assets
+                    .all()
+                    .iter()
+                    .any(|asset| account_id(&wallet_account(payer, asset)).is_none())
+            {
+                return Err(GateError::Payer);
+            }
+        }
+        if let Some(directory) = payment.conformance_suite.as_deref() {
+            if recorded_suite(directory).ok()
+                != Some((conformance.suite_digest(), conformance.vector_count()))
+            {
+                return Err(GateError::Conformance);
+            }
+        }
         let rpc = GatewayRpc::new(&config.gateway.endpoint)?;
         let store = PaymentStore::open(&config.data_dir).map_err(GateError::Store)?;
         let public_key = receiver.verifying_key().to_bytes();
@@ -713,6 +744,8 @@ impl PaymentGate {
             network: format!("layerx:{}", config.kernel_network_id),
             network_id: config.kernel_network_id,
             trust: config.gateway.sequencer,
+            payer: payment.payer_did.clone(),
+            draw_fee_limit: payment.draw_fee_limit,
             rpc,
             store,
             clock,
@@ -733,6 +766,18 @@ impl PaymentGate {
     #[must_use]
     pub const fn purpose(&self) -> [u8; 32] {
         self.receiver.purpose
+    }
+
+    /// The configured payer every draw is taken from, if any.
+    #[must_use]
+    pub fn payer(&self) -> Option<&str> {
+        self.payer.as_deref()
+    }
+
+    /// The fee limit each draw is signed with and may be charged.
+    #[must_use]
+    pub const fn draw_fee_limit(&self) -> u128 {
+        self.draw_fee_limit
     }
 
     /// The account id the receiver is paid into for `asset`.
@@ -842,7 +887,7 @@ impl PaymentGate {
     /// after a verified receipt that has released no other request. Without
     /// a payment it answers 402 with `PAYMENT-REQUIRED`.
     pub fn settle(&self, request: &Request, release: &dyn Fn(&Request) -> Response) -> Response {
-        let payer = match payer_did(request) {
+        let payer = match payer_did(request, self.payer.as_deref()) {
             Ok(payer) => payer,
             Err(response) => return response,
         };
@@ -942,23 +987,53 @@ const fn describe(route: Route) -> &'static str {
     }
 }
 
-fn payer_did(request: &Request) -> Result<Option<&str>, Response> {
-    let Some(did) = request.header(PAYER_DID) else {
-        return Ok(None);
+/// The payer a request's draws are taken from: the configured payer when
+/// there is one, which a `LAYERX-PAYER-DID` header may repeat but not
+/// contradict, and otherwise the DID the header names.
+fn payer_did<'a>(
+    request: &'a Request,
+    configured: Option<&'a str>,
+) -> Result<Option<&'a str>, Response> {
+    let named = match request.header(PAYER_DID) {
+        None => None,
+        Some(did) if payer_did_valid(did) => Some(did),
+        Some(_) => return Err(Response::error(400, "malformed_payer")),
     };
-    let valid = did.len() <= MAX_DID_BYTES
-        && did.starts_with("did:")
-        && !did.ends_with(':')
-        && !did.contains("::")
-        && !did.contains(":asset:")
-        && did
-            .bytes()
-            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b':' | b'-'));
-    if valid {
-        Ok(Some(did))
-    } else {
-        Err(Response::error(400, "malformed_payer"))
+    match (configured, named) {
+        (Some(configured), Some(named)) if configured != named => {
+            Err(Response::error(400, "payer_mismatch"))
+        }
+        (Some(configured), _) => Ok(Some(configured)),
+        (None, named) => Ok(named),
     }
+}
+
+/// The digest and rule count of the recorded gateway exchanges in
+/// `directory`: SHA-256 over every file's bytes in file name order, and the
+/// number of rules under `/endpoints/gateway/*` across them.
+fn recorded_suite(directory: &Path) -> io::Result<([u8; 32], u64)> {
+    let mut names = fs::read_dir(directory)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<io::Result<Vec<_>>>()?;
+    names.sort();
+    let mut digest = Sha256::new();
+    let mut rules = 0_u64;
+    for name in names {
+        let bytes = fs::read(name)?;
+        digest.update(&bytes);
+        let recording: Value = serde_json::from_slice(&bytes)
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+        if let Some(list) = recording
+            .pointer("/endpoints/gateway/*")
+            .and_then(Value::as_array)
+        {
+            rules = u64::try_from(list.len())
+                .ok()
+                .and_then(|count| rules.checked_add(count))
+                .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
+        }
+    }
+    Ok((digest.finalize().into(), rules))
 }
 
 fn principal(payer: Option<&str>) -> PrincipalId {
@@ -1029,6 +1104,7 @@ fn offer_record(request: &LayerXPaymentRequest) -> Value {
 
 struct Expected {
     operation: u8,
+    fee_limit: Option<u128>,
     activity_id: Option<[u8; 32]>,
     from: Option<[u8; 32]>,
     to: [u8; 32],
@@ -1135,6 +1211,7 @@ impl Plane<'_> {
                 idempotency_key: receive_key,
                 network_id: self.gate.network_id,
                 now_ms: self.now_ms,
+                fee_limit: self.gate.draw_fee_limit,
             },
         )
         .map_err(|_| "draw_refused")?;
@@ -1271,6 +1348,7 @@ impl Plane<'_> {
             } else {
                 SEND_OPERATION
             },
+            fee_limit: metered.then_some(self.gate.draw_fee_limit),
             activity_id: record.activity_id.as_deref().and_then(unhex32),
             from: record
                 .payer
@@ -1319,6 +1397,12 @@ impl Plane<'_> {
         {
             return Err("receipt_mismatch");
         }
+        if expected
+            .fee_limit
+            .is_some_and(|limit| facts.fee_charged() > limit)
+        {
+            return Err("draw_fee_limit_exceeded");
+        }
         let batch = AuthorizedBatch::new(
             facts.batch_id(),
             facts.asset(),
@@ -1342,6 +1426,7 @@ impl Plane<'_> {
         let key = request.idempotency_key;
         let expected = Expected {
             operation: SEND_OPERATION,
+            fee_limit: None,
             activity_id: None,
             from: None,
             to: pay_to,
