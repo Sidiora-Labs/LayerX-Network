@@ -578,7 +578,11 @@ reqs = ["3.1","3.2"]
 
 [task.2.11]
 title = "Route bridge governance proposals through the application"
-status = "pending"
+status = "done"
+revision = "6ef8021e3643e91e8909ffcb60ca964ed50bf9cc"
+command = "timeout 20m sh -c 'go test -count=1 ./modules/layerxbridge/... ./bridge/deploy/proposals/... && go test -count=1 -run Bridge ./node/'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.9"]
 do_1 = "Give the bridge module a governance proposal content type the way modules/evm and modules/tokenfactory do: define it beside the messages in api/layerxbridge (a proposal carrying the RegisterChain, SetAttestors, SetCap, Pause and Unpause messages task 2.9 generated), generate it into modules/layerxbridge/types, register it as governance content in codec.go, and write modules/layerxbridge/handler.go with NewProposalHandler executing each carried message through the keeper with the governance authority (observation 2.9.1)."

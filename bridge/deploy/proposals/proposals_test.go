@@ -396,6 +396,7 @@ func TestChainConfigurationRefusals(t *testing.T) {
 		{"placeholder-authority.json", fieldAuthority, "placeholder governance authority"},
 		{"zero-authority.json", fieldAuthority, "zero governance authority"},
 		{"empty-authority.json", fieldAuthority, "empty governance authority"},
+		{"non-governance-authority.json", fieldAuthority, "not the governance module account"},
 		{"placeholder-owner.json", fieldOwner, "placeholder address"},
 		{"zero-owner.json", fieldOwner, "zero address"},
 		{"placeholder-solana-owner.json", fieldOwner, "placeholder key"},
@@ -862,6 +863,235 @@ func TestRunWritesTheReadbackBesideTheBodies(t *testing.T) {
 		}
 		if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
 			t.Fatalf("the refused run with only %v left %s behind", partial, target)
+		}
+	}
+}
+
+const bridgeProposalTypeURL = "/paxprotocol.paxchain.layerxbridge.BridgeProposal"
+
+// proposalEnvelope is the top level of an emitted proposal: the content's type
+// URL, its title and description, and every carried message as an Any.
+type proposalEnvelope struct {
+	Type        string            `json:"@type"`
+	Title       string            `json:"title"`
+	Description string            `json:"description"`
+	Messages    []json.RawMessage `json:"messages"`
+}
+
+// decodeProposalStrict decodes one emitted proposal back into the module's
+// proposal content and its messages, and requires every carried message to
+// read back through DecodeBody as the body of the same message would.
+func decodeProposalStrict(t *testing.T, file File) []sdk.Msg {
+	t.Helper()
+	envelope := decodeJSONStrict[proposalEnvelope](t, file.Name, file.Body)
+	if envelope.Type != bridgeProposalTypeURL {
+		t.Fatalf("%s carries the type URL %q, want %q", file.Name, envelope.Type, bridgeProposalTypeURL)
+	}
+	if strings.TrimSpace(envelope.Title) == "" || strings.TrimSpace(envelope.Description) == "" {
+		t.Fatalf("%s carries no title or no description", file.Name)
+	}
+	proposal, err := DecodeProposal(file.Body)
+	if err != nil {
+		t.Fatalf("decoding %s back into the proposal content: %v\n%s", file.Name, err, file.Body)
+	}
+	if proposal.Title != envelope.Title || proposal.Description != envelope.Description {
+		t.Fatalf("%s decodes to another title or description", file.Name)
+	}
+	msgs, err := proposal.GetMessages()
+	if err != nil {
+		t.Fatalf("%s: %v", file.Name, err)
+	}
+	if len(msgs) != len(envelope.Messages) {
+		t.Fatalf("%s carries %d messages and decodes to %d", file.Name, len(envelope.Messages), len(msgs))
+	}
+	for i, raw := range envelope.Messages {
+		body, err := DecodeBody(raw)
+		if err != nil {
+			t.Fatalf("%s message %d does not read back as a body: %v", file.Name, i, err)
+		}
+		if sdk.MsgTypeURL(body) != sdk.MsgTypeURL(msgs[i]) {
+			t.Fatalf("%s message %d is %s as a body and %s in the proposal", file.Name, i, sdk.MsgTypeURL(body), sdk.MsgTypeURL(msgs[i]))
+		}
+	}
+	return msgs
+}
+
+func proposalFiles(t *testing.T, bundle Bundle) []File {
+	t.Helper()
+	files, err := bundle.ProposalFiles()
+	if err != nil {
+		t.Fatalf("marshalling the proposals: %v", err)
+	}
+	return files
+}
+
+func sameCarried(t *testing.T, name string, got sdk.Msg, want codec.ProtoMarshaler) {
+	t.Helper()
+	carried, ok := got.(codec.ProtoMarshaler)
+	if !ok {
+		t.Fatalf("%s carries a %T", name, got)
+	}
+	sameMessage(t, name, want, carried)
+}
+
+func TestEthereumProposalCarriesEveryBodyFieldForField(t *testing.T) {
+	bundle := generate(t, ethereumPath)
+	files := proposalFiles(t, bundle)
+	if len(files) != 1 || files[0].Name != OpenChainProposalFile {
+		t.Fatalf("ethereum emitted %d proposals, want only %s", len(files), OpenChainProposalFile)
+	}
+	msgs := decodeProposalStrict(t, files[0])
+	if len(msgs) != 2+len(bundle.Caps) {
+		t.Fatalf("the proposal carries %d messages for %d caps", len(msgs), len(bundle.Caps))
+	}
+	sameCarried(t, "the registration", msgs[0], &bundle.Register)
+	sameCarried(t, "the attestor set", msgs[1], &bundle.Attestors)
+	for i := range bundle.Caps {
+		sameCarried(t, fmt.Sprintf("cap %d", i), msgs[2+i], &bundle.Caps[i])
+	}
+	if first := msgs[2].(*types.MsgSetCap); first.Asset != (types.Address20{}) {
+		t.Fatalf("the first cap the proposal carries is for %s, want the native coin", first.Asset.Hex())
+	}
+	for i, msg := range msgs {
+		if signers := msg.GetSigners(); len(signers) != 1 || signers[0].String() != governanceAuthority {
+			t.Fatalf("message %d is signed by %v, want the governance module account", i, signers)
+		}
+	}
+}
+
+func TestSolanaProposalsSetSidiorasCapApart(t *testing.T) {
+	bundle := generate(t, solanaPath)
+	files := proposalFiles(t, bundle)
+	if len(files) != 2 || files[0].Name != OpenChainProposalFile || files[1].Name != SidioraCapProposalFile {
+		t.Fatalf("solana emitted %d proposals, want %s and %s", len(files), OpenChainProposalFile, SidioraCapProposalFile)
+	}
+	open := decodeProposalStrict(t, files[0])
+	if len(open) != 3 {
+		t.Fatalf("the opening proposal carries %d messages, want the registration, the attestor set and the wrapped SOL cap", len(open))
+	}
+	sameCarried(t, "the registration", open[0], &bundle.Register)
+	sameCarried(t, "the attestor set", open[1], &bundle.Attestors)
+	sameCarried(t, "the wrapped SOL cap", open[2], &bundle.Caps[0])
+	for i, msg := range open {
+		if capMsg, ok := msg.(*types.MsgSetCap); ok && capMsg.Asset == SidioraAssetID() {
+			t.Fatalf("the opening proposal carries Sidiora's cap as message %d", i)
+		}
+	}
+	sidiora := decodeProposalStrict(t, files[1])
+	if len(sidiora) != 1 {
+		t.Fatalf("the Sidiora proposal carries %d messages, want its cap alone", len(sidiora))
+	}
+	sameCarried(t, "Sidiora's cap", sidiora[0], &bundle.Caps[1])
+	if !strings.Contains(string(files[1].Body), types.SidioraDenom()) {
+		t.Fatalf("the Sidiora proposal does not name the usid denom %s it waits for", types.SidioraDenom())
+	}
+}
+
+func TestProposalsTheHandlerWouldRefuseAreRefused(t *testing.T) {
+	files := proposalFiles(t, generate(t, ethereumPath))
+	body := files[0].Body
+	bridgeAccount := types.ModuleAddress().String()
+	for _, testCase := range []struct {
+		name string
+		from string
+		to   string
+	}{
+		{"an unknown proposal field", `"title":`, `"surplus": true, "title":`},
+		{"an unknown message field", `"chain_id":`, `"surplus": true, "chain_id":`},
+		{"another authority", `"authority": "` + governanceAuthority + `"`, `"authority": "` + bridgeAccount + `"`},
+		{"a message of another module", `"@type": "/paxprotocol.paxchain.layerxbridge.MsgSetAttestors"`, `"@type": "/cosmos.gov.v1beta1.TextProposal"`},
+		{"another proposal type", `"@type": "` + bridgeProposalTypeURL + `"`, `"@type": "/cosmos.gov.v1beta1.TextProposal"`},
+		{"an empty title", `"title": "Open ethereum on the Paxeer X Network bridge"`, `"title": ""`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if !bytes.Contains(body, []byte(testCase.from)) {
+				t.Fatalf("the proposal carries no %s\n%s", testCase.from, body)
+			}
+			altered := bytes.Replace(body, []byte(testCase.from), []byte(testCase.to), 1)
+			if _, err := DecodeProposal(altered); err == nil {
+				t.Fatalf("a proposal with %s was decoded\n%s", testCase.name, altered)
+			}
+		})
+	}
+}
+
+func TestRunWritesTheProposalsApartFromTheBodies(t *testing.T) {
+	root := t.TempDir()
+	out := filepath.Join(root, "solana")
+	proposalsDir := filepath.Join(root, "solana-proposals")
+	var report bytes.Buffer
+	if err := Run([]string{"-manifest", testManifest, "-proposals", proposalsDir, solanaPath, out}, &report); err != nil {
+		t.Fatalf("the command refused a configuration it should accept: %v", err)
+	}
+	bundle := generate(t, solanaPath)
+	bodies, err := bundle.Files()
+	if err != nil {
+		t.Fatalf("marshalling the bundle: %v", err)
+	}
+	for dir, want := range map[string][]File{out: bodies, proposalsDir: proposalFiles(t, bundle)} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("reading %s: %v", dir, err)
+		}
+		if len(entries) != len(want) {
+			t.Fatalf("the command wrote %d files into %s, want %d", len(entries), dir, len(want))
+		}
+		for _, file := range want {
+			path := filepath.Join(dir, file.Name)
+			written, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("reading %s: %v", path, err)
+			}
+			if !bytes.Equal(written, file.Body) {
+				t.Fatalf("%s on disk is not what the generator built", path)
+			}
+			if !strings.Contains(report.String(), path) {
+				t.Fatalf("the command did not report %s", path)
+			}
+		}
+	}
+}
+
+func TestRunWritesNoProposalsOrBodiesWhenTheProposalsCannotBeWritten(t *testing.T) {
+	root := t.TempDir()
+	out := filepath.Join(root, "solana")
+	var report bytes.Buffer
+	if err := Run([]string{"-manifest", testManifest, "-proposals", out, solanaPath, out}, &report); err == nil {
+		t.Fatal("the command wrote the proposals into the bodies' directory")
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("the refused run left %s behind (%v)", out, err)
+	}
+
+	proposalsDir := filepath.Join(root, "proposals")
+	if err := os.Mkdir(proposalsDir, 0o755); err != nil {
+		t.Fatalf("creating the proposals directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(proposalsDir, OpenChainProposalFile), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("writing a stale proposal: %v", err)
+	}
+	if err := Run([]string{"-manifest", testManifest, "-proposals", proposalsDir, solanaPath, out}, &report); err == nil {
+		t.Fatal("the command wrote proposals beside a proposal of an earlier bundle")
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("the refused run wrote the bodies to %s (%v)", out, err)
+	}
+	entries, err := os.ReadDir(proposalsDir)
+	if err != nil {
+		t.Fatalf("reading the proposals directory: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("the refused run changed the proposals directory: %d entries", len(entries))
+	}
+
+	err = Run([]string{"-manifest", testManifest, "-proposals", filepath.Join(root, "refused"),
+		filepath.Join("testdata", "refuse", "non-governance-authority.json"), filepath.Join(root, "refused-bodies")}, &report)
+	if refusal := fieldError(t, err); refusal.Field != fieldAuthority {
+		t.Fatalf("the refusal names the field %q, want %q", refusal.Field, fieldAuthority)
+	}
+	for _, name := range []string{"refused", "refused-bodies"} {
+		if _, err := os.Stat(filepath.Join(root, name)); !os.IsNotExist(err) {
+			t.Fatalf("the refused run left %s behind (%v)", name, err)
 		}
 	}
 }

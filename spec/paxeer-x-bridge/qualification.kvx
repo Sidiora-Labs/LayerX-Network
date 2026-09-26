@@ -204,6 +204,7 @@ symbol = "govRouter"
 observed = "The chain's governance module executes only proposal content routed through govRouter, which has no layerxbridge route, so a body whose authority is the gov module account is routed by the Msg service but no submit-proposal can carry it; a body signed by an account set as the bridge authority executes today."
 assumption = "Carrying the bodies through submit-proposal needs a governance route for the module in node/app.go, which this task does not own; the bodies already carry the type URLs such a route would read."
 severity = "blocker"
+closed = "Task 2.11 added BridgeProposal from api/layerxbridge/proposal.proto as governance content, NewProposalHandler executing each carried message through the Msg service for the governance module account, the layerxbridge route in govRouter and the generator's -proposals output; the verify_cmd passed at revision 6ef8021e3643e91e8909ffcb60ca964ed50bf9cc."
 
 [observation.2.6.1]
 task = "2.6"
@@ -228,3 +229,11 @@ symbol = "cargo-build-sbf"
 observed = "The dry run built the admin client, started solana-test-validator on the loopback interface with the run's Sidiora mint and stopped at deploy-solana-program.sh, whose cargo-build-sbf (platform tools cargo 1.84.0) failed on zeroize_derive 1.5.0 with 'feature edition2024 is required', so no program was deployed and no fixture was recorded."
 assumption = "The environment-level blocker of observation 1.2.1; the dry run names it and stops, and bridge/deploy/tests/fixtures/solana_dry_run.json is written by the first --record run on platform tools whose cargo accepts edition 2024."
 severity = "blocker"
+
+[observation.2.11.1]
+task = "2.11"
+file = "bridge/README.md"
+symbol = "-proposals"
+observed = "Section 6 of the runbook still says the module registers no message service and no command carries the bodies, and does not name the generator's -proposals output, whose 04-proposal-open-chain.json and, for Solana, 05-proposal-sidiora-cap.json are the content a submit-proposal transaction carries."
+assumption = "The runbook belongs to the documentation task; the proposals are written apart from the bodies because checklist.sh counts every JSON file in the bodies directory, and Sidiora's cap travels in its own proposal so it is submitted only after the usid pair reads back."
+severity = "note"

@@ -886,7 +886,8 @@ func New(
 		AddRoute(ibcclienttypes.RouterKey, ibcclient.NewClientProposalHandler(app.IBCKeeper.ClientKeeper)).
 		AddRoute(minttypes.RouterKey, mint.NewProposalHandler(app.MintKeeper)).
 		AddRoute(tokenfactorytypes.RouterKey, tokenfactorymodule.NewProposalHandler(app.TokenFactoryKeeper)).
-		AddRoute(evmtypes.RouterKey, evm.NewProposalHandler(app.EvmKeeper))
+		AddRoute(evmtypes.RouterKey, evm.NewProposalHandler(app.EvmKeeper)).
+		AddRoute(layerxbridgetypes.RouterKey, layerxbridgemodule.NewProposalHandler(app.LayerXBridgeKeeper))
 	if len(enabledProposals) != 0 {
 		govRouter.AddRoute(wasm.RouterKey, wasm.NewWasmProposalHandler(app.WasmKeeper, enabledProposals))
 	}

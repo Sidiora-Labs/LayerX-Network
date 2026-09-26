@@ -10,20 +10,24 @@ import (
 	cdctypes "github.com/sidiora-labs/paxeer-network/sdk/codec/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	"github.com/sidiora-labs/paxeer-network/sdk/types/msgservice"
+	govtypes "github.com/sidiora-labs/paxeer-network/sdk/x/gov/types"
 )
 
-// RegisterCodec registers the governance messages on the legacy amino codec
-// that signs them in legacy amino JSON mode.
+// RegisterCodec registers the governance messages and the proposal content
+// that carries them on the legacy amino codec that signs them in legacy amino
+// JSON mode.
 func RegisterCodec(cdc *codec.LegacyAmino) {
 	cdc.RegisterConcrete(&MsgRegisterChain{}, "layerxbridge/MsgRegisterChain", nil)
 	cdc.RegisterConcrete(&MsgSetAttestors{}, "layerxbridge/MsgSetAttestors", nil)
 	cdc.RegisterConcrete(&MsgSetCap{}, "layerxbridge/MsgSetCap", nil)
 	cdc.RegisterConcrete(&MsgPause{}, "layerxbridge/MsgPause", nil)
 	cdc.RegisterConcrete(&MsgUnpause{}, "layerxbridge/MsgUnpause", nil)
+	cdc.RegisterConcrete(&BridgeProposal{}, "layerxbridge/BridgeProposal", nil)
 }
 
 // RegisterInterfaces registers every governance message as an sdk.Msg under
-// its type URL and the Msg service that executes them.
+// its type URL, the Msg service that executes them and BridgeProposal as the
+// governance proposal content that carries them.
 func RegisterInterfaces(registry cdctypes.InterfaceRegistry) {
 	registry.RegisterImplementations((*sdk.Msg)(nil),
 		&MsgRegisterChain{},
@@ -32,6 +36,7 @@ func RegisterInterfaces(registry cdctypes.InterfaceRegistry) {
 		&MsgPause{},
 		&MsgUnpause{},
 	)
+	registry.RegisterImplementations((*govtypes.Content)(nil), &BridgeProposal{})
 	msgservice.RegisterMsgServiceDesc(registry, &_Msg_serviceDesc)
 }
 

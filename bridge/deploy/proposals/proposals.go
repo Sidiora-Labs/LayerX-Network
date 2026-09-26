@@ -6,7 +6,10 @@
 // modules/layerxbridge/types, which this package imports and never modifies,
 // each written as the protobuf JSON of a message packed under its type URL -
 // the form a governance proposal or a transaction carries its messages in - so
-// a body cannot drift from what the keeper accepts. Nothing here reaches a
+// a body cannot drift from what the keeper accepts. Given -proposals it also
+// writes the module's governance proposal content, BridgeProposal, carrying
+// the same messages in submission order, which the chain's submit-proposal
+// transaction carries as its content as it stands. Nothing here reaches a
 // network: the generator reads committed files and writes JSON.
 package proposals
 
@@ -28,6 +31,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/sdk/codec"
 	cdctypes "github.com/sidiora-labs/paxeer-network/sdk/codec/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	govtypes "github.com/sidiora-labs/paxeer-network/sdk/x/gov/types"
 )
 
 const (
@@ -53,6 +57,15 @@ const (
 	registerChainFile = "01-register-chain.json"
 	setAttestorsFile  = "02-set-attestors.json"
 	setCapFileFormat  = "03-set-cap-%02d-%s.json"
+
+	// OpenChainProposalFile is the proposal that opens the chain: its
+	// registration, the attestor set and every cap but Sidiora's.
+	OpenChainProposalFile = "04-proposal-open-chain.json"
+
+	// SidioraCapProposalFile is the proposal that carries Sidiora's cap alone,
+	// submitted only once the Paxeer side reads the Sidiora pair back against
+	// the usid denom.
+	SidioraCapProposalFile = "05-proposal-sidiora-cap.json"
 
 	addressHexLength = 2 + 2*len(types.Address20{})
 
@@ -90,6 +103,7 @@ var messageCodec = newMessageCodec()
 
 func newMessageCodec() *codec.ProtoCodec {
 	registry := cdctypes.NewInterfaceRegistry()
+	govtypes.RegisterInterfaces(registry)
 	types.RegisterInterfaces(registry)
 	return codec.NewProtoCodec(registry)
 }
@@ -412,6 +426,74 @@ func (b Bundle) Files() ([]File, error) {
 	return files, nil
 }
 
+// ProposalFiles marshals every proposal of the bundle, in submission order.
+func (b Bundle) ProposalFiles() ([]File, error) {
+	proposals, err := b.Proposals()
+	if err != nil {
+		return nil, err
+	}
+	files := make([]File, 0, len(proposals))
+	for _, proposal := range proposals {
+		body, err := marshalProposal(proposal.Content)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, File{Name: proposal.Name, Body: body})
+	}
+	return files, nil
+}
+
+// Proposal is one governance proposal of a bundle: the name it is written
+// under and the module's proposal content.
+type Proposal struct {
+	Name    string
+	Content *types.BridgeProposal
+}
+
+// Proposals builds the bundle's governance proposals in submission order. The
+// first opens the chain: its registration, the attestor set and every cap in
+// configuration order, the native coin's first. Sidiora's cap is never part of
+// it. A cap for a pair the Paxeer side has not recorded registers the pair
+// under the bridge's generic denom, so Sidiora's cap travels in a second
+// proposal of its own, submitted once the pair reads back against usid.
+func (b Bundle) Proposals() ([]Proposal, error) {
+	open := []sdk.Msg{&b.Register, &b.Attestors}
+	var sidiora *types.MsgSetCap
+	for i := range b.Caps {
+		capMsg := &b.Caps[i]
+		if capMsg.Asset == sidioraAssetID {
+			sidiora = capMsg
+			continue
+		}
+		open = append(open, capMsg)
+	}
+	set := b.Attestors.Set
+	chain := b.Register.Chain
+	content, err := types.NewBridgeProposal(
+		fmt.Sprintf("Open %s on the Paxeer X Network bridge", b.Chain),
+		fmt.Sprintf("Registers %s as chain %d with the vault %s and a finality depth of %d, installs the shared "+
+			"attestor set of %d attestors with a threshold of %d, and sets the caps of %d assets, the native coin first.",
+			b.Chain, chain.ChainID, chain.Vault.Hex(), chain.FinalityDepth, len(set.Attestors), set.Threshold, len(open)-2),
+		open...)
+	if err != nil {
+		return nil, err
+	}
+	proposals := []Proposal{{Name: OpenChainProposalFile, Content: content}}
+	if sidiora == nil {
+		return proposals, nil
+	}
+	content, err = types.NewBridgeProposal(
+		fmt.Sprintf("Set Sidiora's %s bridge cap", b.Chain),
+		fmt.Sprintf("Sets the cap of Sidiora, asset id %s on chain %d, to %s per transaction and %s in flight. "+
+			"Submitted only once the Paxeer side reads this pair back against the usid denom %s.",
+			sidiora.Asset.Hex(), sidiora.ChainID, sidiora.MaxPerTx.String(), sidiora.MaxInFlight.String(), types.SidioraDenom()),
+		sidiora)
+	if err != nil {
+		return nil, err
+	}
+	return append(proposals, Proposal{Name: SidioraCapProposalFile, Content: content}), nil
+}
+
 // Write writes every body into dir, returning the paths it wrote in
 // submission order. It refuses a dir that already holds anything, so no body
 // of an earlier bundle can sit beside this one, and it writes the bodies into
@@ -422,12 +504,34 @@ func (b Bundle) Write(dir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	dir = filepath.Clean(dir)
+	return writeFiles(dir, files)
+}
+
+// WriteProposals writes every proposal into dir the way Write writes the
+// bodies: into an empty or absent directory, all at once or not at all.
+func (b Bundle) WriteProposals(dir string) ([]string, error) {
+	files, err := b.ProposalFiles()
+	if err != nil {
+		return nil, err
+	}
+	return writeFiles(dir, files)
+}
+
+// requireEmpty refuses a directory that already holds anything.
+func requireEmpty(dir string) error {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case err == nil && len(entries) > 0:
-		return nil, fmt.Errorf("%s: the output directory is not empty", dir)
+		return fmt.Errorf("%s: the output directory is not empty", dir)
 	case err != nil && !os.IsNotExist(err):
+		return err
+	}
+	return nil
+}
+
+func writeFiles(dir string, files []File) ([]string, error) {
+	dir = filepath.Clean(dir)
+	if err := requireEmpty(dir); err != nil {
 		return nil, err
 	}
 	parent := filepath.Dir(dir)
@@ -473,6 +577,11 @@ func (b Bundle) Write(dir string) ([]string, error) {
 // values no configuration carries - the governance authority and the deployed
 // vault - arrive as arguments. -readback then also writes the values the
 // deployed chain and the Paxeer side must read back once the bodies execute.
+//
+// Given -proposals, it also writes the bundle's governance proposals into that
+// directory: the proposal that opens the chain and, where the chain carries
+// Sidiora, the proposal that sets Sidiora's cap alone. Each is the content a
+// submit-proposal transaction carries as it stands.
 func Run(args []string, report io.Writer) error {
 	flags := flag.NewFlagSet(CommandName, flag.ContinueOnError)
 	flags.SetOutput(report)
@@ -484,8 +593,10 @@ func Run(args []string, report io.Writer) error {
 		"deployed vault address, on Solana the vault-authority handle; reads the configuration through bridge/deploy/chainconfig")
 	readbackPath := flags.String("readback", "",
 		"path the read-back expectation is written to; needs -authority and -vault")
+	proposalsPath := flags.String("proposals", "",
+		"directory the governance proposals are written to, apart from the bodies")
 	flags.Usage = func() {
-		fmt.Fprintf(report, "usage: %s [-manifest <path>] [-authority <bech32> -vault <address> [-readback <path>]] <chain-configuration.json> <output-directory>\n", CommandName)
+		fmt.Fprintf(report, "usage: %s [-manifest <path>] [-authority <bech32> -vault <address> [-readback <path>]] [-proposals <directory>] <chain-configuration.json> <output-directory>\n", CommandName)
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -526,6 +637,19 @@ func Run(args []string, report io.Writer) error {
 	if err != nil {
 		return err
 	}
+	var proposalsDir string
+	if *proposalsPath != "" {
+		proposalsDir = filepath.Clean(*proposalsPath)
+		if proposalsDir == filepath.Clean(flags.Arg(1)) {
+			return fmt.Errorf("%s: the proposals are written apart from the bodies, not into %s", CommandName, proposalsDir)
+		}
+		if _, err := bundle.ProposalFiles(); err != nil {
+			return err
+		}
+		if err := requireEmpty(proposalsDir); err != nil {
+			return err
+		}
+	}
 	if *readbackPath != "" {
 		readback, err := ReadbackOf(canonCfg, bundle)
 		if err != nil {
@@ -544,6 +668,13 @@ func Run(args []string, report io.Writer) error {
 	written, err := bundle.Write(flags.Arg(1))
 	if err != nil {
 		return err
+	}
+	if proposalsDir != "" {
+		proposalPaths, err := bundle.WriteProposals(proposalsDir)
+		if err != nil {
+			return err
+		}
+		written = append(written, proposalPaths...)
 	}
 	if readbackF != "" {
 		if err := writeAtomically(readbackF, expected); err != nil {
@@ -811,6 +942,44 @@ func marshalBody(msg sdk.Msg) ([]byte, error) {
 	return indented.Bytes(), nil
 }
 
+// marshalProposal writes a proposal as the protobuf JSON of the Any a
+// submit-proposal transaction carries as its content: the proposal's type URL
+// under "@type", its title and description, and every message as an Any of its
+// own.
+func marshalProposal(content *types.BridgeProposal) ([]byte, error) {
+	if err := content.ValidateBasic(); err != nil {
+		return nil, err
+	}
+	raw, err := messageCodec.MarshalInterfaceJSON(content)
+	if err != nil {
+		return nil, err
+	}
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, raw, "", "  "); err != nil {
+		return nil, err
+	}
+	indented.WriteByte('\n')
+	return indented.Bytes(), nil
+}
+
+// DecodeProposal reads one proposal back into the module's proposal content,
+// resolving every message it carries under its type URL, with unknown fields
+// forbidden, and refuses a proposal the handler would refuse.
+func DecodeProposal(body []byte) (*types.BridgeProposal, error) {
+	var content govtypes.Content
+	if err := messageCodec.UnmarshalInterfaceJSON(body, &content); err != nil {
+		return nil, err
+	}
+	proposal, ok := content.(*types.BridgeProposal)
+	if !ok {
+		return nil, fmt.Errorf("the proposal is a %T, not a %T", content, proposal)
+	}
+	if err := proposal.ValidateBasic(); err != nil {
+		return nil, err
+	}
+	return proposal, nil
+}
+
 // DecodeBody reads one body back into the module message its type URL names,
 // with unknown fields forbidden.
 func DecodeBody(body []byte) (sdk.Msg, error) {
@@ -917,7 +1086,9 @@ func liveKey(file, field, text string) ([]byte, error) {
 }
 
 // liveAuthority parses the governance authority, the only account the keeper
-// executes these messages for.
+// executes these messages for. The bodies travel in governance proposals, and
+// a proposal executes only for the governance module account, so any other
+// account is refused.
 func liveAuthority(file, field, text string) (string, error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
@@ -932,6 +1103,10 @@ func liveAuthority(file, field, text string) (string, error) {
 	}
 	if isPlaceholder(account) {
 		return "", refuse(file, field, "placeholder governance authority %q", trimmed)
+	}
+	if governance := types.DefaultAuthority(); trimmed != governance {
+		return "", refuse(file, field, "%q is not the governance module account %s, the authority a governance proposal executes with",
+			trimmed, governance)
 	}
 	return trimmed, nil
 }
