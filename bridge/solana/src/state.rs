@@ -20,12 +20,14 @@ pub const CONFIG_MAGIC: &[u8; 8] = b"PXBRCFG0";
 pub const ASSET_MAGIC: &[u8; 8] = b"PXBRAST0";
 pub const RECEIPT_MAGIC: &[u8; 8] = b"PXBRRCP0";
 pub const RECIPIENT_MAGIC: &[u8; 8] = b"PXBRREC0";
+pub const NULLIFIER_MAGIC: &[u8; 8] = b"PXBRNUL0";
 
 pub const CONFIG_SEED: &[u8] = b"config";
 pub const VAULT_SEED: &[u8] = b"vault-authority";
 pub const ASSET_SEED: &[u8] = b"asset";
 pub const RECEIPT_SEED: &[u8] = b"receipt";
 pub const RECIPIENT_SEED: &[u8] = b"recipient";
+pub const NULLIFIER_SEED: &[u8] = b"nullifier";
 
 /// The most attestors a config record can hold.
 pub const MAX_ATTESTORS: usize = 64;
@@ -39,6 +41,8 @@ pub const ASSET_BYTES: usize = 89;
 pub const RECEIPT_BYTES: usize = 130;
 /// The exact size of a recipient record.
 pub const RECIPIENT_BYTES: usize = 62;
+/// The exact size of a release-nullifier record.
+pub const NULLIFIER_BYTES: usize = 130;
 
 /// The config PDA: who owns the program, who may accept ownership next, whether
 /// custody is paused, the shared attestor set with its threshold, the deposit
@@ -248,6 +252,21 @@ impl Asset {
         }
         Ok(outstanding)
     }
+
+    /// Admit a release of `amount` against the per-transaction cap and the
+    /// balance held in custody, returning the outstanding balance the release
+    /// leaves behind. Nothing leaves custody that a deposit did not bring in.
+    pub fn withdraw(&self, amount: u64) -> Result<u64, ProgramError> {
+        if amount == 0 {
+            return Err(BridgeError::Bounds.into());
+        }
+        if amount > self.per_tx_cap {
+            return Err(BridgeError::Cap.into());
+        }
+        self.outstanding
+            .checked_sub(amount)
+            .ok_or(BridgeError::Outstanding.into())
+    }
 }
 
 /// A deposit-receipt PDA, one per deposit nonce. Its existence is the record: a
@@ -342,6 +361,64 @@ impl RecipientRecord {
     pub fn store(&self, account: &AccountInfo<'_>) -> Result<(), ProgramError> {
         self.encode(&mut account.try_borrow_mut_data()?)
     }
+}
+
+/// A release-nullifier PDA, one per Paxeer burn: seeded by the keccak256 of
+/// the burn's paxeerTxHash and paxeerNonce, created by the release that pays it
+/// out. Its existence is the record: a replayed release fails because creating
+/// the same nullifier a second time is refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NullifierRecord {
+    pub paxeer_tx_hash: [u8; 32],
+    pub paxeer_nonce: u64,
+    pub mint: Pubkey,
+    pub recipient: Pubkey,
+    pub amount: u64,
+    pub slot: u64,
+}
+
+impl NullifierRecord {
+    pub fn decode(bytes: &[u8]) -> Result<Self, ProgramError> {
+        if bytes.len() != NULLIFIER_BYTES
+            || &bytes[..8] != NULLIFIER_MAGIC
+            || read_u16(&bytes[8..10])? != LAYOUT_VERSION
+        {
+            return Err(BridgeError::Conflict.into());
+        }
+        Ok(Self {
+            paxeer_tx_hash: read_recipient(&bytes[10..42])?,
+            paxeer_nonce: read_u64(&bytes[42..50])?,
+            mint: read_pubkey(&bytes[50..82])?,
+            recipient: read_pubkey(&bytes[82..114])?,
+            amount: read_u64(&bytes[114..122])?,
+            slot: read_u64(&bytes[122..130])?,
+        })
+    }
+
+    pub fn encode(&self, bytes: &mut [u8]) -> Result<(), ProgramError> {
+        if bytes.len() != NULLIFIER_BYTES {
+            return Err(BridgeError::Conflict.into());
+        }
+        bytes[..8].copy_from_slice(NULLIFIER_MAGIC);
+        bytes[8..10].copy_from_slice(&LAYOUT_VERSION.to_be_bytes());
+        bytes[10..42].copy_from_slice(&self.paxeer_tx_hash);
+        bytes[42..50].copy_from_slice(&self.paxeer_nonce.to_be_bytes());
+        bytes[50..82].copy_from_slice(self.mint.as_ref());
+        bytes[82..114].copy_from_slice(self.recipient.as_ref());
+        bytes[114..122].copy_from_slice(&self.amount.to_be_bytes());
+        bytes[122..130].copy_from_slice(&self.slot.to_be_bytes());
+        Ok(())
+    }
+
+    pub fn store(&self, account: &AccountInfo<'_>) -> Result<(), ProgramError> {
+        self.encode(&mut account.try_borrow_mut_data()?)
+    }
+}
+
+/// The nullifier PDA of a release whose nullifier hash is `nullifier` and its
+/// bump.
+pub fn find_nullifier_address(program_id: &Pubkey, nullifier: &[u8; 32]) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[NULLIFIER_SEED, nullifier], program_id)
 }
 
 /// The recipient PDA of `handle` and its bump.

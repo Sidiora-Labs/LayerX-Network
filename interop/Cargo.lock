@@ -1052,6 +1052,7 @@ dependencies = [
 name = "layerx-bridge-relayer"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "k256",
  "layerx-crypto",
  "layerx-mirror",

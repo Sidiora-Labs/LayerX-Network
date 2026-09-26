@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Stands for the pinned cargo-build-sbf in bridge/deploy/tests/deploy-scripts-check.sh:
+# it refuses any manifest but the custody program's and writes one shared object
+# named as ../cluster.json records into the output directory, so the deployment
+# script's build, deploy and read-back comparison run against a single file.
+set -euo pipefail
+
+FIXTURES=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+refuse() {
+    printf 'replayed cargo-build-sbf: %s\n' "$*" >&2
+    exit 64
+}
+
+if [ $# -ne 4 ] || [ "$1" != --manifest-path ] || [ "$3" != --sbf-out-dir ]; then
+    refuse "no recorded answer for: $*"
+fi
+[ -r "$2" ] || refuse "$2 is not readable"
+grep -qx 'name = "paxeer-x-bridge-solana-program"' "$2" || refuse "$2 is not the custody program's manifest"
+mkdir -p "$4"
+sha256sum "$2" > "$4/$(jq -r .program_so "$FIXTURES/cluster.json")"

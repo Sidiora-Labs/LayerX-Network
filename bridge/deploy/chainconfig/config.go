@@ -23,7 +23,6 @@
 package chainconfig
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,7 +32,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"golang.org/x/crypto/sha3"
+	"github.com/sidiora-labs/paxeer-network/bridge/vectors"
 )
 
 // Kind is the kind of chain a configuration describes. The kind decides which
@@ -274,44 +273,20 @@ func LoadChain(chainsRoot, name string) (*ChainConfig, error) {
 // fill in.
 func IsPlaceholder(value string) bool { return strings.HasPrefix(value, PlaceholderPrefix) }
 
-// SolanaHandle derives the 20-byte handle a 32-byte Solana key enters the
-// attestation digests as: the last 20 bytes of keccak256 of the key.
+// SolanaHandle is the 20-byte handle a 32-byte Solana key enters the
+// attestation digests as. The derivation lives only in bridge/vectors; this is
+// the configuration's reading of it, rendered the way an asset id is written.
 func SolanaHandle(key string) (string, error) {
-	raw, err := DecodeBase58(key)
+	raw, err := vectors.Key(key)
 	if err != nil {
 		return "", err
 	}
-	if len(raw) != 32 {
-		return "", fmt.Errorf("a Solana key is 32 bytes, %q decodes to %d", key, len(raw))
-	}
-	digest := sha3.NewLegacyKeccak256()
-	digest.Write(raw)
-	sum := digest.Sum(nil)
-	return "0x" + hex.EncodeToString(sum[12:]), nil
+	return vectors.Handle(raw).Hex(), nil
 }
 
-const base58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-
-// DecodeBase58 decodes a base58 Solana key into its bytes, refusing an empty
-// string and any character outside the Bitcoin base58 alphabet Solana uses.
-func DecodeBase58(value string) ([]byte, error) {
-	if value == "" {
-		return nil, errors.New("a base58 key is not the empty string")
-	}
-	number := new(big.Int)
-	radix := big.NewInt(58)
-	for index, character := range value {
-		position := strings.IndexRune(base58Alphabet, character)
-		if position < 0 {
-			return nil, fmt.Errorf("%q carries %q at byte %d, which is not a base58 character", value, character, index)
-		}
-		number.Mul(number, radix)
-		number.Add(number, big.NewInt(int64(position)))
-	}
-	leading := len(value) - len(strings.TrimLeft(value, "1"))
-	decoded := make([]byte, leading, leading+len(value))
-	return append(decoded, number.Bytes()...), nil
-}
+// DecodeBase58 decodes a base58 Solana key into its bytes through bridge/vectors,
+// refusing an empty string and any character outside the alphabet Solana uses.
+func DecodeBase58(value string) ([]byte, error) { return vectors.DecodeBase58(value) }
 
 // parseAmount reads a cap: a decimal integer in the asset's base units, written
 // as a JSON string because a uint256 cap does not fit a JSON number.

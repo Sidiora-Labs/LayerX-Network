@@ -1,12 +1,59 @@
 package keeper
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 )
+
+type msgServer struct {
+	keeper Keeper
+}
+
+// NewMsgServerImpl returns the Msg service over the keeper. Every message is
+// executed by the keeper method of the same name, which refuses any authority
+// but the module's governance authority.
+func NewMsgServerImpl(k Keeper) types.MsgServer { return msgServer{keeper: k} }
+
+var _ types.MsgServer = msgServer{}
+
+func (s msgServer) RegisterChain(goCtx context.Context, msg *types.MsgRegisterChain) (*types.MsgRegisterChainResponse, error) {
+	if err := s.keeper.RegisterChain(sdk.UnwrapSDKContext(goCtx), *msg); err != nil {
+		return nil, err
+	}
+	return &types.MsgRegisterChainResponse{}, nil
+}
+
+func (s msgServer) SetAttestors(goCtx context.Context, msg *types.MsgSetAttestors) (*types.MsgSetAttestorsResponse, error) {
+	if err := s.keeper.SetAttestors(sdk.UnwrapSDKContext(goCtx), *msg); err != nil {
+		return nil, err
+	}
+	return &types.MsgSetAttestorsResponse{}, nil
+}
+
+func (s msgServer) SetCap(goCtx context.Context, msg *types.MsgSetCap) (*types.MsgSetCapResponse, error) {
+	if err := s.keeper.SetCap(sdk.UnwrapSDKContext(goCtx), *msg); err != nil {
+		return nil, err
+	}
+	return &types.MsgSetCapResponse{}, nil
+}
+
+func (s msgServer) Pause(goCtx context.Context, msg *types.MsgPause) (*types.MsgPauseResponse, error) {
+	if err := s.keeper.Pause(sdk.UnwrapSDKContext(goCtx), *msg); err != nil {
+		return nil, err
+	}
+	return &types.MsgPauseResponse{}, nil
+}
+
+func (s msgServer) Unpause(goCtx context.Context, msg *types.MsgUnpause) (*types.MsgUnpauseResponse, error) {
+	if err := s.keeper.Unpause(sdk.UnwrapSDKContext(goCtx), *msg); err != nil {
+		return nil, err
+	}
+	return &types.MsgUnpauseResponse{}, nil
+}
 
 // RegisterChain adds or replaces a remote chain. Re-registering updates the
 // vault, finality depth or enabled flag; assets and nullifiers are kept.

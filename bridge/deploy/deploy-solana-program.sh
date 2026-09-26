@@ -31,9 +31,22 @@
 # carries its own credential.
 #
 # The configuration's solana.program_id is the id the program is deployed to
-# once it exists: a placeholder is the first deployment, and this run prints the
-# id to fill in, while a filled id must be reproduced by the program keypair the
-# run deploys with and stops the run if the deployment lands elsewhere.
+# once it exists. A placeholder is the first deployment: the run deploys, writes
+# the deployed program id and its vault authority into the deployment record and
+# stops before the initialise step, naming solana.program_id, because the admin
+# client initialises only the program the configuration names. A filled id must
+# be reproduced by the program keypair the run deploys with and stops the run if
+# the deployment lands elsewhere.
+#
+# The program is built with the platform tools release PLATFORM_TOOLS_VERSION
+# names, passed to cargo-build-sbf as --tools-version, and not with the release
+# the Solana toolchain installs by default, whose cargo rejects the dependency
+# manifests that declare edition 2024. cargo-build-sbf fetches that release on
+# its first use; the toolchain directory still supplies solana, solana-keygen and
+# cargo-build-sbf itself.
+#
+# The vault authority is the PDA of the seed the program declares as VAULT_SEED
+# in bridge/solana/src/state.rs, and its handle is the vault Paxeer registers.
 #
 # Every asset id is checked against the handle the chain derives for its mint
 # before the cluster is reached, and Sidiora's fixed id is accepted for Sidiora's
@@ -59,7 +72,8 @@ SIDIORA_MINT=5w3wVdJaESaJKyLmStM6Hv9UyUkmZ1b9DLQquAqqpump
 SIDIORA_ASSET_ID=0x21f7b20a555199fa73a238b1a91fd0f549068fee
 SIDIORA_DECIMALS=6
 UPGRADEABLE_LOADER=BPFLoaderUpgradeab1e11111111111111111111111
-VAULT_AUTHORITY_SEED=vault
+VAULT_AUTHORITY_SEED=vault-authority
+PLATFORM_TOOLS_VERSION=v1.56
 
 fail() {
     printf 'deploy-solana-program: error: %s\n' "$*" >&2
@@ -304,10 +318,11 @@ genesis_hash=$("$SOLANA" genesis-hash --url "$rpc") \
 [ -n "$genesis_hash" ] || fail "$rpc_variable answered an empty genesis hash"
 publisher=$("$KEYGEN" pubkey "$keypair") || fail "$key_variable does not name a Solana keypair"
 
-"$BUILD_SBF" --manifest-path "$PROGRAM_DIR/Cargo.toml" --sbf-out-dir "$work/deploy" \
+"$BUILD_SBF" --tools-version "$PLATFORM_TOOLS_VERSION" \
+    --manifest-path "$PROGRAM_DIR/Cargo.toml" --sbf-out-dir "$work/deploy" \
     > "$work/build.log" 2>&1 || {
     cat "$work/build.log" >&2
-    fail "cargo-build-sbf could not build $PROGRAM_DIR"
+    fail "cargo-build-sbf could not build $PROGRAM_DIR with platform tools $PLATFORM_TOOLS_VERSION"
 }
 mapfile -t built < <(find "$work/deploy" -maxdepth 1 -name '*.so' -type f | sort)
 [ "${#built[@]}" -eq 1 ] \
@@ -329,10 +344,7 @@ program_id=$(jq -r '.programId // empty' "$work/deploy.json")
 deployment_signature=$(jq -r '.signature // empty' "$work/deploy.json")
 [ -n "$program_id" ] || fail "solana program deploy reported no program id"
 case $configured_program_id in
-"$PLACEHOLDER_PREFIX"*)
-    printf 'deploy-solana-program: %s still carries %s; set solana.program_id to %s\n' \
-        "$config" "$configured_program_id" "$program_id" >&2
-    ;;
+"$PLACEHOLDER_PREFIX"*) ;;
 *)
     [ "$configured_program_id" = "$program_id" ] \
         || fail "$config names program $configured_program_id and this deployment is $program_id"
@@ -375,6 +387,32 @@ vault_authority=$("$SOLANA" find-program-derived-address "$program_id" "string:$
 }
 [ -n "$vault_authority" ] || fail "the vault-authority PDA of $program_id is empty"
 vault_handle=$(handle_of "$vault_authority")
+
+case $configured_program_id in
+"$PLACEHOLDER_PREFIX"*)
+    umask 077
+    jq -n --arg chain solana --argjson chain_id "$chain_id" --arg kind solana \
+        --arg configuration "${config#"$REPO_ROOT"/}" \
+        --arg genesis_hash "$genesis_hash" --arg program_id "$program_id" \
+        --arg program_data_account "$program_data" --arg upgradeable_loader_id "$UPGRADEABLE_LOADER" \
+        --arg program_elf_sha256 "$elf_sha256" --argjson program_elf_bytes "$elf_bytes" \
+        --arg deployment_signature "$deployment_signature" --argjson deployment_slot "$deployed_slot" \
+        --argjson rooted_slot "$rooted_slot" --arg publisher "$publisher" \
+        --arg upgrade_authority "$authority" --arg commitment "$commitment" \
+        --arg vault_authority "$vault_authority" --arg vault_handle "$vault_handle" \
+        '{chain: $chain, chain_id: $chain_id, kind: $kind, configuration: $configuration,
+          genesis_hash: $genesis_hash, program_id: $program_id,
+          program_data_account: $program_data_account, upgradeable_loader_id: $upgradeable_loader_id,
+          program_elf_sha256: $program_elf_sha256, program_elf_bytes: $program_elf_bytes,
+          deployment_signature: $deployment_signature, deployment_slot: $deployment_slot,
+          rooted_slot: $rooted_slot, publisher: $publisher, upgrade_authority: $upgrade_authority,
+          commitment: $commitment, vault_authority: $vault_authority, vault_handle: $vault_handle}' \
+        > "$record"
+    printf 'deploy-solana-program: %s deployed and recorded in %s, vault authority %s, handle %s\n' \
+        "$program_id" "$record" "$vault_authority" "$vault_handle" >&2
+    refuse "solana.program_id: $configured_program_id is still a placeholder, so the run stops before the initialise step; set solana.program_id to $program_id, the program this run deployed"
+    ;;
+esac
 
 attestor_list=$(
     IFS=,

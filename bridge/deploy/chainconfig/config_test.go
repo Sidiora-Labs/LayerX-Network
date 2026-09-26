@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sidiora-labs/paxeer-network/bridge/vectors"
 )
 
 // repositoryRoot is where the nine committed configurations live, relative to
@@ -915,4 +917,41 @@ func TestRefusalsOfTheFileItself(t *testing.T) {
 			t.Error("a missing configuration is accepted")
 		}
 	})
+}
+
+// The handle derivation lives only in bridge/vectors: the configuration reads
+// every Solana key through it, so a committed asset id, the pinned vectors and
+// the handle the validator derives are one computation, not two that agree.
+func TestSolanaHandleIsTheVectorsDerivation(t *testing.T) {
+	for _, key := range []vectors.Key32{
+		vectors.WrappedSolMint,
+		vectors.SidioraMint,
+		vectors.VectorProgramID,
+		vectors.VectorVaultAuthority,
+	} {
+		encoded := key.Base58()
+		got, err := SolanaHandle(encoded)
+		if err != nil {
+			t.Fatalf("%s has no handle: %v", encoded, err)
+		}
+		if want := vectors.Handle(key).Hex(); got != want {
+			t.Errorf("the handle of %s is %s here and %s in bridge/vectors", encoded, got, want)
+		}
+		raw, err := DecodeBase58(encoded)
+		if err != nil {
+			t.Fatalf("%s does not decode: %v", encoded, err)
+		}
+		if !bytes.Equal(raw, key[:]) {
+			t.Errorf("%s decodes to %x, not %x", encoded, raw, key[:])
+		}
+	}
+	if got, want := strings.ToLower(SidioraAssetID), vectors.SidioraAssetID.Hex(); got != want {
+		t.Errorf("Sidiora's asset id is %s here and %s in bridge/vectors", got, want)
+	}
+	if got, want := SolanaChainID, vectors.SolanaChainID; got != want {
+		t.Errorf("Solana's chain id is %d here and %d in bridge/vectors", got, want)
+	}
+	if got, err := SolanaHandle(vectors.VectorVaultAuthority.Base58()); err != nil || got != vectors.VectorVaultHandle.Hex() {
+		t.Errorf("the vault-authority handle is %s (%v), not the pinned %s", got, err, vectors.VectorVaultHandle.Hex())
+	}
 }

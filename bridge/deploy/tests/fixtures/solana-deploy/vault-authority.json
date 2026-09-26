@@ -1,0 +1,10 @@
+{
+  "source": "bridge/vectors/solana.go VectorProgramID, VectorVaultAuthority, VectorVaultAuthorityBump and VectorVaultHandle",
+  "program_id": "A7SZbByPYuHpunZ9pyMDMrhMYvK44ANT1AVqb8U1FpM9",
+  "program_id_hex": "875f91f2b7ddd837d8584366fa8d7a8c73905b2212713a4826d4a89faa8d40fc",
+  "seed": "vault-authority",
+  "vault_authority": "GxxA9Cs9v5pAGVsaCe2jjDrtmieeBijcY4S5HHTY8Vq6",
+  "vault_authority_hex": "ed349d8496a5f534b3bb8f5d240d8633acf502427eca37504ec7cf68766aa71d",
+  "bump": 255,
+  "vault_handle": "0x334121a65b47bd45c3f6381537d9180e98e445bc"
+}

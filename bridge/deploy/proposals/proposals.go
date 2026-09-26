@@ -2,9 +2,14 @@
 // that open that chain on Paxeer X Network: the chain registration, the shared
 // attestor set and one cap per asset.
 //
-// The bodies are the bridge module's own message types, marshalled from
+// The bodies are the bridge module's own generated message types from
 // modules/layerxbridge/types, which this package imports and never modifies,
-// so a body cannot drift from what the keeper accepts. Nothing here reaches a
+// each written as the protobuf JSON of a message packed under its type URL -
+// the form a governance proposal or a transaction carries its messages in - so
+// a body cannot drift from what the keeper accepts. Given -proposals it also
+// writes the module's governance proposal content, BridgeProposal, carrying
+// the same messages in submission order, which the chain's submit-proposal
+// transaction carries as its content as it stands. Nothing here reaches a
 // network: the generator reads committed files and writes JSON.
 package proposals
 
@@ -20,8 +25,13 @@ import (
 	"strings"
 
 	"github.com/cosmos/btcutil/base58"
+	"github.com/sidiora-labs/paxeer-network/bridge/deploy/chainconfig"
+	"github.com/sidiora-labs/paxeer-network/bridge/vectors"
 	"github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
+	"github.com/sidiora-labs/paxeer-network/sdk/codec"
+	cdctypes "github.com/sidiora-labs/paxeer-network/sdk/codec/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	govtypes "github.com/sidiora-labs/paxeer-network/sdk/x/gov/types"
 )
 
 const (
@@ -48,11 +58,26 @@ const (
 	setAttestorsFile  = "02-set-attestors.json"
 	setCapFileFormat  = "03-set-cap-%02d-%s.json"
 
+	// OpenChainProposalFile is the proposal that opens the chain: its
+	// registration, the attestor set and every cap but Sidiora's.
+	OpenChainProposalFile = "04-proposal-open-chain.json"
+
+	// SidioraCapProposalFile is the proposal that carries Sidiora's cap alone,
+	// submitted only once the Paxeer side reads the Sidiora pair back against
+	// the usid denom.
+	SidioraCapProposalFile = "05-proposal-sidiora-cap.json"
+
 	addressHexLength = 2 + 2*len(types.Address20{})
 
 	// solanaKeyLength is the length of an ed25519 public key, which is what a
 	// Solana owner is: a key, not a twenty-byte address.
 	solanaKeyLength = 32
+
+	// solanaConfigSeed and solanaAssetSeed are the seeds the custody program
+	// derives its config account and each asset account from, as
+	// bridge/solana/src/state.rs declares them.
+	solanaConfigSeed = "config"
+	solanaAssetSeed  = "asset"
 )
 
 const (
@@ -71,6 +96,17 @@ const (
 )
 
 var sidioraAssetID = mustAddress20(types.SidioraRemoteAddress)
+
+// messageCodec packs and unpacks the module's messages under their type URLs,
+// resolved against the module's own interface registration.
+var messageCodec = newMessageCodec()
+
+func newMessageCodec() *codec.ProtoCodec {
+	registry := cdctypes.NewInterfaceRegistry()
+	govtypes.RegisterInterfaces(registry)
+	types.RegisterInterfaces(registry)
+	return codec.NewProtoCodec(registry)
+}
 
 // SidioraAssetID is the asset id the chain fixes for Sidiora: the remote
 // address EnsureSidioraDenom registers against the module's usid denom, and so
@@ -184,8 +220,8 @@ func (c ChainConfig) isNative(asset Asset) bool {
 	return strings.EqualFold(strings.TrimSpace(asset.Address), EVMNativeAddress)
 }
 
-// File is one generated body: the name it is written under and the JSON the
-// module's own message type marshalled to.
+// File is one generated body: the name it is written under and the JSON of
+// the module's own message packed under its type URL.
 type File struct {
 	Name string
 	Body []byte
@@ -368,17 +404,18 @@ func SetCaps(cfg ChainConfig) ([]types.MsgSetCap, error) {
 // is created, so a bundle that cannot be marshalled leaves nothing behind.
 func (b Bundle) Files() ([]File, error) {
 	files := make([]File, 0, 2+len(b.Caps))
-	register, err := marshalBody(b.Register)
+	register, err := marshalBody(&b.Register)
 	if err != nil {
 		return nil, err
 	}
 	files = append(files, File{Name: registerChainFile, Body: register})
-	attestors, err := marshalBody(b.Attestors)
+	attestors, err := marshalBody(&b.Attestors)
 	if err != nil {
 		return nil, err
 	}
 	files = append(files, File{Name: setAttestorsFile, Body: attestors})
-	for i, msg := range b.Caps {
+	for i := range b.Caps {
+		msg := &b.Caps[i]
 		body, err := marshalBody(msg)
 		if err != nil {
 			return nil, err
@@ -387,6 +424,74 @@ func (b Bundle) Files() ([]File, error) {
 		files = append(files, File{Name: name, Body: body})
 	}
 	return files, nil
+}
+
+// ProposalFiles marshals every proposal of the bundle, in submission order.
+func (b Bundle) ProposalFiles() ([]File, error) {
+	proposals, err := b.Proposals()
+	if err != nil {
+		return nil, err
+	}
+	files := make([]File, 0, len(proposals))
+	for _, proposal := range proposals {
+		body, err := marshalProposal(proposal.Content)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, File{Name: proposal.Name, Body: body})
+	}
+	return files, nil
+}
+
+// Proposal is one governance proposal of a bundle: the name it is written
+// under and the module's proposal content.
+type Proposal struct {
+	Name    string
+	Content *types.BridgeProposal
+}
+
+// Proposals builds the bundle's governance proposals in submission order. The
+// first opens the chain: its registration, the attestor set and every cap in
+// configuration order, the native coin's first. Sidiora's cap is never part of
+// it. A cap for a pair the Paxeer side has not recorded registers the pair
+// under the bridge's generic denom, so Sidiora's cap travels in a second
+// proposal of its own, submitted once the pair reads back against usid.
+func (b Bundle) Proposals() ([]Proposal, error) {
+	open := []sdk.Msg{&b.Register, &b.Attestors}
+	var sidiora *types.MsgSetCap
+	for i := range b.Caps {
+		capMsg := &b.Caps[i]
+		if capMsg.Asset == sidioraAssetID {
+			sidiora = capMsg
+			continue
+		}
+		open = append(open, capMsg)
+	}
+	set := b.Attestors.Set
+	chain := b.Register.Chain
+	content, err := types.NewBridgeProposal(
+		fmt.Sprintf("Open %s on the Paxeer X Network bridge", b.Chain),
+		fmt.Sprintf("Registers %s as chain %d with the vault %s and a finality depth of %d, installs the shared "+
+			"attestor set of %d attestors with a threshold of %d, and sets the caps of %d assets, the native coin first.",
+			b.Chain, chain.ChainID, chain.Vault.Hex(), chain.FinalityDepth, len(set.Attestors), set.Threshold, len(open)-2),
+		open...)
+	if err != nil {
+		return nil, err
+	}
+	proposals := []Proposal{{Name: OpenChainProposalFile, Content: content}}
+	if sidiora == nil {
+		return proposals, nil
+	}
+	content, err = types.NewBridgeProposal(
+		fmt.Sprintf("Set Sidiora's %s bridge cap", b.Chain),
+		fmt.Sprintf("Sets the cap of Sidiora, asset id %s on chain %d, to %s per transaction and %s in flight. "+
+			"Submitted only once the Paxeer side reads this pair back against the usid denom %s.",
+			sidiora.Asset.Hex(), sidiora.ChainID, sidiora.MaxPerTx.String(), sidiora.MaxInFlight.String(), types.SidioraDenom()),
+		sidiora)
+	if err != nil {
+		return nil, err
+	}
+	return append(proposals, Proposal{Name: SidioraCapProposalFile, Content: content}), nil
 }
 
 // Write writes every body into dir, returning the paths it wrote in
@@ -399,12 +504,34 @@ func (b Bundle) Write(dir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	dir = filepath.Clean(dir)
+	return writeFiles(dir, files)
+}
+
+// WriteProposals writes every proposal into dir the way Write writes the
+// bodies: into an empty or absent directory, all at once or not at all.
+func (b Bundle) WriteProposals(dir string) ([]string, error) {
+	files, err := b.ProposalFiles()
+	if err != nil {
+		return nil, err
+	}
+	return writeFiles(dir, files)
+}
+
+// requireEmpty refuses a directory that already holds anything.
+func requireEmpty(dir string) error {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case err == nil && len(entries) > 0:
-		return nil, fmt.Errorf("%s: the output directory is not empty", dir)
+		return fmt.Errorf("%s: the output directory is not empty", dir)
 	case err != nil && !os.IsNotExist(err):
+		return err
+	}
+	return nil
+}
+
+func writeFiles(dir string, files []File) ([]string, error) {
+	dir = filepath.Clean(dir)
+	if err := requireEmpty(dir); err != nil {
 		return nil, err
 	}
 	parent := filepath.Dir(dir)
@@ -444,13 +571,32 @@ func (b Bundle) Write(dir string) ([]string, error) {
 // already holds anything, and writes the bodies into the output directory.
 // Every refusal happens before the output directory is touched, so a refused
 // run writes nothing at all.
+//
+// Given -authority and -vault, the configuration is read through
+// bridge/deploy/chainconfig, the bridge's one configuration schema, and the two
+// values no configuration carries - the governance authority and the deployed
+// vault - arrive as arguments. -readback then also writes the values the
+// deployed chain and the Paxeer side must read back once the bodies execute.
+//
+// Given -proposals, it also writes the bundle's governance proposals into that
+// directory: the proposal that opens the chain and, where the chain carries
+// Sidiora, the proposal that sets Sidiora's cap alone. Each is the content a
+// submit-proposal transaction carries as it stands.
 func Run(args []string, report io.Writer) error {
 	flags := flag.NewFlagSet(CommandName, flag.ContinueOnError)
 	flags.SetOutput(report)
 	manifestPath := flags.String("manifest", DefaultManifestPath,
 		"path of the committed attestor-set manifest")
+	authority := flags.String("authority", "",
+		"bech32 governance authority the bodies are executed for; reads the configuration through bridge/deploy/chainconfig")
+	vault := flags.String("vault", "",
+		"deployed vault address, on Solana the vault-authority handle; reads the configuration through bridge/deploy/chainconfig")
+	readbackPath := flags.String("readback", "",
+		"path the read-back expectation is written to; needs -authority and -vault")
+	proposalsPath := flags.String("proposals", "",
+		"directory the governance proposals are written to, apart from the bodies")
 	flags.Usage = func() {
-		fmt.Fprintf(report, "usage: %s [-manifest <path>] <chain-configuration.json> <output-directory>\n", CommandName)
+		fmt.Fprintf(report, "usage: %s [-manifest <path>] [-authority <bech32> -vault <address> [-readback <path>]] [-proposals <directory>] <chain-configuration.json> <output-directory>\n", CommandName)
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -461,11 +607,29 @@ func Run(args []string, report io.Writer) error {
 		return fmt.Errorf("%s: expected a chain configuration path and an output directory, got %d arguments",
 			CommandName, flags.NArg())
 	}
+	canonical := *authority != "" || *vault != "" || *readbackPath != ""
+	if canonical && (*authority == "" || *vault == "") {
+		return fmt.Errorf("%s: -authority and -vault are both required to read a chain configuration through chainconfig", CommandName)
+	}
 	manifest, err := LoadAttestorManifest(*manifestPath)
 	if err != nil {
 		return err
 	}
-	cfg, err := LoadChainConfig(flags.Arg(0))
+	var (
+		cfg       ChainConfig
+		canonCfg  *chainconfig.ChainConfig
+		expected  []byte
+		readbackF string
+	)
+	if canonical {
+		canonCfg, err = chainconfig.Load(flags.Arg(0))
+		if err != nil {
+			return err
+		}
+		cfg, err = FromChainConfig(canonCfg, *authority, *vault)
+	} else {
+		cfg, err = LoadChainConfig(flags.Arg(0))
+	}
 	if err != nil {
 		return err
 	}
@@ -473,9 +637,50 @@ func Run(args []string, report io.Writer) error {
 	if err != nil {
 		return err
 	}
+	var proposalsDir string
+	if *proposalsPath != "" {
+		proposalsDir = filepath.Clean(*proposalsPath)
+		if proposalsDir == filepath.Clean(flags.Arg(1)) {
+			return fmt.Errorf("%s: the proposals are written apart from the bodies, not into %s", CommandName, proposalsDir)
+		}
+		if _, err := bundle.ProposalFiles(); err != nil {
+			return err
+		}
+		if err := requireEmpty(proposalsDir); err != nil {
+			return err
+		}
+	}
+	if *readbackPath != "" {
+		readback, err := ReadbackOf(canonCfg, bundle)
+		if err != nil {
+			return err
+		}
+		if expected, err = marshalJSON(readback); err != nil {
+			return err
+		}
+		readbackF = filepath.Clean(*readbackPath)
+		if _, err := os.Lstat(readbackF); err == nil {
+			return fmt.Errorf("%s: the read-back expectation already exists", readbackF)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
 	written, err := bundle.Write(flags.Arg(1))
 	if err != nil {
 		return err
+	}
+	if proposalsDir != "" {
+		proposalPaths, err := bundle.WriteProposals(proposalsDir)
+		if err != nil {
+			return err
+		}
+		written = append(written, proposalPaths...)
+	}
+	if readbackF != "" {
+		if err := writeAtomically(readbackF, expected); err != nil {
+			return err
+		}
+		written = append(written, readbackF)
 	}
 	for _, path := range written {
 		fmt.Fprintln(report, path)
@@ -483,12 +688,306 @@ func Run(args []string, report io.Writer) error {
 	return nil
 }
 
-func marshalBody(body any) ([]byte, error) {
+// writeAtomically writes body to a temporary sibling of path and renames it
+// into place, so a failed write leaves nothing at path.
+func writeAtomically(path string, body []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".readback-*")
+	if err != nil {
+		return err
+	}
+	staged := file.Name()
+	defer os.Remove(staged)
+	if _, err := file.Write(body); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(staged, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(staged, path)
+}
+
+// FromChainConfig is the generator's reading of a configuration in the
+// bridge's one schema, bridge/deploy/chainconfig. The configuration must be
+// deployable - no placeholder owner, attestor or program id - and the two
+// values a configuration does not carry arrive beside it: the bech32 governance
+// authority the keeper executes the bodies for, and the deployed vault. On
+// Solana the vault is the handle of the program's vault-authority PDA, and a
+// vault that is not that handle is refused, because governance would register
+// an address no release can come from.
+func FromChainConfig(cfg *chainconfig.ChainConfig, authority, vault string) (ChainConfig, error) {
+	if err := cfg.RequireDeployable(); err != nil {
+		return ChainConfig{}, err
+	}
+	out := ChainConfig{
+		Name:           cfg.Chain,
+		ChainID:        cfg.ChainID,
+		NativeSymbol:   cfg.Native.Symbol,
+		NativeDecimals: uint32(cfg.Native.Decimals),
+		RPCEndpointEnv: cfg.Environment.RPCURL,
+		ExplorerKeyEnv: cfg.Environment.ExplorerKey,
+		Authority:      authority,
+		Owner:          cfg.Owner,
+		Vault:          vault,
+		Attestors:      append([]string(nil), cfg.Attestors...),
+		Threshold:      cfg.Threshold,
+		FinalityDepth:  cfg.FinalityDepth,
+		Assets:         make([]Asset, 0, len(cfg.Assets)),
+		source:         cfg.Source(),
+	}
+	if cfg.BigBlocks != nil {
+		out.BigBlocksRequired = cfg.BigBlocks.Required
+	}
+	for _, asset := range cfg.Assets {
+		out.Assets = append(out.Assets, Asset{
+			Address:  asset.Address,
+			AssetID:  asset.AssetID,
+			Decimals: uint32(asset.Decimals),
+			MaxPerTx: asset.PerTxCap,
+			MaxTotal: asset.TotalCap,
+		})
+	}
+	if cfg.Solana == nil {
+		return out, nil
+	}
+	out.ProgramID = cfg.Solana.ProgramID
+	out.Commitment = cfg.Solana.Commitment
+	program, err := vectors.Key(cfg.Solana.ProgramID)
+	if err != nil {
+		return ChainConfig{}, refuse(out.file(), "solana.program_id", "%v", err)
+	}
+	handle, err := vectors.VaultHandle(program)
+	if err != nil {
+		return ChainConfig{}, refuse(out.file(), "solana.program_id", "%v", err)
+	}
+	given, err := liveAddress(out.file(), fieldVault, vault)
+	if err != nil {
+		return ChainConfig{}, err
+	}
+	if given != types.Address20(handle) {
+		return ChainConfig{}, refuse(out.file(), fieldVault,
+			"%s is not %s, the handle of the vault-authority PDA of program %s", given.Hex(), handle.Hex(), cfg.Solana.ProgramID)
+	}
+	return out, nil
+}
+
+// Readback is what a deployed chain and the Paxeer side must read back once a
+// chain is deployed from its configuration and its bundle has executed: the
+// owner, the attestor set and threshold, the vault registered on Paxeer with
+// its finality depth, and per asset, native coin first, the caps and the denom
+// the Paxeer side mints it as. On Solana it also names the accounts the
+// program keeps that state in, derived the way the program derives them.
+type Readback struct {
+	Chain         string          `json:"chain"`
+	Kind          string          `json:"kind"`
+	ChainID       uint64          `json:"chain_id"`
+	Owner         string          `json:"owner"`
+	Vault         string          `json:"vault"`
+	FinalityDepth uint64          `json:"finality_depth"`
+	Attestors     []string        `json:"attestors"`
+	Threshold     uint32          `json:"threshold"`
+	Solana        *SolanaReadback `json:"solana,omitempty"`
+	Assets        []AssetReadback `json:"assets"`
+}
+
+// SolanaReadback names the custody program and the accounts it keeps its
+// configuration and its custody authority in.
+type SolanaReadback struct {
+	ProgramID      string `json:"program_id"`
+	Commitment     string `json:"commitment"`
+	ConfigAccount  string `json:"config_account"`
+	VaultAuthority string `json:"vault_authority"`
+}
+
+// AssetReadback is one asset as it must read back: its caps as the bodies set
+// them and the denom the Paxeer side mints it as. Mint and Account are the
+// Solana mint's bytes in hex and the program's asset account of that mint.
+type AssetReadback struct {
+	Symbol   string `json:"symbol"`
+	Address  string `json:"address"`
+	AssetID  string `json:"asset_id"`
+	Decimals uint8  `json:"decimals"`
+	PerTxCap string `json:"per_tx_cap"`
+	TotalCap string `json:"total_cap"`
+	Denom    string `json:"denom"`
+	Mint     string `json:"mint,omitempty"`
+	Account  string `json:"account,omitempty"`
+}
+
+// ReadbackOf derives the read-back expectation of a chain from its
+// configuration and the bundle generated from it. Every cap comes from the
+// bundle's own bodies, in their order, so what the checklist compares against
+// is what governance submits. Sidiora on Solana reads back as the module's
+// usid denom, the pair only the chain's upgrade handler registers; every other
+// asset reads back as the tokenfactory denom of its (chain, asset) pair.
+func ReadbackOf(cfg *chainconfig.ChainConfig, bundle Bundle) (Readback, error) {
+	if cfg == nil {
+		return Readback{}, fmt.Errorf("%s: a read-back expectation is derived from a chainconfig configuration", CommandName)
+	}
+	if bundle.Chain != cfg.Chain || bundle.Register.Chain.ChainID != cfg.ChainID {
+		return Readback{}, refuse(cfg.Source(), fieldChain, "the bundle is for %s (%d), not %s (%d)",
+			bundle.Chain, bundle.Register.Chain.ChainID, cfg.Chain, cfg.ChainID)
+	}
+	if len(bundle.Caps) != len(cfg.Assets) {
+		return Readback{}, refuse(cfg.Source(), fieldAssets, "the bundle carries %d caps for %d assets",
+			len(bundle.Caps), len(cfg.Assets))
+	}
+	out := Readback{
+		Chain:         cfg.Chain,
+		Kind:          string(cfg.Kind),
+		ChainID:       cfg.ChainID,
+		Owner:         strings.ToLower(cfg.Owner),
+		Vault:         bundle.Register.Chain.Vault.Hex(),
+		FinalityDepth: bundle.Register.Chain.FinalityDepth,
+		Attestors:     make([]string, 0, len(bundle.Attestors.Set.Attestors)),
+		Threshold:     bundle.Attestors.Set.Threshold,
+		Assets:        make([]AssetReadback, 0, len(cfg.Assets)),
+	}
+	for _, attestor := range bundle.Attestors.Set.Attestors {
+		out.Attestors = append(out.Attestors, attestor.Signer.Hex())
+	}
+	var program vectors.Key32
+	if cfg.Solana != nil {
+		var err error
+		if program, err = vectors.Key(cfg.Solana.ProgramID); err != nil {
+			return Readback{}, refuse(cfg.Source(), "solana.program_id", "%v", err)
+		}
+		owner, err := vectors.Key(cfg.Owner)
+		if err != nil {
+			return Readback{}, refuse(cfg.Source(), fieldOwner, "%v", err)
+		}
+		out.Owner = "0x" + hex.EncodeToString(owner[:])
+		configAccount, _, err := vectors.FindProgramAddress(program, [][]byte{[]byte(solanaConfigSeed)})
+		if err != nil {
+			return Readback{}, refuse(cfg.Source(), "solana.program_id", "%v", err)
+		}
+		authority, _, err := vectors.VaultAuthority(program)
+		if err != nil {
+			return Readback{}, refuse(cfg.Source(), "solana.program_id", "%v", err)
+		}
+		out.Solana = &SolanaReadback{
+			ProgramID:      cfg.Solana.ProgramID,
+			Commitment:     cfg.Solana.Commitment,
+			ConfigAccount:  configAccount.Base58(),
+			VaultAuthority: authority.Base58(),
+		}
+	}
+	for i, asset := range cfg.Assets {
+		field := fmt.Sprintf("%s[%d]", fieldAssets, i)
+		capMsg := bundle.Caps[i]
+		id, err := decodeField(cfg.Source(), field+".asset_id", asset.AssetID)
+		if err != nil {
+			return Readback{}, err
+		}
+		if capMsg.Asset != id {
+			return Readback{}, refuse(cfg.Source(), field+".asset_id", "the bundle caps %s where the configuration lists %s",
+				capMsg.Asset.Hex(), id.Hex())
+		}
+		entry := AssetReadback{
+			Symbol:   asset.Symbol,
+			Address:  asset.Address,
+			AssetID:  id.Hex(),
+			Decimals: asset.Decimals,
+			PerTxCap: capMsg.MaxPerTx.String(),
+			TotalCap: capMsg.MaxInFlight.String(),
+			Denom:    types.Denom(cfg.ChainID, id),
+		}
+		if cfg.Solana == nil {
+			entry.Address = strings.ToLower(asset.Address)
+		} else {
+			if id == sidioraAssetID {
+				entry.Denom = types.SidioraDenom()
+			}
+			mint, err := vectors.Key(asset.Address)
+			if err != nil {
+				return Readback{}, refuse(cfg.Source(), field+".address", "%v", err)
+			}
+			account, _, err := vectors.FindProgramAddress(program, [][]byte{[]byte(solanaAssetSeed), mint[:]})
+			if err != nil {
+				return Readback{}, refuse(cfg.Source(), field+".address", "%v", err)
+			}
+			entry.Mint = "0x" + hex.EncodeToString(mint[:])
+			entry.Account = account.Base58()
+		}
+		out.Assets = append(out.Assets, entry)
+	}
+	return out, nil
+}
+
+// marshalJSON writes a document that is not a module message, such as the
+// read-back expectation, as indented JSON.
+func marshalJSON(body any) ([]byte, error) {
 	raw, err := json.MarshalIndent(body, "", "  ")
 	if err != nil {
 		return nil, err
 	}
 	return append(raw, '\n'), nil
+}
+
+// marshalBody writes msg as the protobuf JSON of an Any: its type URL under
+// "@type" beside the message's own fields.
+func marshalBody(msg sdk.Msg) ([]byte, error) {
+	raw, err := messageCodec.MarshalInterfaceJSON(msg)
+	if err != nil {
+		return nil, err
+	}
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, raw, "", "  "); err != nil {
+		return nil, err
+	}
+	indented.WriteByte('\n')
+	return indented.Bytes(), nil
+}
+
+// marshalProposal writes a proposal as the protobuf JSON of the Any a
+// submit-proposal transaction carries as its content: the proposal's type URL
+// under "@type", its title and description, and every message as an Any of its
+// own.
+func marshalProposal(content *types.BridgeProposal) ([]byte, error) {
+	if err := content.ValidateBasic(); err != nil {
+		return nil, err
+	}
+	raw, err := messageCodec.MarshalInterfaceJSON(content)
+	if err != nil {
+		return nil, err
+	}
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, raw, "", "  "); err != nil {
+		return nil, err
+	}
+	indented.WriteByte('\n')
+	return indented.Bytes(), nil
+}
+
+// DecodeProposal reads one proposal back into the module's proposal content,
+// resolving every message it carries under its type URL, with unknown fields
+// forbidden, and refuses a proposal the handler would refuse.
+func DecodeProposal(body []byte) (*types.BridgeProposal, error) {
+	var content govtypes.Content
+	if err := messageCodec.UnmarshalInterfaceJSON(body, &content); err != nil {
+		return nil, err
+	}
+	proposal, ok := content.(*types.BridgeProposal)
+	if !ok {
+		return nil, fmt.Errorf("the proposal is a %T, not a %T", content, proposal)
+	}
+	if err := proposal.ValidateBasic(); err != nil {
+		return nil, err
+	}
+	return proposal, nil
+}
+
+// DecodeBody reads one body back into the module message its type URL names,
+// with unknown fields forbidden.
+func DecodeBody(body []byte) (sdk.Msg, error) {
+	var msg sdk.Msg
+	if err := messageCodec.UnmarshalInterfaceJSON(body, &msg); err != nil {
+		return nil, err
+	}
+	return msg, nil
 }
 
 // isPlaceholder reports whether every byte is the same non-zero byte. The
@@ -587,7 +1086,9 @@ func liveKey(file, field, text string) ([]byte, error) {
 }
 
 // liveAuthority parses the governance authority, the only account the keeper
-// executes these messages for.
+// executes these messages for. The bodies travel in governance proposals, and
+// a proposal executes only for the governance module account, so any other
+// account is refused.
 func liveAuthority(file, field, text string) (string, error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
@@ -602,6 +1103,10 @@ func liveAuthority(file, field, text string) (string, error) {
 	}
 	if isPlaceholder(account) {
 		return "", refuse(file, field, "placeholder governance authority %q", trimmed)
+	}
+	if governance := types.DefaultAuthority(); trimmed != governance {
+		return "", refuse(file, field, "%q is not the governance module account %s, the authority a governance proposal executes with",
+			trimmed, governance)
 	}
 	return trimmed, nil
 }
