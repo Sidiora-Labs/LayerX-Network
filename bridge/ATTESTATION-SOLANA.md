@@ -42,7 +42,8 @@ bytes and the digests carry 20.
 
 The last 20 bytes of `keccak256` of the key's 32 raw bytes: the same truncation
 an EVM address is to a public key. `bridge/vectors.Handle` is the only Go
-implementation and `bridge/solana`'s `identity` module is the only Rust one.
+implementation. The custody program is to carry the only Rust one, in its
+`identity` module, so that no second derivation of a handle exists anywhere.
 
 ### The vault
 
@@ -121,13 +122,15 @@ it through `MsgRegisterChain` exactly like an EVM chain.
 `bridge/vectors/solana.go` holds these values and `bridge/vectors/solana_test.go`
 recomputes every digest below through `modules/layerxbridge/types.InboundPreimage`
 and `OutboundPreimage`, the chain's own builders, so this document cannot claim a
-digest the chain would not produce. The same values are asserted by the Solana
-program's tests and by the relayer's Solana tests; changing one of the three
-fails the others.
+digest the chain would not produce. That Go check is the only one in place
+today. The custody program's tests and the relayer's Solana tests are to assert
+these same values as they are written, and from then on changing one of the
+three implementations fails the other two; until then this document and
+`bridge/vectors` are the record they must be written against.
 
 Every example input is derived from a documented ASCII label with `keccak256`,
-so all three implementations can recompute it instead of copying an unexplained
-value. The labels stand in for what a deployment produces - a program id, a
+so each of the three implementations can recompute it instead of copying an
+unexplained value. The labels stand in for what a deployment produces - a program id, a
 transaction signature, an account - and none of them is a deployment value:
 
 | Label | Derives |
