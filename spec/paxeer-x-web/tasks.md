@@ -184,7 +184,7 @@
     - Write modules/xweb/types/envelope.go, the ECIES envelope over secp256k1 with HKDF-SHA256 and AES-256-GCM every implementation shares, with types/testdata/envelope-vectors.json carrying keys, plaintexts and ciphertexts the Rust, TypeScript and Python implementations pin; add no dependency the Go module does not already carry unless the standard library cannot provide it.
     - Write contracts/src/xweb/XWebApi.sol, a library that builds an api payload with get, post, select, withCredential and single, encodes it exactly as the Go codec decodes it and submits it through the precompile interface in one statement; extend the interface and XWeb.sol for the level; add contracts/src/xweb/examples/ApiConsumer.sol using the library; tests in Go for the codec, every refusal, the envelope vectors and both levels through the keeper and the precompile, and Foundry tests for the library and the example.
     - _Requirements: 17.1, 17.2, 17.4, 17.5, 17.6_
-  - [ ] 2.14 Perform api requests in the sidecar with envelopes, selectors and the single level — **Implemented - qualification pending**
+  - [x] 2.14 Perform api requests in the sidecar with envelopes, selectors and the single level
     - Write interop/crates/x-websearch/src/api.rs: decode the api payload exactly as modules/xweb/types does, pick the envelope addressed to this sidecar's attestor address and decrypt it in memory with the attestor key against modules/xweb/types/testdata/envelope-vectors.json, perform the call with the public and the credential headers under the fetch limits and destination refusals of the fetch path, apply the JSON pointers, canonicalise in RFC 8785 form, bound the answer and zeroise the plaintext; the credential never reaches a log line, the index, the content store, a fixture or any file, and a request with no envelope for this attestor is refused, never called without it.
     - In src/attest.rs route the api kind to api.rs, sign under the majority level as for a fetch, and under the single level sign only when this sidecar is the named attestor and let src/submit.rs post fulfil with that one signature; add the module line to src/lib.rs.
     - Write tests/api.rs against a loopback API server the test starts that refuses a call without the credential header and answers JSON whose unselected fields differ per call: identical digests from two sidecars holding different envelopes, the refusal without an envelope, the pointer and canonicalisation vectors, the single level's one signature, and a scan of every file under each sidecar's data directory and of its log output proving the credential is absent.
@@ -194,12 +194,12 @@
     - Extend docs/site/docs/protocol/xweb.md with a section showing a contract calling an API through XWebApi in a dozen lines, the envelope rule, the selector rule and the two attestation levels, under the page's link and naming rules.
     - Tests: agent/sdk/typescript/test/xweb-api.test.ts and agent/sdk/python/tests/test_xweb_api.py pin the payload bytes and the envelope vectors, and the page builds under mkdocs --strict.
     - _Requirements: 17.5, 17.6_
-  - [ ] 2.16 Run the agent workspace tests with the binaries the workflow builds for them
+  - [ ] 2.16 Run the agent workspace tests with the binaries the workflow builds for them — **Implemented - qualification pending**
     - Build the prerequisites the Makefile declares for agent-test (public-tls-test-prerequisites for the boundary and clock binaries, agent-test-native-prerequisites for the native daemon binaries) and run make agent-test once, exactly as the workflow's test step does.
     - For every test that fails outside this feature's crates, fix its real cause in code or fixtures, starting with the native terminal evidence test in agent/crates/layerx-agentd/src/protocol_evidence_native_tests.rs, which fails to decode tests/fixtures/custody/daemon-credit-receipt with Decode(MalformedPayload): determine which side drifted from the receipt format the platform writes and correct that side, regenerating the fixture through the tool that produced it when the fixture is stale; never ignore, delete, relax or skip a test.
     - Close observation 2.9.1 naming the revision at which make agent-test passes.
     - _Requirements: 9.1_
-  - [ ] 2.17 Qualify the sidecar api request path and serve api answers from the content store — **Implemented - qualification pending**
+  - [x] 2.17 Qualify the sidecar api request path and serve api answers from the content store
     - In interop/crates/x-websearch/tests/api.rs clear the clippy findings recorded in observation 2.14.1 without an allow attribute: split the envelope vector test into one test per vector group over a shared helper, pass a single root through std::slice::from_ref, and keep every assertion as written.
     - Make the loopback API server in tests/api.rs answer 401 to a call carrying no credential header or an unknown credential and 200 only to the known credential, so the no-envelope refusal test observes the status it asserts.
     - In interop/crates/x-websearch/src/canonical.rs add ContentKind::Api with byte 3, accepted by from_byte and the canonical header, and store an api answer's canonical bytes in the content store at the point the fetch path stores its own, so GET /content/<digest> serves an api answer and a consumer can read the full answer behind the on-chain digest; extend tests/canonical.rs and tests/content.rs for the new kind and tests/api.rs with a request whose answer is read back through GET /content/<digest> and scanned for the credential.
@@ -236,12 +236,12 @@
     - In src/protocol/lxp_kernel.c make lxp_kernel_prepare_activity open a journal over its snapshot for the duration of a program call, so lxp_ctx_account_stage_module_value in src/protocol/lxp_module_ctx.c stages the way it does on the commit path, and discard that journal with the snapshot; the prepare pass changes no committed state.
     - Extend tests/protocol/lxp_test_module_ctx.c and tests/protocol/lxp_test_kernel.c for staging under prepare and its discard, and extend tests/test_web_program_path.c with a run whose genesis carries no web fee account and whose first paying call creates it, keeping the genesis-provisioned run as it is; close observation 2.2.2 naming the revision.
     - _Requirements: 11.1_
-  - [ ] 2.24 Canonicalise JSON numbers as ECMAScript does so the shared vectors agree — **Implemented - qualification pending**
+  - [x] 2.24 Canonicalise JSON numbers as ECMAScript does so the shared vectors agree
     - Make the sidecar's api canonicaliser produce, for every JSON number, the ECMAScript Number::toString digits of the correctly rounded IEEE 754 double the literal denotes, as RFC 8785 requires: parse the literal to the nearest double, enabling serde_json's float_roundtrip feature for the crate if its default parse is not correctly rounded for long literals, and print the shortest digit string that round-trips, choosing the closest when several do; the vector file stays as written.
     - Add a unit test in interop/crates/x-websearch/tests/api.rs that parses the literal 123456789012345678901234 and asserts both the double's bits and the printed digits against modules/xweb/types/testdata/api-vectors.json, beside the existing vector test.
     - Run task 2.17's verify_cmd once on the result, then task 2.14's build command and verify_cmd once each; on exit 0 record tasks 2.17 and 2.14 done with that revision, their commands, exit codes and logs, and close observations 2.17.1, 2.14.1 and 2.14.2 naming the revision.
     - _Requirements: 17.3, 17.6_
-  - [ ] 2.25 Correct the select vector's number digits and qualify the api request path — **Implemented - qualification pending**
+  - [x] 2.25 Correct the select vector's number digits and qualify the api request path
     - The literal 123456789012345678901234 parses to the correctly rounded double 0x44ba249b1f10a06d, whose shortest round-trip digits are 1.2345678901234569e+23 in ECMAScript, Go and Python alike, so the answer in interop/crates/x-websearch/tests/fixtures/api/select-vectors.json that expects 1.2345678901234568e+23 is wrong; correct that vector to 1.2345678901234569e+23 and change nothing else in it.
     - Add the unit test in interop/crates/x-websearch/tests/api.rs that parses that literal, asserts the double's bits are 0x44ba249b1f10a06d and asserts the canonical digits are 1.2345678901234569e+23, so the vector and the code are pinned to the same value.
     - Run this task's verify_cmd once; on exit 0 record tasks 2.14, 2.17 and 2.24 done with that revision, command, exit code and log, and close observations 2.14.1, 2.14.2, 2.17.1 and 2.24.1 naming the revision.
@@ -261,6 +261,14 @@
     - List lx_getProgramEvents with its parameters and result shape in platform/hosted/gateway/openrpc.json, matching the method task 2.21 wrote in platform/hosted/gateway/src/rpc.rs.
     - Extend platform/hosted/gateway/tests/local/events.rs so the local qualification runs the reference web-reader program's request through a real node and core and reads the request event with its raw bytes through lx_getProgramEvents; close observation 2.21.2 naming the revision.
     - _Requirements: 11.2_
+  - [ ] 2.29 Restore the module context test after the web module registration and qualify the prepare pass staging
+    - test-module-ctx stops in its opening block, where lxp_ctx_emit_transfer_set returns LXP_FATAL_INVARIANT, on every revision since the web module was registered with the kernel; run the test once at that registration commit's parent to confirm the cause, then fix it where it lives, whether a bound or table in src/protocol/lxp_module_ctx.c or include/layerx/lxp_module.h that still assumes ten reserved modules or an expectation in the test that the registration made stale; every existing assertion stays exactly as strong.
+    - Run task 2.23's verify_cmd once; on exit 0 record task 2.23 done with that revision, command, exit code and log, and close observations 2.2.2 and 2.23.1 naming the revision.
+    - _Requirements: 11.1_
+  - [x] 2.30 Pin the api preimage vector in the attestation test and qualify the api request path
+    - interop/crates/x-websearch/tests/attest.rs asserts the preimage vector file holds two vectors while task 2.13 added the third, evm-api-single; extend the_preimage_matches_every_pinned_vector to pin all three, checking the api vector's preimage exactly as the other two are checked, with no existing assertion weakened.
+    - Run task 2.25's verify_cmd once; on exit 0 record tasks 2.25, 2.14, 2.17 and 2.24 done with that revision, command, exit code and log, and close observations 2.14.1, 2.14.2, 2.17.1, 2.24.1 and 2.25.1 naming the revision.
+    - _Requirements: 17.3, 17.6_
 
 ## Wave 3 - One Run, Recorded
 
@@ -278,7 +286,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17", "1.18"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23", "2.24", "2.25", "2.26", "2.27", "2.28"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23", "2.24", "2.25", "2.26", "2.27", "2.28", "2.29", "2.30"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }

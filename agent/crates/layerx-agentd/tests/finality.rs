@@ -34,7 +34,7 @@ const BATCH_NUMBER: u64 = 8;
 const GLOBAL_SEQUENCE: u64 = 9;
 const EPOCH: u64 = 2;
 const PAXEER_CHAIN_ID: u64 = 31_337;
-const SETTLEMENT_CONTRACT: [u8; 20] = [0x55; 20];
+const SETTLEMENT_CONTRACT: [u8; 20] = layerx_client::evidence::ANCHOR_SETTLEMENT_CONTRACT;
 
 fn tenant() -> TenantId {
     TenantId::new("tenant-a").unwrap_or_else(|error| panic!("tenant: {error}"))

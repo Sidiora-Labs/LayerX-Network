@@ -6,10 +6,53 @@ fn checked<T, E: std::fmt::Debug>(value: Result<T, E>) -> T {
     value.unwrap_or_else(|error| panic!("native terminal evidence: {error:?}"))
 }
 
+fn custody_fixture(directory: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../tests/fixtures/custody")
+        .join(directory)
+}
+
+#[test]
+fn daemon_terminal_fixture_carries_the_credit_and_maintenance_the_platform_writes() {
+    let root = custody_fixture("daemon-light-credit-receipt");
+    let vector = custody_fixture("paxeer-light-v1");
+    let read = |path: &std::path::Path, name: &str| checked(std::fs::read(path.join(name)));
+    let credit = read(&root, "credit");
+    let profile = read(&root, "profile");
+    assert_eq!(credit, read(&vector, "custody.credit"));
+    assert_eq!(profile, read(&vector, "custody.profile"));
+    assert_eq!(&credit[..5], b"LXDC3");
+    assert_eq!(&profile[..5], b"LXBC3");
+    let kind = checked(layerx_types::payload::ActivityType::new(
+        layerx_types::payload::ModuleId::Bridge,
+        1,
+    ));
+    let registration = checked(layerx_types::payload::ModuleRegistration::new(
+        layerx_types::payload::ModuleId::Bridge,
+        &[kind],
+    ));
+    let registry = checked(layerx_types::payload::ModuleRegistry::new(&[registration]));
+    let activity = checked(layerx_wire::activity::decode_signed(
+        &read(&root, "activity"),
+        &registry,
+    ));
+    assert_eq!(activity.payload(), credit.as_slice());
+    checked(crate::prepare::disclose(
+        &checked(layerx_wire::activity::encode_unsigned(&activity)),
+        &registry,
+    ));
+    assert!(matches!(
+        checked(layerx_wire::batch_maintenance::decode_maintenance(&read(
+            &root,
+            "maintenance.receipt"
+        ))),
+        layerx_wire::batch_maintenance::MaintenanceReceipt::Batch(_)
+    ));
+}
+
 #[test]
 fn actual_daemon_terminal_requires_the_complete_maintained_transition() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../tests/fixtures/custody/daemon-credit-receipt");
+    let root = custody_fixture("daemon-light-credit-receipt");
     let read = |name: &str| checked(std::fs::read(root.join(name)));
     let header_bytes = read("header");
     let header = checked(layerx_wire::receipt::decode_batch_header(&header_bytes));

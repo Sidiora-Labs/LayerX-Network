@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use k256::ecdsa::SigningKey;
 use serde_json::{json, Value};
+use x_websearch::api::ApiPayload;
 use x_websearch::attest::{
     self, evm_requester, network_word, recover_signer, sign_digest, signer_address,
     stored_response, Answer, Attestation, Attestor, AttestorSet, Discard, Level, SignatureExchange,
@@ -332,6 +333,33 @@ fn vectors() -> Outcome<Value> {
     )
 }
 
+fn number_at(value: &Value, pointer: &str) -> Outcome<u64> {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| fail(format!("missing {pointer}")))
+}
+
+/// Checks the api preimage vector's payload against the codec vector it
+/// names in the api vector file.
+fn api_vector_payload(name: &str, payload: &[u8]) -> Outcome {
+    let codec = read_json(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../modules/xweb/types/testdata/api-vectors.json"),
+    )?;
+    let vector = codec
+        .get("vectors")
+        .and_then(Value::as_array)
+        .and_then(|list| {
+            list.iter()
+                .find(|vector| vector.get("name") == Some(&json!(name)))
+        })
+        .ok_or_else(|| fail(format!("no api vector {name}")))?;
+    assert_eq!(hex0x(payload), text(vector, "/payload")?);
+    assert_eq!(hex0x(&keccak(payload)), text(vector, "/payload_hash")?);
+    Ok(())
+}
+
 #[test]
 fn the_preimage_matches_every_pinned_vector() -> Outcome {
     let pinned = vectors()?;
@@ -344,16 +372,31 @@ fn the_preimage_matches_every_pinned_vector() -> Outcome {
         .get("vectors")
         .and_then(Value::as_array)
         .ok_or_else(|| fail("no vectors"))?;
-    assert_eq!(list.len(), 2);
-    for vector in list {
+    assert_eq!(list.len(), 3);
+    let names = ["evm-fetch", "program-search", "evm-api-single"];
+    for (vector, name) in list.iter().zip(names) {
+        assert_eq!(text(vector, "/name")?, name);
         let number = |key: &str| {
             vector
                 .get(key)
                 .and_then(Value::as_u64)
                 .ok_or_else(|| fail(format!("missing {key}")))
         };
-        let payload = text(vector, "/payload")?.as_bytes();
+        let payload_hex =
+            unhex0x(text(vector, "/payload_hex")?).ok_or_else(|| fail("payload_hex is not hex"))?;
+        let payload = if name == "evm-api-single" {
+            api_vector_payload(text(vector, "/payload_vector")?, &payload_hex)?;
+            payload_hex.as_slice()
+        } else {
+            let payload = text(vector, "/payload")?.as_bytes();
+            assert_eq!(payload, payload_hex.as_slice());
+            payload
+        };
         let response = text(vector, "/response")?.as_bytes();
+        assert_eq!(
+            unhex0x(text(vector, "/response_hex")?).as_deref(),
+            Some(response)
+        );
         assert_eq!(hex0x(&keccak(payload)), text(vector, "/payload_hash")?);
         assert_eq!(hex0x(&keccak(response)), text(vector, "/response_hash")?);
         let attestation = Attestation {
@@ -373,6 +416,16 @@ fn the_preimage_matches_every_pinned_vector() -> Outcome {
         let signer = recover_signer(&digest, &signature(text(vector, "/signature")?)?)?;
         assert_eq!(hex0x(&signer), text(vector, "/signer")?);
     }
+
+    // The api vector is a single-level request whose one signature comes
+    // from the attestor its payload names.
+    let api = &list[2];
+    assert_eq!(number_at(api, "/kind")?, 3);
+    let payload = ApiPayload::decode(
+        &unhex0x(text(api, "/payload_hex")?).ok_or_else(|| fail("payload_hex is not hex"))?,
+    )?;
+    assert_eq!(payload.level, 1);
+    assert_eq!(hex0x(&payload.attestor), text(api, "/signer")?);
 
     // The origin-1 attestation of the decoded request is the evm-fetch vector.
     let evm = &list[0];
