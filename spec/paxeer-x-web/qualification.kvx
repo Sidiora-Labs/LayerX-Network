@@ -417,3 +417,11 @@ exit_code = 2
 log_path = ".logs/verify.log"
 observed = "test-module-ctx stops in its unchanged opening block, where lxp_ctx_emit_transfer_set returns LXP_FATAL_INVARIANT (-1001) against the test's apply_transfer fixture exactly as the unmodified test does, so the new prepare staging checks after it never run, while test-kernel and test-web-program-path, including the run whose first paying call creates the web fee account, pass (.logs/verify-rest.log, exit 0)."
 assumption = "The module-ctx fixture's owner restores that transfer emit check without weakening it, after which this verify_cmd runs unchanged."
+
+[observation.2.25.1]
+task = "2.25"
+file = "interop/crates/x-websearch/tests/attest.rs"
+symbol = "the_preimage_matches_every_pinned_vector"
+observed = "At a43f796c08960b6ed5aff6a9988c57094cff082f clippy is clean and all eleven api tests pass with the corrected vector, but the attest test pins two preimage vectors where modules/xweb/types/testdata/preimage-vectors.json now holds three (evm-api-single, added by task 2.13), so it fails (.logs/verify.log, exit 101) and the canonical and content tests did not run."
+assumption = "Both files lie outside this task; the attest test's owner extends it to the third vector without relaxing it, after which the verify_cmd runs unchanged."
+severity = "blocker"

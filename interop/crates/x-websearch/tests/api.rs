@@ -726,6 +726,17 @@ fn pointers_select_and_canonicalise_as_the_vectors_pin() -> Checked {
 }
 
 #[test]
+fn a_long_integer_literal_reads_as_the_nearest_double_and_prints_its_shortest_closest_digits(
+) -> Checked {
+    let api::Json::Number(number) = api::parse_json("123456789012345678901234")? else {
+        return Err(fail("the literal did not parse as a number"));
+    };
+    assert_eq!(number.to_bits(), 0x44ba_249b_1f10_a06d);
+    assert_eq!(api::es_number(number), "1.2345678901234569e+23");
+    Ok(())
+}
+
+#[test]
 fn two_sidecars_holding_different_envelopes_sign_the_same_digest() -> Checked {
     let scratch = Scratch::new("majority")?;
     let server = ApiServer::start()?;

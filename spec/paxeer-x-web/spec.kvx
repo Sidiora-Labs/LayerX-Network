@@ -994,7 +994,11 @@ reqs = ["17.3","17.6"]
 
 [task.2.25]
 title = "Correct the select vector's number digits and qualify the api request path"
-status = "pending"
+status = "implemented"
+implemented_revision = "a43f796c08960b6ed5aff6a9988c57094cff082f"
+implemented_command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test api --test attest --test canonical --test content'"
+implemented_exit_code = 101
+implemented_log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.19","2.24"]
 do_1 = "The literal 123456789012345678901234 parses to the correctly rounded double 0x44ba249b1f10a06d, whose shortest round-trip digits are 1.2345678901234569e+23 in ECMAScript, Go and Python alike, so the answer in interop/crates/x-websearch/tests/fixtures/api/select-vectors.json that expects 1.2345678901234568e+23 is wrong; correct that vector to 1.2345678901234569e+23 and change nothing else in it."

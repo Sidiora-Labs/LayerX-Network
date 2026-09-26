@@ -241,7 +241,7 @@
     - Add a unit test in interop/crates/x-websearch/tests/api.rs that parses the literal 123456789012345678901234 and asserts both the double's bits and the printed digits against modules/xweb/types/testdata/api-vectors.json, beside the existing vector test.
     - Run task 2.17's verify_cmd once on the result, then task 2.14's build command and verify_cmd once each; on exit 0 record tasks 2.17 and 2.14 done with that revision, their commands, exit codes and logs, and close observations 2.17.1, 2.14.1 and 2.14.2 naming the revision.
     - _Requirements: 17.3, 17.6_
-  - [ ] 2.25 Correct the select vector's number digits and qualify the api request path
+  - [ ] 2.25 Correct the select vector's number digits and qualify the api request path — **Implemented - qualification pending**
     - The literal 123456789012345678901234 parses to the correctly rounded double 0x44ba249b1f10a06d, whose shortest round-trip digits are 1.2345678901234569e+23 in ECMAScript, Go and Python alike, so the answer in interop/crates/x-websearch/tests/fixtures/api/select-vectors.json that expects 1.2345678901234568e+23 is wrong; correct that vector to 1.2345678901234569e+23 and change nothing else in it.
     - Add the unit test in interop/crates/x-websearch/tests/api.rs that parses that literal, asserts the double's bits are 0x44ba249b1f10a06d and asserts the canonical digits are 1.2345678901234569e+23, so the vector and the code are pinned to the same value.
     - Run this task's verify_cmd once; on exit 0 record tasks 2.14, 2.17 and 2.24 done with that revision, command, exit code and log, and close observations 2.14.1, 2.14.2, 2.17.1 and 2.24.1 naming the revision.
