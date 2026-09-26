@@ -265,7 +265,11 @@ status = "pending"
 
 [task.1.1]
 title = "Move the EVM vault to bridge/evm and harden it to production grade"
-status = "pending"
+status = "done"
+revision = "f715c9d92d1e984d28a0667fa71fca0ce94fc4a6"
+command = "timeout 20m sh -c 'bash bridge/evm/bootstrap-libs.sh && forge test --root bridge/evm -vvv'"
+exit_code = 0
+log_path = "build/bridge-gates/task-1.1-verify.log"
 wave = 1
 requires = []
 do_1 = "Move the project with git mv so its history follows: interop/contracts/ethereum-bridge/src/PaxeerXVault.sol, src/BridgeAttestation.sol, test/PaxeerXVault.t.sol, test/TestToken.sol, test/Vm.sol, ATTESTATION.md and foundry.toml become bridge/evm/..., and nothing is left at the old path."

@@ -58,3 +58,19 @@ symbol = "deploy-scripts-check"
 observed = "The pinned Solana toolchain and the bridge/evm and bridge/solana sources are not present at this revision, so the offline check drives the Solana run only as far as the toolchain refusal and the two EVM scripts check the sources where they are used instead of at preflight."
 assumption = "A real build and deployment is the Solana dry run's ground, not this check's; the toolchain refusal proves every configuration and environment check before it passed."
 severity = "assumption"
+
+[observation.1.1.1]
+task = "1.1"
+file = "modules/layerxbridge/ATTESTATION.md"
+symbol = "modules/layerxbridge/types/attestation.go"
+observed = "Both files name interop/contracts/ethereum-bridge for the Solidity attestation source and its document, which this task moved to bridge/evm with git mv, so the two references now point at a path that no longer exists."
+assumption = "The halt on chain changes forbids editing anything under modules/, so both files are left exactly as written and the references stay stale until the first authorised chain change corrects them."
+severity = "note"
+
+[observation.1.1.2]
+task = "1.1"
+file = "spec/paxeer-x-bridge/qualification.kvx"
+symbol = "[gate.<task>.<n>] versus req.15 ac_2 and ac_3"
+observed = "This header names a gate record's result and log keys outcome and evidence, while req.15 ac_2 and ac_3 and task 3.1 do_2 require the same record to carry the exit code and the log path, so the two spellings of one gate record disagree before any gate is written."
+assumption = "Both spellings are left as written here, and which key names a gate record's exit code and log path remains unresolved in this ledger."
+severity = "note"
