@@ -129,6 +129,7 @@ impl ModuleCacheKey {
             crate::ABI_V1_VERSION => Ok(AbiRevision::V1),
             crate::ABI_V2_VERSION => Ok(AbiRevision::V2),
             crate::ABI_V3_VERSION => Ok(AbiRevision::V3),
+            crate::ABI_V4_VERSION => Ok(AbiRevision::V4),
             requested => Err(CompiledModuleRefusal::UnsupportedAbiVersion { requested }),
         }
     }

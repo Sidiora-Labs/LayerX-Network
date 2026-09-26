@@ -3431,6 +3431,19 @@ test-programs-oracle-read: $(BUILD_DIR)/tests/test_programs_oracle_read
 	tools/lxp_check_sole_writer.sh
 	sh tools/lx_oracle_adapter_isolation.sh
 
+$(BUILD_DIR)/tests/test_programs_web_read: tests/test_programs_web_read.c \
+		tests/programs/test_call_activity.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-programs-web-read
+test-programs-web-read: $(BUILD_DIR)/tests/test_programs_web_read
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_programs_web_read
+	sh tools/lx_oracle_adapter_isolation.sh
+
 .PHONY: programs-native-lifecycle-fixtures programs-check-native-lifecycle-fixtures
 programs-native-lifecycle-fixtures: $(BUILD_DIR)/tests/programs_call_activity
 	python3 platform/sdk/conformance/fixtures/generate_native_lifecycle_fixtures.py --encoder $<

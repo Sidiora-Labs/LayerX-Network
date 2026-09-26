@@ -6,6 +6,7 @@
 #include "occupancy.h"
 
 #include "layerx/lx_oracle.h"
+#include "layerx/lx_web.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_merkle.h"
@@ -102,6 +103,13 @@ struct lxp_programs_call_activity {
         uint8_t market_id[32];
         uint8_t record[LX_ORACLE_COMMITTED_BYTES];
     } oracle_view;
+    struct {
+        bool active;
+        uint8_t program_id[32];
+        uint8_t header[LX_WEB_ANSWER_HEADER_BYTES];
+        uint32_t response_length;
+        uint8_t response[LX_WEB_MAX_RESPONSE_BYTES];
+    } web_view;
     struct {
         lxp_programs_storage_cell *cells;
         uint32_t count;
@@ -394,7 +402,7 @@ static lxp_result catalog_count_visit(const uint8_t *key, size_t key_length,
         key_length != PROGRAM_KEY_BYTES || record_length != PROGRAM_RECORD_BYTES ||
         memcmp(key, "program\0", 8U) != 0 || lxp_ct_is_zero(key + 8U, 32U) ||
         read_u16(record + 65U) == 0U ||
-        read_u16(record + 65U) > LX_PROGRAMS_GUEST_ABI_V3_VERSION ||
+        read_u16(record + 65U) > LX_PROGRAMS_GUEST_ABI_V4_VERSION ||
         (read_u16(record + 65U) >= LX_PROGRAMS_GUEST_ABI_V2_VERSION &&
          !lxp_protocol_version_uses_occupancy(value->ctx->protocol_version)) ||
         lxp_ct_is_zero(record + 33U, 32U) || value->catalog_count == UINT32_MAX)
@@ -784,6 +792,70 @@ lxp_result layerx_programs_call_oracle_view_byte(
     } else if (section == 1U) {
         bytes = value->oracle_view.record;
         length = LX_ORACLE_COMMITTED_BYTES;
+    } else {
+        return LXP_ERR_UNKNOWN_FIELD;
+    }
+    if ((size_t)offset >= length) return LXP_ERR_TRUNCATED;
+    return (lxp_result)bytes[offset];
+}
+
+lxp_result layerx_programs_call_web_view_begin(
+    uint64_t token, uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3,
+    uint64_t request_id)
+{
+    lxp_programs_call_activity *value =
+        (lxp_programs_call_activity *)(uintptr_t)token;
+    uint8_t program_id[32];
+    lx_web_answer answer;
+    size_t index;
+    lxp_result status;
+    if (value == NULL || value->ctx == NULL) return LXP_ERR_NON_CANONICAL;
+    (void)memset(&value->web_view, 0, sizeof(value->web_view));
+    write_u64(program_id, p0);
+    write_u64(program_id + 8U, p1);
+    write_u64(program_id + 16U, p2);
+    write_u64(program_id + 24U, p3);
+    status = lx_web_committed_read(value->ctx, program_id, request_id,
+                                   &answer);
+    if (status != LXP_OK) return status;
+    if (lxp_ct_memcmp(answer.program_id, program_id, 32U) != 0 ||
+        answer.request_id != request_id ||
+        answer.response_length > LX_WEB_MAX_RESPONSE_BYTES ||
+        answer.response_length > answer.full_length)
+        return LXP_ERR_ROOT_MISMATCH;
+    (void)memcpy(value->web_view.program_id, program_id, 32U);
+    (void)memcpy(value->web_view.header, answer.content_digest, 32U);
+    for (index = 0U; index < 4U; ++index) {
+        value->web_view.header[32U + index] =
+            (uint8_t)(answer.full_length >> ((3U - index) * 8U));
+        value->web_view.header[36U + index] =
+            (uint8_t)(answer.response_length >> ((3U - index) * 8U));
+    }
+    value->web_view.response_length = answer.response_length;
+    (void)memcpy(value->web_view.response, answer.response,
+                 answer.response_length);
+    value->web_view.active = true;
+    return LXP_OK;
+}
+
+lxp_result layerx_programs_call_web_view_byte(
+    uint64_t token, uint16_t section, uint32_t offset)
+{
+    lxp_programs_call_activity *value =
+        (lxp_programs_call_activity *)(uintptr_t)token;
+    const uint8_t *bytes;
+    size_t length;
+    if (value == NULL || !value->web_view.active)
+        return LXP_ERR_UNKNOWN_FIELD;
+    if (section == 0U) {
+        bytes = value->web_view.program_id;
+        length = 32U;
+    } else if (section == 1U) {
+        bytes = value->web_view.header;
+        length = LX_WEB_ANSWER_HEADER_BYTES;
+    } else if (section == 2U) {
+        bytes = value->web_view.response;
+        length = value->web_view.response_length;
     } else {
         return LXP_ERR_UNKNOWN_FIELD;
     }
@@ -1783,7 +1855,8 @@ static lxp_result transfer_source_validate(
     }
     if (source->kind == PROGRAM_TRANSFER_SOURCE_PROGRAM_FUNDING) {
         if ((value->abi_version != LX_PROGRAMS_GUEST_ABI_V2_VERSION &&
-             value->abi_version != LX_PROGRAMS_GUEST_ABI_V3_VERSION) ||
+             value->abi_version != LX_PROGRAMS_GUEST_ABI_V3_VERSION &&
+             value->abi_version != LX_PROGRAMS_GUEST_ABI_V4_VERSION) ||
             lxp_ct_is_zero(source->owner_program, 32U) ||
             lxp_ct_memcmp(source->owner_program, source->staging_program, 32U) != 0 ||
             source->seed_written != source->seed_length ||
@@ -1807,7 +1880,8 @@ static lxp_result transfer_source_validate(
     }
     if (source->kind != PROGRAM_TRANSFER_SOURCE_PROGRAM ||
         (value->abi_version != LX_PROGRAMS_GUEST_ABI_V2_VERSION &&
-         value->abi_version != LX_PROGRAMS_GUEST_ABI_V3_VERSION) ||
+         value->abi_version != LX_PROGRAMS_GUEST_ABI_V3_VERSION &&
+         value->abi_version != LX_PROGRAMS_GUEST_ABI_V4_VERSION) ||
         lxp_ct_is_zero(source->owner_program, 32U) ||
         lxp_ct_memcmp(source->owner_program, source->staging_program, 32U) != 0 ||
         source->seed_written != source->seed_length ||
@@ -2002,7 +2076,7 @@ lxp_result lxp_programs_call_decode(lxp_module_ctx *ctx,
         value->response_capacity > LX_PROGRAMS_MAX_RESPONSE_BYTES)
         return LXP_ERR_NON_CANONICAL;
     if (value->abi_version > registration->abi_version ||
-        value->abi_version > LX_PROGRAMS_GUEST_ABI_V3_VERSION ||
+        value->abi_version > LX_PROGRAMS_GUEST_ABI_V4_VERSION ||
         (value->abi_version >= LX_PROGRAMS_GUEST_ABI_V2_VERSION &&
          !lxp_protocol_version_uses_occupancy(ctx->protocol_version)))
         return LXP_ERR_VERSION_UNSUPPORTED;

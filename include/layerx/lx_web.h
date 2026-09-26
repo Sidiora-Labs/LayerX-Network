@@ -39,7 +39,13 @@ enum {
     LX_WEB_STORE_CAPACITY = 64,
     LX_WEB_LEAF_BYTES = 213,
     LX_WEB_REQUEST_TOPIC_BYTES = 22,
-    LX_WEB_REQUEST_RECORD_HEADER_BYTES = 13
+    LX_WEB_REQUEST_RECORD_HEADER_BYTES = 13,
+    LX_WEB_ANSWER_PREFIX_BYTES = 10,
+    LX_WEB_ANSWER_KEY_BYTES = LX_WEB_ANSWER_PREFIX_BYTES + 32 + 8 + 1,
+    LX_WEB_ANSWER_HEADER_BYTES = 40,
+    LX_WEB_ANSWER_CHUNK_BYTES = 1024,
+    LX_WEB_ANSWER_MAX_CHUNKS =
+        LX_WEB_MAX_RESPONSE_BYTES / LX_WEB_ANSWER_CHUNK_BYTES
 };
 
 /* One attested answer to a program web request. The fields up to
@@ -96,6 +102,18 @@ typedef struct lx_web_store {
     lx_web_committed committed[LX_WEB_STORE_CAPACITY];
     size_t committed_count;
 } lx_web_store;
+
+/* One answer as committed in module storage for the program that owns the
+ * request. The record is keyed by program id and request id; part 0 carries
+ * the content digest and both lengths, parts 1..4 the response in order. */
+typedef struct lx_web_answer {
+    uint8_t program_id[32];
+    uint64_t request_id;
+    uint8_t content_digest[32];
+    uint32_t full_length;
+    uint32_t response_length;
+    uint8_t response[LX_WEB_MAX_RESPONSE_BYTES];
+} lx_web_answer;
 
 typedef struct lx_web_intake_request {
     lx_web_store *store;
@@ -171,6 +189,16 @@ lxp_result lx_web_pending_add(lx_web_store *store,
 lxp_result lx_web_intake(lxp_module_ctx *ctx,
                          const lx_web_intake_request *request,
                          lx_web_committed *committed);
+/* Stages the answer record for an accepted observation into the context's
+ * module storage. */
+lxp_result lx_web_committed_put(lxp_module_ctx *ctx,
+                                const lx_web_observation *observation);
+/* Reads the answer committed in the context module's storage for one request
+ * of one program. Staged writes are never visible and nothing leaves the
+ * node: LXP_ERR_UNKNOWN_FIELD means no answer is committed for the pair. */
+lxp_result lx_web_committed_read(lxp_module_ctx *ctx,
+                                 const uint8_t program_id[32],
+                                 uint64_t request_id, lx_web_answer *answer);
 lxp_result lx_web_committed_lookup(const lx_web_store *store,
                                    const uint8_t program_id[32],
                                    uint64_t request_id,

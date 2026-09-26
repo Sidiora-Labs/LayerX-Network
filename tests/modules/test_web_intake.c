@@ -826,6 +826,68 @@ static int attestor_sets(lxp_module_ctx *ctx, lxp_kernel *kernel)
     return 0;
 }
 
+static int committed_reads(lxp_state_store *state, lxp_state_journal *journal,
+                           lxp_kernel *kernel)
+{
+    static uint8_t read_arena_bytes[65536];
+    static lx_web_answer answer;
+    const uint8_t *signatures[3];
+    lx_web_attestor_set set;
+    lxp_module_ctx write_ctx;
+    lxp_module_ctx read_ctx;
+    lxp_effect_buffer effects;
+    lxp_arena read_arena;
+    uint8_t program_id[32];
+
+    attestors_fill(&set, 2U);
+    program_id_fill(program_id);
+    store_reset();
+    WEB_CHECK(lx_web_pending_add(&store, program_id, web_first_request,
+                                 LX_WEB_KIND_FETCH, web_payload,
+                                 sizeof(web_payload) - 1U, 40U) == LXP_OK);
+    WEB_CHECK(lxp_state_journal_open(state, state->next_sequence,
+                                     journal) == LXP_OK);
+    WEB_CHECK(lxp_arena_init(&read_arena, read_arena_bytes,
+                             sizeof(read_arena_bytes)) == LXP_OK);
+    WEB_CHECK(lxp_module_ctx_init(&write_ctx, kernel, LXP_MODULE_SERVICE,
+                                  500U, 0U, state->next_sequence, 1000U,
+                                  &read_arena, true) == LXP_OK);
+    write_ctx.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+    WEB_CHECK(lxp_effect_buffer_init(&effects) == LXP_OK);
+    WEB_CHECK(lxp_module_ctx_bind_effects(&write_ctx, &effects) == LXP_OK);
+    signatures[0] = web_first_sig_0;
+    signatures[1] = web_first_sig_1;
+    signatures[2] = web_first_sig_2;
+    observation_fill(&observation, signatures, 3U);
+    WEB_CHECK(submit(&write_ctx, &set, &observation) == LXP_OK);
+    WEB_CHECK(lx_web_committed_read(&write_ctx, program_id, web_first_request,
+                                    &answer) == LXP_ERR_UNKNOWN_FIELD);
+    WEB_CHECK(lxp_module_ctx_prepare_commit(&write_ctx) == LXP_OK);
+    WEB_CHECK(lxp_state_journal_commit(journal) == LXP_OK);
+    WEB_CHECK(lxp_module_ctx_commit(&write_ctx) == LXP_OK);
+
+    WEB_CHECK(lxp_arena_init(&read_arena, read_arena_bytes,
+                             sizeof(read_arena_bytes)) == LXP_OK);
+    WEB_CHECK(lxp_module_ctx_init(&read_ctx, kernel, LXP_MODULE_SERVICE,
+                                  500U, 0U, state->next_sequence, 1000U,
+                                  &read_arena, false) == LXP_OK);
+    WEB_CHECK(lx_web_committed_read(&read_ctx, program_id, web_first_request,
+                                    &answer) == LXP_OK);
+    WEB_CHECK(memcmp(answer.program_id, program_id, 32U) == 0 &&
+              answer.request_id == web_first_request &&
+              answer.full_length == observation.full_length &&
+              answer.response_length == sizeof(web_text) - 1U &&
+              memcmp(answer.response, web_text, sizeof(web_text) - 1U) == 0 &&
+              memcmp(answer.content_digest, web_content_digest, 32U) == 0);
+    WEB_CHECK(lx_web_committed_read(&read_ctx, program_id,
+                                    web_first_request + 1U, &answer) ==
+              LXP_ERR_UNKNOWN_FIELD);
+    program_id[0] ^= 1U;
+    WEB_CHECK(lx_web_committed_read(&read_ctx, program_id, web_first_request,
+                                    &answer) == LXP_ERR_UNKNOWN_FIELD);
+    return 0;
+}
+
 int main(void)
 {
     lxp_state_store state;
@@ -851,7 +913,8 @@ int main(void)
                                   WEB_SEQUENCE, 1000U, &arena, true) ==
               LXP_OK);
     if (observation_refusals(&ctx) != 0 || observation_accepts(&ctx) != 0 ||
-        attestor_sets(&ctx, &kernel) != 0)
+        attestor_sets(&ctx, &kernel) != 0 ||
+        committed_reads(&state, &journal, &kernel) != 0)
         return 1;
     WEB_CHECK(lxp_state_store_destroy(&state) == LXP_OK);
     return 0;

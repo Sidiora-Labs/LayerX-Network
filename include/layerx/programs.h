@@ -182,6 +182,7 @@ enum {
     LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION = 4,
     LX_PROGRAMS_GUEST_ABI_V2_VERSION = 2,
     LX_PROGRAMS_GUEST_ABI_V3_VERSION = 3,
+    LX_PROGRAMS_GUEST_ABI_V4_VERSION = 4,
     LX_PROGRAMS_EVENT_DEPLOYED = 1,
     LX_PROGRAMS_EVENT_UPGRADED = 2,
     LX_PROGRAMS_EVENT_CALLED = 3,
@@ -555,6 +556,14 @@ lxp_result layerx_programs_call_balance_view_byte(
 lxp_result layerx_programs_call_oracle_view_begin(
     uint64_t token, uint64_t m0, uint64_t m1, uint64_t m2, uint64_t m3);
 lxp_result layerx_programs_call_oracle_view_byte(
+    uint64_t token, uint16_t section, uint32_t offset);
+/* Committed web answer view for one request of one program. Section 0 is the
+ * program id, section 1 the 40-byte header (content digest, big-endian full
+ * length and response length) and section 2 the response bytes. */
+lxp_result layerx_programs_call_web_view_begin(
+    uint64_t token, uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3,
+    uint64_t request_id);
+lxp_result layerx_programs_call_web_view_byte(
     uint64_t token, uint16_t section, uint32_t offset);
 
 /* Per-catalog-program scalar storage projection.  The root-only storage

@@ -126,3 +126,27 @@ symbol = "CRAWL_INTERVAL"
 observed = "The configuration has no crawl interval and no signal handling is reachable without a new crate (unsafe_code is denied and Cargo.toml is outside the touches), so cycles start every 900 seconds from a constant and SIGTERM ends the process by its default action."
 assumption = "The index commits per cycle and the content and payment stores write by rename, so termination leaves the data directory reopenable, which tests/binary.rs asserts; a configured interval and a graceful stop are feature-owned changes."
 severity = "note"
+
+[observation.1.8.1]
+task = "1.8"
+file = "include/layerx/programs.h"
+symbol = "LX_PROGRAMS_SANDBOX_ABI_VERSION"
+observed = "Raising LX_PROGRAMS_SANDBOX_ABI_VERSION to 4 collides with LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION = 4, so guest ABI 4 is LX_PROGRAMS_GUEST_ABI_V4_VERSION and tests/programs/test_registration.c, which expects transition_validate(0, SANDBOX + 1) to be unsupported, now disagrees with deploy admission."
+assumption = "The test stays unedited as instructed; whether that assertion moves to the new constant is a decision for the feature owner."
+severity = "blocker"
+
+[observation.1.8.2]
+task = "1.8"
+file = "src/modules/web/lx_web_intake.c"
+symbol = "lx_web_committed_put"
+observed = "The web module id cannot be registered with the kernel, so committed answers live in the storage of the module context that runs intake and lx_web_committed_read reads that same context's module storage."
+assumption = "Task 2.2 routes intake through the programs module context so the call bridge reads the answers it committed."
+severity = "suspect"
+
+[observation.1.8.3]
+task = "1.8"
+file = "programs/sdk/rust/src/naming.rs"
+symbol = "clippy::byte_char_slices"
+observed = "Clippy with -D warnings on the Rust program SDK refuses the unchanged naming.rs line 183 byte-char slice, so the SDK lint gate fails before this task's SDK modules are linted."
+assumption = "The naming.rs lint is outside this task's touches and is left for its owner."
+severity = "suspect"

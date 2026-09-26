@@ -372,7 +372,11 @@ log_path = ".logs/verify.log"
 
 [task.1.8]
 title = "Add the web_read host import to the programs runtime and the call bridge"
-status = "pending"
+status = "done"
+revision = "4d26498e37be52148510e98c9d2c9e08cd177191"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path programs/Cargo.toml -p layerx-programs-runtime --test web_read --test abi_linker && make programs-abi-drift && make test-programs-web-read'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 1
 requires = ["1.7"]
 do_1 = "Write programs/crates/layerx-programs-runtime/src/host/web.rs beside host/oracle.rs implementing web_read(i32,i32,i32,i32)->i32 over the committed observation view, returning the response, digest and length for a request owned by the calling program, the absent code when nothing is committed, and a refusal for a small or out-of-bounds buffer; register it in host/mod.rs."

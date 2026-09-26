@@ -1,6 +1,7 @@
 #include "layerx/lx_web.h"
 
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_kernel.h"
 
 #include <string.h>
 
@@ -239,6 +240,132 @@ static lxp_result signatures_verify(
     return LXP_OK;
 }
 
+_Static_assert((int)LX_WEB_ANSWER_CHUNK_BYTES <=
+                   (int)LXP_MODULE_MAX_VALUE_BYTES &&
+                   (int)LX_WEB_ANSWER_KEY_BYTES <=
+                   (int)LXP_MODULE_MAX_KEY_BYTES &&
+                   (int)LX_WEB_ANSWER_MAX_CHUNKS *
+                   (int)LX_WEB_ANSWER_CHUNK_BYTES ==
+                   (int)LX_WEB_MAX_RESPONSE_BYTES,
+               "web answer parts fit module storage entries");
+
+static const uint8_t answer_prefix[LX_WEB_ANSWER_PREFIX_BYTES] = {
+    'w', 'e', 'b', '/', 'a', 'n', 's', 'w', 'e', 'r'
+};
+
+static void answer_key(uint8_t key[LX_WEB_ANSWER_KEY_BYTES],
+                       const uint8_t program_id[32], uint64_t request_id,
+                       uint8_t part)
+{
+    (void)memcpy(key, answer_prefix, LX_WEB_ANSWER_PREFIX_BYTES);
+    (void)memcpy(key + LX_WEB_ANSWER_PREFIX_BYTES, program_id, 32U);
+    put_u64(key + LX_WEB_ANSWER_PREFIX_BYTES + 32U, request_id);
+    key[LX_WEB_ANSWER_KEY_BYTES - 1U] = part;
+}
+
+static size_t answer_chunks(uint32_t response_length)
+{
+    return ((size_t)response_length + LX_WEB_ANSWER_CHUNK_BYTES - 1U) /
+           LX_WEB_ANSWER_CHUNK_BYTES;
+}
+
+lxp_result lx_web_committed_put(lxp_module_ctx *ctx,
+                                const lx_web_observation *observation)
+{
+    uint8_t key[LX_WEB_ANSWER_KEY_BYTES];
+    uint8_t header[LX_WEB_ANSWER_HEADER_BYTES];
+    size_t chunks;
+    size_t part;
+    lxp_result status;
+    if (ctx == NULL || observation == NULL ||
+        observation->response_length > LX_WEB_MAX_RESPONSE_BYTES ||
+        observation->response_length > observation->full_length ||
+        ctx->staged_reserve > LXP_MODULE_MAX_STAGED_WRITES ||
+        ctx->staged_count > LXP_MODULE_MAX_STAGED_WRITES - ctx->staged_reserve)
+        return LXP_ERR_NON_CANONICAL;
+    chunks = answer_chunks(observation->response_length);
+    if (LXP_MODULE_MAX_STAGED_WRITES - ctx->staged_reserve -
+            ctx->staged_count < chunks + 1U)
+        return LXP_ERR_ARENA_EXHAUSTED;
+    (void)memcpy(header, observation->content_digest, 32U);
+    put_u32(header + 32U, observation->full_length);
+    put_u32(header + 36U, observation->response_length);
+    answer_key(key, observation->program_id, observation->request_id, 0U);
+    status = lxp_ctx_kv_put(ctx, key, sizeof(key), header, sizeof(header));
+    for (part = 0U; status == LXP_OK && part < chunks; ++part) {
+        size_t offset = part * LX_WEB_ANSWER_CHUNK_BYTES;
+        size_t length = observation->response_length - offset;
+        if (length > LX_WEB_ANSWER_CHUNK_BYTES)
+            length = LX_WEB_ANSWER_CHUNK_BYTES;
+        answer_key(key, observation->program_id, observation->request_id,
+                   (uint8_t)(part + 1U));
+        status = lxp_ctx_kv_put(ctx, key, sizeof(key),
+                                observation->response + offset, length);
+    }
+    return status;
+}
+
+static lxp_result committed_part(const lxp_module_ctx *ctx,
+                                 const uint8_t key[LX_WEB_ANSWER_KEY_BYTES],
+                                 const uint8_t **bytes, size_t *length)
+{
+    const lxp_kernel *kernel = ctx->kernel;
+    size_t i;
+    if (kernel == NULL || kernel->module_kv_count > LXP_KERNEL_MAX_MODULE_KV)
+        return LXP_ERR_NON_CANONICAL;
+    for (i = 0U; i < kernel->module_kv_count; ++i) {
+        const lxp_module_kv_entry *entry = &kernel->module_kv[i];
+        if (entry->module_id != ctx->module_id ||
+            entry->key_length != LX_WEB_ANSWER_KEY_BYTES ||
+            memcmp(entry->key, key, LX_WEB_ANSWER_KEY_BYTES) != 0)
+            continue;
+        *bytes = entry->value;
+        *length = entry->value_length;
+        return LXP_OK;
+    }
+    return LXP_ERR_UNKNOWN_FIELD;
+}
+
+lxp_result lx_web_committed_read(lxp_module_ctx *ctx,
+                                 const uint8_t program_id[32],
+                                 uint64_t request_id, lx_web_answer *answer)
+{
+    uint8_t key[LX_WEB_ANSWER_KEY_BYTES];
+    const uint8_t *bytes;
+    size_t length;
+    size_t chunks;
+    size_t part;
+    lxp_result status;
+    if (ctx == NULL || program_id == NULL || answer == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    (void)memset(answer, 0, sizeof(*answer));
+    answer_key(key, program_id, request_id, 0U);
+    status = committed_part(ctx, key, &bytes, &length);
+    if (status != LXP_OK) return status;
+    if (length != LX_WEB_ANSWER_HEADER_BYTES) return LXP_ERR_NON_CANONICAL;
+    (void)memcpy(answer->program_id, program_id, 32U);
+    answer->request_id = request_id;
+    (void)memcpy(answer->content_digest, bytes, 32U);
+    answer->full_length = get_u32(bytes + 32U);
+    answer->response_length = get_u32(bytes + 36U);
+    if (answer->response_length > LX_WEB_MAX_RESPONSE_BYTES ||
+        answer->response_length > answer->full_length)
+        return LXP_ERR_NON_CANONICAL;
+    chunks = answer_chunks(answer->response_length);
+    for (part = 0U; part < chunks; ++part) {
+        size_t offset = part * LX_WEB_ANSWER_CHUNK_BYTES;
+        size_t expected = answer->response_length - offset;
+        if (expected > LX_WEB_ANSWER_CHUNK_BYTES)
+            expected = LX_WEB_ANSWER_CHUNK_BYTES;
+        answer_key(key, program_id, request_id, (uint8_t)(part + 1U));
+        status = committed_part(ctx, key, &bytes, &length);
+        if (status != LXP_OK || length != expected)
+            return LXP_ERR_NON_CANONICAL;
+        (void)memcpy(answer->response + offset, bytes, length);
+    }
+    return LXP_OK;
+}
+
 lxp_result lx_web_intake(lxp_module_ctx *ctx,
                          const lx_web_intake_request *request,
                          lx_web_committed *committed)
@@ -276,6 +403,8 @@ lxp_result lx_web_intake(lxp_module_ctx *ctx,
     if (status != LXP_OK) return status;
     if (request->store->committed_count == LX_WEB_STORE_CAPACITY)
         return LXP_ERR_ARENA_EXHAUSTED;
+    status = lx_web_committed_put(ctx, &observation);
+    if (status != LXP_OK) return status;
     entry = &request->store->committed[request->store->committed_count++];
     (void)memset(entry, 0, sizeof(*entry));
     entry->observation = observation;
