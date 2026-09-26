@@ -802,7 +802,7 @@ reqs = ["6.3","6.4","13.1","13.6"]
 
 [task.4.7]
 title = "Encode the implementation's initialize call in the scheduled proxy upgrade"
-status = "pending"
+status = "done"
 wave = 4
 requires = []
 do_1 = "In scripts/SidioraProxyGovernance.s.sol make scheduleUpgrade take no caller-supplied initialization bytes and encode upgradeToAndCall with abi.encodeCall of the implementation's initialize(), declared through an interface in the script because the kernel Foundry project does not compile contracts/src; initialize() takes no argument and writes the usid denom derived from the bridge module account, the only minter, so the encoded call carries exactly that initialization."
@@ -813,6 +813,10 @@ verify_cmd = "timeout 20m sh -c 'forge test --root . --match-path test/SidioraPr
 symbols = ["SidioraProxyGovernance","scheduleUpgrade","upgradeToAndCall","initialize"]
 touches = ["scripts/SidioraProxyGovernance.s.sol","test/SidioraProxyGovernance.t.sol"]
 reqs = ["6.2","7.3","7.5"]
+revision = "ecebaa2f51cecadf1de6ca104b4609548e1c72a9"
+command = "timeout 20m sh -c 'forge test --root . --match-path test/SidioraProxyGovernance.t.sol -vvv'"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.4.8]
 title = "Assert the account signature fails after a chain id change"

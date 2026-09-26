@@ -240,6 +240,7 @@ symbol = "SidioraProxyGovernance"
 observed = "Review comment 4107758202 requires the governance upgrade to initialize atomically; task 2.2 documents this requirement and tests upgradeAndCall, but the governance upgrade tooling belongs to task 2.3."
 assumption = "Task 2.3 must encode initialize in the same upgrade operation; task 2.2 leaves the initializer and its one-time guard unchanged."
 severity = "blocker"
+closed = "Task 4.7 at ecebaa2f51cecadf1de6ca104b4609548e1c72a9: scheduleUpgrade takes no caller bytes and schedules upgradeToAndCall(implementation, initialize()), executed and initialized once in test/SidioraProxyGovernance.t.sol."
 
 [observation.2.2.6]
 task = "2.2"; file = "modules/layerxbridge/types/genesis.go"

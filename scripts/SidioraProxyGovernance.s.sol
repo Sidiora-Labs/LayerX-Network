@@ -10,6 +10,10 @@ interface SidioraGovernanceVm {
     function toString(uint256 value) external pure returns (string memory);
 }
 
+interface ISidioraNativeInitialize {
+    function initialize() external;
+}
+
 interface ISidioraProxyOwnership {
     function owner() external view returns (address);
     function transferOwnership(address newOwner) external;
@@ -65,17 +69,23 @@ contract SidioraProxyGovernance {
         SidioraProxyTimelock timelock,
         Parameters calldata parameters,
         address implementation,
-        bytes calldata initialization,
         bytes32 salt,
         uint64 delay
     ) external returns (bytes32 id, uint256 nonce) {
         _validate(timelock, parameters);
         if (ISidioraProxyOwnership(parameters.proxy).owner() != address(timelock)) revert InvalidConfiguration();
-        bytes memory data = abi.encodeCall(ISidioraProxyUpgrade.upgradeToAndCall, (implementation, initialization));
+        bytes memory data = upgradeCall(implementation);
         nonce = timelock.operationNonce();
         vm.startBroadcast(parameters.governanceAuthority);
         id = timelock.schedule(parameters.proxy, 0, data, salt, delay);
         vm.stopBroadcast();
+    }
+
+    function upgradeCall(address implementation) public pure returns (bytes memory) {
+        return abi.encodeCall(
+            ISidioraProxyUpgrade.upgradeToAndCall,
+            (implementation, abi.encodeCall(ISidioraNativeInitialize.initialize, ()))
+        );
     }
 
     function proposalBody(SidioraProxyTimelock timelock, Parameters calldata parameters)

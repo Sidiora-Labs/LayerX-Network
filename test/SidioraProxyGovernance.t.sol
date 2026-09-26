@@ -23,6 +23,10 @@ interface SidioraProxyVm {
     function toString(address value) external pure returns (string memory);
 }
 
+interface ISidioraInitialize {
+    function initialize() external;
+}
+
 contract GovernedProxyImplementation is UUPSUpgradeable, Ownable, Initializable {
     constructor() Ownable(msg.sender) {
         _disableInitializers();
@@ -34,6 +38,14 @@ contract GovernedProxyImplementation is UUPSUpgradeable, Ownable, Initializable 
     }
 
     function _authorizeUpgrade(address) internal override onlyOwner {}
+}
+
+contract GovernedSidioraReplacement is GovernedProxyImplementation {
+    bool public sidioraInitialized;
+
+    function initialize() external reinitializer(2) {
+        sidioraInitialized = true;
+    }
 }
 
 contract SidioraProxyGovernanceTest {
@@ -51,7 +63,7 @@ contract SidioraProxyGovernanceTest {
     SidioraProxyGovernance private runner;
     SidioraProxyTimelock private timelock;
     GovernedProxyImplementation private original;
-    GovernedProxyImplementation private replacement;
+    GovernedSidioraReplacement private replacement;
     address private proxy;
     bytes private data;
 
@@ -63,7 +75,7 @@ contract SidioraProxyGovernanceTest {
 
     function setUp() public {
         original = new GovernedProxyImplementation();
-        replacement = new GovernedProxyImplementation();
+        replacement = new GovernedSidioraReplacement();
         proxy = address(new ERC1967Proxy(address(original), abi.encodeCall(original.initialize, (FOUNDATION))));
         runner = new SidioraProxyGovernance();
         timelock = runner.deploy(FOUNDATION, _parameters());
@@ -85,24 +97,103 @@ contract SidioraProxyGovernanceTest {
     }
 
     function testScriptSchedulesAndUpgradeExecutesAtReadyTime() public {
-        bytes32 expected = timelock.operationId(proxy, 0, data, SALT, 1);
+        bytes memory initialized = _initializedUpgrade();
+        bytes32 expected = timelock.operationId(proxy, 0, initialized, SALT, 1);
         vm.expectEmit(true, true, false, true, address(timelock));
-        emit OperationScheduled(expected, proxy, 0, sha256(data), uint64(block.timestamp + DELAY));
-        (bytes32 id, uint256 nonce) =
-            runner.scheduleUpgrade(timelock, _parameters(), address(replacement), "", SALT, DELAY);
+        emit OperationScheduled(expected, proxy, 0, sha256(initialized), uint64(block.timestamp + DELAY));
+        (bytes32 id, uint256 nonce) = runner.scheduleUpgrade(timelock, _parameters(), address(replacement), SALT, DELAY);
         require(id == expected && nonce == 1, "script operation mismatch");
         require(timelock.operationNonce() == 2, "nonce absent");
         vm.warp(timelock.readyAt(id) - 1);
         vm.expectRevert(SidioraProxyTimelock.OperationNotReady.selector);
-        _execute(data, SALT, nonce);
+        _execute(initialized, SALT, nonce);
         require(_implementation() == address(original), "early upgrade");
         vm.warp(timelock.readyAt(id));
         vm.expectEmit(true, true, false, true, address(timelock));
-        emit OperationExecuted(id, proxy, 0, sha256(data));
-        _execute(data, SALT, nonce);
+        emit OperationExecuted(id, proxy, 0, sha256(initialized));
+        _execute(initialized, SALT, nonce);
         require(_implementation() == address(replacement), "upgrade absent");
         require(GovernedProxyImplementation(proxy).owner() == address(timelock), "owner storage changed");
         require(timelock.completed(id), "completion absent");
+    }
+
+    function testScheduledUpgradeDataIsExactlyUpgradeToAndCallInitialize() public {
+        bytes memory expected = _initializedUpgrade();
+        bytes memory encoded = runner.upgradeCall(address(replacement));
+        require(encoded.length == expected.length && keccak256(encoded) == keccak256(expected), "upgrade call differs");
+        require(bytes4(encoded) == ISidioraProxyUpgrade.upgradeToAndCall.selector, "upgrade selector differs");
+        (address implementation, bytes memory initialization) = abi.decode(_slice(encoded, 4), (address, bytes));
+        require(implementation == address(replacement), "implementation differs");
+        require(
+            initialization.length == 4 && bytes4(initialization) == ISidioraInitialize.initialize.selector
+                && bytes4(initialization) == bytes4(keccak256("initialize()")),
+            "initialize call differs"
+        );
+        bytes32 expectedId = timelock.operationId(proxy, 0, expected, SALT, 1);
+        vm.expectEmit(true, true, false, true, address(timelock));
+        emit OperationScheduled(expectedId, proxy, 0, sha256(expected), uint64(block.timestamp + DELAY));
+        (bytes32 id, uint256 nonce) = runner.scheduleUpgrade(timelock, _parameters(), address(replacement), SALT, DELAY);
+        require(id == expectedId && nonce == 1, "scheduled data differs");
+        require(id != timelock.operationId(proxy, 0, data, SALT, nonce), "scheduled data omits initialize");
+    }
+
+    function testScheduleUpgradeAcceptsNoCallerSuppliedBytes() public {
+        require(
+            SidioraProxyGovernance.scheduleUpgrade.selector
+                == bytes4(
+                    keccak256(
+                        "scheduleUpgrade(address,(address,address,address,address,uint64,uint64,uint64),address,bytes32,uint64)"
+                    )
+                ),
+            "schedule signature carries caller bytes"
+        );
+        bytes4 withBytes = bytes4(
+            keccak256(
+                "scheduleUpgrade(address,(address,address,address,address,uint64,uint64,uint64),address,bytes,bytes32,uint64)"
+            )
+        );
+        (bool accepted,) = address(runner)
+            .call(
+                abi.encodeWithSelector(
+                    withBytes,
+                    timelock,
+                    _parameters(),
+                    address(replacement),
+                    abi.encodeCall(original.initialize, (OUTSIDER)),
+                    SALT,
+                    DELAY
+                )
+            );
+        require(!accepted, "caller bytes accepted");
+        require(timelock.operationNonce() == 1, "caller bytes reached the schedule");
+        (bool extended,) = address(runner)
+            .call(
+                bytes.concat(
+                    abi.encodeCall(
+                        runner.scheduleUpgrade, (timelock, _parameters(), address(replacement), SALT, DELAY)
+                    ),
+                    abi.encode(abi.encodeCall(original.initialize, (OUTSIDER)))
+                )
+            );
+        require(extended, "trailing bytes changed the schedule call");
+        bytes32 id = timelock.operationId(proxy, 0, _initializedUpgrade(), SALT, 1);
+        require(timelock.readyAt(id) == block.timestamp + DELAY, "trailing bytes reached the scheduled data");
+    }
+
+    function testExecutedUpgradeInitializesReplacementOnce() public {
+        require(!replacement.sidioraInitialized(), "implementation initialized outside the proxy");
+        (bytes32 id, uint256 nonce) = runner.scheduleUpgrade(timelock, _parameters(), address(replacement), SALT, DELAY);
+        vm.warp(timelock.readyAt(id));
+        _execute(_initializedUpgrade(), SALT, nonce);
+        require(_implementation() == address(replacement), "upgrade absent");
+        require(GovernedSidioraReplacement(proxy).sidioraInitialized(), "replacement not initialized");
+        require(GovernedProxyImplementation(proxy).owner() == address(timelock), "initialization changed owner");
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        GovernedSidioraReplacement(proxy).initialize();
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        vm.prank(address(timelock));
+        GovernedSidioraReplacement(proxy).initialize();
+        require(GovernedSidioraReplacement(proxy).sidioraInitialized(), "second initialize changed state");
     }
 
     function testGraceBoundaryIsInclusive() public {
@@ -367,7 +458,7 @@ contract SidioraProxyGovernanceTest {
         vm.expectRevert(SidioraProxyGovernance.InvalidConfiguration.selector);
         runner.handover(FOUNDATION, timelock, p);
         vm.expectRevert(SidioraProxyGovernance.InvalidConfiguration.selector);
-        runner.scheduleUpgrade(timelock, p, address(replacement), "", SALT, DELAY);
+        runner.scheduleUpgrade(timelock, p, address(replacement), SALT, DELAY);
         vm.expectRevert(SidioraProxyGovernance.InvalidConfiguration.selector);
         runner.proposalBody(timelock, p);
     }
@@ -381,7 +472,7 @@ contract SidioraProxyGovernanceTest {
         runner.handover(address(timelock), timelock, _parameters());
         SidioraProxyTimelock other = runner.deploy(FOUNDATION, _parameters());
         vm.expectRevert(SidioraProxyGovernance.InvalidConfiguration.selector);
-        runner.scheduleUpgrade(other, _parameters(), address(replacement), "", SALT, DELAY);
+        runner.scheduleUpgrade(other, _parameters(), address(replacement), SALT, DELAY);
     }
 
     function testProposalBodyNamesActualProxyTimelockRolesAndDelay() public view {
@@ -417,6 +508,20 @@ contract SidioraProxyGovernanceTest {
     function _execute(bytes memory callData, bytes32 salt, uint256 nonce) private {
         vm.prank(EXECUTOR);
         timelock.execute(proxy, 0, callData, salt, nonce);
+    }
+
+    function _initializedUpgrade() private view returns (bytes memory) {
+        return abi.encodeCall(
+            ISidioraProxyUpgrade.upgradeToAndCall,
+            (address(replacement), abi.encodeCall(ISidioraInitialize.initialize, ()))
+        );
+    }
+
+    function _slice(bytes memory value, uint256 start) private pure returns (bytes memory result) {
+        result = new bytes(value.length - start);
+        for (uint256 i; i < result.length; ++i) {
+            result[i] = value[start + i];
+        }
     }
 
     function _implementation() private view returns (address) {
