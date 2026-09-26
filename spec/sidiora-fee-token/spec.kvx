@@ -821,7 +821,11 @@ reqs = ["1.1","1.5","1.7"]
 
 [task.4.9]
 title = "Sweep fee-token fees from the coinbase to the collector"
-status = "pending"
+status = "done"
+revision = "ecebaa2f51cecadf1de6ca104b4609548e1c72a9"
+command = "timeout 20m sh -c 'go test -count=1 -run \"EndBlock|FeeTokenSweep|SidioraFeeCollection\" ./modules/evm/keeper/...'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 4
 requires = []
 do_1 = "In modules/evm/keeper/abci.go make EndBlock sweep, beside the network coin and wei it sweeps now, the balance of every allowed fee denom from each transaction's coinbase address to the coinbase the block credits, which is the fee collector outside block tests and replay, failing the block on a rejected sweep exactly as the network-coin sweep does."

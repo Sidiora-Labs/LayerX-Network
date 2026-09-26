@@ -125,6 +125,14 @@ func (k *Keeper) EndBlock(ctx sdk.Context, height int64, blockGasUsed int64) {
 	}
 	evmTxDeferredInfoList := k.GetAllEVMTxDeferredInfo(ctx)
 	denom := k.GetBaseDenom(ctx)
+	var feeTokenDenoms []string
+	if k.GetFeeTokenEnabled(ctx) {
+		for _, entry := range k.GetAllowedFeeDenoms(ctx) {
+			if entry.Denom != denom {
+				feeTokenDenoms = append(feeTokenDenoms, entry.Denom)
+			}
+		}
+	}
 	surplus, err := k.GetAnteSurplusSum(ctx)
 	failEndBlockOnError("sum ante surplus", err)
 	for _, deferredInfo := range evmTxDeferredInfoList {
@@ -151,6 +159,20 @@ func (k *Keeper) EndBlock(ctx sdk.Context, height int64, blockGasUsed int64) {
 		if !balance.IsZero() || !weiBalance.IsZero() {
 			err := k.BankKeeper().SendCoinsAndWei(ctx, coinbaseAddress, coinbase, balance, weiBalance)
 			failEndBlockOnError(fmt.Sprintf("sweep coinbase surplus from %s", coinbaseAddress), err)
+		}
+		if len(feeTokenDenoms) > 0 {
+			locked := k.BankKeeper().LockedCoins(ctx, coinbaseAddress)
+			feeTokens := sdk.NewCoins()
+			for _, feeDenom := range feeTokenDenoms {
+				amount := k.BankKeeper().GetBalance(ctx, coinbaseAddress, feeDenom).Amount.Sub(locked.AmountOf(feeDenom))
+				if amount.IsPositive() {
+					feeTokens = feeTokens.Add(sdk.NewCoin(feeDenom, amount))
+				}
+			}
+			if !feeTokens.IsZero() {
+				err := k.BankKeeper().SendCoins(ctx, coinbaseAddress, coinbase, feeTokens)
+				failEndBlockOnError(fmt.Sprintf("sweep coinbase fee tokens %s from %s", feeTokens, coinbaseAddress), err)
+			}
 		}
 		surplus = surplus.Add(deferredInfo.Surplus)
 	}

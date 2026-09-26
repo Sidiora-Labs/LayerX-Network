@@ -240,7 +240,7 @@
     - Change no production contract; this is a test-only task and the test ratio is satisfied by the test file alone.
     - Close observation 2.3.1 in spec/sidiora-fee-token/qualification.kvx naming the revision at which the verify_cmd passes.
     - _Requirements: 1.1, 1.5, 1.7_
-  - [ ] 4.9 Sweep fee-token fees from the coinbase to the collector
+  - [x] 4.9 Sweep fee-token fees from the coinbase to the collector
     - In modules/evm/keeper/abci.go make EndBlock sweep, beside the network coin and wei it sweeps now, the balance of every allowed fee denom from each transaction's coinbase address to the coinbase the block credits, which is the fee collector outside block tests and replay, failing the block on a rejected sweep exactly as the network-coin sweep does.
     - Leave RouteCollectedFeeTokens, which node/app.go runs after EndBlock, deciding by the fee-token distribution parameter whether the swept fee tokens are distributed from the collector or moved to the holding module account; with the fee-token switch off or the allowed list empty, the sweep is byte for byte what it is today.
     - Extend modules/evm/keeper/abci_test.go under the FeeTokenSweep prefix over a block that paid gas in Sidiora and in the network coin: the coinbase addresses emptied, the collector credited, a rejected fee-token sweep failing the block; extend modules/evm/keeper/feecollect_test.go under the SidioraFeeCollection prefix so the swept Sidiora reaches the distribution under one option and the holding account under the other.

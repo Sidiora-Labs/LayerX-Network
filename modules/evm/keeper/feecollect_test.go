@@ -137,3 +137,41 @@ func TestSidioraFeeCollectionParams(t *testing.T) {
 	require.Equal(t, int32(18), fields["fee_token_enabled"])
 	require.Equal(t, int32(19), fields["fee_token_distribution"])
 }
+
+func TestSidioraFeeCollectionSweptCoinbase(t *testing.T) {
+	for _, distribute := range []bool{false, true} {
+		name := "hold"
+		if distribute {
+			name = "distribute"
+		}
+		t.Run(name, func(t *testing.T) {
+			testApp := app.Setup(t, false, false, false)
+			k := &testApp.EvmKeeper
+			ctx := testApp.GetContextForDeliverTx([]byte{}).WithBlockHeight(1)
+			setFeeTokenSweepParams(ctx, k, true, distribute)
+			holding := testApp.AccountKeeper.GetModuleAddress(types.FeeTokenHoldingAccount)
+			collector := testApp.AccountKeeper.GetModuleAddress(authtypes.FeeCollectorName)
+			distributionAddress := testApp.AccountKeeper.GetModuleAddress(distrtypes.ModuleName)
+			require.True(t, testApp.BankKeeper.GetAllBalances(ctx, holding).Empty())
+			require.True(t, testApp.BankKeeper.GetAllBalances(ctx, distributionAddress).Empty())
+			runFeeTokenSweepBlock(t, testApp, ctx)
+
+			k.EndBlock(ctx, 1, 0)
+			require.NoError(t, k.RouteCollectedFeeTokens(ctx))
+			distribution.BeginBlocker(ctx.WithBlockHeight(2), nil, testApp.DistrKeeper)
+
+			sidiora := sdk.NewCoins(sdk.NewCoin(feeTokenSweepDenom, feeTokenSweepSidioraReward))
+			network := sdk.NewCoins(sdk.NewCoin(k.GetBaseDenom(ctx), feeTokenSweepNetworkReward))
+			held := sidiora
+			distributed := network
+			if distribute {
+				held = sdk.NewCoins()
+				distributed = network.Add(sidiora...)
+			}
+			require.True(t, testApp.BankKeeper.GetAllBalances(ctx, collector).Empty())
+			require.Equal(t, held, testApp.BankKeeper.GetAllBalances(ctx, holding))
+			require.Equal(t, distributed, testApp.BankKeeper.GetAllBalances(ctx, distributionAddress))
+			require.Equal(t, feeTokenSweepNetworkReward, testApp.BankKeeper.GetBalance(ctx, distributionAddress, k.GetBaseDenom(ctx)).Amount)
+		})
+	}
+}
