@@ -209,6 +209,7 @@ command = "cat modules/evm/gov.go"; exit_code = 0
 log_path = ".logs/scope-conflicts.log"
 observed = "The legacy native-pointer binding proposal is deprecated; V2 accepts metadata without pointer or version and deploys or overwrites pointer code, so no supported proposal safely binds the existing proxy."
 assumption = "The committed legacy binding fields are a non-executable artifact pending separately authorized governance support; no V2 deployment proposal is substituted."
+closed = "MsgBindERCNativePointer, carried by the evm PointerBindingProposal and executed through the Msg service for the governance authority from the fee-token upgrade on, binds the existing address without deploying code; contracts/test/sidiora_pointer_proposal.json is that proposal, and the task verify passes at exit 0 on ecebaa2f51cecadf1de6ca104b4609548e1c72a9."
 
 [observation.2.2.2]
 revision = "a9224a86520f442902062b3d8f71afb996646778"

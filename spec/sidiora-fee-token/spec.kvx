@@ -782,7 +782,11 @@ reqs = ["5.1","5.4","5.5"]
 
 [task.4.6]
 title = "Bind the existing Sidiora address as the native pointer through a governance message"
-status = "pending"
+status = "done"
+revision = "ecebaa2f51cecadf1de6ca104b4609548e1c72a9"
+command = "timeout 20m sh -c 'go test -count=1 ./modules/evm/ ./modules/evm/types/... ./modules/evm/client/... && go test -count=1 -run BindNativePointer ./modules/evm/keeper/...'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 4
 requires = []
 do_1 = "In api/evm/tx.proto add MsgBindERCNativePointer carrying the authority, the tokenfactory denom, the already deployed ERC20 address and the pointer version, with its response, to the Msg service, and in api/evm/gov.proto add a proposal content that carries governance messages packed under their type URL in the shape api/layerxbridge/proposal.proto declares BridgeProposal; regenerate tx.pb.go and gov.pb.go through scripts/protoc.sh, reverting every other file it rewrites, and hand-edit no generated file."

@@ -1,5 +1,14 @@
 {
-  "token": "factory/pax1dzfx9mk4fl9kl2mysjmtvk2xp75ljumk6nynhf/usid",
-  "pointer": "0x21f7b20a555199fa73A238B1a91FD0f549068fEe",
-  "version": 1
+  "@type": "/paxprotocol.paxchain.evm.PointerBindingProposal",
+  "title": "Bind Sidiora as the ERC20 pointer of usid",
+  "description": "Binds the Sidiora proxy already deployed at 0x21f7b20a555199fa73A238B1a91FD0f549068fEe as the ERC20 pointer of the bridge's usid denom at pointer version 1, so the pointer registry resolves the denom to the address holders already use and no pointer contract is deployed.",
+  "messages": [
+    {
+      "@type": "/paxprotocol.paxchain.evm.MsgBindERCNativePointer",
+      "authority": "pax10d07y265gmmuvt4z0w9aw880jnsr700jxdwa9m",
+      "token": "factory/pax1dzfx9mk4fl9kl2mysjmtvk2xp75ljumk6nynhf/usid",
+      "pointer": "0x21f7b20a555199fa73A238B1a91FD0f549068fEe",
+      "version": 1
+    }
+  ]
 }
