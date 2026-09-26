@@ -246,6 +246,21 @@
     - Add the unit test in interop/crates/x-websearch/tests/api.rs that parses that literal, asserts the double's bits are 0x44ba249b1f10a06d and asserts the canonical digits are 1.2345678901234569e+23, so the vector and the code are pinned to the same value.
     - Run this task's verify_cmd once; on exit 0 record tasks 2.14, 2.17 and 2.24 done with that revision, command, exit code and log, and close observations 2.14.1, 2.14.2, 2.17.1 and 2.24.1 naming the revision.
     - _Requirements: 17.3, 17.6_
+  - [ ] 2.26 Keep a call's full program event list beside the receipt's artifacts, bound to the outcome's event envelope digest
+    - The kernel receives a call's full raw event list as the terminal events section, hashes it into the call outcome event's event_envelope_digest in terminal_publish in src/modules/programs/call.c and then frees it, so no store holds a program's web request bytes; add an event envelope payload span to lxp_program_outcome in include/layerx/lxp_receipt.h, fill it from the terminal event list in terminal_publish before the buffer is freed, and copy it with the other artifacts in outcome_copy_artifacts in src/protocol/lxp_module_ctx.c; the committed receipt and every consensus-visible byte stay exactly as they are.
+    - Extend lxp_receipt_bind_program_artifacts in src/protocol/lxp_receipt.c so a bound artifact set whose event list's SHA-256 differs from the call outcome event's event_envelope_digest is refused, and cover the accepting and the refusing case in tests/protocol/lxp_test_receipts.c.
+    - In tests/test_web_program_path.c read the web request record back from the outcome's event list after the reference program's request call, check the list hashes to the outcome's digest, and check the record's payload hashes to the pending request's payload hash.
+    - _Requirements: 11.2_
+  - [ ] 2.27 Persist the event list in the node's receipt authority log and serve program events by topic and sequence
+    - Carry the event list as a third artifact span through the batch WAL in cmd/layerxd/lxp_daemon_batch_wal.c and the pending receipt collection and artifact append in cmd/layerxd/lxp_daemon_process.c, and append it to the receipt authority log as a record format 3 in cmd/layerxd/lxp_daemon_receipt_authority.c with the authority record bound raised to hold it; records the recovery and replica paths append without artifacts decode exactly as before.
+    - Serve GET /v1/programs/events/<topic-hex>/<from_sequence>/<limit> from route_inner in cmd/layerxd/lxp_daemon_protocol.c, placed before the program identifier parse: scan the authority log from the sequence, decode each record's event list, and answer the events whose topic matches as an object with events, each carrying sequence, program_id, topic and data, and next_sequence, in the shape of interop/crates/x-websearch/tests/fixtures/kernel/watch.json; sequence is the activity's global sequence, only successful outcomes contribute, a record without an event list contributes nothing, and next_sequence never passes the durable head.
+    - Cover storing, binding and the route in tests/daemon/lxp_test_program_artifacts.c with the reference program's request: the page holds the web request event with its raw bytes, a topic that matches nothing answers an empty page, and a sequence past the head answers an empty page whose next_sequence is the head.
+    - _Requirements: 11.2_
+  - [ ] 2.28 Relay program events through core and list the gateway method so the sidecar's watcher reads real request bytes
+    - Add the v1 programs events path with hex topic and unsigned integer sequence and limit validation to the core boundary's relay allowlist in platform/hosted/core/src/main.rs, and cover the allowed and the refused shapes in platform/hosted/core/tests/boundary.rs.
+    - List lx_getProgramEvents with its parameters and result shape in platform/hosted/gateway/openrpc.json, matching the method task 2.21 wrote in platform/hosted/gateway/src/rpc.rs.
+    - Extend platform/hosted/gateway/tests/local/events.rs so the local qualification runs the reference web-reader program's request through a real node and core and reads the request event with its raw bytes through lx_getProgramEvents; close observation 2.21.2 naming the revision.
+    - _Requirements: 11.2_
 
 ## Wave 3 - One Run, Recorded
 
@@ -263,7 +278,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17", "1.18"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23", "2.24", "2.25"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23", "2.24", "2.25", "2.26", "2.27", "2.28"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }
