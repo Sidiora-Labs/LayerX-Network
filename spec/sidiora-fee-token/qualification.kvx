@@ -443,3 +443,17 @@ task = "2.11"; file = "spec/sidiora-fee-token/spec.kvx"; symbol = "req.14.ac_2"
 observed = "Supplement to observation.2.11.1: the oracle clause of req 14.2 and task.2.11.do_2 cannot be documented as written while the precompile is retired, so the page describes the governed rate instead and the requirement stays unmet."
 assumption = "The completion record reports the strict docs build that ran and passed, not the unmet clause; the clause is a blocker on the requirement text that only an owner revision of req 14.2 and task.2.11.do_2 clears."
 severity = "blocker"
+
+[observation.1.5.1]
+revision = "pending"
+command = "timeout 20m sh -c 'npm --prefix human/apps/web run typecheck && cd human/apps/web && node --test e2e/gas-station.test.ts'"; exit_code = 1
+log_path = ".logs/verify.log"
+observed = "Typecheck passed; the focused test process failed before assertions: TypeError [ERR_INVALID_RETURN_PROPERTY_VALUE]: Expected a string, an ArrayBuffer, or a TypedArray to be returned for the \"source\" from the \"load\" hook but got undefined."
+assumption = "The Node TypeScript and TSX loader needs a further task-scoped correction; both authorized repair cycles are exhausted."
+
+[observation.1.5.2]
+task = "1.5"; file = "interop/crates/layerx-gas-station/src/main.rs"
+symbol = "main"
+observed = "The station executable checks initialization and explicitly reports that no service was started; a quote and sponsored-submission HTTP service is not supplied by that executable."
+assumption = "The web adapter requires separately supplied quote and submission services matching its request and response contracts; no submission was attempted."
+severity = "blocker"
