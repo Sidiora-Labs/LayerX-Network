@@ -652,11 +652,63 @@ symbols = ["BridgeProposalHandler"]
 touches = ["modules/layerxbridge/client/cli/tx.go","modules/layerxbridge/client/cli/tx_test.go","node/app.go","node/gov_bridge_test.go","bridge/README.md","bridge/deploy/tests/docs-check.sh"]
 reqs = ["9.1","12.1","12.5"]
 
+[task.2.15]
+title = "Read the generated bodies through DecodeBody in the EVM dry run"
+status = "pending"
+wave = 2
+requires = ["2.6","2.9"]
+do_1 = "Make the Paxeer side of bridge/deploy/tests/evm-dry-run-check.sh read every generated body through bridge/deploy/proposals DecodeBody, as the Solana dry run does, so bodies written under their type URL apply to the real keeper (observation 2.7.3), and assert one body with a wrong type URL and one with an unknown field are refused by name."
+do_2 = "Re-record bridge/deploy/tests/fixtures/evm_dry_run.json once through --record on this revision and keep the replay passing without a node."
+verify_cmd = "timeout 20m sh -c 'bash bridge/deploy/tests/evm-dry-run-check.sh --record && bash bridge/deploy/tests/evm-dry-run-check.sh'"
+symbols = ["DecodeBody"]
+touches = ["bridge/deploy/tests/evm-dry-run-check.sh","bridge/deploy/tests/fixtures/evm_dry_run.json"]
+reqs = ["13.1","13.5"]
+
+[task.2.16]
+title = "Make the deploy scripts wait for an executable program, keep its keypair and run from any directory"
+status = "pending"
+wave = 2
+requires = ["2.10","2.12"]
+do_1 = "In bridge/deploy/deploy-solana-program.sh, after the deploy transaction is rooted, poll the program account at the configured commitment until it reports executable, with a bounded wait that fails by naming the program id, before the initialise step (observation 2.7.2)."
+do_2 = "On a first deployment with no PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE, write the generated program keypair to the path the deployment record names beside it and print that path, so the rerun with a filled solana.program_id finds it (observation 2.10.1); refuse to overwrite an existing keypair file."
+do_3 = "In bridge/deploy/deploy-evm-chain.sh resolve the Foundry script path from the script's own location so it deploys from any working directory (observation 2.6.1)."
+do_4 = "Extend bridge/deploy/tests/deploy-scripts-check.sh to cover the executable wait, the kept keypair and its overwrite refusal, and an EVM deploy driven from a directory other than bridge/evm."
+do_5 = "With these in place, re-qualify task 2.7 on this revision: run its --record once to write bridge/deploy/tests/fixtures/solana_dry_run.json, run its verify_cmd once, and set task 2.7 to done with its four evidence fields only when that run passes."
+verify_cmd = "timeout 20m sh -c 'bash bridge/deploy/tests/deploy-scripts-check.sh'"
+symbols = ["wait_executable"]
+touches = ["bridge/deploy/deploy-solana-program.sh","bridge/deploy/deploy-evm-chain.sh","bridge/deploy/tests/deploy-scripts-check.sh","bridge/deploy/tests/solana-dry-run-check.sh","bridge/deploy/tests/fixtures/solana_dry_run.json"]
+reqs = ["10.1","10.3","10.4","13.2"]
+
+[task.2.17]
+title = "Clear the relayer's clippy findings and point the attestation references at the moved contract"
+status = "pending"
+wave = 2
+requires = ["2.3"]
+do_1 = "Fix the five clippy findings observation 2.2.1 names in interop/crates/layerx-bridge-relayer by restructuring the code, never by an allow attribute or a lint-level change, so cargo clippy with -D warnings passes on the crate with all targets."
+do_2 = "Update modules/layerxbridge/ATTESTATION.md and the comment in modules/layerxbridge/types/attestation.go to the contract path wave 1 moved to bridge/evm (observation 1.1.1), and make the existing check that compares the two attestation documents, if there is one, assert the new path."
+verify_cmd = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p layerx-bridge-relayer --all-targets -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p layerx-bridge-relayer && go build ./modules/layerxbridge/... && grep -rL interop/contracts/ethereum-bridge modules/layerxbridge/ATTESTATION.md modules/layerxbridge/types/attestation.go | wc -l | grep -qx 2'"
+symbols = ["layerx-bridge-relayer"]
+touches = ["interop/crates/layerx-bridge-relayer/src","modules/layerxbridge/ATTESTATION.md","modules/layerxbridge/types/attestation.go"]
+reqs = ["7.1","8.1"]
+
+[task.2.18]
+title = "Register the Solana Sidiora pair through governance"
+status = "pending"
+wave = 2
+requires = ["2.14","2.16"]
+do_1 = "Add a message to api/layerxbridge/tx.proto that registers the Sidiora pair for a chain by calling the keeper's EnsureSidioraDenom under the governance authority, generate it with the toolchain task 2.9 used, serve it in keeper/msg_server.go, carry it in the BridgeProposal content and validate it like the others, so the bridge no longer depends on another upgrade handler to register the pair (observation 1.5.2)."
+do_2 = "Make bridge/deploy/proposals emit it for Solana inside 05-proposal-sidiora-cap.json ahead of the cap message, so one proposal registers the pair and then caps it, and keep the proposal refused for any chain that is not Sidiora's foreign home."
+do_3 = "Update section 6 and the Sidiora section of bridge/README.md so the ordering rule reads from the proposal itself, and extend bridge/deploy/tests/docs-check.sh, keeper_test.go, proposals_test.go and the cli tests for the new message; re-record bridge/deploy/tests/fixtures/solana_dry_run.json only if the Solana dry run's Paxeer side applies a body this task changes."
+verify_cmd = "timeout 20m sh -c 'go test -count=1 ./modules/layerxbridge/... ./bridge/deploy/proposals/... && go test -count=1 -run Bridge ./node/ && bash bridge/deploy/tests/docs-check.sh && bash bridge/deploy/tests/solana-dry-run-check.sh'"
+symbols = ["MsgRegisterSidioraPair"]
+touches = ["api/layerxbridge/tx.proto","api/layerxbridge/proposal.proto","modules/layerxbridge/types","modules/layerxbridge/keeper/msg_server.go","modules/layerxbridge/keeper/keeper_test.go","modules/layerxbridge/handler.go","modules/layerxbridge/client/cli","bridge/deploy/proposals","bridge/README.md","bridge/deploy/tests/docs-check.sh","bridge/deploy/tests/fixtures/solana_dry_run.json"]
+reqs = ["9.1","12.1"]
+
 [task.3.1]
 title = "Run the bridge workflow's command set once on the merged revision and record the evidence"
 status = "pending"
 wave = 3
-requires = ["1.1","1.2","1.3","1.4","1.5","1.6","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12","2.13","2.14"]
+requires = ["1.1","1.2","1.3","1.4","1.5","1.6","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12","2.13","2.14","2.15","2.16","2.17","2.18"]
 do_1 = "On the revision that merges waves 1 and 2, run the workflow's four legs once, in order - the bridge/evm Foundry suite after bootstrapping the pinned libraries, the bridge/solana crate with its release tests and cargo build-sbf, the layerx-bridge-relayer crate, and the bridge/deploy and bridge/vectors Go packages with the offline check scripts - writing each leg's output to its own log under build/bridge-gates/."
 do_2 = "Append one gate record per leg to spec/paxeer-x-bridge/qualification.kvx carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code, the log path, the outcome and the evidence, written only from a command that actually ran."
 do_3 = "Append one [observation.*] entry per failure the run exposes that belongs to no task in this feature, in the spec/workflow.kvx [qualification_log] shape: task, file, symbol, one sentence observed, one sentence assumption and severity; do not investigate it further and do not rerun it."
