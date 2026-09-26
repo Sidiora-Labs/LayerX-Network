@@ -735,7 +735,7 @@ log_path = ".logs/verify.log"
 
 [task.4.3]
 title = "Serve the quote and sponsored submission endpoints from the station binary"
-status = "pending"
+status = "done"
 wave = 4
 requires = ["4.2"]
 do_1 = "Add interop/crates/layerx-gas-station/src/service.rs serving POST requests on a configured listen address with std::net::TcpListener and serde_json, adding no dependency: the quote endpoint takes the body requestGasQuote in agent/sdk/typescript/src/gas-station.ts sends and answers {quote, relayerSignature} with every numeric field a decimal string and decimals a number, and the submission endpoint takes the body sendSponsoredBatch in human/apps/web/src/api/gas-station.ts sends and answers {transactionHash}."
@@ -747,6 +747,10 @@ verify_cmd = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Car
 symbols = ["serve","ServiceError","StationConfig","main"]
 touches = ["interop/crates/layerx-gas-station/src/service.rs","interop/crates/layerx-gas-station/src/main.rs","interop/crates/layerx-gas-station/src/config.rs","interop/crates/layerx-gas-station/src/lib.rs","interop/crates/layerx-gas-station/tests/service.rs"]
 reqs = ["2.1","2.4","2.5","3.3"]
+revision = "bd6c1c297ca5159cc565fd0f2cef54daeaa76ef6"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p layerx-gas-station --bin paxeer-gas-station --test service'"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.4.4]
 title = "Resolve the Paxeer Foundry libraries without a manual clone"
