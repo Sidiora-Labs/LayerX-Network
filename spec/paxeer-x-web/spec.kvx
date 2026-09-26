@@ -337,7 +337,7 @@ reqs = ["6.1","6.2","6.3","6.4","6.5"]
 
 [task.1.7]
 title = "Add the kernel web observation activity, its intake and its root"
-status = "pending"
+status = "done"
 wave = 1
 requires = ["1.5"]
 do_1 = "Write include/layerx/lx_web.h beside lx_oracle.h: the web observation activity id, the observation layout with the origin-2 preimage fields, a response of at most 4096 bytes and up to the maximum attestor count of 65-byte signatures, the web attestor set layout, the pending program web request layout and the web request record topic; change nothing in lx_oracle.h."
@@ -349,6 +349,10 @@ symbols = ["LX_WEB_OBSERVATION_ACTIVITY","lx_web_observation","lx_web_intake","l
 touches = ["include/layerx/lx_web.h","src/modules/web/lx_web_intake.c","src/modules/web/lx_web_attestors.c","src/sequencer/lx_web_root.c","src/network/lx_web_adapter.c","tests/modules/test_web_intake.c","tests/sequencer/test_web_root.c","tests/network/test_web_adapter.c","tests/fixtures/web/observation-activity.hex","Makefile"]
 tests = ["tests/modules/test_web_intake.c","tests/sequencer/test_web_root.c","tests/network/test_web_adapter.c"]
 reqs = ["7.1","7.2","7.3","7.4","7.5"]
+revision = "affe190ec825c9f007566e7693e36dfe9747adbe"
+command = "timeout 20m make test-web-intake test-web-root test-web-adapter"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.1.8]
 title = "Add the web_read host import to the programs runtime and the call bridge"
