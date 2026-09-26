@@ -220,3 +220,11 @@ symbol = "TestPaxeerSide"
 observed = "No local Paxeer X node exists for a dry run, so the checklist's precompile views are answered by the real layerxbridge keeper and precompile executor in process, after they execute the governance bodies generated for the run's deployment."
 assumption = "A local Paxeer node running the same governance bodies through a proposal is the stronger ground and belongs to a later bring-up; the keeper, the message handlers and the precompile executor answering here are the chain's own code."
 severity = "note"
+
+[observation.2.7.1]
+task = "2.7"
+file = "bridge/deploy/tests/solana-dry-run-check.sh"
+symbol = "cargo-build-sbf"
+observed = "The dry run built the admin client, started solana-test-validator on the loopback interface with the run's Sidiora mint and stopped at deploy-solana-program.sh, whose cargo-build-sbf (platform tools cargo 1.84.0) failed on zeroize_derive 1.5.0 with 'feature edition2024 is required', so no program was deployed and no fixture was recorded."
+assumption = "The environment-level blocker of observation 1.2.1; the dry run names it and stops, and bridge/deploy/tests/fixtures/solana_dry_run.json is written by the first --record run on platform tools whose cargo accepts edition 2024."
+severity = "blocker"

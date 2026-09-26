@@ -501,7 +501,11 @@ reqs = ["13.1","13.3","13.4","13.5"]
 
 [task.2.7]
 title = "Dry-run the Solana deployment against solana-test-validator and record it"
-status = "pending"
+status = "implemented"
+implemented_revision = "5a4542e9e42ad0a98afdf527beaa72fc0a6dd91d"
+implemented_command = "timeout 20m sh -c 'bash bridge/deploy/tests/solana-dry-run-check.sh'"
+implemented_exit_code = 1
+implemented_log = ".logs/verify.log"
 wave = 2
 requires = ["1.2","1.4","2.1","2.4","2.8"]
 do_1 = "Write bridge/deploy/tests/solana-dry-run-check.sh starting solana-test-validator, writing a run-local configuration whose placeholder owner and attestors are replaced by that run's own generated local values, and deploying and initialising the program with bridge/deploy/deploy-solana-program.sh against it."
