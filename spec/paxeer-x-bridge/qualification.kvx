@@ -90,3 +90,11 @@ symbol = "EnsureSidioraDenom"
 observed = "No production path calls EnsureSidioraDenom at this revision, and MsgSetCap creates Denom(chain, asset) for an asset that is not registered yet, so submitting Solana's Sidiora cap before something registers (chain, 0x21f7b20a555199fa73A238B1a91FD0f549068fEe, usid) binds that cap to an lxb denom instead of the module's usid denom."
 assumption = "The Sidiora cap must be submitted after the asset is registered against usid; the chain is frozen, so the ordering belongs in the operator runbook and the checklist read-back rather than in a chain change."
 severity = "suspect"
+
+[observation.1.2.1]
+task = "1.2"
+file = "bridge/solana/Cargo.lock"
+symbol = "cargo build-sbf"
+observed = "cargo build-sbf cannot resolve the dependency graph: the cargo shipped in platform-tools rejects the 35 transitive manifests that declare edition 2024, failing first on zeroize_derive with 'feature edition2024 is required'."
+assumption = "Pre-existing and environment-level, not introduced here: interop/contracts/solana-mirror pins the identical 35 manifests and fails the same way, so the SBF leg of the wave 3 gate needs a newer platform-tools on the gate runner rather than a change to this crate."
+severity = "blocker"
