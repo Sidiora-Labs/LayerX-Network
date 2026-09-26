@@ -29,3 +29,11 @@
 #
 # No record carries a hostname, an IP address, an internal URL, a credential or
 # the name of an agent or a working branch.
+
+[observation.1.11.1]
+task = "1.11"
+file = ".github/workflows/xweb-test.yml"
+symbol = "task.1.11.do_1"
+observed = "The do_1 path filters omit trees whose changes the legs exercise - Makefile, tests/modules, tests/sequencer, tests/network, tests/test_programs_web_read.c, tests/test_web_program_path.c, tests/fixtures/web, src/modules/programs/call.c, include/layerx/programs.h, programs/sdk/rust, agent/sdk/typescript/test, agent/sdk/python/tests and modules/layerxbridge - so a change confined to them does not start the workflow."
+assumption = "The workflow carries exactly the do_1 list and tools/ci/xweb-workflow-check.sh asserts that list; widening it is a spec change for the feature owner, not this task."
+severity = "suspect"

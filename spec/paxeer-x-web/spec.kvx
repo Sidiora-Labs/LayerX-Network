@@ -387,7 +387,11 @@ reqs = ["9.2","9.3","9.4"]
 
 [task.1.11]
 title = "Add the one xweb workflow and prove its filters and legs are true"
-status = "pending"
+status = "done"
+revision = "affe190ec825c9f007566e7693e36dfe9747adbe"
+command = "timeout 20m sh -c 'bash tools/ci/xweb-workflow-check.sh'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 1
 requires = []
 do_1 = "Write .github/workflows/xweb-test.yml running on pull requests and pushes to main, with a concurrency group per ref and cancel-in-progress, filtered to interop/crates/x-websearch/**, interop/deploy/x-websearch/**, modules/xweb/**, precompiles/xweb/**, contracts/src/precompiles/IXWeb.sol, contracts/src/xweb/**, contracts/test/XWebConsumer.t.sol, include/layerx/lx_web.h, src/modules/web/**, src/network/lx_web_adapter.c, src/sequencer/lx_web_root.c, programs/crates/layerx-programs-runtime/**, agent/sdk/typescript/src/web-search.ts, agent/sdk/python/layerx_sdk/web_search.py, agent/crates/layerx-mcp/**, tools/ci/xweb-forge-libs.sh and the workflow file itself."
