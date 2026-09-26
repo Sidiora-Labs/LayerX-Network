@@ -16,7 +16,7 @@ Sidiora is a coin people already hold, and this page is the read of what it is a
 | Address | `0x21f7b20a555199fa73A238B1a91FD0f549068fEe` |
 | Native denom | `factory/pax1dzfx9mk4fl9kl2mysjmtvk2xp75ljumk6nynhf/usid` - a tokenfactory denom whose creator is the bridge module account and whose subdenom is `usid` |
 | Minter and burner | the `x/layerxbridge` module account, and nothing else |
-| Contract administration | a timelock whose only proposer is the chain governance authority |
+| Contract administration | proposed, not yet applied: a timelock whose only proposer is the chain governance authority |
 
 For contrast, the network coin is PAX. Its base denom is `uhpx` and it carries eighteen decimals, so a Sidiora amount and a network-coin amount are never the same scale.
 
@@ -24,7 +24,7 @@ For contrast, the network coin is PAX. Its base denom is `uhpx` and it carries e
 
 The address does not move. What changes is the implementation behind that proxy: `contracts/src/SidioraNativeERC20.sol` is an ERC-20 whose balances are not its own. `balanceOf` reads the bank balance of the native denom, `totalSupply` reads the bank supply of it, and every transfer moves the denom through the bank precompile and reverts the call if that move fails or returns false. The contract's own state - its initialization flag, the denom, the name, the symbol, the decimals and its allowances - lives in a single ERC-7201 namespace, so the slots the deployed implementation already occupies are neither read nor written; the allowances it keeps start empty and legacy slots stay untouched.
 
-The denom string the contract derives is the same string `x/layerxbridge` derives for it, and a pointer record ties that denom to this same address, so the native denom and the ERC-20 people already hold resolve to one asset rather than two.
+The denom string the contract derives is the same string `x/layerxbridge` derives for it, and the pointer record that ties that denom to this same address is written as a proposal rather than applied state; once that proposal passes, the native denom and the ERC-20 people already hold resolve to one asset rather than two.
 
 Nothing in this design replaces, redeploys or migrates the address. The implementation behind it is upgraded and the address stays.
 
@@ -36,7 +36,7 @@ The bridge mints when it credits an attested bridge-in and burns when it sends a
 
 ### Who may change the contract behind the address
 
-Administration of the proxy sits with governance behind `contracts/governance/SidioraProxyTimelock.sol`, and the timelock is deliberately narrow:
+Administration of the proxy moves to governance behind `contracts/governance/SidioraProxyTimelock.sol` when the handover proposal in the repository is executed, and the timelock it hands the proxy to is deliberately narrow:
 
 - Only the chain governance authority may schedule an operation, and the only call it may schedule on the proxy is `upgradeToAndCall(address,bytes)` with zero value. Any other target, any other selector, any value, oversized calldata or calldata that does not re-encode to exactly that call is refused.
 - The scheduled call carries the new implementation and its initialization together, so an upgrade and the initializer it needs run as one operation. The implementation must be a contract, and it may be neither the proxy nor the timelock.
