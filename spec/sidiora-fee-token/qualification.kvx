@@ -387,3 +387,22 @@ command = "timeout 20m sh -c 'go test -count=1 ./node/antedecorators/... && go t
 log_path = ".logs/verify.log"
 observed = "Antedecorator tests pass, but the assembled-handler priority assertions compare int constants with int64 results and fail despite matching numeric values."
 assumption = "The two task-scoped repair cycles are exhausted; the assertions remain intact and task 2.7 is implemented but not qualified."
+
+[observation.2.7.2]
+task = "2.7"; file = "spec/sidiora-fee-token/spec.kvx"; symbol = "task.2.7.status"
+observed = "observation.2.7.1 records the first run, taken before the typed priority comparison was repaired; the done record in spec.kvx carries a later run of the same command at exit 0, so the ledger and the status read as contradicting each other."
+assumption = "The done record in spec.kvx is the authoritative result for task 2.7 and observation.2.7.1 stands as the superseded first run, which is not re-run."
+severity = "note"
+
+[observation.2.7.3]
+task = "2.7"; file = "spec/sidiora-fee-token/spec.kvx"; symbol = "fee_safety"
+observed = "fee_safety, req 1 ac_4 and reqs 10.1, 10.2 and 11.1 still name an x/oracle rate and its spread, while task 2.12 replaced the oracle pair with a governed rate and a block-age bound that both fee paths now read."
+assumption = "The governed rate is the authorized single price source for every fee path; the requirement text stays exactly as written and only an owner revision of this spec reconciles the wording."
+severity = "suspect"
+
+[observation.2.6.4]
+task = "2.6"; file = "modules/evm/keeper/feetoken.go"; symbol = "GetFeeTokenCharge"
+command = "timeout 20m sh -c 'go test -count=1 ./modules/evm/ante/...'"; exit_code = 1; log_path = ".logs/verify-fee-ante.log"
+observed = "Req 9.2 forbids an account being locked into a denom that stops being allowed, but under the governed rate a denom absent from the allowed list is the same state as an unavailable rate, so the refusal req 10.2 orders also refuses the precompile call that clears the preference."
+assumption = "Falling through to the base denom for a withdrawn denom was tried and made TestFeeTokenAnte/missing_rate fail on the charge the network coin must refuse, so the refusal stays and only an owner decision - a fee-check exemption for the clearing call or reconciled requirement text - resolves the lockout."
+severity = "blocker"
