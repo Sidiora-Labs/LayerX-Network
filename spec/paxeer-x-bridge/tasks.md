@@ -51,7 +51,7 @@
     - Write .github/workflows/bridge-test.yml running on pull requests, the merge group and pushes to main and release branches, filtered to bridge/**, interop/crates/layerx-bridge-relayer/** and the workflow file itself and to nothing else.
     - Give it four jobs whose names say what they run: forge test for bridge/evm after cloning forge-std v1.9.6 and openzeppelin-contracts v5.3.0 the way paxeer-forge-test.yml clones them; cargo test and cargo build-sbf for bridge/solana; cargo test for the layerx-bridge-relayer crate; and the bridge/deploy tooling leg running that directory's Go packages, bridge/vectors and the offline check scripts.
     - Pin every action by commit the way the repository's existing workflows pin theirs, add no continue-on-error, and let no step description claim a check it does not perform.
-    - Write bridge/deploy/tests/workflow-check.sh parsing the workflow, asserting every path filter names a directory that exists, asserting every job's command is one the repository can run from its root, asserting the four job names match the four legs, and asserting no continue-on-error is present.
+    - Write bridge/deploy/tests/workflow-check.sh parsing the workflow, asserting the path filters are exactly bridge/**, interop/crates/layerx-bridge-relayer/** and the workflow file itself and that each names a directory or file that exists, asserting every job's command is one the repository can run from its root, asserting the four job names match the four legs, and asserting no continue-on-error is present.
     - _Requirements: 14.1, 14.2, 14.3, 14.4_
 
 ## Wave 2 - Integration
@@ -63,6 +63,7 @@
     - Write bridge/solana/src/release.rs creating the nullifier PDA seeded by the paxeerTxHash and the paxeerNonce so a replay fails on the existing account, reducing the asset's outstanding amount, moving the tokens out by spl-token CPI from the vault-authority PDA to the recipient's token account after checking that account belongs to the recipient, and logging the record naming the asset, the amount, the recipient, the paxeerTxHash and the paxeerNonce.
     - Refuse a release while paused, with a zero amount, above the per-transaction cap, above the outstanding amount, for an unregistered or disabled mint, to a token account that is not the recipient's, and when the nullifier exists; add each refusal to the dispatch in src/lib.rs with its own error code.
     - Write bridge/solana/tests/release.rs under solana-program-test covering a successful release paying the recipient and creating the nullifier, the digest equalling the pinned vector, a replayed release, and every refusal above, with the signatures produced by real secp256k1 keys over the real preimage and verified by the real native program.
+    - Write bridge/solana/src/recipient.rs with the permissionless register-recipient instruction: a Solana account signs to register its own 32-byte pubkey under its 20-byte handle in a recipient PDA seeded by that handle, the program verifies the last 20 bytes of keccak256 of the pubkey equal the handle through src/identity.rs, and refuses a mismatched handle, an unsigned pubkey and an existing PDA; add it to the dispatch in src/lib.rs, and cover the registration, the read-back and each refusal in bridge/solana/tests/release.rs under solana-program-test.
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6_
   - [ ] 2.2 Observe Solana deposits in the relayer and submit bridgeIn
     - Add the solana entry to interop/crates/layerx-bridge-relayer/src/config.rs with the same shape a chains[] entry has - the chain id, the vault handle, the finality depth in slots, the start slot, the maximum slot range, the RPC quorum and the fee-payer key handle - plus the program id and the commitment, with unknown fields refused, and validate that the fee-payer handle is not the attestor handle and that the chain id is the reserved Solana constant bridge/ATTESTATION-SOLANA.md pins.
@@ -77,14 +78,16 @@
     - Fetch a blockhash with getLatestBlockhash, sign the transaction message with the fee payer, journal the exact signed bytes before broadcast so a restart rebroadcasts rather than re-signs, send with sendTransaction and confirm with getSignatureStatuses to the configured commitment; record an existing nullifier PDA as a completed submission rather than an error to retry, and treat an expired blockhash without inclusion as a resubmission of the same journalled attestation.
     - Wire the loop into src/relayer.rs beside the existing outbound step, watching BridgeOut on Paxeer exactly as it already does and changing no existing journal key or stream name.
     - Write interop/crates/layerx-bridge-relayer/tests/solana_release.rs and its recorded fixture covering the instruction layout against the pinned vector, the fee payer's domain, the journal written before broadcast, a restart rebroadcasting the journalled bytes, an existing nullifier recorded as completed, an expired blockhash resubmitted, and a full outbound cycle with a real signer socket and a real journal.
+    - Before building a release, read the recipient PDA seeded by the BridgeOut 20-byte recipient handle with getAccountInfo and take the 32-byte pubkey from it; while that PDA does not exist, hold the release in src/journal.rs as pending-recipient and retry the lookup on later passes without signing or broadcasting anything, and cover the pending state, its resolution once the PDA appears, and a restart that keeps the release pending in interop/crates/layerx-bridge-relayer/tests/solana_release.rs and its fixture.
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
   - [ ] 2.4 Read the deployment back with the post-deploy checklist
     - Write bridge/deploy/checklist.sh taking a chain name and reading the deployed state back through that chain's own RPC: on an EVM chain the vault's owner, attestors, threshold, per-asset caps, paused flag and deployed code hash; on Solana the config PDA's owner, attestors, threshold and paused flag and every asset PDA.
     - Read the Paxeer side back through the precompile's getChain, getAttestors, getCap and isPaused views at 0x0000000000000000000000000000000000001016, and compare every value with the chain configuration and the bodies bridge/deploy/proposals generates.
     - Report one line per check naming the chain, the value, what was expected and what was found; check the native coin first for every chain and fail the run when the native coin is unregistered, uncapped or paused, when any value disagrees, when a placeholder is still in place, or when the Paxeer side carries no registration for the chain.
     - Make the run read-only: no transaction, no state change anywhere, and no default endpoint, key or address; every endpoint arrives through the environment variable the configuration names.
-    - Write bridge/deploy/tests/checklist-check.sh exercising the checklist offline against recorded responses covering a fully agreeing deployment, a disagreeing cap, an unregistered native coin, a paused vault, a missing Paxeer registration and a placeholder still in place, in the shape interop/deploy/mirror/tests/render-config-check.sh establishes.
-    - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5_
+    - Write bridge/deploy/tests/checklist-check.sh exercising the checklist offline against recorded responses covering a fully agreeing deployment, a disagreeing cap, an unregistered native coin, a paused vault, a missing Paxeer registration and a placeholder still in place, in the shape interop/deploy/mirror/tests/render-config-check.sh establishes, plus a Solana asset PDA pairing the id 0x21f7b20a555199fa73A238B1a91FD0f549068fEe with any mint but 5w3wVdJaESaJKyLmStM6Hv9UyUkmZ1b9DLQquAqqpump, or that mint with any other id, failing the run.
+    - Replace the proposals package's private schema with bridge/deploy/chainconfig and delete the duplicate handle derivation in chainconfig in favour of bridge/vectors, keeping every existing proposals and chainconfig test passing unchanged.
+    - _Requirements: 3.8, 11.1, 11.2, 11.3, 11.4, 11.5_
   - [ ] 2.5 Write the operator runbook and the per-chain pages
     - Write bridge/README.md as the operator runbook: what the bridge is in two sentences, then the order of operations - bootstrap the libraries, deploy the chain, verify the source, deploy and initialise the Solana program, generate the proposals, submit them, run the checklist - with the environment variables each step needs by name and what the checklist must report before the bridge is opened.
     - Write bridge/evm/chains/<name>/README.md for each of the eight EVM chains and bridge/solana/chains/solana/README.md, each naming the pair in plain words - PAX against ETH on ethereum, base, arbitrum and optimism, against BNB on bnb, POL on polygon, AVAX on avalanche, HYPE on hyperevm, SOL on solana - the chain id, the assets its configuration registers, and the environment variables its scripts need.
@@ -106,14 +109,21 @@
     - Record the exchange as a fixture under bridge/deploy/tests/fixtures in the same format, carrying no key material, no endpoint but the local one and no date or hostname, and make it replayable without a validator.
     - Stop the run with a message naming the missing tool when solana-test-validator or cargo-build-sbf is absent, and skip nothing.
     - _Requirements: 13.2, 13.3, 13.4, 13.5_
+  - [ ] 2.8 Write the Solana admin client
+    - Write the client as a Rust binary crate at bridge/solana/admin, a member of the bridge/solana workspace, not as a Go subcommand under bridge/deploy: the repository's Solana client code in interop/crates/layerx-mirror/src/solana.rs is Rust, the instruction and account layouts it must encode live in the bridge/solana program crate it can import directly, and solana-program-test is a Rust harness, so Rust keeps one definition of every byte and tests it against the real program.
+    - Read bridge/solana/chains/solana/config.json through the same fields bridge/deploy/chainconfig validates, refuse every placeholder, and take the owner and fee-payer keys only through the environment variable names the configuration declares, carrying no default endpoint, key or address.
+    - Initialise the program config with the owner, the attestor set, the threshold and paused=false; register the assets in configuration order, native wrapped SOL first and then the Sidiora mint 5w3wVdJaESaJKyLmStM6Hv9UyUkmZ1b9DLQquAqqpump with its fixed id 0x21f7b20a555199fa73A238B1a91FD0f549068fEe; set every per-transaction and total cap; then read the config and asset PDAs back and print the resulting on-chain state.
+    - Be the admin client deploy-solana-program.sh calls, satisfying the PAXEER_BRIDGE_SOLANA_ADMIN_CLI requirement task 1.4 declares, and refuse an already-initialised program whose owner differs from the configuration.
+    - Write bridge/solana/admin/tests/admin.rs under solana-program-test running the client against the real program: initialisation, both registrations with their ids, the caps, the printed state, the placeholder and missing-variable refusals, and the different-owner refusal.
+    - _Requirements: 3.8, 4.2, 4.3, 10.3, 10.4_
 
 ## Wave 3 - One Run, Recorded
 
 - [ ] 3. Run the workflow's command set once on the merged revision and write down what ran
   - [ ] 3.1 Run the bridge workflow's command set once on the merged revision and record the evidence
     - On the revision that merges waves 1 and 2, run the workflow's four legs once, in order - the bridge/evm Foundry suite after bootstrapping the pinned libraries, the bridge/solana crate with its release tests and cargo build-sbf, the layerx-bridge-relayer crate, and the bridge/deploy and bridge/vectors Go packages with the offline check scripts - writing each leg's output to its own log under build/bridge-gates/.
-    - Append one gate record per leg to spec/paxeer-x-bridge/qualification.kvx carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code and the log path, written only from a command that actually ran.
-    - Append one observation per failure the run exposes that belongs to no task in this feature: revision, command, exit code, log path, one sentence of what was observed and one sentence of what is assumed; do not investigate it further and do not rerun it.
+    - Append one gate record per leg to spec/paxeer-x-bridge/qualification.kvx carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code, the log path, the outcome and the evidence, written only from a command that actually ran.
+    - Append one [observation.*] entry per failure the run exposes that belongs to no task in this feature, in the spec/workflow.kvx [qualification_log] shape: task, file, symbol, one sentence observed, one sentence assumption and severity; do not investigate it further and do not rerun it.
     - Rerun nothing that already passed at this revision, spawn no review of a task whose verify_cmd passed, and write no gate record for a command that did not run.
     - Deploy nothing: the deployment scripts and the generated governance proposals are left for their owner, and no task in this feature touches a public network.
     - _Requirements: 15.1, 15.2, 15.3, 15.4_
@@ -124,7 +134,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }

@@ -31,3 +31,6 @@
 #
 # No record carries a hostname, an IP address, an internal URL, a credential or
 # the name of an agent or a working branch.
+# Note: a [gate.*] record also carries exit_code, the exit status the command
+#   returned; evidence is the repository-relative log path that run wrote. An [observation.*] entry
+#   carries only the workflow.kvx shape keys listed above.
