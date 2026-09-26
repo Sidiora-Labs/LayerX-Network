@@ -73,6 +73,10 @@
     - Give it legs named for what they run: cargo test for x-websearch; go test for modules/xweb and precompiles/xweb; forge test for XWebConsumer.t.sol after running tools/ci/xweb-forge-libs.sh; the kernel make targets for the web activity and web_read with the runtime web_read test; and the TypeScript, Python and MCP tests. Pin every action by commit as the existing workflows do and add no continue-on-error.
     - Write tools/ci/xweb-workflow-check.sh parsing the workflow and asserting the concurrency group and cancel-in-progress, that every path filter names a path that exists or a path a task of this feature adds, that every leg's command runs from the repository root, and that no continue-on-error is present.
     - _Requirements: 16.1, 16.2_
+  - [ ] 1.12 Repair the pointer test doubles so the Foundry suite compiles and qualify the xweb precompile
+    - In contracts/test/CW1155ERC1155PointerTest.t.sol and contracts/test/CW721ERC721PointerTest.t.sol bring MockAddr up to the whole IAddr interface - bindLayerX, unbindLayerX, getLayerXDid, getEvmAddrByLayerX, layerXBindNonce, getUnifiedAccount and every other declared function - with behaviour consistent with the existing getPaxAddr and getEvmAddr doubles, so the contracts tree compiles under forge again; change nothing else in those tests.
+    - Run task 1.6's verify_cmd unchanged on the resulting revision, record it as task 1.6's evidence, set task 1.6 to done and close observation 1.6.1.
+    - _Requirements: 6.5_
 
 ## Wave 2 - Integration
 
@@ -126,7 +130,7 @@
 ```json
 {
   "waves": [
-    { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11"] },
+    { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12"] },
     { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]

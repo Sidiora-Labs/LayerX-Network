@@ -428,6 +428,19 @@ section = "Wave 2 - Integration"
 title = "Close the contract and program loops, package the sidecar, write the v6.8 plan and the page, and dry-run it"
 status = "pending"
 
+[task.1.12]
+title = "Repair the pointer test doubles so the Foundry suite compiles and qualify the xweb precompile"
+status = "pending"
+wave = 1
+requires = ["1.6"]
+do_1 = "In contracts/test/CW1155ERC1155PointerTest.t.sol and contracts/test/CW721ERC721PointerTest.t.sol bring MockAddr up to the whole IAddr interface - bindLayerX, unbindLayerX, getLayerXDid, getEvmAddrByLayerX, layerXBindNonce, getUnifiedAccount and every other declared function - with behaviour consistent with the existing getPaxAddr and getEvmAddr doubles, so the contracts tree compiles under forge again; change nothing else in those tests."
+do_2 = "Run task 1.6's verify_cmd unchanged on the resulting revision, record it as task 1.6's evidence, set task 1.6 to done and close observation 1.6.1."
+verify_cmd = "timeout 20m sh -c 'go test -count=1 ./precompiles/xweb/... ./precompiles/ && bash tools/ci/xweb-forge-libs.sh && FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague --match-path contracts/test/XWebConsumer.t.sol -vvv'"
+symbols = ["MockAddr"]
+touches = ["contracts/test/CW1155ERC1155PointerTest.t.sol","contracts/test/CW721ERC721PointerTest.t.sol"]
+tests = ["contracts/test/CW1155ERC1155PointerTest.t.sol","contracts/test/CW721ERC721PointerTest.t.sol","contracts/test/XWebConsumer.t.sol"]
+reqs = ["6.5"]
+
 [task.2.1]
 title = "Sign as an attestor and submit fulfil from the sidecar"
 status = "pending"
