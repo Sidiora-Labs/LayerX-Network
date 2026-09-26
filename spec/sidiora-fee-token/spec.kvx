@@ -895,11 +895,23 @@ symbols = ["Params","AllowedFeeDenom"]
 touches = ["modules/evm/types/params.pb.go"]
 reqs = ["8.1","8.5"]
 
+[task.4.14]
+title = "Reconcile the fee-token rate accessor with the generated parameters and qualify the regeneration"
+status = "pending"
+wave = 4
+requires = ["4.12"]
+do_1 = "The pinned pipeline emits no GetRate getter for the fee-token rate field, while modules/evm/types/params_test.go calls one that only the earlier hand edit provided; regenerate modules/evm/types/params.pb.go through scripts/protoc.sh and commit it exactly as emitted, and if any non-test code calls GetRate provide that accessor in the hand-written modules/evm/types/params.go, otherwise make the test read the field directly; no assertion changes."
+do_2 = "Run task 4.12's verify_cmd once; on exit 0 record task 4.12 done with that revision, command, exit code and log, and close observations 2.8.1 and 4.12.1 naming the revision."
+verify_cmd = "timeout 20m sh -c 'bash scripts/protoc.sh && git diff --exit-code -- modules/evm/types/params.pb.go && go test -count=1 ./modules/evm/types/...'"
+symbols = ["GetRate"]
+touches = ["modules/evm/types/params.pb.go","modules/evm/types/params.go","modules/evm/types/params_test.go"]
+reqs = ["8.1","8.5"]
+
 [task.4.13]
 title = "Rerun the aggregate suites once on the merged wave 4 revision"
 status = "pending"
 wave = 4
-requires = ["4.1","4.2","4.3","4.4","4.5","4.6","4.7","4.8","4.9","4.10","4.11","4.12"]
+requires = ["4.1","4.2","4.3","4.4","4.5","4.6","4.7","4.8","4.9","4.10","4.11","4.12","4.14"]
 do_1 = "On the revision that merges every wave 4 task, run the three legs of task 3.1 once, in order - the Go packages under modules/evm, modules/layerxbridge, precompiles and node/antedecorators, then the gas-station crate, then the Paxeer Foundry project after contracts/bootstrap-libs.sh - writing each leg's output to its own log under build/sidiora-gates/."
 do_2 = "Append one gate record per leg that ran to spec/sidiora-fee-token/qualification.kvx under gate.4.13, carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code and the log path, written only from a command that actually ran."
 do_3 = "Append one observation per failure the run exposes that belongs to no task in this feature, do not investigate or rerun it, rerun nothing that already passed at this revision, and deploy nothing."

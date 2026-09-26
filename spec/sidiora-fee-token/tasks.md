@@ -269,6 +269,10 @@
     - Append one gate record per leg that ran to spec/sidiora-fee-token/qualification.kvx under gate.4.13, carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code and the log path, written only from a command that actually ran.
     - Append one observation per failure the run exposes that belongs to no task in this feature, do not investigate or rerun it, rerun nothing that already passed at this revision, and deploy nothing.
     - _Requirements: 15.1, 15.2, 15.3, 15.4_
+  - [ ] 4.14 Reconcile the fee-token rate accessor with the generated parameters and qualify the regeneration
+    - The pinned pipeline emits no GetRate getter for the fee-token rate field, while modules/evm/types/params_test.go calls one that only the earlier hand edit provided; regenerate modules/evm/types/params.pb.go through scripts/protoc.sh and commit it exactly as emitted, and if any non-test code calls GetRate provide that accessor in the hand-written modules/evm/types/params.go, otherwise make the test read the field directly; no assertion changes.
+    - Run task 4.12's verify_cmd once; on exit 0 record task 4.12 done with that revision, command, exit code and log, and close observations 2.8.1 and 4.12.1 naming the revision.
+    - _Requirements: 8.1, 8.5_
 
 ## Task Dependency Graph
 
@@ -278,7 +282,7 @@
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"] },
     { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17"] },
     { "id": 3,  "tasks": ["3.1"] },
-    { "id": 4,  "tasks": ["4.1", "4.2", "4.3", "4.4", "4.5", "4.6", "4.7", "4.8", "4.9", "4.10", "4.11", "4.12", "4.13"] }
+    { "id": 4,  "tasks": ["4.1", "4.2", "4.3", "4.4", "4.5", "4.6", "4.7", "4.8", "4.9", "4.10", "4.11", "4.12", "4.13", "4.14"] }
   ]
 }
 ```
