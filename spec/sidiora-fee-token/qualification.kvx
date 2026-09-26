@@ -496,3 +496,33 @@ environment = "linux/amd64, go1.25.6, the first leg of the task 3.1 verify_cmd u
 outcome = "fail"
 evidence = "build/sidiora-gates/go.log"
 note = "Exit code 1: 21 packages passed and github.com/sidiora-labs/paxeer-network/modules/evm failed in TestModuleExportGenesis (modules/evm/module_test.go:58 expects the exported params without allowed_fee_denoms, max_fee_token_spread, fee_token_enabled, fee_token_distribution and max_fee_token_rate_age, which task 2.4 added) and TestConsensusVersion (modules/evm/module_test.go:64 expects 21, the module reports 22 after the task 2.9 raise). Both failures belong to tasks in this feature, so no observation is written; the verify_cmd stops at the first failing leg, so the gas-station leg and the Paxeer Foundry leg never ran and no record is written for them."
+
+[gate.3.1.2]
+task = "3.1"
+reqs = ["15.1","15.2","15.3","15.4"]
+revision = "e46a55ed4ad72702fa668074d40a9d014bd7820b"
+command = "go test -count=1 ./modules/evm/... ./modules/layerxbridge/... ./precompiles/ ./precompiles/feetoken/... ./node/antedecorators/..."
+environment = "linux/amd64, go1.25.6, the first leg of the task 3.1 verify_cmd under one timeout 20m"
+outcome = "pass"
+evidence = "build/sidiora-gates/go.log"
+note = "Exit code 0: 22 packages passed and 11 carry no test files; the evm module's genesis export and consensus version tests that stopped gate.3.1.1 pass after task 2.17."
+
+[gate.3.1.3]
+task = "3.1"
+reqs = ["15.1","15.2","15.3","15.4"]
+revision = "e46a55ed4ad72702fa668074d40a9d014bd7820b"
+command = "cargo test --locked --manifest-path interop/Cargo.toml -p layerx-gas-station"
+environment = "linux/amd64, cargo 1.91.1, the second leg of the task 3.1 verify_cmd under the same timeout 20m"
+outcome = "pass"
+evidence = "build/sidiora-gates/gas-station.log"
+note = "Exit code 0: 21 tests passed, 0 failed, 0 ignored across the crate's unit, integration and doc test targets."
+
+[gate.3.1.4]
+task = "3.1"
+reqs = ["15.1","15.2","15.3","15.4"]
+revision = "e46a55ed4ad72702fa668074d40a9d014bd7820b"
+command = "FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague"
+environment = "linux/amd64, forge 1.7.1, the third leg of the task 3.1 verify_cmd under the same timeout 20m"
+outcome = "pass"
+evidence = "build/sidiora-gates/foundry.log"
+note = "Exit code 0: 8 test suites ran, 106 tests passed, 0 failed, 0 skipped; the whole verify_cmd exited 0 with its combined output in .logs/verify.log."
