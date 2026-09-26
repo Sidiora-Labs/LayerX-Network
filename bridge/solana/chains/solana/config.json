@@ -1,0 +1,46 @@
+{
+  "chain": "solana",
+  "kind": "solana",
+  "chain_id": 91600046870081,
+  "native": {
+    "symbol": "SOL",
+    "decimals": 9
+  },
+  "environment": {
+    "rpc_url": "PAXEER_BRIDGE_SOLANA_RPC_URL",
+    "deploy_key": "PAXEER_BRIDGE_SOLANA_KEYPAIR_FILE",
+    "toolchain_bin": "PAXEER_BRIDGE_SOLANA_TOOLCHAIN_BIN"
+  },
+  "owner": "PLACEHOLDER:owner",
+  "attestors": [
+    "PLACEHOLDER:attestor-1",
+    "PLACEHOLDER:attestor-2",
+    "PLACEHOLDER:attestor-3",
+    "PLACEHOLDER:attestor-4",
+    "PLACEHOLDER:attestor-5"
+  ],
+  "threshold": 3,
+  "finality_depth": 32,
+  "solana": {
+    "program_id": "PLACEHOLDER:program-id",
+    "commitment": "finalized"
+  },
+  "assets": [
+    {
+      "symbol": "SOL",
+      "address": "So11111111111111111111111111111111111111112",
+      "asset_id": "0xcf996523B5d068A26f0aa8a116602fE5033Ee3A1",
+      "decimals": 9,
+      "per_tx_cap": "5000000000000",
+      "total_cap": "100000000000000"
+    },
+    {
+      "symbol": "SID",
+      "address": "5w3wVdJaESaJKyLmStM6Hv9UyUkmZ1b9DLQquAqqpump",
+      "asset_id": "0x21f7b20a555199fa73A238B1a91FD0f549068fEe",
+      "decimals": 6,
+      "per_tx_cap": "1000000000000",
+      "total_cap": "50000000000000"
+    }
+  ]
+}

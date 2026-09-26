@@ -26,8 +26,91 @@
 # Task-level verify_cmd runs are NOT recorded here: a task records its result
 # through cg spec done. This ledger carries the four legs of the wave 3 gate and
 # the observations any task makes along the way, including the stale references
-# the halt on chain changes leaves in modules/layerxbridge after task 1.1 moves
+# the chain freeze leaves in modules/layerxbridge after task 1.1 moves
 # the Ethereum custody project to bridge/evm.
 #
 # No record carries a hostname, an IP address, an internal URL, a credential or
 # the name of an agent or a working branch.
+# Note: a [gate.*] record also carries exit_code, the exit status the command
+#   returned; evidence is the repository-relative log path that run wrote. An [observation.*] entry
+#   carries only the workflow.kvx shape keys listed above.
+
+[observation.1.4.1]
+task = "1.4"
+file = "bridge/deploy/chainconfig/config.go"
+symbol = "SolanaHandle"
+observed = "The Solana identity handle - the last twenty bytes of the keccak256 of a thirty-two byte key - is derived inside chainconfig because bridge/vectors does not exist at this revision, so the same derivation now lives in two packages once task 1.3 lands."
+assumption = "Task 1.3 owns the derivation and its vectors; the copy here is asserted against the committed wrapped SOL handle and should import that package once it exists rather than be re-derived a second time."
+severity = "assumption"
+
+[observation.1.4.2]
+task = "1.4"
+file = "bridge/deploy/deploy-solana-program.sh"
+symbol = "PAXEER_BRIDGE_SOLANA_ADMIN_CLI"
+observed = "Initialising the deployed program with its owner, attestor set and threshold and registering each asset needs a client that encodes those instructions, and no task in this feature creates one, so the script requires it through PAXEER_BRIDGE_SOLANA_ADMIN_CLI and refuses to deploy without an executable."
+assumption = "The bridge/solana program's own client is delivered elsewhere; until it exists the Solana deployment cannot be completed past the program upload, and the refusal names the variable rather than defaulting to anything."
+severity = "blocker"
+
+[observation.1.4.3]
+task = "1.4"
+file = "bridge/deploy/tests/deploy-scripts-check.sh"
+symbol = "deploy-scripts-check"
+observed = "The pinned Solana toolchain and the bridge/evm and bridge/solana sources are not present at this revision, so the offline check drives the Solana run only as far as the toolchain refusal and the two EVM scripts check the sources where they are used instead of at preflight."
+assumption = "A real build and deployment is the Solana dry run's ground, not this check's; the toolchain refusal proves every configuration and environment check before it passed."
+severity = "assumption"
+
+[observation.1.1.1]
+task = "1.1"
+file = "modules/layerxbridge/ATTESTATION.md"
+symbol = "modules/layerxbridge/types/attestation.go"
+observed = "Both files name interop/contracts/ethereum-bridge for the Solidity attestation source and its document, which this task moved to bridge/evm with git mv, so the two references now point at a path that no longer exists."
+assumption = "The chain freeze forbids editing anything under modules/, so both files are left exactly as written and the references stay stale until the first authorised chain change corrects them."
+severity = "note"
+
+[observation.1.1.2]
+task = "1.1"
+file = "spec/paxeer-x-bridge/qualification.kvx"
+symbol = "[gate.<task>.<n>] versus req.15 ac_2 and ac_3"
+observed = "This header names a gate record's result and log keys outcome and evidence, while req.15 ac_2 and ac_3 and task 3.1 do_2 require the same record to carry the exit code and the log path, so the two spellings of one gate record disagree before any gate is written."
+assumption = "Both spellings are left as written here, and which key names a gate record's exit code and log path remains unresolved in this ledger."
+severity = "note"
+
+[observation.1.5.1]
+task = "1.5"
+file = "bridge/deploy/proposals/proposals.go"
+symbol = "ChainConfig"
+observed = "Task 1.4 owns bridge/deploy/chainconfig and the nine committed configurations, which do not exist on this branch, so the generator declares the minimal schema it reads from [design.chains] p2 plus the two fields no governance body can be built without: governance_authority, the bech32 account the keeper executes these messages for, and vault, the deployed vault address or Solana vault handle."
+assumption = "The wave merge reconciles the two declarations - the canonical chainconfig package keeps ownership of the schema and gains these two fields, and the Solana slot finality depth is the single finality_depth field this generator reads - because both read the same file."
+severity = "assumption"
+
+[observation.1.5.2]
+task = "1.5"
+file = "modules/layerxbridge/keeper/sidiora.go"
+symbol = "EnsureSidioraDenom"
+observed = "No production path calls EnsureSidioraDenom at this revision, and MsgSetCap creates Denom(chain, asset) for an asset that is not registered yet, so submitting Solana's Sidiora cap before something registers (chain, 0x21f7b20a555199fa73A238B1a91FD0f549068fEe, usid) binds that cap to an lxb denom instead of the module's usid denom."
+assumption = "The Sidiora cap must be submitted after the asset is registered against usid; the chain is frozen, so the ordering belongs in the operator runbook and the checklist read-back rather than in a chain change."
+severity = "suspect"
+
+[observation.1.2.1]
+task = "1.2"
+file = "bridge/solana/Cargo.lock"
+symbol = "cargo build-sbf"
+observed = "cargo build-sbf cannot resolve the dependency graph: the cargo shipped in platform-tools rejects the 35 transitive manifests that declare edition 2024, failing first on zeroize_derive with 'feature edition2024 is required'."
+assumption = "Pre-existing and environment-level, not introduced here: interop/contracts/solana-mirror pins the identical 35 manifests and fails the same way, so the SBF leg of the wave 3 gate needs a newer platform-tools on the gate runner rather than a change to this crate."
+severity = "blocker"
+
+[observation.1.6.1]
+task = "1.6"
+file = "spec/paxeer-x-bridge/spec.kvx"
+symbol = "req.14.ac_1"
+observed = "Requirement 14.1 says the workflow SHALL carry no path filter other than bridge/** and interop/crates/layerx-bridge-relayer/**, and 14.4 says every path filter SHALL name a directory that exists, while task 1.6 do_1 requires the workflow file itself as a third filter; a workflow that changes its own legs without rerunning them would be the alternative, so the task followed do_1 and carries three filters, the third naming a file."
+assumption = "do_1 is the narrower and later instruction and the merge group carries no filter at all because GitHub applies none there, so bridge/deploy/tests/workflow-check.sh asserts the two directory globs as directories and the third filter as the workflow file by name rather than relaxing either check."
+severity = "note"
+
+[wave.1]
+revision = "4f2b24deb"
+command = "timeout 20m each: bash bridge/evm/bootstrap-libs.sh && forge test --root bridge/evm -vvv; cargo test --locked --manifest-path bridge/solana/Cargo.toml; go test -count=1 ./bridge/vectors/...; go test -count=1 ./bridge/deploy/chainconfig/... && bash bridge/deploy/tests/deploy-scripts-check.sh; go test -count=1 ./bridge/deploy/proposals/...; bash bridge/deploy/tests/workflow-check.sh"
+exit_codes = "lint 0; legs 1.1 0, 1.2 0, 1.3 0, 1.4 0, 1.5 0, 1.6 0"
+evidence = ".logs/wave1-union.log"
+observed = "All six wave-one verify legs and the spec lint (0 errors, 34 warnings for wave-two paths not yet created) pass on the merged feature revision; the public-text scan of the diff against main found three wording hits in spec/paxeer-x-bridge (spec.kvx lines 50 and 54, qualification.kvx line 67)."
+assumption = "The lint warnings name files wave-two tasks create and the three scan hits are spec wording left unedited here, so neither blocks the wave."

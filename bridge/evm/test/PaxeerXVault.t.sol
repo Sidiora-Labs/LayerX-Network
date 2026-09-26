@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity 0.8.30;
 
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
 import {PaxeerXVault} from "../src/PaxeerXVault.sol";
 import {BridgeAttestation} from "../src/BridgeAttestation.sol";
 import {CheatTest} from "./Vm.sol";
@@ -286,31 +290,39 @@ contract PaxeerXVaultTest is CheatTest {
 
     // ---- owner-only configuration ----
 
+    function notOwner(address account) internal pure returns (bytes memory) {
+        return abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, account);
+    }
+
     function test_OwnerOnlySetters() public {
         address[] memory attestors = new address[](1);
         attestors[0] = vm.addr(OUTSIDER_KEY);
 
-        vm.expectRevert(PaxeerXVault.NotOwner.selector);
+        vm.expectRevert(notOwner(USER));
         vm.prank(USER);
         vault.setAttestors(attestors, 1);
 
-        vm.expectRevert(PaxeerXVault.NotOwner.selector);
+        vm.expectRevert(notOwner(USER));
         vm.prank(USER);
         vault.setCap(address(token), 1, 1);
 
-        vm.expectRevert(PaxeerXVault.NotOwner.selector);
+        vm.expectRevert(notOwner(USER));
         vm.prank(USER);
         vault.pause();
 
         vm.prank(OWNER);
         vault.pause();
-        vm.expectRevert(PaxeerXVault.NotOwner.selector);
+        vm.expectRevert(notOwner(USER));
         vm.prank(USER);
         vault.unpause();
 
-        vm.expectRevert(PaxeerXVault.NotOwner.selector);
+        vm.expectRevert(notOwner(USER));
         vm.prank(USER);
         vault.transferOwnership(USER);
+
+        vm.expectRevert(notOwner(USER));
+        vm.prank(USER);
+        vault.rescue(address(token), USER);
     }
 
     function test_SetAttestorsReplacesSetAndEmits() public {
@@ -527,5 +539,371 @@ contract PaxeerXVaultTest is CheatTest {
             0x511964ae9566f9536604258667400b0d76335e2a6e60ab0f700bf2433bc97918,
             "in vector"
         );
+    }
+
+    // ---- two-step ownership ----
+
+    function test_ConstructorRefusesZeroOwner() public {
+        address[] memory attestors = new address[](1);
+        attestors[0] = vm.addr(keys[0]);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableInvalidOwner.selector, address(0)));
+        new PaxeerXVault(address(0), attestors, 1);
+    }
+
+    function test_OwnershipTransferIsTwoStep() public {
+        vm.expectEmit();
+        emit Ownable2Step.OwnershipTransferStarted(OWNER, USER);
+        vm.prank(OWNER);
+        vault.transferOwnership(USER);
+        assertEq(vault.owner(), OWNER, "owner unchanged by the proposal");
+        assertEq(vault.pendingOwner(), USER, "pending owner");
+
+        // The sitting owner keeps every power until the transfer completes.
+        vm.prank(OWNER);
+        vault.pause();
+        vm.prank(OWNER);
+        vault.unpause();
+
+        vm.expectEmit();
+        emit Ownable.OwnershipTransferred(OWNER, USER);
+        vm.prank(USER);
+        vault.acceptOwnership();
+        assertEq(vault.owner(), USER, "owner after acceptance");
+        assertEq(vault.pendingOwner(), address(0), "pending owner cleared");
+
+        vm.expectRevert(notOwner(OWNER));
+        vm.prank(OWNER);
+        vault.pause();
+        vm.prank(USER);
+        vault.pause();
+        assertTrue(vault.paused(), "the accepted owner governs");
+    }
+
+    function test_OwnershipTransferRefusesForeignAcceptance() public {
+        vm.prank(OWNER);
+        vault.transferOwnership(USER);
+        vm.expectRevert(notOwner(RECIPIENT));
+        vm.prank(RECIPIENT);
+        vault.acceptOwnership();
+        assertEq(vault.owner(), OWNER, "owner unchanged");
+        assertEq(vault.pendingOwner(), USER, "pending owner unchanged");
+    }
+
+    function test_OwnershipTransferCanBeCancelled() public {
+        vm.prank(OWNER);
+        vault.transferOwnership(USER);
+        vm.prank(OWNER);
+        vault.transferOwnership(address(0));
+        assertEq(vault.pendingOwner(), address(0), "pending owner cleared");
+        vm.expectRevert(notOwner(USER));
+        vm.prank(USER);
+        vault.acceptOwnership();
+        assertEq(vault.owner(), OWNER, "owner unchanged");
+    }
+
+    // ---- custody measured as a balance delta ----
+
+    function test_DepositRefusesFeeOnTransferToken() public {
+        FeeOnTransferToken fee = new FeeOnTransferToken(100);
+        vm.prank(OWNER);
+        vault.setCap(address(fee), PER_TX, TOTAL);
+        fee.mint(USER, 10 ether);
+        vm.prank(USER);
+        fee.approve(address(vault), 10 ether);
+        vm.expectRevert(abi.encodeWithSelector(PaxeerXVault.TransferAmountMismatch.selector, 9.9 ether, 10 ether));
+        vm.prank(USER);
+        vault.deposit(address(fee), 10 ether, PAXEER_RECIPIENT);
+        assertEq(vault.outstanding(address(fee)), 0, "nothing recorded");
+        assertEq(fee.balanceOf(address(vault)), 0, "nothing held");
+        assertEq(vault.depositNonce(), 0, "nonce untouched");
+    }
+
+    function test_DepositRefusesZeroAmountAndZeroRecipient() public {
+        token.mint(USER, 1 ether);
+        vm.prank(USER);
+        token.approve(address(vault), 1 ether);
+
+        vm.expectRevert(PaxeerXVault.ZeroAmount.selector);
+        vm.prank(USER);
+        vault.deposit(address(token), 0, PAXEER_RECIPIENT);
+
+        vm.expectRevert(PaxeerXVault.InvalidRecipient.selector);
+        vm.prank(USER);
+        vault.deposit(address(token), 1 ether, bytes32(0));
+
+        vm.deal(USER, 1 ether);
+        vm.expectRevert(PaxeerXVault.ZeroAmount.selector);
+        vm.prank(USER);
+        vault.depositNative{value: 0}(PAXEER_RECIPIENT);
+
+        vm.expectRevert(PaxeerXVault.InvalidRecipient.selector);
+        vm.prank(USER);
+        vault.depositNative{value: 1 ether}(bytes32(0));
+    }
+
+    // ---- release refusals the wire format keeps ----
+
+    function test_ReleaseRefusesZeroAmountAndZeroRecipient() public {
+        depositToken(10 ether);
+        bytes32 txHash = keccak256("burn");
+        bytes[] memory sigs = releaseSigs(txHash, 1, address(token), 1 ether);
+
+        vm.expectRevert(PaxeerXVault.ZeroAmount.selector);
+        vault.release(address(token), 0, RECIPIENT, txHash, 1, sigs);
+
+        vm.expectRevert(PaxeerXVault.InvalidRecipient.selector);
+        vault.release(address(token), 1 ether, address(0), txHash, 1, sigs);
+    }
+
+    function test_ReleaseRefusesSignatureOfTheWrongLength() public {
+        depositToken(10 ether);
+        bytes32 txHash = keccak256("burn");
+        bytes32 digest = vault.releaseDigest(txHash, 1, RECIPIENT, address(token), 1 ether);
+        bytes[] memory sigs = new bytes[](2);
+        sigs[0] = new bytes(64);
+        sigs[1] = signature(keys[0], digest);
+        vm.expectRevert(PaxeerXVault.InvalidSignature.selector);
+        vault.release(address(token), 1 ether, RECIPIENT, txHash, 1, sigs);
+    }
+
+    function test_ReleaseRefusesRecoveryIdOutsideTwentySevenAndTwentyEight() public {
+        depositToken(10 ether);
+        bytes32 txHash = keccak256("burn");
+        bytes32 digest = vault.releaseDigest(txHash, 1, RECIPIENT, address(token), 1 ether);
+        (, bytes32 r, bytes32 s) = vm.sign(keys[0], digest);
+        bytes[] memory sigs = new bytes[](2);
+        sigs[0] = abi.encodePacked(r, s, uint8(29));
+        sigs[1] = signature(keys[1], digest);
+        vm.expectRevert(PaxeerXVault.InvalidSignature.selector);
+        vault.release(address(token), 1 ether, RECIPIENT, txHash, 1, sigs);
+    }
+
+    function test_ReleaseNativeRefusesRecipientThatRejectsValue() public {
+        vm.deal(USER, 10 ether);
+        vm.prank(USER);
+        vault.depositNative{value: 10 ether}(PAXEER_RECIPIENT);
+        RejectingRecipient sink = new RejectingRecipient();
+        bytes32 txHash = keccak256("burn-native-rejected");
+        bytes[] memory sigs = signSorted(twoKeys(), vault.releaseDigest(txHash, 2, address(sink), NATIVE, 1 ether));
+        vm.expectRevert(PaxeerXVault.NativeTransferFailed.selector);
+        vault.release(NATIVE, 1 ether, address(sink), txHash, 2, sigs);
+        assertEq(vault.outstanding(NATIVE), 10 ether, "custody untouched");
+        assertTrue(!vault.nullified(vault.nullifierOf(txHash, 2)), "nullifier untouched");
+    }
+
+    function test_ReleaseRefusesReentrantToken() public {
+        ReentrantToken reentrant = new ReentrantToken();
+        vm.prank(OWNER);
+        vault.setCap(address(reentrant), PER_TX, TOTAL);
+        reentrant.mint(USER, 10 ether);
+        vm.prank(USER);
+        reentrant.approve(address(vault), 10 ether);
+        vm.prank(USER);
+        vault.deposit(address(reentrant), 10 ether, PAXEER_RECIPIENT);
+
+        bytes32 outerHash = keccak256("burn-reentrant-outer");
+        bytes32 innerHash = keccak256("burn-reentrant-inner");
+        bytes[] memory inner =
+            signSorted(twoKeys(), vault.releaseDigest(innerHash, 2, RECIPIENT, address(reentrant), 1 ether));
+        reentrant.arm(
+            address(vault),
+            abi.encodeWithSelector(
+                PaxeerXVault.release.selector,
+                address(reentrant),
+                uint256(1 ether),
+                RECIPIENT,
+                innerHash,
+                uint64(2),
+                inner
+            )
+        );
+        bytes[] memory outer =
+            signSorted(twoKeys(), vault.releaseDigest(outerHash, 1, RECIPIENT, address(reentrant), 1 ether));
+        vm.expectRevert(ReentrancyGuard.ReentrancyGuardReentrantCall.selector);
+        vault.release(address(reentrant), 1 ether, RECIPIENT, outerHash, 1, outer);
+        assertEq(vault.outstanding(address(reentrant)), 10 ether, "custody untouched");
+        assertEq(reentrant.balanceOf(RECIPIENT), 0, "nothing paid out");
+    }
+
+    // ---- rescue ----
+
+    function test_SetCapRegistersTheAssetOnce() public {
+        TestToken other = new TestToken();
+        assertTrue(!vault.registered(address(other)), "not registered yet");
+        vm.expectEmit();
+        emit PaxeerXVault.AssetRegistered(address(other));
+        vm.prank(OWNER);
+        vault.setCap(address(other), PER_TX, TOTAL);
+        assertTrue(vault.registered(address(other)), "registered");
+
+        // A later cap change emits CapSet alone: registration cannot be undone,
+        // so zeroing the caps does not open the rescue path onto a bridged asset.
+        vm.expectEmit();
+        emit PaxeerXVault.CapSet(address(other), 0, 0);
+        vm.prank(OWNER);
+        vault.setCap(address(other), 0, 0);
+        assertTrue(vault.registered(address(other)), "still registered");
+        other.mint(address(vault), 1 ether);
+        vm.expectRevert(abi.encodeWithSelector(PaxeerXVault.AssetRegisteredForBridging.selector, address(other)));
+        vm.prank(OWNER);
+        vault.rescue(address(other), OWNER);
+    }
+
+    function test_RescueMovesTheWholeBalanceOfAStrayToken() public {
+        TestToken stray = new TestToken();
+        stray.mint(address(vault), 7 ether);
+        assertTrue(!vault.registered(address(stray)), "never registered");
+        vm.expectEmit();
+        emit PaxeerXVault.Rescued(address(stray), RECIPIENT, 7 ether);
+        vm.prank(OWNER);
+        vault.rescue(address(stray), RECIPIENT);
+        assertEq(stray.balanceOf(RECIPIENT), 7 ether, "rescued in full");
+        assertEq(stray.balanceOf(address(vault)), 0, "vault emptied of the stray token");
+        assertEq(token.balanceOf(address(vault)), 0, "bridged asset untouched");
+    }
+
+    function test_RescueRefusesTheNativeAsset() public {
+        vm.deal(address(vault), 3 ether);
+        vm.expectRevert(PaxeerXVault.NativeAssetNotRescuable.selector);
+        vm.prank(OWNER);
+        vault.rescue(NATIVE, RECIPIENT);
+        assertEq(address(vault).balance, 3 ether, "native balance untouched");
+    }
+
+    function test_RescueRefusesZeroDestination() public {
+        TestToken stray = new TestToken();
+        stray.mint(address(vault), 1 ether);
+        vm.expectRevert(PaxeerXVault.InvalidRecipient.selector);
+        vm.prank(OWNER);
+        vault.rescue(address(stray), address(0));
+        assertEq(stray.balanceOf(address(vault)), 1 ether, "still held");
+    }
+
+    function test_RescueRefusesARegisteredToken() public {
+        TestToken other = new TestToken();
+        vm.prank(OWNER);
+        vault.setCap(address(other), PER_TX, TOTAL);
+        other.mint(address(vault), 3 ether);
+        vm.expectRevert(abi.encodeWithSelector(PaxeerXVault.AssetRegisteredForBridging.selector, address(other)));
+        vm.prank(OWNER);
+        vault.rescue(address(other), RECIPIENT);
+        assertEq(other.balanceOf(address(vault)), 3 ether, "still held");
+    }
+
+    function test_RescueRefusesATokenWithOutstandingCustody() public {
+        depositToken(12 ether);
+        vm.expectRevert(abi.encodeWithSelector(PaxeerXVault.OutstandingNotZero.selector, address(token), 12 ether));
+        vm.prank(OWNER);
+        vault.rescue(address(token), RECIPIENT);
+        assertEq(token.balanceOf(address(vault)), 12 ether, "custody untouched");
+        assertEq(vault.outstanding(address(token)), 12 ether, "outstanding untouched");
+    }
+
+    function test_RescueRefusesAnEmptyBalance() public {
+        TestToken stray = new TestToken();
+        vm.expectRevert(abi.encodeWithSelector(PaxeerXVault.NothingToRescue.selector, address(stray)));
+        vm.prank(OWNER);
+        vault.rescue(address(stray), RECIPIENT);
+    }
+}
+
+/// @dev Contract with neither a receive nor a fallback function, so a plain
+/// value transfer to it fails and must take the whole release down with it.
+contract RejectingRecipient {}
+
+/// @dev ERC20 that keeps a fee on every transfer, so the balance that arrives is
+/// smaller than the amount asked for. A vault that trusted the requested amount
+/// would mint more on Paxeer than it holds in custody.
+contract FeeOnTransferToken {
+    uint256 public immutable feeBps;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+    uint256 public totalSupply;
+
+    constructor(uint256 feeBps_) {
+        feeBps = feeBps_;
+    }
+
+    function mint(address to, uint256 amount) external {
+        balanceOf[to] += amount;
+        totalSupply += amount;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        _move(msg.sender, to, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        allowance[from][msg.sender] -= amount;
+        _move(from, to, amount);
+        return true;
+    }
+
+    function _move(address from, address to, uint256 amount) private {
+        uint256 fee = (amount * feeBps) / 10_000;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount - fee;
+        totalSupply -= fee;
+    }
+}
+
+/// @dev ERC20 that calls back into a target contract from inside its own
+/// transfer, so a reentrant release is attempted through a real token path
+/// rather than simulated. The callback fires once and bubbles its revert.
+contract ReentrantToken {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+    uint256 public totalSupply;
+    address public target;
+    bytes public callback;
+
+    function mint(address to, uint256 amount) external {
+        balanceOf[to] += amount;
+        totalSupply += amount;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    /// @dev Arms the one-shot callback the next transfer makes.
+    function arm(address target_, bytes calldata callback_) external {
+        target = target_;
+        callback = callback_;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        _fireCallback();
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        _fireCallback();
+        return true;
+    }
+
+    function _fireCallback() private {
+        address armed = target;
+        if (armed == address(0)) return;
+        bytes memory data = callback;
+        target = address(0);
+        (bool ok, bytes memory returned) = armed.call(data);
+        if (!ok) {
+            assembly ("memory-safe") {
+                revert(add(returned, 0x20), mload(returned))
+            }
+        }
     }
 }
