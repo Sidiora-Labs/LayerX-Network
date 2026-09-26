@@ -19,6 +19,8 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
 	"github.com/sidiora-labs/paxeer-network/node"
+	"github.com/sidiora-labs/paxeer-network/precompiles"
+	"github.com/sidiora-labs/paxeer-network/precompiles/feetoken"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	authtypes "github.com/sidiora-labs/paxeer-network/sdk/x/auth/types"
 	"github.com/sidiora-labs/paxeer-network/testutil/keeper"
@@ -168,6 +170,59 @@ func TestGetCustomPrecompiles(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestCustomPrecompilesServeTheFeeTokenOnlyFromItsUpgradeHeight(t *testing.T) {
+	k, ctx := keeper.MockEVMKeeperPrecompiles(t)
+	address := common.HexToAddress(feetoken.FeeTokenAddress)
+	const upgradeHeight = int64(20)
+	below := ctx.WithBlockHeight(upgradeHeight - 1)
+	at := ctx.WithBlockHeight(upgradeHeight)
+	above := ctx.WithBlockHeight(upgradeHeight + 1)
+
+	// A chain with no upgrade history serves the latest set.
+	latest := k.CustomPrecompiles(below)
+	require.Contains(t, latest, address)
+	named, ok := latest[address].(precompiles.IPrecompile)
+	require.True(t, ok)
+	require.Equal(t, feetoken.PrecompileName, named.GetName())
+
+	k.UpgradeKeeper().SetDone(at, precompiles.FeeTokenUpgrade)
+
+	// Below the fee-token upgrade the precompile is absent from ordinary
+	// execution and from tracing; every other precompile keeps its version.
+	for _, execCtx := range []sdk.Context{below, below.WithIsTracing(true)} {
+		gasBefore := execCtx.GasMeter().GasConsumed()
+		set := k.CustomPrecompiles(execCtx)
+		if !execCtx.IsTracing() {
+			require.Equal(t, gasBefore, execCtx.GasMeter().GasConsumed())
+		}
+		require.NotContains(t, set, address)
+		require.Len(t, set, len(latest)-1)
+		for addr, contract := range latest {
+			if addr == address {
+				continue
+			}
+			require.Contains(t, set, addr)
+			if !execCtx.IsTracing() {
+				require.Same(t, contract, set[addr])
+			}
+		}
+	}
+
+	// From the upgrade height on the precompile is served again.
+	for _, execCtx := range []sdk.Context{at, above, at.WithIsTracing(true), above.WithIsTracing(true)} {
+		set := k.CustomPrecompiles(execCtx)
+		require.Contains(t, set, address)
+		require.Same(t, latest[address], set[address])
+		require.Len(t, set, len(latest))
+		if !execCtx.IsTracing() {
+			for addr, contract := range latest {
+				require.Same(t, contract, set[addr])
+			}
+		}
+	}
+	require.Equal(t, precompiles.FeeTokenUpgrade, k.GetCustomPrecompilesVersions(at)[address])
 }
 
 func mockEVMTransactionMessage(t *testing.T) *types.MsgEVMTransaction {

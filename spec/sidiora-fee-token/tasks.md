@@ -155,7 +155,7 @@
     - Add node/app_feetoken_test.go asserting through the application's real block path the debit in the fee denom, the refund at the recorded rate, the short-balance and unusable-rate refusals, and the unchanged network-coin charge with the switch off.
     - With this in place, re-qualify task 2.10 on this revision: run its verify_cmd once and set task 2.10 to done with its four evidence fields when it passes, leaving it implemented with the run's fields otherwise, and add a closing line to observations 2.6.3 and 2.10.1 in spec/sidiora-fee-token/qualification.kvx when the run proves them resolved.
     - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 13.4, 13.5_
-  - [ ] 2.14 Serve the fee-token precompile only at or after the upgrade
+  - [x] 2.14 Serve the fee-token precompile only at or after the upgrade
     - In precompiles/setup.go make the fee-token entry of GetCustomPrecompiles absent below the upgrade height task 2.9 named, in the shape the xweb entry is gated there, and in modules/evm/keeper/keeper.go make CustomPrecompiles select the set for the block's upgrade height for ordinary execution instead of latestCustomPrecompiles (observation 2.5.3), changing no other precompile's version selection.
     - Extend node/upgrades_test.go so the custom precompile set below the upgrade height holds no fee-token entry and the precompile answers only after the upgrade, and cover the keeper's selection in modules/evm/keeper.
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 13.1, 13.2, 13.3, 13.6_

@@ -601,7 +601,11 @@ reqs = ["10.1", "10.2", "10.3", "10.4", "10.5", "10.6", "13.4", "13.5"]
 
 [task.2.14]
 title = "Serve the fee-token precompile only at or after the upgrade"
-status = "pending"
+status = "done"
+revision = "0b45f3daf70e3310fbc86c35b4c6dd9d3df1a21c"
+command = "timeout 20m sh -c 'go test -count=1 -run Upgrade ./node/ && go test -count=1 ./precompiles/feetoken/... ./modules/evm/keeper/...'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.13"]
 do_1 = "In precompiles/setup.go make the fee-token entry of GetCustomPrecompiles absent below the upgrade height task 2.9 named, in the shape the xweb entry is gated there, and in modules/evm/keeper/keeper.go make CustomPrecompiles select the set for the block's upgrade height for ordinary execution instead of latestCustomPrecompiles (observation 2.5.3), changing no other precompile's version selection."
