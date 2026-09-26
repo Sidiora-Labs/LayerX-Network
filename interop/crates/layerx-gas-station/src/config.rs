@@ -2,6 +2,7 @@ use crate::quote::{Address, SIDIORA};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use std::io::Read;
+use std::net::SocketAddr;
 use std::path::Path;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -56,12 +57,36 @@ fn address(map: &mut Map<String, Value>, name: &'static str) -> Result<Address, 
     Ok(result)
 }
 
+fn object(text: &str) -> Result<Map<String, Value>, ConfigError> {
+    serde_json::from_str(text).map_err(|_| ConfigError { field: "config" })
+}
+
+fn read_text(path: &Path) -> Result<String, ConfigError> {
+    let file = std::fs::File::open(path).map_err(|_| ConfigError {
+        field: "config_path",
+    })?;
+    let mut text = String::new();
+    file.take(1_048_577)
+        .read_to_string(&mut text)
+        .map_err(|_| ConfigError {
+            field: "config_path",
+        })?;
+    if text.len() > 1_048_576 {
+        return Err(ConfigError {
+            field: "config_size",
+        });
+    }
+    Ok(text)
+}
+
 impl StationConfig {
     /// # Errors
     /// Returns the field that is missing, malformed or inconsistent.
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
-        let mut map: Map<String, Value> =
-            serde_json::from_str(text).map_err(|_| ConfigError { field: "config" })?;
+        Self::from_map(object(text)?)
+    }
+
+    fn from_map(mut map: Map<String, Value>) -> Result<Self, ConfigError> {
         let config = Self {
             chain_id: field(&mut map, "chain_id")?,
             endpoints: field(&mut map, "endpoints")?,
@@ -90,21 +115,7 @@ impl StationConfig {
     /// # Errors
     /// Refuses unreadable, oversized or invalid configuration files.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        let file = std::fs::File::open(path).map_err(|_| ConfigError {
-            field: "config_path",
-        })?;
-        let mut text = String::new();
-        file.take(1_048_577)
-            .read_to_string(&mut text)
-            .map_err(|_| ConfigError {
-                field: "config_path",
-            })?;
-        if text.len() > 1_048_576 {
-            return Err(ConfigError {
-                field: "config_size",
-            });
-        }
-        Self::parse(&text)
+        Self::parse(&read_text(path)?)
     }
 
     /// # Errors
@@ -163,6 +174,50 @@ impl StationConfig {
             }
         }
         Ok(())
+    }
+}
+
+/// The station configuration plus the fields only the served binary reads:
+/// the socket address it listens on and the fee shape of the sponsored
+/// transactions it quotes for.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServiceConfig {
+    pub station: StationConfig,
+    pub listen: SocketAddr,
+    pub gas_limit: u64,
+    pub max_priority_fee_per_gas: u128,
+}
+
+impl ServiceConfig {
+    /// # Errors
+    /// Returns the field that is missing, malformed or inconsistent, including
+    /// a listen address that does not parse or names port zero.
+    pub fn parse(text: &str) -> Result<Self, ConfigError> {
+        let mut map = object(text)?;
+        let listen: String = field(&mut map, "listen")?;
+        let listen: SocketAddr = listen
+            .parse()
+            .map_err(|_| ConfigError { field: "listen" })?;
+        if listen.port() == 0 {
+            return Err(ConfigError { field: "listen" });
+        }
+        let gas_limit: u64 = field(&mut map, "gas_limit")?;
+        if gas_limit == 0 {
+            return Err(ConfigError { field: "gas_limit" });
+        }
+        let max_priority_fee_per_gas = field(&mut map, "max_priority_fee_per_gas")?;
+        Ok(Self {
+            station: StationConfig::from_map(map)?,
+            listen,
+            gas_limit,
+            max_priority_fee_per_gas,
+        })
+    }
+
+    /// # Errors
+    /// Refuses unreadable, oversized or invalid configuration files.
+    pub fn load(path: &Path) -> Result<Self, ConfigError> {
+        Self::parse(&read_text(path)?)
     }
 }
 
@@ -280,6 +335,80 @@ pub(crate) mod tests {
                 })
             );
         }
+    }
+
+    fn service_json() -> Value {
+        let mut value = json();
+        value["listen"] = Value::String("127.0.0.1:8545".into());
+        value["gas_limit"] = serde_json::json!(200_000);
+        value["max_priority_fee_per_gas"] = serde_json::json!(1_000_000_000);
+        value
+    }
+
+    #[test]
+    fn service_config_and_every_missing_field() {
+        let value = service_json();
+        assert_eq!(
+            ServiceConfig::parse(&value.to_string()),
+            Ok(ServiceConfig {
+                station: config(),
+                listen: SocketAddr::from(([127, 0, 0, 1], 8545)),
+                gas_limit: 200_000,
+                max_priority_fee_per_gas: 1_000_000_000,
+            })
+        );
+        let Value::Object(fields) = value else {
+            panic!("object required")
+        };
+        for name in fields.keys() {
+            let mut incomplete = fields.clone();
+            incomplete.remove(name);
+            let result = ServiceConfig::parse(&Value::Object(incomplete).to_string());
+            assert_eq!(result.err().map(|e| e.field.to_owned()), Some(name.clone()));
+        }
+        assert_eq!(
+            StationConfig::parse(&service_json().to_string()).err(),
+            Some(ConfigError {
+                field: "unknown_field"
+            })
+        );
+    }
+
+    #[test]
+    fn listen_address_and_fee_shape_refusals() {
+        for (name, value) in [
+            ("listen", serde_json::json!("127.0.0.1:0")),
+            ("listen", serde_json::json!("127.0.0.1")),
+            ("listen", serde_json::json!("localhost:8545")),
+            ("listen", serde_json::json!("https://127.0.0.1:8545")),
+            ("listen", serde_json::json!("")),
+            ("listen", serde_json::json!(8545)),
+            ("gas_limit", serde_json::json!(0)),
+            ("gas_limit", serde_json::json!(-1)),
+            ("max_priority_fee_per_gas", serde_json::json!(-1)),
+            ("max_priority_fee_per_gas", serde_json::json!("1")),
+        ] {
+            let mut refused = service_json();
+            refused[name] = value;
+            assert_eq!(
+                ServiceConfig::parse(&refused.to_string()).err(),
+                Some(ConfigError { field: name })
+            );
+        }
+        let mut value = service_json();
+        value["listen"] = Value::String("[::1]:9000".into());
+        assert_eq!(
+            ServiceConfig::parse(&value.to_string()).map(|c| c.listen),
+            Ok(SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 9000)))
+        );
+        let mut value = service_json();
+        value["spread_bps"] = serde_json::json!(501);
+        assert_eq!(
+            ServiceConfig::parse(&value.to_string()).err(),
+            Some(ConfigError {
+                field: "spread_bps"
+            })
+        );
     }
 
     #[test]

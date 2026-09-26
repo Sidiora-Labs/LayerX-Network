@@ -13,17 +13,40 @@
 //! a missing rate, or a rate older than `max_rate_age` refuses the quote, and the
 //! quoted amount is the governed price plus `margin_bps`, within `spread_bps`.
 //! The caller opens a journal path such as `state/sponsorship.jsonl` and passes
-//! it to the station. Each JSON line is `quoted`, `prepared`, or `completed`,
-//! keyed by sponsor and quote nonce. Quotes persist reservations and signatures;
-//! prepared entries persist the transaction nonce, hash and exact signed bytes;
-//! completion records contain consumed, included or reverted outcomes. No key,
+//! it to the station. Each JSON line is `quoted`, `prepared`, `released`,
+//! `replaced`, `cancelled`, or `completed`, keyed by sponsor and quote nonce.
+//! Quotes persist reservations and signatures; prepared entries persist the
+//! transaction nonce, hash and exact signed bytes; a released entry frees the
+//! sponsor nonce of a submission the node refused; a replaced entry persists the
+//! fee and signed bytes of the zero-value self-transfer that fills the sponsor
+//! nonce of a dropped or expired submission, written before it is broadcast; a
+//! cancelled entry records that replacement's inclusion; completion records
+//! contain consumed, included, reverted or cancelled outcomes. No key,
 //! endpoint or credential is serialized. Entries are flushed and synced before
 //! publication or broadcast. Exclusive locking prevents simultaneous writers;
-//! corrupt or torn lines fail closed. Restart replays policy reservations and
-//! rebroadcasts the saved bytes. Reservations remain conservative after settlement.
+//! corrupt or torn lines fail closed. Restart replays policy reservations,
+//! rebroadcasts the saved bytes and resumes each replacement from the journal.
+//! Reservations remain conservative after settlement.
+//!
+//! The `paxeer-gas-station` binary runs as
+//! `paxeer-gas-station --config PATH --journal PATH`. Its configuration file
+//! carries the fields above plus `listen`, the socket address it serves on
+//! (port zero is refused), `gas_limit`, the gas limit of every sponsored
+//! transaction, and `max_priority_fee_per_gas` in PAX base units; a quote's
+//! `gasCost` must be `gas_limit` times the maximum fee per gas it pays. The
+//! service answers `POST /quote` with `{quote, relayerSignature}` and
+//! `POST /submit` with `{transactionHash}`, with every numeric field a decimal
+//! string and `decimals` a number. A request the station refuses is answered
+//! with a 4xx status; an unavailable price source, an unreachable node, an
+//! unusable clock or a failing journal with a 5xx status. It speaks plain
+//! HTTP: the web adapter requires an `https` endpoint, so TLS is terminated in
+//! front of the process. Request bodies and read time are capped, and neither
+//! a response nor a log line carries key material, a credential or a signed
+//! transaction byte.
 
 pub mod journal;
 pub mod rpc;
+pub mod service;
 pub mod station;
 pub mod tx;
 pub use station::GasStation;

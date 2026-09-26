@@ -504,6 +504,7 @@ symbol = "main"
 observed = "The station executable checks initialization and explicitly reports that no service was started; a quote and sponsored-submission HTTP service is not supplied by that executable."
 assumption = "The web adapter requires separately supplied quote and submission services matching its request and response contracts; no submission was attempted."
 severity = "blocker"
+closed = "The station binary now serves POST /quote and POST /submit in the SDK and web adapter wire shapes with the 4xx and 5xx split, and the service tests pass at exit 0 over a real socket on bd6c1c297ca5159cc565fd0f2cef54daeaa76ef6."
 
 [observation.2.10.1]
 task = "2.10"; file = "tests/chain/sidiora_fee_test.go"; symbol = "TestSidioraFeePaid"
