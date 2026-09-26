@@ -59,6 +59,7 @@ file = "contracts/src/BatchCallAndSponsor.sol"
 observed = "The oracle keeper stores LastUpdateTimestamp in milliseconds, but _readRate compares it directly with block.timestamp in seconds and rejects a current keeper-produced timestamp with StaleOracleRate."
 assumption = "Keeper-produced rates require matching timestamp units in the contract freshness check and behavior coverage; oracle availability remains a separate recorded blocker."
 severity = "note"
+closed = "The owner-set rate at dbae0ed7ac62f8050142125f6e4ebece6df1182c removed _readRate and the oracle timestamp comparison, and the paymaster now checks its own rate age in seconds through currentRate."
 
 [observation.2.4.4]
 task = "2.4"; file = "contracts/src/BatchCallAndSponsor.sol"
@@ -66,6 +67,7 @@ symbol = "_readRate"
 observed = "Review comment 4107937019 repeats the timestamp-unit mismatch recorded in observation.2.4.3; the contract remains unchanged."
 assumption = "Freshness validation requires matching units and coverage for keeper-produced rates; oracle availability remains a separate recorded blocker."
 severity = "note"
+closed = "The owner-set rate at dbae0ed7ac62f8050142125f6e4ebece6df1182c removed _readRate and the oracle timestamp comparison, and the paymaster now checks its own rate age in seconds through currentRate."
 
 [observation.2.1.1]
 revision = "974fcd706f687617f9b4a1e3aa6e2d0b85981143"
@@ -116,6 +118,7 @@ revision = "5241cfaeda1a9536e3bf2cde20e3125a5f5a1112"
 command = "sed -n '135,178p' contracts/src/BatchCallAndSponsor.sol"; exit_code = 0; log_path = "https://github.com/Sidiora-Labs/Paxeer-X-Network/pull/530#discussion_r4107607647"
 observed = "The digit accumulation adds the ASCII digit before subtracting 48, allowing an intermediate overflow after the numeric-digit overflow guard passes."
 assumption = "The parser and its behavior tests require a separately scoped correction because the contract is outside task 2.8 touches."
+closed = "The owner-set rate at dbae0ed7ac62f8050142125f6e4ebece6df1182c deleted the oracle parsing helpers including _readRate, so no ASCII digit accumulation remains in the paymaster."
 
 [observation.2.8.3]
 task = "2.8"; file = "modules/evm/types/params_test.go"; symbol = "TestFeeTokenParamsProtoDescriptor"; severity = "blocker"
@@ -123,6 +126,7 @@ revision = "5241cfaeda1a9536e3bf2cde20e3125a5f5a1112"
 command = "sed -n '245,292p' modules/evm/types/params_test.go"; exit_code = 0; log_path = "https://github.com/Sidiora-Labs/Paxeer-X-Network/pull/530#discussion_r4107607672"
 observed = "The descriptor test selects the last three fields as fields 16 through 18, contradicting the addition of field 19."
 assumption = "The code and assertions remain intact because this test is outside task 2.8 touches; a separate correction must preserve all field-name, number and type assertions."
+closed = "At c65ef1fe0fb30d7f823a806508eefb7533e00f56 the descriptor test looks every fee-token field up by name and asserts fields 16 through 20, including fee_token_distribution at 19."
 
 [observation.2.5.1]
 revision = "d1eb0ba1740688198d57530458a5c4e139f58e16"
@@ -137,6 +141,7 @@ file = "contracts/src/BatchCallAndSponsor.sol"
 observed = "Review comment 4107486010 identifies the retired oracle dependency already recorded in observation.1.1.1."
 assumption = "The sponsorship contract and price-source activation are outside task 2.5; the existing fail-closed behavior is retained."
 severity = "blocker"
+closed = "The owner-set rate at dbae0ed7ac62f8050142125f6e4ebece6df1182c removed the oracle import, address and read from the paymaster, which now prices quotes through currentRate."
 
 [observation.2.5.3]
 revision = "aa64844f985255bc82e07822d53d8473d2e7681c"
@@ -159,6 +164,7 @@ command = "timeout 20m sh -c 'npm --prefix agent/sdk/typescript run build && nod
 log_path = "/root/lx-lanes/sid-t1-4/.logs/verify.log"
 observed = "The SDK build reports pre-existing TS2352 at test/trading-payload.test.ts:118 when converting Record<string, unknown> to the market_create activity and PerpsMarket intersection."
 assumption = "The unrelated test is outside this task scope; its owner must resolve the type conflict before the full gate can qualify this task."
+closed = "At 797af3dd3d852c6139c06d927c633b5f932eb95c trading-payload.test.ts decodes the market fixture through decodePerpsActivity and narrows its activity, so the SDK build no longer reports TS2352 there."
 
 [observation.1.4.2]
 task = "1.4"
@@ -166,6 +172,7 @@ file = "agent/sdk/typescript/test/trading-payload.test.ts"
 symbol = "typedMarket"
 observed = "The pre-existing TS2352 came from asserting an untyped fixture record directly as the market_create activity."
 assumption = "Decoding the same validated fixture and narrowing its activity discriminant preserves the parameter-bounds assertion while supplying its real type."
+closed = "At 797af3dd3d852c6139c06d927c633b5f932eb95c typedMarket comes from decodePerpsActivity rather than a direct assertion of the untyped record."
 
 [observation.1.4.3]
 task = "1.4"; file = "spec/sidiora-fee-token/spec.kvx"
@@ -245,6 +252,7 @@ exit_code = 130
 log_path = "/root/lx-lanes/sid-t1-6/.logs/install.log"
 observed = "The dependency install remained in linking until interrupted at the qualification limit; lint, compilation and verify_cmd did not run."
 assumption = "Qualification requires a completed dependency install in a fresh qualification window."
+closed = "The task 1.6 done record landed at c45c5cab36109eac1330890d3a7a4ba2ac761c0f carries the verify command, frozen-lockfile install included, at exit 0."
 
 [observation.1.6.3]
 revision = "17c8ed319f18cbe5a003614c4ee082c2c3c0b122"
@@ -253,6 +261,7 @@ exit_code = 128
 log_path = ".logs/publish.log"
 observed = "Publication could not create the worktree index lock because the shared Git metadata is read-only."
 assumption = "Publication requires writable Git metadata; no commit, push or pull request was created."
+closed = "Task 1.6 was published and merged at c45c5cab36109eac1330890d3a7a4ba2ac761c0f."
 
 [observation.1.6.4]
 revision = "pending"
@@ -261,6 +270,7 @@ exit_code = 134
 log_path = "/root/lx-lanes/sid-t1-6/.logs/verify-attempt-1.log"
 observed = "TypeScript compilation exhausted the default 2 GB Node heap before the focused tests ran."
 assumption = "The repair cycle supplies a 4 GB Node heap without changing the command or checks."
+closed = "The task 1.6 done record landed at c45c5cab36109eac1330890d3a7a4ba2ac761c0f carries the same command, TypeScript compilation included, at exit 0."
 
 [observation.1.6.5]
 revision = "pending"
@@ -269,6 +279,7 @@ exit_code = 1
 log_path = "/root/lx-lanes/sid-t1-6/.logs/verify.log"
 observed = "Compilation passed with a 4 GB Node heap; 16 focused tests failed because jsdom lacks window.matchMedia, while five tests passed."
 assumption = "Qualification requires a real media-query implementation or browser test environment; no stub or weakened assertion was added."
+closed = "At c45c5cab36109eac1330890d3a7a4ba2ac761c0f both fee specs render through the explorer's existing test wrapper instead of static markup, and the task 1.6 done record carries the focused tests at exit 0."
 
 [observation.1.6.6]
 revision = "pending"
@@ -276,6 +287,7 @@ command = "timeout 20m sh -c 'cd explorer/frontend && HUSKY=0 yarn install --fro
 exit_code = 1
 log_path = "/root/lx-lanes/sid-t1-6/.logs/verify.log"
 observed = "Compilation and 15 tests passed; six detail tests fail because Vitest imports icons/info.svg as a URL rather than a React component. Qualification assumes authorization to configure the existing SVG transformer outside the task file list; no production code or assertions were changed."
+closed = "At c45c5cab36109eac1330890d3a7a4ba2ac761c0f explorer/frontend/vitest.config.ts loads the svgr plugin, so SVG imports resolve to components, and the task 1.6 done record carries the focused tests at exit 0."
 
 [observation.1.6.7]
 revision = "82476214b7d2d71fde3813f18f3646cc82a041c3"
@@ -283,6 +295,7 @@ file = "observation.1.6.4"
 observed = "Append-only attribution: the failed compilation checked the implementation published in this source revision; the original exit code remains 134."
 assumption = "This identifies the published source snapshot, not a commit that existed before verification."
 severity = "note"
+closed = "The attributed failure in observation.1.6.4 is closed by the passing task 1.6 done record landed at c45c5cab36109eac1330890d3a7a4ba2ac761c0f."
 
 [observation.1.6.8]
 revision = "82476214b7d2d71fde3813f18f3646cc82a041c3"
@@ -290,6 +303,7 @@ file = "observation.1.6.5"
 observed = "Append-only attribution: the media-query failures checked the implementation published in this source revision; the original exit code remains 1."
 assumption = "This identifies the published source snapshot, not a commit that existed before verification."
 severity = "note"
+closed = "The attributed failure in observation.1.6.5 is closed by the passing task 1.6 done record landed at c45c5cab36109eac1330890d3a7a4ba2ac761c0f."
 
 [observation.1.6.9]
 revision = "4241f66f6bc99adc8258c0408886ab56ea18c9fa"
@@ -297,6 +311,7 @@ file = "observation.1.6.6"
 observed = "Append-only attribution: the SVG import failures checked the test harness published in this source revision; the original exit code remains 1."
 assumption = "This identifies the published source snapshot, not a commit that existed before verification."
 severity = "note"
+closed = "The attributed failure in observation.1.6.6 is closed by the svgr configuration and passing task 1.6 done record landed at c45c5cab36109eac1330890d3a7a4ba2ac761c0f."
 
 [observation.1.7.1]
 revision = "12478c28531d6c39ce4f3d941b8960c1efcdfa5c"
@@ -304,6 +319,7 @@ command = "cat precompiles/oracle/oracle.go"; exit_code = 0
 log_path = ".logs/context.log"
 observed = "Requirement 1 acceptance criterion 4 requires the oracle precompile, whose every ABI method returns ErrOraclePrecompileRetired, so executable sponsorship cannot satisfy it."
 assumption = "The authorized owner-set bounded rate replaces sponsored oracle pricing while the requirement remains unchanged, including its related oracle coverage in acceptance criterion 7."
+closed = "At f8c63d8d4064ef37d76bb848f56bb175f9f768b2 requirement 1 acceptance criterion 4 was revised to check quotes against the paymaster's owner-set rate and its staleness bound, which the paymaster implements."
 
 [observation.1.7.2]
 revision = "12478c28531d6c39ce4f3d941b8960c1efcdfa5c"
@@ -349,6 +365,7 @@ task = "1.3"; file = "contracts/src/BatchCallAndSponsor.sol"; symbol = "_checkPr
 observed = "The paymaster reads the retired oracle precompile in _checkPrice and live sponsored execution reverts with OracleUnavailable."
 assumption = "An owner-governed paymaster rate is required in a separately authorized follow-up; submission qualification uses recorded fixtures."
 severity = "blocker"
+closed = "The owner-set rate at dbae0ed7ac62f8050142125f6e4ebece6df1182c makes _checkPrice read currentRate instead of the oracle precompile, and the paymaster no longer declares OracleUnavailable."
 
 [observation.1.3.3]
 task = "1.3"; file = "interop/crates/layerx-gas-station/Cargo.toml"; symbol = "layerx-gas-station"; severity = "note"
@@ -389,12 +406,14 @@ command = "timeout 20m sh -c 'go test -count=1 ./node/antedecorators/... && go t
 log_path = ".logs/verify.log"
 observed = "Antedecorator tests pass, but the assembled-handler priority assertions compare int constants with int64 results and fail despite matching numeric values."
 assumption = "The two task-scoped repair cycles are exhausted; the assertions remain intact and task 2.7 is implemented but not qualified."
+closed = "At bf7a894e14373cf1ed5067ac79867827e437e4a2 the assembled-handler priority assertions compare int64 values, and the task 2.7 done record landed there carries the same command at exit 0."
 
 [observation.2.7.2]
 task = "2.7"; file = "spec/sidiora-fee-token/spec.kvx"; symbol = "task.2.7.status"
 observed = "observation.2.7.1 records the first run, taken before the typed priority comparison was repaired; the done record in spec.kvx carries a later run of the same command at exit 0, so the ledger and the status read as contradicting each other."
 assumption = "The done record in spec.kvx is the authoritative result for task 2.7 and observation.2.7.1 stands as the superseded first run, which is not re-run."
 severity = "note"
+closed = "observation.2.7.1 now carries its closure naming bf7a894e14373cf1ed5067ac79867827e437e4a2, where the task 2.7 done record at exit 0 landed, so the ledger and the status agree."
 
 [observation.2.7.3]
 task = "2.7"; file = "spec/sidiora-fee-token/spec.kvx"; symbol = "fee_safety"
@@ -452,6 +471,7 @@ command = "timeout 20m sh -c 'npm --prefix human/apps/web run typecheck && cd hu
 log_path = ".logs/verify.log"
 observed = "Closed: with the web application and TypeScript SDK dependencies installed, the test's own TypeScript and TSX load hooks run all seven assertions and pass unchanged."
 assumption = "The earlier load-hook failure came from the prior environment, not the tests or the runner configuration; observation 1.5.2 remains open."
+closed = "The task 1.5 verify command passed at exit 0 on f7745bc651f12e9c8557418145a97f1355d07180, as the task 1.5 done record states."
 
 [observation.1.5.2]
 task = "1.5"; file = "interop/crates/layerx-gas-station/src/main.rs"
