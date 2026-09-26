@@ -144,6 +144,7 @@ file = "modules/evm/keeper/keeper.go"
 observed = "Review comment 4107486044 is valid: CustomPrecompiles selects latestCustomPrecompiles for ordinary execution without consulting the upgrade height."
 assumption = "Height selection and upgrade activation require keeper and upgrade integration outside task 2.5 touches; changing registration alone cannot supply this gate."
 severity = "blocker"
+closed = "GetCustomPrecompiles leaves the fee-token entry out below its upgrade and versions it at that upgrade, and CustomPrecompiles leaves out of ordinary execution every precompile whose upgrades the block's height has not reached; the Upgrade and keeper tests pass at exit 0 on 0b45f3daf70e3310fbc86c35b4c6dd9d3df1a21c."
 
 [observation.2.5.4]
 revision = "aa64844f985255bc82e07822d53d8473d2e7681c"
@@ -478,3 +479,10 @@ log_path = ".logs/verify-2.10.log"
 observed = "The processblock harness delivers EVM transactions through the V2 DeliverTx path, whose EvmCheckAndChargeFees in node/ante/evm_checktx.go charges the network coin, so the giga-path fee-token charge is not reached and observation 2.10.1 stays open."
 assumption = "Charging the fee token in EvmCheckAndChargeFees lies outside this task's files; the SidioraFee assertions stay intact and task 2.10 remains implemented."
 closed = "EvmCheckAndChargeFees now charges the fee token on the delivery path the processblock harness uses, and the SidioraFee block tests pass at exit 0 on c69c004dc53f6a067c6d16ac735eec94dc3d5cb2."
+
+[observation.2.14.1]
+task = "2.14"; file = "precompiles/setup_test.go"; symbol = "TestFeeTokenRegistration"
+observed = "TestFeeTokenRegistration builds GetCustomPrecompiles for v6.6, below the fee-token upgrade, and requires the fee-token entry there with a single version, which the upgrade gating task 2.14 specifies now leaves out."
+assumption = "The test lies outside task 2.14 touches and was not run by its verify_cmd; it stays as written until a task owning it builds the set at or after the fee-token upgrade."
+severity = "suspect"
+closed = "Task 2.16 builds the set at the fee-token upgrade, requires the single version keyed by it and no entry below it; the precompiles package tests pass on d714b6402b9b7d78c6b15bc002fcbc3ad170e58b."

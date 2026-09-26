@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"maps"
 	"math"
 	"math/big"
+	"sort"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -42,6 +44,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	putils "github.com/sidiora-labs/paxeer-network/precompiles/utils"
 	"github.com/sidiora-labs/paxeer-network/utils"
+	"golang.org/x/mod/semver"
 )
 
 const Pacific1ChainID = "pacific-1"
@@ -88,7 +91,10 @@ type Keeper struct {
 
 	customPrecompiles       map[common.Address]putils.VersionedPrecompiles
 	latestCustomPrecompiles map[common.Address]vm.PrecompiledContract
-	latestUpgrade           string
+	// customPrecompileUpgrades lists, newest first, the upgrades each custom
+	// precompile carries a version for.
+	customPrecompileUpgrades map[common.Address][]string
+	latestUpgrade            string
 
 	// traceDB, when non-nil, serves cached debug_trace results and
 	// forwards EndBlock heights to the registered baker. nil-safe.
@@ -162,21 +168,79 @@ func (k *Keeper) SetCustomPrecompiles(cp map[common.Address]putils.VersionedPrec
 	k.customPrecompiles = cp
 	k.latestUpgrade = latestUpgrade
 	k.latestCustomPrecompiles = make(map[common.Address]vm.PrecompiledContract, len(cp))
+	k.customPrecompileUpgrades = make(map[common.Address][]string, len(cp))
 	for addr, versioned := range cp {
 		k.latestCustomPrecompiles[addr] = versioned[latestUpgrade]
+		upgrades := make([]string, 0, len(versioned))
+		for upgrade := range versioned {
+			upgrades = append(upgrades, upgrade)
+		}
+		sort.Slice(upgrades, func(i, j int) bool {
+			return semver.Compare(upgrades[i], upgrades[j]) > 0
+		})
+		k.customPrecompileUpgrades[addr] = upgrades
 	}
 }
 
+// CustomPrecompiles returns the custom precompile set for the block of ctx.
+// Ordinary execution serves the latest version of every custom precompile
+// whose upgrades the block's height has reached; tracing serves the version
+// each precompile carried at that height. A precompile none of whose versions
+// the height has reached is absent from the set.
 func (k *Keeper) CustomPrecompiles(ctx sdk.Context) map[common.Address]vm.PrecompiledContract {
 	if !ctx.IsTracing() {
-		return k.latestCustomPrecompiles
+		return k.latestCustomPrecompilesAtHeight(ctx)
 	}
 	versions := k.GetCustomPrecompilesVersions(ctx)
 	cp := make(map[common.Address]vm.PrecompiledContract, len(k.customPrecompiles))
 	for addr, versioned := range k.customPrecompiles {
-		cp[addr] = versioned[versions[addr]]
+		version, found := versions[addr]
+		if !found {
+			continue
+		}
+		cp[addr] = versioned[version]
 	}
 	return cp
+}
+
+// latestCustomPrecompilesAtHeight returns the latest custom precompile set
+// without the precompiles the block's height has not reached. It reads the
+// upgrade heights without charging the caller.
+func (k *Keeper) latestCustomPrecompilesAtHeight(ctx sdk.Context) map[common.Address]vm.PrecompiledContract {
+	readCtx := ctx.WithGasMeter(sdk.NewInfiniteGasMeter(1, 1))
+	var cp map[common.Address]vm.PrecompiledContract
+	for addr := range k.latestCustomPrecompiles {
+		if k.customPrecompileReached(readCtx, addr) {
+			continue
+		}
+		if cp == nil {
+			cp = maps.Clone(k.latestCustomPrecompiles)
+		}
+		delete(cp, addr)
+	}
+	if cp == nil {
+		return k.latestCustomPrecompiles
+	}
+	return cp
+}
+
+// customPrecompileReached reports whether the block's height has reached the
+// custom precompile at addr: one of the upgrades it carries a version for was
+// done at or below the height, or none of them was ever done.
+func (k *Keeper) customPrecompileReached(ctx sdk.Context, addr common.Address) bool {
+	height := ctx.BlockHeight()
+	forked := false
+	for _, upgrade := range k.customPrecompileUpgrades[addr] {
+		upgradeHeight := k.upgradeKeeper.GetDoneHeight(ctx, upgrade)
+		if upgradeHeight == 0 {
+			continue
+		}
+		if height >= upgradeHeight {
+			return true
+		}
+		forked = true
+	}
+	return !forked
 }
 
 func (k *Keeper) GetCustomPrecompilesVersions(ctx sdk.Context) map[common.Address]string {

@@ -155,7 +155,7 @@
     - Add node/app_feetoken_test.go asserting through the application's real block path the debit in the fee denom, the refund at the recorded rate, the short-balance and unusable-rate refusals, and the unchanged network-coin charge with the switch off.
     - With this in place, re-qualify task 2.10 on this revision: run its verify_cmd once and set task 2.10 to done with its four evidence fields when it passes, leaving it implemented with the run's fields otherwise, and add a closing line to observations 2.6.3 and 2.10.1 in spec/sidiora-fee-token/qualification.kvx when the run proves them resolved.
     - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 13.4, 13.5_
-  - [ ] 2.14 Serve the fee-token precompile only at or after the upgrade
+  - [x] 2.14 Serve the fee-token precompile only at or after the upgrade
     - In precompiles/setup.go make the fee-token entry of GetCustomPrecompiles absent below the upgrade height task 2.9 named, in the shape the xweb entry is gated there, and in modules/evm/keeper/keeper.go make CustomPrecompiles select the set for the block's upgrade height for ordinary execution instead of latestCustomPrecompiles (observation 2.5.3), changing no other precompile's version selection.
     - Extend node/upgrades_test.go so the custom precompile set below the upgrade height holds no fee-token entry and the precompile answers only after the upgrade, and cover the keeper's selection in modules/evm/keeper.
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 13.1, 13.2, 13.3, 13.6_
@@ -164,6 +164,10 @@
     - Add the matching node/ante tests: a payer with a fee denom is charged in it and not in the network coin on the delivery path, an uncovered payer is refused with the insufficient-funds error naming the denom, and a payer without a fee denom is charged in the network coin as before.
     - Run task 2.10's verify_cmd once on the result; on exit 0 record task 2.10 done with that revision, command, exit code and log, and close observations 2.10.1 and 2.13.1 naming the revision.
     - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 13.4, 13.5_
+  - [x] 2.16 Assert the fee-token registration at its upgrade
+    - In precompiles/setup_test.go make TestFeeTokenRegistration build the custom precompile set at the fee-token upgrade name node/upgrades.go declares and require the fee-token entry there with exactly one version keyed by that name, and require the set built below that upgrade to carry no fee-token entry, in the shape TestXWebRegistration asserts for xweb; every other assertion of the test stays as written (observation 2.14.1).
+    - Close observation 2.14.1 naming the revision at which the precompiles package tests pass.
+    - _Requirements: 9.1, 13.1, 13.2_
 
 ## Wave 3 - One Aggregate Run, Recorded
 
@@ -182,7 +186,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }

@@ -36,6 +36,12 @@ import (
 // xweb.XWebAddress.
 const XWebUpgrade = "v6.8"
 
+// FeeTokenUpgrade is the upgrade that brings the fee-token precompile. A custom
+// precompile set built for an earlier latest upgrade carries no entry at
+// feetoken.FeeTokenAddress, and the entry carries a version at this upgrade so
+// that execution below its height leaves the precompile out.
+const FeeTokenUpgrade = "v6.7"
+
 var SetupMtx = &sync.Mutex{}
 var Initialized = false
 
@@ -59,7 +65,6 @@ func GetCustomPrecompiles(
 	keepers utils.Keepers,
 ) map[ecommon.Address]utils.VersionedPrecompiles {
 	custom := map[ecommon.Address]utils.VersionedPrecompiles{
-		ecommon.HexToAddress(feetoken.FeeTokenAddress):           feetoken.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(bank.BankAddress):                   bank.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(wasmd.WasmdAddress):                 wasmd.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(json.JSONAddress):                   json.GetVersioned(latestUpgrade, keepers),
@@ -79,6 +84,11 @@ func GetCustomPrecompiles(
 		ecommon.HexToAddress(layerxexchange.ExchangeAddress):     layerxexchange.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(layerxbridge.BridgeAddress):         layerxbridge.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(launchpad.LaunchpadAddress):         launchpad.GetVersioned(latestUpgrade, keepers),
+	}
+	if semver.Compare(latestUpgrade, FeeTokenUpgrade) >= 0 {
+		versioned := feetoken.GetVersioned(latestUpgrade, keepers)
+		versioned[FeeTokenUpgrade] = versioned[latestUpgrade]
+		custom[ecommon.HexToAddress(feetoken.FeeTokenAddress)] = versioned
 	}
 	if semver.Compare(latestUpgrade, XWebUpgrade) >= 0 {
 		custom[ecommon.HexToAddress(xweb.XWebAddress)] = xweb.GetVersioned(latestUpgrade, keepers)

@@ -9,7 +9,10 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm"
 	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	layerxbridgetypes "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
+	"github.com/sidiora-labs/paxeer-network/precompiles"
+	"github.com/sidiora-labs/paxeer-network/precompiles/feetoken"
 	"github.com/sidiora-labs/paxeer-network/sdk/crypto/keys/secp256k1"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	paramstypes "github.com/sidiora-labs/paxeer-network/sdk/x/params/types"
 	upgradetypes "github.com/sidiora-labs/paxeer-network/sdk/x/upgrade/types"
 	"github.com/stretchr/testify/assert"
@@ -218,22 +221,8 @@ func TestSidioraFeeTokenUpgradeIsRegisteredAndRunsTheFeeTokenMigration(t *testin
 	a.RegisterUpgradeHandlers()
 	require.True(t, a.UpgradeKeeper.HasHandler(sidioraFeeTokenUpgrade))
 
-	// The upgrade reads the chain of the registered Sidiora remote asset, which
-	// is the deployment prerequisite of the plan.
 	const chainID = uint64(1)
-	require.NoError(t, a.LayerXBridgeKeeper.RegisterChain(ctx, layerxbridgetypes.MsgRegisterChain{
-		Authority: layerxbridgetypes.DefaultAuthority(),
-		Chain: layerxbridgetypes.Chain{
-			ChainID:       chainID,
-			Vault:         layerxbridgetypes.Address20(common.HexToAddress("0x00000000000000000000000000000000000000c1")),
-			FinalityDepth: 64,
-			Enabled:       true,
-		},
-	}))
-	denom := layerxbridgetypes.SidioraDenom()
-	registered, err := a.LayerXBridgeKeeper.EnsureSidioraDenom(ctx, chainID)
-	require.NoError(t, err)
-	require.Equal(t, denom, registered)
+	denom := registerSidioraRemoteAsset(t, a, ctx, chainID)
 
 	// Rewind x/evm to the store and the module version a chain that predates the
 	// fee token carries.
@@ -298,4 +287,99 @@ func TestSidioraFeeTokenUpgradeFailsWithoutTheRemoteAssetRegistration(t *testing
 
 	_, found = a.BankKeeper.GetDenomMetaData(ctx, denom)
 	require.False(t, found)
+}
+
+// registerSidioraRemoteAsset registers the bridge chain and the Sidiora remote
+// asset the fee-token upgrade reads, which is the deployment prerequisite of
+// the plan, and returns the Sidiora denom.
+func registerSidioraRemoteAsset(t *testing.T, a *App, ctx sdk.Context, chainID uint64) string {
+	t.Helper()
+	require.NoError(t, a.LayerXBridgeKeeper.RegisterChain(ctx, layerxbridgetypes.MsgRegisterChain{
+		Authority: layerxbridgetypes.DefaultAuthority(),
+		Chain: layerxbridgetypes.Chain{
+			ChainID:       chainID,
+			Vault:         layerxbridgetypes.Address20(common.HexToAddress("0x00000000000000000000000000000000000000c1")),
+			FinalityDepth: 64,
+			Enabled:       true,
+		},
+	}))
+	denom := layerxbridgetypes.SidioraDenom()
+	registered, err := a.LayerXBridgeKeeper.EnsureSidioraDenom(ctx, chainID)
+	require.NoError(t, err)
+	require.Equal(t, denom, registered)
+	return denom
+}
+
+func TestSidioraFeeTokenUpgradeCustomPrecompileSetBelowTheUpgradeHoldsNoFeeTokenEntry(t *testing.T) {
+	require.Equal(t, sidioraFeeTokenUpgrade, precompiles.FeeTokenUpgrade)
+	address := common.HexToAddress(feetoken.FeeTokenAddress)
+	tags, err := f.ReadFile("tags")
+	require.NoError(t, err)
+	names := parseUpgradesList(string(tags))
+	previous := names[indexOf(names, sidioraFeeTokenUpgrade)-1]
+
+	testWrapper := NewTestWrapper(t, time.Now().UTC(), secp256k1.GenPrivKey().PubKey(), false)
+	keepers := testWrapper.App.GetPrecompileKeepers()
+
+	below := precompiles.GetCustomPrecompiles(previous, keepers)
+	require.NotEmpty(t, below)
+	require.NotContains(t, below, address)
+
+	at := precompiles.GetCustomPrecompiles(sidioraFeeTokenUpgrade, keepers)
+	require.Contains(t, at, address)
+	require.Len(t, at, len(below)+1)
+	for addr := range below {
+		require.Contains(t, at, addr)
+	}
+	require.Len(t, at[address], 1)
+	named, ok := at[address][sidioraFeeTokenUpgrade].(precompiles.IPrecompile)
+	require.True(t, ok)
+	require.Equal(t, feetoken.PrecompileName, named.GetName())
+
+	// A later set keeps a version at the fee-token upgrade, so execution below
+	// its height leaves the precompile out.
+	latest := precompiles.GetCustomPrecompiles(LatestUpgrade, keepers)
+	require.Contains(t, latest, address)
+	require.Len(t, latest[address], 2)
+	require.Same(t, latest[address][LatestUpgrade], latest[address][sidioraFeeTokenUpgrade])
+}
+
+func TestSidioraFeeTokenUpgradeServesThePrecompileOnlyAfterIt(t *testing.T) {
+	testWrapper := NewTestWrapper(t, time.Now().UTC(), secp256k1.GenPrivKey().PubKey(), true)
+	a := testWrapper.App
+	const upgradeHeight = int64(10)
+	ctx := testWrapper.Ctx.WithBlockHeight(upgradeHeight)
+	address := common.HexToAddress(feetoken.FeeTokenAddress)
+	require.Zero(t, a.UpgradeKeeper.GetDoneHeight(ctx, sidioraFeeTokenUpgrade))
+
+	a.RegisterUpgradeHandlers()
+	require.True(t, a.UpgradeKeeper.HasHandler(sidioraFeeTokenUpgrade))
+	registerSidioraRemoteAsset(t, a, ctx, 1)
+	a.UpgradeKeeper.ApplyUpgrade(ctx, upgradetypes.Plan{Name: sidioraFeeTokenUpgrade, Height: upgradeHeight})
+	require.Equal(t, upgradeHeight, a.UpgradeKeeper.GetDoneHeight(ctx, sidioraFeeTokenUpgrade))
+
+	caller := a.AccountKeeper.GetModuleAddress(evmtypes.ModuleName)
+	account := common.HexToAddress("0x00000000000000000000000000000000000000a1")
+	info := precompiles.GetPrecompileInfo(feetoken.PrecompileName)
+	require.Equal(t, address, info.Address)
+	input, err := info.ABI.Pack(feetoken.GetFeeDenomMethod, account)
+	require.NoError(t, err)
+
+	// Below the upgrade height the address is an empty account.
+	below := ctx.WithBlockHeight(upgradeHeight - 1)
+	require.NotContains(t, a.EvmKeeper.CustomPrecompiles(below), address)
+	output, err := a.EvmKeeper.StaticCallEVM(below, caller, &address, input)
+	require.NoError(t, err)
+	require.Empty(t, output)
+
+	// From the upgrade height on the precompile answers.
+	for _, height := range []int64{upgradeHeight, upgradeHeight + 1} {
+		at := ctx.WithBlockHeight(height)
+		require.Contains(t, a.EvmKeeper.CustomPrecompiles(at), address)
+		output, err = a.EvmKeeper.StaticCallEVM(at, caller, &address, input)
+		require.NoError(t, err)
+		values, err := info.ABI.Unpack(feetoken.GetFeeDenomMethod, output)
+		require.NoError(t, err)
+		require.Equal(t, []interface{}{a.EvmKeeper.GetBaseDenom(at)}, values)
+	}
 }
