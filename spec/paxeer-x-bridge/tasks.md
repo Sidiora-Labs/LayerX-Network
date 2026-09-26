@@ -170,6 +170,11 @@
     - Make bridge/deploy/proposals emit it for Solana inside 05-proposal-sidiora-cap.json ahead of the cap message, so one proposal registers the pair and then caps it, and keep the proposal refused for any chain that is not Sidiora's foreign home.
     - Update section 6 and the Sidiora section of bridge/README.md so the ordering rule reads from the proposal itself, and extend bridge/deploy/tests/docs-check.sh, keeper_test.go, proposals_test.go and the cli tests for the new message; re-record bridge/deploy/tests/fixtures/solana_dry_run.json only if the Solana dry run's Paxeer side applies a body this task changes.
     - _Requirements: 9.1, 12.1_
+  - [ ] 2.19 Replay a completion out of the pending set in the relayer journal
+    - In interop/crates/layerx-bridge-relayer/src/journal.rs add SubmissionStatus::Landed and make the Completed replay arm apply it: Completion::Included marks the submission whose tx_hash it names, Completion::Released marks the release whose signature it names, and a completion naming a transaction the item never submitted is refused as a JournalError::Conflict naming the item; Completion::AlreadyBridged names nothing and marks nothing; pending() and pending_release() keep matching Pending only, so the unit test observation 2.17.2 records passes as written.
+    - Extend the journal tests beside it: the EVM item has no pending submission after Completed Included and still replays to the same state, the refusal fires for an unknown tx_hash and an unknown release signature, and the existing release test stays byte for byte; keep src/relayer.rs behaviour unchanged except where it relied on a landed transaction still reading as pending, and cover any such change in the relayer's tests.
+    - Run task 2.17's verify_cmd once on the result; on exit 0 record task 2.17 done with that revision, command, exit code and log, and close observation 2.17.2 naming the revision.
+    - _Requirements: 8.1, 8.4_
 
 ## Wave 3 - One Run, Recorded
 
@@ -188,7 +193,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }
