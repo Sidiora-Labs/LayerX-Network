@@ -7,7 +7,7 @@
 ## Wave 1 - Sponsored Gas, No Consensus Change
 
 - [ ] 1. Let a Sidiora holder transact without holding the network coin
-  - [ ] 1.1 Harden the sponsored batch into a Sidiora paymaster
+  - [x] 1.1 Harden the sponsored batch into a Sidiora paymaster
     - In contracts/src/BatchCallAndSponsor.sol add a Quote struct carrying the sponsor address, the token address, the maximum token amount, the quoted token amount, the deadline and the quote nonce, and add an executeSponsored entry point taking the calls, the account's signature over the batch digest and the relayer's signature over the quote digest; keep execute and the existing signature-carrying path working exactly as they do, keep the nonce, the CallExecuted and BatchExecuted events and the payable fallback and receive.
     - Bind the two digests so neither half replays alone: the account digest SHALL cover the batch nonce, the calls and the quote digest, and the quote digest SHALL cover the chain id, this contract's address, the sponsor, the token, the maximum, the quoted amount, the deadline and the quote nonce; recover both with the ECDSA library already imported, require the recovered account to equal address(this) and the recovered relayer to equal the quote's sponsor, and revert with a named error otherwise.
     - Consume the quote nonce in a mapping separate from the batch nonce, revert on a consumed one, revert when block.timestamp is past the deadline and revert when the quoted amount exceeds the maximum.
@@ -16,7 +16,7 @@
     - Write contracts/test/BatchCallAndSponsorTest.t.sol covering a successful sponsored batch with the sponsor repaid, a missing and a wrong account signature, a missing and a wrong relayer signature, an expired deadline, a quoted amount above the maximum, a replayed quote nonce, a replayed batch nonce, a failing token transfer reverting the whole batch, a quote outside the spread, an oracle reporting no rate, and the direct execute path; stand in for the oracle and the token the way contracts/test/NativePaxTokensERC20Test.t.sol stands in for the bank precompile, with the production contract calling the real precompile address.
     - Publish the quote digest as a vector the test asserts, so the gas station and the SDK can assert the same bytes; if the pinned Foundry libraries under contracts/lib are absent, vendor them exactly as .github/workflows/paxeer-forge-test.yml does before running the test.
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7_
-  - [ ] 1.2 Stand up the gas station crate with its quoting and pricing
+  - [x] 1.2 Stand up the gas station crate with its quoting and pricing
     - Add interop/crates/layerx-gas-station to the members of interop/Cargo.toml and give it a Cargo.toml in the shape interop/crates/layerx-bridge-relayer/Cargo.toml uses - workspace version, edition, rust-version, license and lints, a lib at src/lib.rs and a bin at src/main.rs - taking its dependencies from the workspace table and adding none that is not already declared there.
     - Write src/config.rs loading the station's configuration from a file path: the chain endpoints, the paymaster address, the Sidiora token address and its six decimals, the oracle pair, the acceptable rate age, the spread, the station's margin, the per-account, per-interval and per-quote limits, the Paxeer balance floor and the relayer key source; refuse a configuration that is incomplete or self-contradictory with a typed error naming the field.
     - Write src/quote.rs building the quote the contract verifies and computing its digest byte for byte as contracts/src/BatchCallAndSponsor.sol computes it, asserted against the same vector contracts/test/BatchCallAndSponsorTest.t.sol asserts, and src/signer.rs signing that digest with the configured relayer key held behind a trait so the key never crosses a public boundary.
@@ -31,7 +31,7 @@
     - Write tests/station.rs as an integration test driving a full quote, submit and collect cycle against a local node when one is reachable and otherwise against a recorded node fixture carried in tests/fixtures/, asserting the Sidiora that moved to the sponsor, the Paxeer the station spent, the journal entry written before broadcast, a restart rebroadcasting the journalled bytes, and a consumed nonce recorded as completed.
     - Document the crate's configuration fields and its journal layout in its own lib documentation, naming environment variables and file paths only and carrying no endpoint, host, address or credential.
     - _Requirements: 2.4, 2.5, 2.6_
-  - [ ] 1.4 Give the SDK the quote and the authorisation
+  - [x] 1.4 Give the SDK the quote and the authorisation
     - Add agent/sdk/typescript/src/gas-station.ts exposing the quote request against a configured gas station, the sponsored batch builder, the account digest the wallet signs and the EIP-7702 authorisation assembly, following the call-construction style of agent/sdk/typescript/src/exchange.ts and adding no runtime dependency to agent/sdk/typescript/package.json.
     - Compute the account digest and the quote digest exactly as contracts/src/BatchCallAndSponsor.sol computes them, using the hashing already available in the SDK's dependencies, and export the types describing a quote, a sponsored batch and a refusal.
     - Refuse as a typed result rather than a thrown string: an expired quote, a quoted amount above the maximum, a sponsor or token address that is not the configured one, and a decimals value that is not Sidiora's six.
@@ -45,75 +45,83 @@
     - Add every string this journey shows to human/apps/web/copy/catalog.ts and read them from the catalogue; add no literal user-facing string to a component.
     - Add human/apps/web/e2e/gas-station.test.ts asserting the quote presentation, the consent before signing, and the unavailable, refused and cancelled outcomes, and add it to the test and test:component scripts in human/apps/web/package.json beside the existing e2e files.
     - _Requirements: 3.3, 3.4, 3.5_
-  - [ ] 1.6 Render a Sidiora fee as Sidiora in the explorer
+  - [x] 1.6 Render a Sidiora fee as Sidiora in the explorer
     - In explorer/frontend/types/api/transaction.ts declare the fee token's symbol and decimals as optional fields of the fee payload, so their absence means the network coin and a chain that pays only in the network coin is unchanged.
     - In explorer/frontend/ui/shared/tx/TxFee.tsx and explorer/frontend/ui/tx/details/TxDetailsTxFee.tsx render the amount with the fee token's decimals and symbol when they are present, and keep the existing network-coin rendering - its wei and gwei unit names from explorer/frontend/lib/units.ts, its exchange-rate toggle and its breakdown - exactly as it is when they are absent.
     - Keep explorer/frontend/ui/shared/value/NativeCoinValue.tsx for the network coin and render a non-network fee through the token value component the fork already has, rather than adding a second formatting path.
     - Add explorer/frontend/ui/shared/tx/TxFee.spec.tsx and explorer/frontend/ui/tx/details/TxDetailsTxFee.spec.tsx, each rendering a Sidiora fee with six decimals and the SID symbol, a Paxeer fee unchanged, and a fee with no token declared, and asserting the rendered amount, decimals and symbol for each.
     - Change no backend module, no environment preset and no upstream file beyond what these three components require.
     - _Requirements: 4.1, 4.2, 4.3, 4.4_
+  - [x] 1.7 Price sponsored gas through an owner-set rate
+    - In contracts/src/BatchCallAndSponsor.sol replace the oracle import, address, denoms and parsing helpers with a constructor taking the owner, initial SID base units per whole PAX and maximum rate age, rejecting zero configuration and recording the initial update time.
+    - Add owner-only setRate updating the stored rate and timestamp and emitting RateUpdated, rejecting an unauthorized caller with UnauthorizedOwner and a delegated write with InvalidRateContext.
+    - Read the deployed paymaster through currentRate from EIP-7702 delegated accounts, reject an unset rate with InvalidRate and an expired rate with StaleRate, and retain the existing spread check and upward rounding over six-decimal SID and eighteen-decimal PAX.
+    - Keep Quote, both bound digests, both nonces, the deadline and maximum checks, atomic repayment, every existing event, direct execute and the payable receive and fallback unchanged.
+    - Update contracts/test/BatchCallAndSponsorTest.t.sol to deploy with 3.114 SID per PAX and cover constructor refusals, owner updates and their event, unauthorized updates, delegated pricing, staleness and its inclusive boundary, independent decimal arithmetic and spread refusals while retaining every case independent of the oracle.
+    - Delete contracts/src/precompiles/IOracle.sol after confirming no remaining import uses it, remove its mocking and selector assertions from contracts/test/BatchCallAndSponsorTest.t.sol, and record the unchanged requirement 1 acceptance criterion 4 contradiction in spec/sidiora-fee-token/qualification.kvx.
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7_
 
 ## Wave 2 - Sidiora as a Native Denom and a Fee Token
 
 - [ ] 2. Make the protocol itself take Sidiora, behind one upgrade
-  - [ ] 2.1 Make Sidiora a tokenfactory denom the bridge alone mints
+  - [x] 2.1 Make Sidiora a tokenfactory denom the bridge alone mints
     - In modules/layerxbridge/types/keys.go declare Sidiora's subdenom and a helper that builds its tokenfactory denom from the module address types.ModuleAddress() through tokenfactorytypes.GetTokenDenom, so the denom is derived rather than written as a literal, and declare the display symbol SID and the six-decimal exponent the denom metadata carries.
     - Add modules/layerxbridge/keeper/sidiora.go creating the denom under the bridge module account when it does not exist, setting its bank metadata to the Sidiora name, the SID display symbol, the six-decimal exponent and the description, and leaving the tokenfactory admin as the bridge module account; refuse to create it when the module account is not the creator the tokenfactory would record.
     - Register Sidiora in the bridge's asset registry against its remote address so an inbound event naming it resolves to the denom, and leave the refusal of an unregistered asset exactly as modules/layerxbridge/keeper/bridge.go performs it today.
     - Leave BridgeIn and BridgeOut minting and burning through the tokenfactory message server exactly as they do now, so the per-asset cap, the pause, the nullifier set and the attestor threshold apply to Sidiora with no special case; add no path by which any sender other than the bridge module account can mint or burn the denom.
     - Add modules/layerxbridge/keeper/sidiora_test.go covering the denom's construction and metadata, the admin being the bridge module account, a mint and a burn through the bridge, a mint attempted by another sender being refused by the tokenfactory admin check, the cap and the pause refusing a Sidiora bridge, and a replayed inbound event being nullified.
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5_
-  - [ ] 2.2 Put a bank-backed implementation behind the existing Sidiora address
+  - [x] 2.2 Put a bank-backed implementation behind the existing Sidiora address
     - Add contracts/src/SidioraNativeERC20.sol, an ERC20 whose balanceOf, totalSupply and transfers read and move the Sidiora denom through the bank precompile at 0x0000000000000000000000000000000000001001 in the shape contracts/src/NativePaxTokensERC20.sol uses, reporting the name Sidiora, the symbol SID and six decimals.
     - Write it for a proxy rather than a constructor: hold the denom and the metadata in storage set by an initialiser that reverts on a second call, occupy storage slots that do not move, reorder or reuse the slots the existing implementation behind 0x21f7b20a555199fa73A238B1a91FD0f549068fEe occupies, and document the layout the proxy requires in the contract itself.
     - Revert with a named error when the bank precompile refuses a transfer, and emit the ERC20 Transfer event only when the bank move succeeded, so the log and the balance cannot disagree.
     - Write the governance proposal body that binds this address as the ERC20 pointer of the Sidiora denom through the existing native-pointer proposal handled by modules/evm/gov.go, as a committed JSON body beside contracts/test/param_change_proposal.json, naming the denom, the address and the pointer version and nothing else; deploy no second pointer contract for Sidiora and propose no replacement address.
     - Add contracts/test/SidioraNativeERC20Test.t.sol asserting the name, the symbol, the six decimals, a balance and a total supply read through the bank precompile, a transfer that moves bank balance and emits the event, a transfer the bank refuses reverting, a second initialisation reverting, and the storage layout the proxy requires.
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5_
-  - [ ] 2.3 Move the Sidiora proxy administration to governance behind a timelock
+  - [x] 2.3 Move the Sidiora proxy administration to governance behind a timelock
     - Add contracts/governance/SidioraProxyTimelock.sol extending the shape contracts/governance/LayerXTimelock.sol establishes: a minimum delay with a floor, a grace period, a proposer that is the chain's governance authority, an executor, a guardian that can cancel before the ready time, and a per-target per-selector permission map restricted to the administrative selectors the Sidiora proxy upgrade needs.
     - Emit a scheduled, a cancelled and an executed event carrying the operation id, the target, the value and the data hash, following the events the existing timelock already emits, and add no path that executes before the ready time or after the grace period.
     - Add scripts/SidioraProxyGovernance.s.sol taking the proxy address, the timelock parameters and the role holders as parameters with no literal value compiled in, handing the proxy administration to the timelock and scheduling an implementation upgrade through it.
     - Write the governance proposal body that performs the handover, naming the timelock, the proxy and the delay it establishes, beside the repository's other committed proposal bodies.
     - Add test/SidioraProxyGovernance.t.sol in the dependency-free style test/LayerXTimelock.t.sol uses, asserting that an upgrade scheduled by governance cannot execute before the delay, can execute after it, cannot execute after the grace period, can be cancelled by the guardian before it is ready, cannot be scheduled or executed by an account holding neither role, and cannot call a selector the timelock does not permit.
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5_
-  - [ ] 2.4 Add the fee-token parameters to x/evm
+  - [x] 2.4 Add the fee-token parameters to x/evm
     - In api/evm/params.proto add to the Params message, at field numbers no existing field uses and leaving every existing field exactly as it is, the repeated allowed fee denom entries carrying a denom and its oracle pair, the maximum conversion spread as a Dec with the customtype the other Dec fields use, and the boolean that turns the fee-token path off; regenerate modules/evm/types/params.pb.go through the repository's Protocol Buffer pipeline rather than editing it.
     - In modules/evm/types/params.go add a parameter key, a default and a validator for each new field, register them in ParamSetPairs beside the existing pairs, and leave every ParamsPreV* set untouched; the defaults leave the path off and the allowed list empty.
     - Write the validators to refuse an empty or malformed denom, a duplicate denom, an allowed denom with no oracle pair, a spread that is negative or at or above one, and a list containing the network coin's own denom; return an error naming the field and the value.
     - In modules/evm/keeper/params.go add readers for each new parameter in the style of the existing readers, returning the documented default when the parameter is unset, and add a helper that answers whether a given denom is an allowed fee denom and what pair it is priced against.
     - Extend modules/evm/types/params_test.go with each validator's refusals and acceptances, the defaults and the round trip through the parameter store, and add keeper tests named with a FeeTokenParams prefix covering a read against an unset parameter and the allowed-denom helper.
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
-  - [ ] 2.5 Add the per-account fee-token preference precompile
+  - [x] 2.5 Add the per-account fee-token preference precompile
     - Add precompiles/feetoken with FeeToken.sol declaring setFeeDenom, getFeeDenom and clearFeeDenom, the committed abi.json matching it, feetoken.go implementing the executor in the shape precompiles/layerxbridge/layerxbridge.go uses, and a versions directory; register it at 0x0000000000000000000000000000000000001018, an address no precompile in precompiles/setup.go occupies, and generate setup.go through scripts/bump_version rather than writing it by hand.
     - Declare the gas each method costs from a base plus a per-byte and a per-write component the way the bridge precompile declares its own, make getFeeDenom a view that writes no state, and declare which methods are transactions through IsTransaction exactly as the other precompiles do.
     - In modules/evm/types/keys.go add the store prefix for the preference and in a new modules/evm/keeper/feetoken.go add the setter, getter and deleter keyed by the account's EVM address, returning the network coin's denom for an account that has never set one and reading without charging the ante caller for the read.
     - Refuse a setFeeDenom whose denom the x/evm parameters do not allow, and refuse any setFeeDenom while the fee-token switch is off, reverting with a reason that names the refusal; always permit clearFeeDenom so an account cannot be locked into a denom that stops being allowed.
     - Add precompiles/feetoken/feetoken_test.go covering setting, reading and clearing, a disallowed denom reverting, a set attempted while the switch is off reverting, the default for an unset account, the gas each method declares and that the view writes nothing; add precompiles/setup_test.go asserting the precompile is registered at its address and collides with no other; add modules/evm/keeper/feetoken_test.go covering the store round trip and the default and extend modules/evm/types/keys_test.go with the new prefix.
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5_
-  - [ ] 2.6 Debit and refund gas in the account's fee denom at an oracle price
-    - In modules/evm/ante/fee.go, inside EVMFeeCheckDecorator.AnteHandle and after the existing fee cap, minimum fee, tip cap and blob fee cap checks have run unchanged, read the sender's fee denom through the x/evm keeper; when the fee-token path is on and that denom is an allowed fee denom, convert the transaction's maximum fee from Paxeer terms into that denom at the x/oracle rate for its configured pair before geth's BuyGas runs, and debit that denom.
-    - Refuse the transaction when the oracle reports no rate for the pair, when the rate lies outside the governed maximum spread, or when the conversion overflows; return the error the refusal names and add no fallback to the network coin, to a zero charge or to an unbounded stale rate.
+  - [x] 2.6 Debit and refund gas in the account's fee denom at a governed rate
+    - In modules/evm/ante/fee.go, inside EVMFeeCheckDecorator.AnteHandle and after the existing fee cap, minimum fee, tip cap and blob fee cap checks have run unchanged, read the sender's fee denom through the x/evm keeper; when the fee-token path is on and that denom is an allowed fee denom, convert the transaction's maximum fee from Paxeer terms into that denom through GetFeeTokenRate before geth's BuyGas runs, and debit that denom.
+    - Refuse the transaction when GetFeeTokenRate reports a missing, invalid, future or stale rate, when the rate lies outside the governed maximum spread, or when the conversion overflows; return the named refusal error and add no fallback to the network coin, to a zero charge or to an unbounded stale rate.
     - Do the conversion in integer arithmetic over sdk.Dec throughout, six decimals on the Sidiora side and eighteen on the Paxeer side, rounding in the network's favour at the charge; record the rate the charge used so the refund can use the same one.
     - Refund unused gas in the denom that was debited, at the rate the debit recorded, rounding in the payer's favour, and leave the ante surplus accounting and the deferred info that carries it exactly as they are; compute the priority from the effective gas price in Paxeer terms through CalculatePriority so a Sidiora payer and a Paxeer payer at the same real price sort identically.
     - Leave the path byte for byte as it is today when the fee-token switch is off, when the sender has no preference, or when the sender's preference is the network coin.
     - Extend modules/evm/ante/fee_test.go with a Sidiora-paid transaction debiting Sidiora, an insufficient Sidiora balance refusing, a missing rate refusing, a rate outside the spread refusing, the refund returning Sidiora at the debit rate, two payers in different denoms at the same real price receiving the same priority, and every existing case continuing to pass unchanged.
     - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6_
-  - [ ] 2.7 Accept the same fee denoms on the Cosmos path
-    - Add a fee-denom conversion to the Cosmos fee path so a fee offered in a denom the x/evm fee-token parameters allow is converted to Paxeer terms through the same oracle reading and the same spread bound the EVM path uses, and a denom the parameters do not allow is refused.
+  - [x] 2.7 Accept the same fee denoms on the Cosmos path
+    - Add a fee-denom conversion to the Cosmos fee path so a fee offered in a denom the x/evm fee-token parameters allow is converted to Paxeer terms through GetFeeTokenRate and the same spread bound the EVM path uses, and a denom the parameters do not allow is refused; propagate the named refusal error for a missing, invalid, future or stale rate without falling back to the network coin, a zero charge or an unbounded stale rate.
     - Make the minimum-fee check run against the converted Paxeer-terms amount, so a Sidiora fee and a Paxeer fee of the same real value are accepted or refused together, and leave the priority assignment computed from that same converted amount.
     - Keep node/ante.go's decorator ordering exactly as it is - the gasless decorator wrapping the deduct-fee decorator, the oracle spamming and vote-alone decorators, and the priority decorator after fee deduction - and change no decorator's construction beyond passing what the conversion needs.
     - Leave the path behaving exactly as it behaves now when the fee-token switch is off.
     - Add tests beside node/antedecorators covering a Sidiora-paid Cosmos transaction, a disallowed denom refused, the minimum-fee check against the converted amount, a missing rate refusing, and the gasless path unchanged; extend node/ante_test.go, with test names carrying a FeeDenom prefix, asserting the assembled handler still places the decorators in the order node/ante.go declares today.
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5_
-  - [ ] 2.8 Decide where collected Sidiora fees go
+  - [x] 2.8 Decide where collected Sidiora fees go
     - Add to the x/evm parameters, at an unused field number and with its own key, default and validator, the switch that chooses between distributing collected non-network-coin fees through the fee collector the distribution already reads and holding them at a named module account for governance to move, defaulting to holding.
     - Add modules/evm/keeper/feecollect.go routing every non-network-coin fee denom the parameters allow according to that switch, applying to the whole allowed list rather than to Sidiora as a special case, and leaving the network coin's own fees reaching the fee collector exactly as they do now under either option.
     - Register the holding module account with the account keeper the way the application's other module accounts are registered, with no minting or burning permission, so governance can move its balance and nothing else can.
     - Implement no on-chain conversion, swap or price-taking sale to realise a held balance; holding means the coins sit at that module account.
     - Add modules/evm/keeper/feecollect_test.go, with test names carrying a SidioraFeeCollection prefix, covering both options over a block that collected Sidiora fees and Paxeer fees together, asserting the balances that moved, asserting the network coin's path is unchanged under both, and asserting that the holding module account node/app.go registers exists in the test application and carries neither a minting nor a burning permission.
     - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.5_
-  - [ ] 2.9 Gate every consensus change behind one upgrade handler
+  - [x] 2.9 Gate every consensus change behind one upgrade handler
     - Add the upgrade name to node/tags in the alphabetical order the file's parser requires and register its handler in node/upgrades.go beside the existing named handlers, running the module migrations and nothing this feature does not need.
     - Add modules/evm/migrations/migrate_fee_token_params.go setting the new x/evm parameters to their documented defaults on an existing store, leaving every existing parameter at its stored value, and returning without change on a store that already carries them; follow the shape of the migrations already in that directory.
     - Raise the x/evm module's consensus version in modules/evm/module.go and register the migration with the configurator so it runs exactly once.
@@ -135,6 +143,13 @@
     - Add the page to the Protocol section of the navigation in docs/site/mkdocs.yml beside the other protocol pages, and make every link it carries resolve so the strict build passes.
     - Carry no date, host, IP address, internal URL or credential; name the product as Paxeer X Network and use LayerX only where it names the kernel domain.
     - _Requirements: 14.1, 14.2, 14.3, 14.4, 14.5_
+  - [x] 2.12 Replace the oracle pair with a governed fee-token rate
+    - In api/evm/params.proto replace AllowedFeeDenom.oracle_pair with a Dec rate in Sidiora base units per Paxeer coin and its update height, add Params.max_fee_token_rate_age at an unused field number, and update modules/evm/types/params.pb.go through the repository tooling or the authorized manual update when the tooling cannot run.
+    - In modules/evm/types/params.go register KeyMaxFeeTokenRateAge with its default and validator, validate positive rates and nonnegative update heights beside the existing denom and spread refusals, and leave every ParamsPreV* set untouched.
+    - Keep the fee-token path disabled and the allowed list empty by default, and document InitialSidioraBaseUnitsPerPax as the six-decimal rate a governance proposal would set.
+    - In modules/evm/keeper/params.go return governed rates from IsAllowedFeeDenom, expose GetMaxFeeTokenRateAge with its unset default, and add GetFeeTokenRate refusing missing, invalid, future or stale rates with named errors and no fallback.
+    - Extend modules/evm/types/params_test.go with validator refusals and acceptances, defaults, the initial-rate scale, parameter-store and protobuf round trips, and extend modules/evm/keeper/params_test.go under the FeeTokenParams prefix with fresh, boundary, stale and unset reads through a real parameter store.
+    - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
 
 ## Wave 3 - One Aggregate Run, Recorded
 
@@ -152,8 +167,8 @@
 ```json
 {
   "waves": [
-    { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11"] },
+    { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }

@@ -3,8 +3,17 @@ package app
 import (
 	"reflect"
 	"testing"
+	"time"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/sidiora-labs/paxeer-network/modules/evm"
+	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
+	layerxbridgetypes "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
+	"github.com/sidiora-labs/paxeer-network/sdk/crypto/keys/secp256k1"
+	paramstypes "github.com/sidiora-labs/paxeer-network/sdk/x/params/types"
+	upgradetypes "github.com/sidiora-labs/paxeer-network/sdk/x/upgrade/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestOverrideList(t *testing.T) {
@@ -181,4 +190,111 @@ func TestParseUpgradesList(t *testing.T) {
 			}
 		})
 	}
+}
+
+// sidioraFeeTokenParamKeys are the five x/evm parameters the fee-token upgrade
+// adds through the x/evm migration it runs.
+var sidioraFeeTokenParamKeys = [][]byte{
+	evmtypes.KeyFeeTokenEnabled,
+	evmtypes.KeyAllowedFeeDenoms,
+	evmtypes.KeyMaxFeeTokenSpread,
+	evmtypes.KeyMaxFeeTokenRateAge,
+	evmtypes.KeyFeeTokenDistribution,
+}
+
+func TestSidioraFeeTokenUpgradeIsRegisteredAndRunsTheFeeTokenMigration(t *testing.T) {
+	tags, err := f.ReadFile("tags")
+	require.NoError(t, err)
+	names := parseUpgradesList(string(tags))
+	require.Contains(t, names, sidioraFeeTokenUpgrade)
+	require.Equal(t, sidioraFeeTokenUpgrade, names[len(names)-1])
+	require.Equal(t, sidioraFeeTokenUpgrade, LatestUpgrade)
+
+	valPub := secp256k1.GenPrivKey().PubKey()
+	testWrapper := NewTestWrapper(t, time.Now().UTC(), valPub, false)
+	a, ctx := testWrapper.App, testWrapper.Ctx
+
+	a.RegisterUpgradeHandlers()
+	require.True(t, a.UpgradeKeeper.HasHandler(sidioraFeeTokenUpgrade))
+
+	// The upgrade reads the chain of the registered Sidiora remote asset, which
+	// is the deployment prerequisite of the plan.
+	const chainID = uint64(1)
+	require.NoError(t, a.LayerXBridgeKeeper.RegisterChain(ctx, layerxbridgetypes.MsgRegisterChain{
+		Authority: layerxbridgetypes.DefaultAuthority(),
+		Chain: layerxbridgetypes.Chain{
+			ChainID:       chainID,
+			Vault:         layerxbridgetypes.Address20(common.HexToAddress("0x00000000000000000000000000000000000000c1")),
+			FinalityDepth: 64,
+			Enabled:       true,
+		},
+	}))
+	denom := layerxbridgetypes.SidioraDenom()
+	registered, err := a.LayerXBridgeKeeper.EnsureSidioraDenom(ctx, chainID)
+	require.NoError(t, err)
+	require.Equal(t, denom, registered)
+
+	// Rewind x/evm to the store and the module version a chain that predates the
+	// fee token carries.
+	paramsStore := ctx.KVStore(a.GetKey(paramstypes.StoreKey))
+	for _, key := range sidioraFeeTokenParamKeys {
+		paramsStore.Delete(append([]byte(evmtypes.ModuleName+"/"), key...))
+		require.False(t, a.EvmKeeper.Paramstore.Has(ctx, key), string(key))
+	}
+	fromVersion := evm.AppModule{}.ConsensusVersion() - 1
+	versions := a.UpgradeKeeper.GetModuleVersionMap(ctx)
+	versions[evmtypes.ModuleName] = fromVersion
+	a.UpgradeKeeper.SetModuleVersionMap(ctx, versions)
+
+	a.UpgradeKeeper.ApplyUpgrade(ctx, upgradetypes.Plan{Name: sidioraFeeTokenUpgrade, Height: ctx.BlockHeight()})
+
+	after := a.UpgradeKeeper.GetModuleVersionMap(ctx)
+	require.Equal(t, fromVersion+1, after[evmtypes.ModuleName])
+	require.Equal(t, evm.AppModule{}.ConsensusVersion(), after[evmtypes.ModuleName])
+
+	for _, key := range sidioraFeeTokenParamKeys {
+		require.True(t, a.EvmKeeper.Paramstore.Has(ctx, key), string(key))
+	}
+	params := a.EvmKeeper.GetParams(ctx)
+	require.Equal(t, evmtypes.DefaultFeeTokenEnabled, params.FeeTokenEnabled)
+	require.Empty(t, params.AllowedFeeDenoms)
+	require.Equal(t, evmtypes.DefaultMaxFeeTokenSpread, params.MaxFeeTokenSpread)
+	require.Equal(t, evmtypes.DefaultMaxFeeTokenRateAge, params.MaxFeeTokenRateAge)
+	require.Equal(t, evmtypes.DefaultFeeTokenDistribution, params.FeeTokenDistribution)
+
+	// The denom, its metadata and its remote asset record stand after the plan.
+	record, found := a.LayerXBridgeKeeper.GetAssetByDenom(ctx, denom)
+	require.True(t, found)
+	require.Equal(t, chainID, record.ChainID)
+	require.Equal(t, denom, record.Denom)
+	metadata, found := a.BankKeeper.GetDenomMetaData(ctx, denom)
+	require.True(t, found)
+	require.NoError(t, metadata.Validate())
+	require.Equal(t, denom, metadata.Base)
+	require.Equal(t, layerxbridgetypes.SidioraSymbol, metadata.Symbol)
+	require.Equal(t, layerxbridgetypes.SidioraSymbol, metadata.Display)
+}
+
+func TestSidioraFeeTokenUpgradeFailsWithoutTheRemoteAssetRegistration(t *testing.T) {
+	valPub := secp256k1.GenPrivKey().PubKey()
+	testWrapper := NewTestWrapper(t, time.Now().UTC(), valPub, false)
+	a, ctx := testWrapper.App, testWrapper.Ctx
+
+	a.RegisterUpgradeHandlers()
+	require.True(t, a.UpgradeKeeper.HasHandler(sidioraFeeTokenUpgrade))
+	denom := layerxbridgetypes.SidioraDenom()
+	_, found := a.LayerXBridgeKeeper.GetAssetByDenom(ctx, denom)
+	require.False(t, found)
+
+	var recovered interface{}
+	func() {
+		defer func() { recovered = recover() }()
+		a.UpgradeKeeper.ApplyUpgrade(ctx, upgradetypes.Plan{Name: sidioraFeeTokenUpgrade, Height: ctx.BlockHeight()})
+	}()
+	err, ok := recovered.(error)
+	require.True(t, ok, "%v", recovered)
+	require.ErrorContains(t, err, denom)
+
+	_, found = a.BankKeeper.GetDenomMetaData(ctx, denom)
+	require.False(t, found)
 }
