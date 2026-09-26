@@ -2,6 +2,7 @@ package keeper
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"sort"
 
@@ -9,7 +10,8 @@ import (
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 )
 
-// RegisterAttestor adds an attestor with its payout account. The set is kept
+// RegisterAttestor adds an attestor with its payout account and, when given,
+// the public key credential envelopes are sealed to. The set is kept
 // in ascending signer order, and the threshold is raised to the majority of
 // the new set when it falls below it.
 func (k Keeper) RegisterAttestor(ctx sdk.Context, msg types.MsgRegisterAttestor) error {
@@ -40,6 +42,7 @@ func (k Keeper) RegisterAttestor(ctx sdk.Context, msg types.MsgRegisterAttestor)
 	ctx.EventManager().EmitEvent(sdk.NewEvent(types.EventAttestorAdded,
 		sdk.NewAttribute(types.AttributeSigner, msg.Attestor.Signer.Hex()),
 		sdk.NewAttribute(types.AttributePayout, msg.Attestor.Payout),
+		sdk.NewAttribute(types.AttributePublicKey, hex.EncodeToString(msg.Attestor.PublicKey)),
 		sdk.NewAttribute(types.AttributeThreshold, fmt.Sprint(set.Threshold))))
 	return nil
 }

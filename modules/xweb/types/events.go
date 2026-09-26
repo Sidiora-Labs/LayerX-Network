@@ -34,4 +34,7 @@ const (
 	AttributePayloadCap    = "max_payload_bytes"
 	AttributeCallbackCap   = "max_callback_gas"
 	AttributeTimeoutBlocks = "timeout_blocks"
+	AttributeLevel         = "level"
+	AttributeAttestor      = "attestor"
+	AttributePublicKey     = "public_key"
 )

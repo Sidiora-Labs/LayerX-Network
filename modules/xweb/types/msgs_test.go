@@ -3,6 +3,7 @@ package types_test
 import (
 	"testing"
 
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/sidiora-labs/paxeer-network/modules/xweb/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	"github.com/stretchr/testify/require"
@@ -138,11 +139,90 @@ func TestGenesisValidateRefusesInconsistentRecords(t *testing.T) {
 		"bad timeout":    func(g *types.GenesisState) { g.Requests[0].TimeoutHeight = 5 },
 		"bad attestors":  func(g *types.GenesisState) { g.Attestors.Threshold = 1 },
 		"bad parameters": func(g *types.GenesisState) { g.Params.TimeoutBlocks = 0 },
+		"single level on fetch": func(g *types.GenesisState) {
+			g.Requests[0].Level = types.LevelSingle
+			g.Requests[0].Attestor = signer
+		},
+		"majority naming an attestor": func(g *types.GenesisState) { g.Requests[0].Attestor = signer },
+		"unknown request level":       func(g *types.GenesisState) { g.Requests[0].Level = 2 },
+		"unknown result level":        func(g *types.GenesisState) { g.Results[0].Level = 2 },
+		"single result with two signers": func(g *types.GenesisState) {
+			g.Results[0].Level = types.LevelSingle
+			g.Results[0].Signers = []types.Address20{signer, {0x09}}
+		},
 	} {
 		g := base()
 		g.Requests = append([]types.Request(nil), g.Requests...)
 		g.Results = append([]types.Result(nil), g.Results...)
 		mutate(&g)
 		require.Error(t, g.Validate(), name)
+	}
+}
+
+func TestRequestAndResultLevels(t *testing.T) {
+	request := types.Request{ID: 1, Requester: types.Address20{0x0a}, Kind: types.KindApi, CallbackGas: 1,
+		Fee: sdk.NewInt(1), Height: 5, TimeoutHeight: 10}
+	require.NoError(t, request.Validate())
+
+	single := request
+	single.Level = types.LevelSingle
+	single.Attestor = signer
+	require.NoError(t, single.Validate())
+
+	unnamed := single
+	unnamed.Attestor = types.Address20{}
+	require.ErrorIs(t, unnamed.Validate(), types.ErrInvalidLevel)
+	require.ErrorContains(t, unnamed.Validate(), "single level names no attestor")
+
+	search := single
+	search.Kind = types.KindSearch
+	require.ErrorContains(t, search.Validate(), "single level on kind 2, open to the api kind only")
+
+	named := request
+	named.Attestor = signer
+	require.ErrorContains(t, named.Validate(), "majority level names attestor "+signer.Hex())
+
+	unknown := request
+	unknown.Level = 7
+	require.ErrorContains(t, unknown.Validate(), "level 7")
+
+	result := types.Result{RequestID: 1, Response: []byte("x"), FullLength: 1, Signers: []types.Address20{signer},
+		Level: types.LevelSingle}
+	require.NoError(t, result.Validate())
+	result.Signers = append(result.Signers, types.Address20{0x09})
+	require.ErrorIs(t, result.Validate(), types.ErrInvalidLevel)
+	result.Level = types.LevelMajority
+	require.NoError(t, result.Validate())
+	result.Level = 3
+	require.ErrorIs(t, result.Validate(), types.ErrInvalidLevel)
+}
+
+func TestAttestorPublicKey(t *testing.T) {
+	key, err := crypto.ToECDSA(crypto.Keccak256([]byte("PAXEERX_WEB_API_ENVELOPE_V1 vector attestor 1")))
+	require.NoError(t, err)
+	other, err := crypto.ToECDSA(crypto.Keccak256([]byte("PAXEERX_WEB_API_ENVELOPE_V1 vector attestor 2")))
+	require.NoError(t, err)
+	address := types.Address20(crypto.PubkeyToAddress(key.PublicKey))
+	compressed := crypto.CompressPubkey(&key.PublicKey)
+
+	require.NoError(t, types.Attestor{Signer: address, Payout: payout}.Validate())
+	require.NoError(t, types.Attestor{Signer: address, Payout: payout, PublicKey: compressed}.Validate())
+
+	for name, tc := range map[string]struct {
+		key     []byte
+		refuses string
+	}{
+		"uncompressed": {crypto.FromECDSAPub(&key.PublicKey), "is 65 bytes, want 33 compressed"},
+		"short":        {compressed[:32], "is 32 bytes, want 33 compressed"},
+		"not a point":  {append([]byte{0x05}, compressed[1:]...), "public key of " + address.Hex()},
+		"another key": {crypto.CompressPubkey(&other.PublicKey),
+			"belongs to " + types.Address20(crypto.PubkeyToAddress(other.PublicKey)).Hex()},
+	} {
+		err := types.Attestor{Signer: address, Payout: payout, PublicKey: tc.key}.Validate()
+		require.ErrorIs(t, err, types.ErrInvalidAttestors, name)
+		require.ErrorContains(t, err, tc.refuses, name)
+		err = types.MsgRegisterAttestor{Authority: authority,
+			Attestor: types.Attestor{Signer: address, Payout: payout, PublicKey: tc.key}}.ValidateBasic()
+		require.ErrorIs(t, err, types.ErrInvalidAttestors, name)
 	}
 }

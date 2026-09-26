@@ -24,4 +24,7 @@ var (
 	ErrUnknownAttestor  = sdkerrors.Register(ModuleName, 20, "attestor not registered")
 	ErrCallbackRecorded = sdkerrors.Register(ModuleName, 21, "callback outcome already recorded")
 	ErrInvalidRequest   = sdkerrors.Register(ModuleName, 22, "invalid request")
+	ErrInvalidApi       = sdkerrors.Register(ModuleName, 23, "invalid api payload")
+	ErrInvalidEnvelope  = sdkerrors.Register(ModuleName, 24, "invalid credential envelope")
+	ErrInvalidLevel     = sdkerrors.Register(ModuleName, 25, "invalid attestation level")
 )

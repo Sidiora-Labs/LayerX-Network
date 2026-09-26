@@ -22,6 +22,7 @@ type vector struct {
 	RequestID     uint64 `json:"request_id"`
 	Kind          uint8  `json:"kind"`
 	Payload       string `json:"payload"`
+	PayloadVector string `json:"payload_vector"`
 	PayloadHex    string `json:"payload_hex"`
 	PayloadHash   string `json:"payload_hash"`
 	ContentDigest string `json:"content_digest"`
@@ -53,22 +54,37 @@ func loadVectors(t *testing.T) vectorFile {
 }
 
 // TestPreimageVectors rebuilds every shared vector byte for byte, checks its
-// digest and recovers its signer, and checks ATTESTATION.md carries it.
+// digest and recovers its signer, and checks ATTESTATION.md carries it. An api
+// vector takes its payload from the api vector it names.
 func TestPreimageVectors(t *testing.T) {
 	file := loadVectors(t)
+	apiPayloads := map[string]string{}
+	for _, v := range loadApiVectors(t).Vectors {
+		apiPayloads[v.Name] = v.Payload
+	}
 	doc, err := os.ReadFile("../ATTESTATION.md")
 	require.NoError(t, err)
 	require.Equal(t, types.Domain, file.Domain)
 	require.Equal(t, types.PreimageLength, file.PreimageLength)
 	require.Equal(t, 188, types.PreimageLength)
-	require.Len(t, file.Vectors, 2)
+	require.Len(t, file.Vectors, 3)
 	origins := map[uint8]bool{}
+	kinds := map[uint8]bool{}
 	for _, v := range file.Vectors {
 		t.Run(v.Name, func(t *testing.T) {
 			origins[v.Origin] = true
-			require.Equal(t, hexutil.Encode([]byte(v.Payload)), v.PayloadHex)
+			kinds[v.Kind] = true
+			if v.Kind == types.KindApi {
+				require.Empty(t, v.Payload)
+				require.Equal(t, apiPayloads[v.PayloadVector], v.PayloadHex)
+			} else {
+				require.Empty(t, v.PayloadVector)
+				require.Equal(t, hexutil.Encode([]byte(v.Payload)), v.PayloadHex)
+			}
+			payload, err := hexutil.Decode(v.PayloadHex)
+			require.NoError(t, err)
 			require.Equal(t, hexutil.Encode([]byte(v.Response)), v.ResponseHex)
-			payloadHash := types.Keccak([]byte(v.Payload))
+			payloadHash := types.Keccak(payload)
 			responseHash := types.Keccak([]byte(v.Response))
 			require.Equal(t, v.PayloadHash, payloadHash.Hex())
 			require.Equal(t, v.ResponseHash, responseHash.Hex())
@@ -101,6 +117,9 @@ func TestPreimageVectors(t *testing.T) {
 	}
 	require.True(t, origins[types.OriginEVM])
 	require.True(t, origins[types.OriginProgram])
+	require.True(t, kinds[types.KindFetch])
+	require.True(t, kinds[types.KindSearch])
+	require.True(t, kinds[types.KindApi])
 }
 
 func TestPreimageFieldOffsets(t *testing.T) {

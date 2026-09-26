@@ -1,0 +1,111 @@
+{
+  "scheme": "ECIES over secp256k1 with HKDF-SHA256 and AES-256-GCM",
+  "key_derivation": "a vector private key is keccak256 of the ASCII bytes of its label; these keys are public test keys",
+  "layout": "attestor (20) || ephemeral_public_key (33, compressed) || nonce (12) || ciphertext || tag (16)",
+  "shared_secret": "the x coordinate of ephemeral_private * attestor_public, 32 bytes big-endian",
+  "hkdf_hash": "SHA-256",
+  "hkdf_ikm": "shared_x",
+  "hkdf_salt": "ephemeral_public_key",
+  "hkdf_info": "PAXEERX_WEB_API_ENVELOPE_V1",
+  "hkdf_length": 32,
+  "aead": "AES-256-GCM, 12-byte nonce, 16-byte tag appended to the ciphertext",
+  "aad": "attestor (20) || the ASCII origin: https:// and the api URL's authority",
+  "credential_layout": "uint8 header count (1 to 8), then per header uint16 name length, name, uint16 value length, value; big-endian lengths; at most 1024 bytes; header rules as for public headers, and no name repeating a public header",
+  "envelope_bytes_min": 82,
+  "envelope_bytes_max": 1105,
+  "vectors": [
+    {
+      "name": "attestor-1-api-key",
+      "attestor_key_label": "PAXEERX_WEB_API_ENVELOPE_V1 vector attestor 1",
+      "attestor_public_key": "0x036c824aae010d3da842e11a66d64f41b99d13589530255ac9ef1117b5ea93e3f3",
+      "attestor": "0xe35182c595c7db5baf6237c02cf6f8177831f384",
+      "ephemeral_key_label": "PAXEERX_WEB_API_ENVELOPE_V1 vector ephemeral 1",
+      "ephemeral_public_key": "0x03cce31e0a490dd0ff1091c927121efdae3b333ece5fcce941de9cafcc543af48b",
+      "nonce": "0x0102030405060708090a0b0c",
+      "origin": "https://paxeer.app",
+      "credential": [
+        {
+          "name": "X-Api-Key",
+          "value": "paxeer-vector-credential"
+        }
+      ],
+      "plaintext": "0x010009582d4170692d4b657900187061786565722d766563746f722d63726564656e7469616c",
+      "shared_x": "0x8dda3ea7557451464022dc5a0bdf6a1c14aec370c9dd5cc48483af27e6796485",
+      "aes_key": "0x1dc57872766482bca61cd26f394ae789f660aaca6f797c2969cda3043a339f46",
+      "aad": "0xe35182c595c7db5baf6237c02cf6f8177831f38468747470733a2f2f7061786565722e617070",
+      "ciphertext": "0x613d9233ee939f7f2b2566c8fa3118d3b434e6e3880fbb94e32ef684bd2c4b38e19793add7f0355c3623d86cc0dbf6778885c49d0344",
+      "envelope": "0xe35182c595c7db5baf6237c02cf6f8177831f38403cce31e0a490dd0ff1091c927121efdae3b333ece5fcce941de9cafcc543af48b0102030405060708090a0b0c613d9233ee939f7f2b2566c8fa3118d3b434e6e3880fbb94e32ef684bd2c4b38e19793add7f0355c3623d86cc0dbf6778885c49d0344"
+    },
+    {
+      "name": "attestor-2-api-key",
+      "attestor_key_label": "PAXEERX_WEB_API_ENVELOPE_V1 vector attestor 2",
+      "attestor_public_key": "0x034f4aaa29d66a7e01b3673bb97682d3f2f3656d77029eb474a6744445ec48c8cd",
+      "attestor": "0xdd0b8a471d5ada4d9f7c7f62601460ed1581c53e",
+      "ephemeral_key_label": "PAXEERX_WEB_API_ENVELOPE_V1 vector ephemeral 2",
+      "ephemeral_public_key": "0x039f0dce916c384faa434208354dbb65adb46d087fb77857a6f790f3295986007f",
+      "nonce": "0x1112131415161718191a1b1c",
+      "origin": "https://paxeer.app",
+      "credential": [
+        {
+          "name": "X-Api-Key",
+          "value": "paxeer-vector-credential"
+        }
+      ],
+      "plaintext": "0x010009582d4170692d4b657900187061786565722d766563746f722d63726564656e7469616c",
+      "shared_x": "0xe67c2289962a82cb91ddbafd9992e54a431a9c058d9b02887f3d27a0e29247c4",
+      "aes_key": "0x141a5f7229f81bb416d9757a03fd8f1c1e56f2b5dcc6966872734304fb2d2058",
+      "aad": "0xdd0b8a471d5ada4d9f7c7f62601460ed1581c53e68747470733a2f2f7061786565722e617070",
+      "ciphertext": "0x02f5b057f85f6ed7a4f0ee1dfdbec6afe7d191c9ef342b2ac960a31ad6b87757efb982747c97267ce7ad0098f16c95056a48a8579ce8",
+      "envelope": "0xdd0b8a471d5ada4d9f7c7f62601460ed1581c53e039f0dce916c384faa434208354dbb65adb46d087fb77857a6f790f3295986007f1112131415161718191a1b1c02f5b057f85f6ed7a4f0ee1dfdbec6afe7d191c9ef342b2ac960a31ad6b87757efb982747c97267ce7ad0098f16c95056a48a8579ce8"
+    },
+    {
+      "name": "attestor-1-two-headers",
+      "attestor_key_label": "PAXEERX_WEB_API_ENVELOPE_V1 vector attestor 1",
+      "attestor_public_key": "0x036c824aae010d3da842e11a66d64f41b99d13589530255ac9ef1117b5ea93e3f3",
+      "attestor": "0xe35182c595c7db5baf6237c02cf6f8177831f384",
+      "ephemeral_key_label": "PAXEERX_WEB_API_ENVELOPE_V1 vector ephemeral 3",
+      "ephemeral_public_key": "0x039e77f530630ee2263c6585bcbeb15d9e399760c8a4a624c8b13107f00e3afba3",
+      "nonce": "0x2122232425262728292a2b2c",
+      "origin": "https://paxeer.app",
+      "credential": [
+        {
+          "name": "X-Api-Key",
+          "value": "paxeer-vector-credential"
+        },
+        {
+          "name": "X-Api-Account",
+          "value": "vector-account"
+        }
+      ],
+      "plaintext": "0x020009582d4170692d4b657900187061786565722d766563746f722d63726564656e7469616c000d582d4170692d4163636f756e74000e766563746f722d6163636f756e74",
+      "shared_x": "0x84fa8613155dd3cb04145935fc6844c301cd474cf0799fe7e120bba6b8a0cdff",
+      "aes_key": "0xe9aee87650fdf5e0f0bf02af306b82dc02a0db110d7df71712ac7ed63900c477",
+      "aad": "0xe35182c595c7db5baf6237c02cf6f8177831f38468747470733a2f2f7061786565722e617070",
+      "ciphertext": "0xdd0224e37551bab14f6c58bef14eff594d9d0056aefaa76298f90b3b25c05ac4142b5c8993da3ab3ffdd68b98ea114500ef251efcfee55f884354053f3eab1a97c76b4bf5a1e870c5efcb8caa9eb5dbbfe0d3351b6",
+      "envelope": "0xe35182c595c7db5baf6237c02cf6f8177831f384039e77f530630ee2263c6585bcbeb15d9e399760c8a4a624c8b13107f00e3afba32122232425262728292a2b2cdd0224e37551bab14f6c58bef14eff594d9d0056aefaa76298f90b3b25c05ac4142b5c8993da3ab3ffdd68b98ea114500ef251efcfee55f884354053f3eab1a97c76b4bf5a1e870c5efcb8caa9eb5dbbfe0d3351b6"
+    }
+  ],
+  "refusals": [
+    {
+      "name": "another origin",
+      "envelope": "0xe35182c595c7db5baf6237c02cf6f8177831f38403cce31e0a490dd0ff1091c927121efdae3b333ece5fcce941de9cafcc543af48b0102030405060708090a0b0c613d9233ee939f7f2b2566c8fa3118d3b434e6e3880fbb94e32ef684bd2c4b38e19793add7f0355c3623d86cc0dbf6778885c49d0344",
+      "open_with": "PAXEERX_WEB_API_ENVELOPE_V1 vector attestor 1",
+      "origin": "https://paxeer.app:8443",
+      "refuses": "does not authenticate"
+    },
+    {
+      "name": "another attestor",
+      "envelope": "0xe35182c595c7db5baf6237c02cf6f8177831f38403cce31e0a490dd0ff1091c927121efdae3b333ece5fcce941de9cafcc543af48b0102030405060708090a0b0c613d9233ee939f7f2b2566c8fa3118d3b434e6e3880fbb94e32ef684bd2c4b38e19793add7f0355c3623d86cc0dbf6778885c49d0344",
+      "open_with": "PAXEERX_WEB_API_ENVELOPE_V1 vector attestor 2",
+      "origin": "https://paxeer.app",
+      "refuses": "addressed to"
+    },
+    {
+      "name": "flipped tag byte",
+      "envelope": "0xe35182c595c7db5baf6237c02cf6f8177831f38403cce31e0a490dd0ff1091c927121efdae3b333ece5fcce941de9cafcc543af48b0102030405060708090a0b0c613d9233ee939f7f2b2566c8fa3118d3b434e6e3880fbb94e32ef684bd2c4b38e19793add7f0355c3623d86cc0dbf6778885c49d0345",
+      "open_with": "PAXEERX_WEB_API_ENVELOPE_V1 vector attestor 1",
+      "origin": "https://paxeer.app",
+      "refuses": "does not authenticate"
+    }
+  ]
+}

@@ -42,6 +42,27 @@ func verifySignatures(set types.AttestorSet, digest types.Hash32, signatures [][
 	return signers, nil
 }
 
+// verifySingle returns the one signer of a single-level fulfilment: exactly
+// one signature, recovering to the attestor the request names, who must still
+// be registered.
+func verifySingle(set types.AttestorSet, named types.Address20, digest types.Hash32,
+	signatures [][]byte) ([]types.Address20, error) {
+	if len(signatures) != 1 {
+		return nil, types.ErrBadSignature.Wrapf("the single level takes exactly one signature, got %d", len(signatures))
+	}
+	recovered, err := bridgetypes.RecoverSigner(bridgetypes.Hash32(digest), signatures[0])
+	if err != nil {
+		return nil, types.ErrBadSignature.Wrapf("signature 0: %v", err)
+	}
+	if signer := types.Address20(recovered); signer != named {
+		return nil, types.ErrBadSignature.Wrapf("signature from %s, the single level names %s", signer.Hex(), named.Hex())
+	}
+	if !set.Has(named) {
+		return nil, types.ErrUnknownAttestor.Wrapf("the single level names %s, no longer registered", named.Hex())
+	}
+	return []types.Address20{named}, nil
+}
+
 // Attestation rebuilds the origin-1 attestation of a stored request for a
 // submitted response, content digest and full length.
 func (k Keeper) Attestation(ctx sdk.Context, request types.Request, response []byte,
@@ -62,7 +83,9 @@ func (k Keeper) Attestation(ctx sdk.Context, request types.Request, response []b
 // Fulfil accepts the attested answer to a pending request. It refuses when
 // paused, for an unknown, fulfilled or refunded request, a response over
 // MaxResponseBytes, a full length shorter than the response, and signatures
-// that do not verify at the threshold over the 188-byte origin-1 preimage.
+// that do not verify over the 188-byte origin-1 preimage: at the threshold
+// under the majority level, or one signature from the named attestor under
+// the single level.
 // On success it stores the result, marks the request fulfilled and splits the
 // fee equally among the signers' payout accounts with the integer remainder
 // to the lowest signer. The caller delivers the callback and records its
@@ -91,7 +114,17 @@ func (k Keeper) Fulfil(ctx sdk.Context, id uint64, response []byte, contentDiges
 			fullLength, len(response))
 	}
 	set := k.GetAttestorSet(ctx)
-	signers, err := verifySignatures(set, types.Digest(k.Attestation(ctx, request, response, contentDigest, fullLength)), signatures)
+	attested := types.Digest(k.Attestation(ctx, request, response, contentDigest, fullLength))
+	var signers []types.Address20
+	var err error
+	switch request.Level {
+	case types.LevelSingle:
+		signers, err = verifySingle(set, request.Attestor, attested, signatures)
+	case types.LevelMajority:
+		signers, err = verifySignatures(set, attested, signatures)
+	default:
+		err = types.ErrInvalidLevel.Wrapf("request %d level %d", id, request.Level)
+	}
 	if err != nil {
 		return types.Request{}, types.Result{}, err
 	}
@@ -124,6 +157,7 @@ func (k Keeper) Fulfil(ctx sdk.Context, id uint64, response []byte, contentDiges
 		Signers:       signers,
 		Height:        ctx.BlockHeight(),
 		Callback:      types.CallbackPending,
+		Level:         request.Level,
 	}
 	request.Status = types.StatusFulfilled
 	k.setRequest(cached, request)
@@ -142,7 +176,8 @@ func (k Keeper) Fulfil(ctx sdk.Context, id uint64, response []byte, contentDiges
 		sdk.NewAttribute(types.AttributeResponseHash, types.Keccak(response).Hex()),
 		sdk.NewAttribute(types.AttributeFullLength, fmt.Sprint(fullLength)),
 		sdk.NewAttribute(types.AttributeFee, request.Fee.String()),
-		sdk.NewAttribute(types.AttributeSigners, strings.Join(names, ","))))
+		sdk.NewAttribute(types.AttributeSigners, strings.Join(names, ",")),
+		sdk.NewAttribute(types.AttributeLevel, fmt.Sprint(request.Level))))
 	return request, result, nil
 }
 
