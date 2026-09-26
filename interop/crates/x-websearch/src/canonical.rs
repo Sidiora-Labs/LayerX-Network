@@ -39,11 +39,14 @@ const WINDOWS_1252_HIGH: [Option<char>; 32] = [
     Some('\u{0178}'),
 ];
 
-/// What the canonical bytes describe.
+/// What the canonical bytes describe: a fetched page, a search, or an api
+/// answer, which is the canonical form of the selected fields or the raw
+/// bounded body.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ContentKind {
     Fetch,
     Search,
+    Api,
 }
 
 impl ContentKind {
@@ -52,6 +55,7 @@ impl ContentKind {
         match self {
             Self::Fetch => 1,
             Self::Search => 2,
+            Self::Api => 3,
         }
     }
 
@@ -60,6 +64,7 @@ impl ContentKind {
         match byte {
             1 => Some(Self::Fetch),
             2 => Some(Self::Search),
+            3 => Some(Self::Api),
             _ => None,
         }
     }
@@ -248,6 +253,30 @@ pub fn canonical_bytes(
     media_type: &str,
     text: &str,
 ) -> Result<Vec<u8>, CanonicalError> {
+    encode(kind, payload, media_type, text.as_bytes())
+}
+
+/// The canonical bytes of an api answer: the same layout with the kind byte
+/// 3 and the answer's bytes as they are, since a raw bounded body need not
+/// be UTF-8.
+///
+/// # Errors
+/// Refuses a malformed media type and a payload or media type longer than a
+/// uint32 length can carry.
+pub fn answer_canonical_bytes(
+    payload: &[u8],
+    media_type: &str,
+    answer: &[u8],
+) -> Result<Vec<u8>, CanonicalError> {
+    encode(ContentKind::Api, payload, media_type, answer)
+}
+
+fn encode(
+    kind: ContentKind,
+    payload: &[u8],
+    media_type: &str,
+    text: &[u8],
+) -> Result<Vec<u8>, CanonicalError> {
     let media_type = media_type_essence(media_type)?;
     let payload_length = u32::try_from(payload.len()).map_err(|_| CanonicalError::TooLong)?;
     let media_length = u32::try_from(media_type.len()).map_err(|_| CanonicalError::TooLong)?;
@@ -262,7 +291,7 @@ pub fn canonical_bytes(
     bytes.extend_from_slice(&media_length.to_be_bytes());
     bytes.extend_from_slice(media_type.as_bytes());
     bytes.extend_from_slice(&text_length.to_be_bytes());
-    bytes.extend_from_slice(text.as_bytes());
+    bytes.extend_from_slice(text);
     Ok(bytes)
 }
 
@@ -295,8 +324,48 @@ pub struct CanonicalContent {
 
 impl CanonicalContent {
     /// # Errors
-    /// Refuses bytes that are not exactly one canonical encoding.
+    /// Refuses bytes that are not exactly one canonical encoding with UTF-8
+    /// text. An api answer whose raw body is not UTF-8 is accepted by
+    /// [`check`] and refused here.
     pub fn parse(bytes: &[u8]) -> Result<Self, CanonicalError> {
+        let fields = Fields::split(bytes)?;
+        let text =
+            String::from_utf8(fields.text.to_vec()).map_err(|_| CanonicalError::Malformed)?;
+        Ok(Self {
+            kind: fields.kind,
+            payload: fields.payload.to_vec(),
+            media_type: fields.media_type,
+            text,
+        })
+    }
+}
+
+/// Checks that bytes are exactly one canonical encoding and returns their
+/// kind: the text of a fetch or a search is UTF-8, an api answer's bytes are
+/// taken as they are.
+///
+/// # Errors
+/// Refuses an unknown domain or kind, a length that does not match, a media
+/// type that is not its own lower-case essence, and a fetch or search text
+/// that is not UTF-8.
+pub fn check(bytes: &[u8]) -> Result<ContentKind, CanonicalError> {
+    let fields = Fields::split(bytes)?;
+    if fields.kind != ContentKind::Api && std::str::from_utf8(fields.text).is_err() {
+        return Err(CanonicalError::Malformed);
+    }
+    Ok(fields.kind)
+}
+
+/// The fields of one canonical encoding, the text still as bytes.
+struct Fields<'a> {
+    kind: ContentKind,
+    payload: &'a [u8],
+    media_type: String,
+    text: &'a [u8],
+}
+
+impl<'a> Fields<'a> {
+    fn split(bytes: &'a [u8]) -> Result<Self, CanonicalError> {
         let rest = bytes
             .strip_prefix(CONTENT_DOMAIN)
             .ok_or(CanonicalError::Malformed)?;
@@ -317,12 +386,11 @@ impl CanonicalContent {
         if media_type_essence(&media_type)? != media_type {
             return Err(CanonicalError::Malformed);
         }
-        let text = String::from_utf8(rest.to_vec()).map_err(|_| CanonicalError::Malformed)?;
         Ok(Self {
             kind,
-            payload: payload.to_vec(),
+            payload,
             media_type,
-            text,
+            text: rest,
         })
     }
 }

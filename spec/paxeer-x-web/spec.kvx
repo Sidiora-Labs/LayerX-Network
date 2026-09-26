@@ -860,7 +860,11 @@ reqs = ["9.1"]
 
 [task.2.17]
 title = "Qualify the sidecar api request path and serve api answers from the content store"
-status = "pending"
+status = "implemented"
+implemented_revision = "51d893a47bdf520fb33ead4b0a1ea02197fc1f60"
+implemented_command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test api --test attest --test canonical --test content'"
+implemented_exit_code = 101
+implemented_log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.14"]
 do_1 = "In interop/crates/x-websearch/tests/api.rs clear the clippy findings recorded in observation 2.14.1 without an allow attribute: split the envelope vector test into one test per vector group over a shared helper, pass a single root through std::slice::from_ref, and keep every assertion as written."

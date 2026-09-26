@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::canonical::{self, CanonicalContent};
+use crate::canonical;
 use crate::fetch::{self, Fetcher, HttpClient, Url};
 use crate::payment::PaymentGate;
 use crate::server::{Request, Response, Route, RouteError, RouteTable};
@@ -69,7 +69,8 @@ impl ContentStore {
         self.directory.join(canonical::digest_hex(digest))
     }
 
-    /// Stores canonical bytes under their digest and returns the digest.
+    /// Stores canonical bytes of any kind - a fetched page, a search or an
+    /// api answer - under their digest and returns the digest.
     ///
     /// # Errors
     /// Refuses bytes that are not one canonical encoding or are larger than
@@ -78,7 +79,7 @@ impl ContentStore {
         if bytes.len() > MAX_CONTENT_BYTES {
             return Err(invalid("content too large"));
         }
-        CanonicalContent::parse(bytes).map_err(|_| invalid("not canonical content"))?;
+        canonical::check(bytes).map_err(|_| invalid("not canonical content"))?;
         let digest = canonical::content_digest(bytes);
         let path = self.path_of(&digest);
         if path.is_file() {
@@ -132,9 +133,7 @@ impl ContentStore {
             let Some(bytes) = self.ask_peer(peer, digest) else {
                 continue;
             };
-            if canonical::content_digest(&bytes) != *digest
-                || CanonicalContent::parse(&bytes).is_err()
-            {
+            if canonical::content_digest(&bytes) != *digest || canonical::check(&bytes).is_err() {
                 continue;
             }
             self.put(&bytes)?;

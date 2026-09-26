@@ -3,7 +3,10 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use x_websearch::canonical::{canonical_bytes, content_digest, digest_hex, ContentKind};
+use x_websearch::canonical::{
+    answer_canonical_bytes, canonical_bytes, content_digest, digest_hex, ContentKind,
+    CONTENT_DOMAIN,
+};
 use x_websearch::content::{self, ContentStore, PEER_HEADER};
 use x_websearch::fetch::Fetcher;
 use x_websearch::payment::{hex, system_clock, PaymentGate, PAYMENT_REQUIRED};
@@ -247,6 +250,60 @@ fn the_store_refuses_non_canonical_bytes_and_drops_damaged_files() -> TestResult
             "{peer}"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn api_answers_are_stored_served_and_retrieved_under_their_own_kind() -> TestResult {
+    let holder_dir = Scratch::new("api-holder")?;
+    let asker_dir = Scratch::new("api-asker")?;
+    let holder = Arc::new(ContentStore::open(&holder_dir.0, &[])?);
+    let selected = answer_canonical_bytes(b"api payload", "application/json", b"[\"3.114\",3]")?;
+    let raw = answer_canonical_bytes(b"api payload", "application/octet-stream", b"\xff\x00raw")?;
+    assert_eq!(selected[CONTENT_DOMAIN.len()], ContentKind::Api.byte());
+    let selected_digest = holder.put(&selected)?;
+    let raw_digest = holder.put(&raw)?;
+    assert_eq!(selected_digest, content_digest(&selected));
+    assert_eq!(raw_digest, content_digest(&raw));
+    assert_eq!(holder.get(&raw_digest)?, Some(raw.clone()));
+
+    let holder_server = sidecar(&holder)?;
+    for (digest, bytes) in [(selected_digest, &selected), (raw_digest, &raw)] {
+        let (status, _, body) = get(
+            holder_server.local_addr(),
+            &format!("/content/{}", digest_hex(&digest)),
+            "",
+        )?;
+        assert_eq!((status, &body), (200, bytes));
+    }
+
+    let asker = Arc::new(ContentStore::open(
+        &asker_dir.0,
+        &[peer_url(&holder_server)],
+    )?);
+    let asker_server = sidecar(&asker)?;
+    let (status, _, body) = get(
+        asker_server.local_addr(),
+        &format!("/content/{}", digest_hex(&raw_digest)),
+        "",
+    )?;
+    assert_eq!((status, &body), (200, &raw));
+    assert_eq!(asker.get(&raw_digest)?, Some(raw.clone()));
+
+    let mut unknown = selected.clone();
+    unknown[CONTENT_DOMAIN.len()] = 4;
+    assert_eq!(
+        holder.put(&unknown).map_err(|error| error.kind()),
+        Err(std::io::ErrorKind::InvalidData)
+    );
+    let mut not_text = raw.clone();
+    not_text[CONTENT_DOMAIN.len()] = ContentKind::Fetch.byte();
+    assert_eq!(
+        holder.put(&not_text).map_err(|error| error.kind()),
+        Err(std::io::ErrorKind::InvalidData)
+    );
+    holder_server.shutdown()?;
+    asker_server.shutdown()?;
     Ok(())
 }
 

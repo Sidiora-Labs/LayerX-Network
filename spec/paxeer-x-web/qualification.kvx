@@ -345,3 +345,11 @@ symbol = "layerx-program-lint"
 observed = "The program lint does not know ABI v4, which web_read needs, so the web-reader build cannot pass through the lint step the escrow reference uses."
 assumption = "The lint gains ABI v4 from its owner, after which the web-reader build adds the lint step."
 severity = "suspect"
+
+[observation.2.17.1]
+task = "2.17"
+file = "interop/crates/x-websearch/src/api.rs"
+symbol = "es_number"
+observed = "Clippy passes and nine of ten api tests pass, but after two repair cycles pointers_select_and_canonicalise_as_the_vectors_pin still writes 123456789012345678901234 as 1.2345678901234569e+23 where the vector pins 1.2345678901234568e+23 (.logs/verify.log, exit 101), so the attest, canonical and content tests and task 2.14's gates never ran."
+assumption = "The vector stays as written; es_number is corrected to pick the closest digits at the shortest length and the verify_cmd reruns unchanged."
+severity = "blocker"
