@@ -26,7 +26,7 @@
 # Task-level verify_cmd runs are NOT recorded here: a task records its result
 # through cg spec done. This ledger carries the four legs of the wave 3 gate and
 # the observations any task makes along the way, including the stale references
-# the halt on chain changes leaves in modules/layerxbridge after task 1.1 moves
+# the chain freeze leaves in modules/layerxbridge after task 1.1 moves
 # the Ethereum custody project to bridge/evm.
 #
 # No record carries a hostname, an IP address, an internal URL, a credential or
@@ -64,7 +64,7 @@ task = "1.1"
 file = "modules/layerxbridge/ATTESTATION.md"
 symbol = "modules/layerxbridge/types/attestation.go"
 observed = "Both files name interop/contracts/ethereum-bridge for the Solidity attestation source and its document, which this task moved to bridge/evm with git mv, so the two references now point at a path that no longer exists."
-assumption = "The halt on chain changes forbids editing anything under modules/, so both files are left exactly as written and the references stay stale until the first authorised chain change corrects them."
+assumption = "The chain freeze forbids editing anything under modules/, so both files are left exactly as written and the references stay stale until the first authorised chain change corrects them."
 severity = "note"
 
 [observation.1.1.2]
