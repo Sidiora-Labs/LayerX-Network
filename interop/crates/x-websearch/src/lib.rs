@@ -8,6 +8,7 @@
 //! behind `payment::PaymentGate`, and `GET /content/<digest>` unpaid.
 
 pub mod assets;
+pub mod attest;
 pub mod canonical;
 pub mod config;
 pub mod content;
@@ -20,6 +21,8 @@ pub mod payment;
 pub mod robots;
 pub mod search;
 pub mod server;
+pub mod submit;
+pub mod watch;
 
 pub use config::{load, Config, ConfigError};
 pub use keys::{KeyError, KeyFiles, Keys};

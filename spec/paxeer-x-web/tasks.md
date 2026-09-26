@@ -112,7 +112,7 @@
 ## Wave 2 - Integration
 
 - [ ] 2. Close the contract and program loops, package the sidecar, write the v6.8 plan and the page, and dry-run it
-  - [ ] 2.1 Sign as an attestor and submit fulfil from the sidecar
+  - [x] 2.1 Sign as an attestor and submit fulfil from the sidecar
     - Write interop/crates/x-websearch/src/watch.rs following XWebRequested logs from the configured EVM endpoint with eth_blockNumber and eth_getLogs to the configured confirmation depth, and src/attest.rs fetching each payload independently, building the origin-1 preimage and signing its digest with the web-attestor key, asserting the preimage against modules/xweb/types/testdata/preimage-vectors.json in its tests.
     - Add an authenticated signature-exchange route to the server for the configured peers, discarding and recording a signature over a different digest, and refusing to start when the attestor key equals the submitter or receiver key.
     - Write src/submit.rs posting fulfil through the precompile once the threshold is reached with signatures in ascending signer order, signing the EIP-1559 transaction with the submitter key in the shape interop/crates/layerx-gas-station/src/tx.rs uses, journalling the signed bytes before broadcast so a restart rebroadcasts, and recording an already-fulfilled request as completed; add the module lines to src/lib.rs and wire the loops into src/main.rs.

@@ -532,7 +532,11 @@ reqs = ["9.1"]
 
 [task.2.1]
 title = "Sign as an attestor and submit fulfil from the sidecar"
-status = "pending"
+status = "done"
+revision = "a9171bc99760fe8d1709ace1bba34d3db5cf9db6"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test attest --test submit'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["1.2","1.3","1.5","1.6"]
 do_1 = "Write interop/crates/x-websearch/src/watch.rs following XWebRequested logs from the configured EVM endpoint with eth_blockNumber and eth_getLogs to the configured confirmation depth, and src/attest.rs fetching each payload independently, building the origin-1 preimage and signing its digest with the web-attestor key, asserting the preimage against modules/xweb/types/testdata/preimage-vectors.json in its tests."

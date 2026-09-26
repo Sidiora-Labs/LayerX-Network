@@ -202,6 +202,11 @@ impl Response {
 }
 
 type Handler = Box<dyn Fn(&Request) -> Response + Send + Sync>;
+type AttestationHandler = Box<dyn Fn(u64) -> Response + Send + Sync>;
+
+/// The path prefix of the signature-exchange route
+/// `GET /attestations/<request id>`.
+pub const ATTESTATION_PATH: &str = "/attestations/";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RouteError {
@@ -221,10 +226,12 @@ impl std::fmt::Display for RouteError {
 impl std::error::Error for RouteError {}
 
 /// The handlers for the paid routes. The health route is built in; a paid
-/// route with no handler answers 503.
+/// route with no handler answers 503. The signature-exchange route answers
+/// 404 until an attestor sets its handler.
 #[derive(Default)]
 pub struct RouteTable {
     handlers: BTreeMap<Route, Handler>,
+    attestations: Option<AttestationHandler>,
 }
 
 impl RouteTable {
@@ -248,6 +255,29 @@ impl RouteTable {
         }
         self.handlers.insert(route, Box::new(handler));
         Ok(())
+    }
+
+    /// Sets the handler of `GET /attestations/<request id>`.
+    ///
+    /// # Errors
+    /// Refuses a table whose exchange route already has a handler.
+    pub fn set_attestations(
+        &mut self,
+        handler: impl Fn(u64) -> Response + Send + Sync + 'static,
+    ) -> Result<(), RouteError> {
+        if self.attestations.is_some() {
+            return Err(RouteError::AlreadySet);
+        }
+        self.attestations = Some(Box::new(handler));
+        Ok(())
+    }
+
+    fn dispatch_attestation(&self, request_id: u64) -> Response {
+        let Some(handler) = &self.attestations else {
+            return Response::error(404, "not_found");
+        };
+        catch_unwind(AssertUnwindSafe(|| handler(request_id)))
+            .unwrap_or_else(|_| Response::error(500, "internal_error"))
     }
 
     #[must_use]
@@ -446,7 +476,10 @@ fn serve(mut stream: TcpStream, limits: &Limits, routes: &RouteTable) {
     let response = match read_head(&mut stream, limits) {
         Ok((head, trailing)) => match parse_request(&head, peer, limits) {
             Ok(_) if trailing => Response::error(400, "unexpected_bytes"),
-            Ok(request) if request.method == "GET" => routes.dispatch(&request),
+            Ok(Parsed::Routed(request)) if request.method == "GET" => routes.dispatch(&request),
+            Ok(Parsed::Attestation { method, request_id }) if method == "GET" => {
+                routes.dispatch_attestation(request_id)
+            }
             Ok(_) => Response::error(405, "method_not_allowed").with_header("Allow", "GET"),
             Err(response) => response,
         },
@@ -564,7 +597,27 @@ fn route_of(path: &str) -> Result<(Route, Option<[u8; 32]>), Response> {
     }
 }
 
-fn parse_request(head: &[u8], peer: SocketAddr, limits: &Limits) -> Result<Request, Response> {
+/// A parsed request: one for a routed resource, or one for the
+/// signature-exchange route with its decimal request id.
+enum Parsed {
+    Routed(Request),
+    Attestation { method: String, request_id: u64 },
+}
+
+fn attestation_id(path: &str) -> Option<Result<u64, Response>> {
+    let id = path.strip_prefix(ATTESTATION_PATH)?;
+    let canonical = !id.is_empty()
+        && id.bytes().all(|byte| byte.is_ascii_digit())
+        && (id == "0" || !id.starts_with('0'));
+    Some(
+        canonical
+            .then(|| id.parse().ok())
+            .flatten()
+            .ok_or_else(|| Response::error(400, "malformed_request_id")),
+    )
+}
+
+fn parse_request(head: &[u8], peer: SocketAddr, limits: &Limits) -> Result<Parsed, Response> {
     let malformed = || Response::error(400, "malformed_request");
     let text = std::str::from_utf8(head).map_err(|_| malformed())?;
     let mut lines = text
@@ -622,8 +675,14 @@ fn parse_request(head: &[u8], peer: SocketAddr, limits: &Limits) -> Result<Reque
         Some((path, query)) => (path, Some(query.to_owned())),
         None => (target, None),
     };
+    if let Some(request_id) = attestation_id(path) {
+        return Ok(Parsed::Attestation {
+            method: method.to_owned(),
+            request_id: request_id?,
+        });
+    }
     let (route, digest) = route_of(path)?;
-    Ok(Request {
+    Ok(Parsed::Routed(Request {
         method: method.to_owned(),
         route,
         path: path.to_owned(),
@@ -631,7 +690,7 @@ fn parse_request(head: &[u8], peer: SocketAddr, limits: &Limits) -> Result<Reque
         headers,
         digest,
         peer,
-    })
+    }))
 }
 
 const fn reason(status: u16) -> &'static str {

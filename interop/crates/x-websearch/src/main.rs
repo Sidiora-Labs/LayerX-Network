@@ -5,16 +5,32 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use x_websearch::attest::{self, Attestor, SignatureExchange};
 use x_websearch::content::{self, ContentStore};
 use x_websearch::crawl::{CrawlBudget, CrawlReport, Crawler};
 use x_websearch::fetch::Fetcher;
 use x_websearch::index::WebIndex;
 use x_websearch::payment::{system_clock, PaymentGate};
+use x_websearch::submit::{self, Outcome, Submitter};
+use x_websearch::watch::{EvmRpc, RequestWatcher};
 use x_websearch::{search, Config, KeyFiles, Keys, Limits, RouteTable, Server};
 
 /// How long after the start of one crawl cycle the next one starts. The
 /// first cycle starts when the sidecar does.
 const CRAWL_INTERVAL: Duration = Duration::from_secs(900);
+
+/// How long after the start of one attestation round the next one starts.
+const ATTEST_INTERVAL: Duration = Duration::from_secs(2);
+
+/// The attestor's loops: the request watcher, the attestor, the signature
+/// exchange and, with a submitter key, the fulfil submitter.
+struct Pipeline {
+    rpc: EvmRpc,
+    watcher: RequestWatcher,
+    attestor: Attestor,
+    exchange: Arc<SignatureExchange>,
+    submitter: Option<Submitter>,
+}
 
 fn config_path(arguments: impl IntoIterator<Item = OsString>) -> Option<PathBuf> {
     let mut arguments = arguments.into_iter();
@@ -26,7 +42,10 @@ fn config_path(arguments: impl IntoIterator<Item = OsString>) -> Option<PathBuf>
 
 /// The routes and the crawler built from the configuration and the keys.
 /// Every refusal names the configuration field or key it concerns.
-fn assemble(config: &Config, keys: &Keys) -> Result<(RouteTable, Crawler), String> {
+fn assemble(
+    config: &Config,
+    keys: &Keys,
+) -> Result<(RouteTable, Crawler, Option<Pipeline>), String> {
     let conformance = x_websearch::conformance_suite()
         .map_err(|error| format!("payment conformance suite: {error}"))?;
     let gate = Arc::new(
@@ -51,7 +70,158 @@ fn assemble(config: &Config, keys: &Keys) -> Result<(RouteTable, Crawler), Strin
         .map_err(|error| format!("route /search: {error}"))?;
     content::register(&mut routes, &gate, &fetcher, &store)
         .map_err(|error| format!("route /fetch or /content: {error}"))?;
-    Ok((routes, crawler))
+    let pipeline = pipeline(config, keys, &mut routes, &fetcher, &index, &store)?;
+    Ok((routes, crawler, pipeline))
+}
+
+/// The attestor's loops when an attestor key is present, with the
+/// signature-exchange route registered; none without one.
+fn pipeline(
+    config: &Config,
+    keys: &Keys,
+    routes: &mut RouteTable,
+    fetcher: &Arc<Fetcher>,
+    index: &Arc<WebIndex>,
+    store: &Arc<ContentStore>,
+) -> Result<Option<Pipeline>, String> {
+    let Some(attestor_key) = keys.attestor() else {
+        return Ok(None);
+    };
+    let rpc =
+        EvmRpc::new(&config.evm.endpoint).map_err(|error| format!("evm.endpoint: {error}"))?;
+    let watcher = RequestWatcher::open(
+        rpc.clone(),
+        config.evm.confirmations,
+        &config.data_dir.join("watch"),
+        None,
+    )
+    .map_err(|error| format!("data_dir: {error}"))?;
+    let exchange = Arc::new(
+        SignatureExchange::open(&config.data_dir.join("attest"), &config.peers)
+            .map_err(|error| format!("peers or data_dir: {error}"))?,
+    );
+    attest::register(routes, &exchange).map_err(|error| format!("route /attestations: {error}"))?;
+    let attestor = Attestor::new(
+        attestor_key.clone(),
+        config.evm.chain_id,
+        Arc::clone(fetcher),
+        Arc::clone(index),
+        Arc::clone(store),
+    );
+    let submitter = keys
+        .submitter()
+        .map(|key| {
+            Submitter::open(
+                rpc.clone(),
+                key.clone(),
+                config.evm.chain_id,
+                &config.data_dir.join("submit"),
+            )
+        })
+        .transpose()
+        .map_err(|error| format!("data_dir: {error}"))?;
+    Ok(Some(Pipeline {
+        rpc,
+        watcher,
+        attestor,
+        exchange,
+        submitter,
+    }))
+}
+
+/// One attestation round: answer the newly confirmed requests, drop the
+/// timed-out ones, exchange signatures and submit or settle each request.
+fn attest_round(pipeline: &mut Pipeline) {
+    match pipeline.watcher.poll() {
+        Ok(requests) => {
+            for request in requests {
+                match pipeline.attestor.attest(&request) {
+                    Ok(answer) => pipeline.exchange.record(answer),
+                    Err(error) => eprintln!(
+                        "x-websearch could not answer request {}: {error}",
+                        request.request_id
+                    ),
+                }
+            }
+        }
+        Err(error) => eprintln!("x-websearch request watch failed: {error}"),
+    }
+    pipeline.exchange.expire(pipeline.watcher.last_head());
+    let set = match submit::attestor_set(&pipeline.rpc) {
+        Ok(set) => set,
+        Err(error) => {
+            eprintln!("x-websearch could not read the attestor set: {error}");
+            return;
+        }
+    };
+    for request_id in pipeline.exchange.pending() {
+        let held = pipeline.exchange.collect(request_id, &set);
+        let settled = match &pipeline.submitter {
+            Some(submitter) => settle(submitter, &pipeline.exchange, request_id, &set),
+            None => submit::request_status(&pipeline.rpc, request_id)
+                .map(|status| status != submit::STATUS_PENDING)
+                .map_err(|error| error.to_string()),
+        };
+        match settled {
+            Ok(true) => pipeline.exchange.forget(request_id),
+            Ok(false) => {}
+            Err(error) => {
+                eprintln!("x-websearch request {request_id} with {held} signatures: {error}");
+            }
+        }
+    }
+}
+
+/// Confirms a journalled fulfil, or submits one once the threshold is
+/// reached. `true` means the request needs nothing more.
+fn settle(
+    submitter: &Submitter,
+    exchange: &SignatureExchange,
+    request_id: u64,
+    set: &attest::AttestorSet,
+) -> Result<bool, String> {
+    if let Some(outcome) = submitter
+        .confirm(request_id)
+        .map_err(|error| error.to_string())?
+    {
+        if outcome.completed() {
+            return Ok(true);
+        }
+    }
+    let Some(ready) = exchange.ready(request_id, set) else {
+        return Ok(false);
+    };
+    submitter
+        .submit(&ready)
+        .map(Outcome::completed)
+        .map_err(|error| error.to_string())
+}
+
+/// Rebroadcasts the journalled fulfilments, then runs an attestation round
+/// every [`ATTEST_INTERVAL`] on its own thread.
+fn start_attestor(mut pipeline: Pipeline) -> std::io::Result<()> {
+    thread::Builder::new()
+        .name("x-websearch-attestor".to_owned())
+        .spawn(move || {
+            if let Some(submitter) = &pipeline.submitter {
+                match submitter.resume() {
+                    Ok(results) => {
+                        for (request_id, result) in results {
+                            if let Err(error) = result {
+                                eprintln!("x-websearch rebroadcast of {request_id}: {error}");
+                            }
+                        }
+                    }
+                    Err(error) => eprintln!("x-websearch journal unreadable: {error}"),
+                }
+            }
+            loop {
+                let started = Instant::now();
+                attest_round(&mut pipeline);
+                thread::sleep(ATTEST_INTERVAL.saturating_sub(started.elapsed()));
+            }
+        })
+        .map(drop)
 }
 
 fn describe(report: &CrawlReport) -> String {
@@ -101,7 +271,7 @@ fn main() -> ExitCode {
     };
     let assembled = assemble(&config, &keys);
     drop(keys);
-    let (routes, crawler) = match assembled {
+    let (routes, crawler, pipeline) = match assembled {
         Ok(assembled) => assembled,
         Err(error) => {
             eprintln!("x-websearch refused startup: {error}");
@@ -118,6 +288,12 @@ fn main() -> ExitCode {
     if let Err(error) = start_crawler(crawler, config.seeds) {
         eprintln!("x-websearch refused startup: crawler thread: {error}");
         return ExitCode::FAILURE;
+    }
+    if let Some(pipeline) = pipeline {
+        if let Err(error) = start_attestor(pipeline) {
+            eprintln!("x-websearch refused startup: attestor thread: {error}");
+            return ExitCode::FAILURE;
+        }
     }
     eprintln!("x-websearch listening on {}", config.listen);
     match server.run() {
@@ -148,6 +324,31 @@ mod tests {
         ] {
             assert_eq!(config_path(args.into_iter().map(OsString::from)), None);
         }
+    }
+
+    #[test]
+    fn a_settled_journal_entry_completes_the_request_before_any_call(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let scratch =
+            std::env::temp_dir().join(format!("x-websearch-main-settle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let mut secret = [0_u8; 32];
+        secret[0] = 0x5a;
+        secret[31] = 1;
+        let key = k256::ecdsa::SigningKey::from_slice(&secret)?;
+        let unreachable = EvmRpc::new("http://127.0.0.1:1")?;
+        let submitter = Submitter::open(unreachable, key, 713_714, &scratch.join("submit"))?;
+        submitter.journal().store(&submit::JournalEntry {
+            request_id: 7,
+            state: submit::JournalState::AlreadyFulfilled,
+            transaction: None,
+        })?;
+        let exchange = SignatureExchange::open(&scratch.join("attest"), &[])?;
+        let set = attest::AttestorSet::default();
+        assert_eq!(settle(&submitter, &exchange, 7, &set), Ok(true));
+        assert_eq!(settle(&submitter, &exchange, 8, &set), Ok(false));
+        std::fs::remove_dir_all(&scratch)?;
+        Ok(())
     }
 
     #[test]
