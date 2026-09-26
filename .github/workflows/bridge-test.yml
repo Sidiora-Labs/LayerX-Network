@@ -41,7 +41,7 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
         with:
-          version: stable
+          version: v1.8.1
 
       - name: Clone the pinned Solidity libraries into bridge/evm/lib
         run: |

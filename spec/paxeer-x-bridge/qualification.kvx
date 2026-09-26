@@ -31,3 +31,11 @@
 #
 # No record carries a hostname, an IP address, an internal URL, a credential or
 # the name of an agent or a working branch.
+
+[observation.1.6.1]
+task = "1.6"
+file = "spec/paxeer-x-bridge/spec.kvx"
+symbol = "req.14.ac_1"
+observed = "Requirement 14.1 says the workflow SHALL carry no path filter other than bridge/** and interop/crates/layerx-bridge-relayer/**, and 14.4 says every path filter SHALL name a directory that exists, while task 1.6 do_1 requires the workflow file itself as a third filter; a workflow that changes its own legs without rerunning them would be the alternative, so the task followed do_1 and carries three filters, the third naming a file."
+assumption = "do_1 is the narrower and later instruction and the merge group carries no filter at all because GitHub applies none there, so bridge/deploy/tests/workflow-check.sh asserts the two directory globs as directories and the third filter as the workflow file by name rather than relaxing either check, and amending req.14 is left to the spec owner because it would change acceptance criteria other tasks are measured against."
+severity = "note"

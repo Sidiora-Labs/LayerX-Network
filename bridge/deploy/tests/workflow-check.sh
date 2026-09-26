@@ -148,6 +148,10 @@ CLONE_LINE = re.compile(
 USES_VALUE = re.compile(r"\buses:\s*(\S+)")
 PINNED_USES = re.compile(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}\Z")
 ANZA_VERSION = re.compile(r"release\.anza\.xyz/v([0-9][0-9.]*)/install")
+FOUNDRY_ACTION = "foundry-rs/foundry-toolchain@"
+# A version, not a moving channel: stable and nightly change what forge does
+# without a commit, so the bytecode a deploy reproduces would move with them.
+EXACT_VERSION = re.compile(r"v?[0-9]+\.[0-9]+\.[0-9]+\Z")
 IPV4 = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
 DATE = re.compile(r"\b20\d{2}-\d{2}-\d{2}\b")
 
@@ -200,6 +204,32 @@ def crate_names(root):
         if found:
             names.add(found.group(1))
     return names
+
+
+def action_versions(root, prefix):
+    """The exact versions the repository's other workflows pin for an action."""
+    versions = set()
+    for path in sorted(glob.glob(os.path.join(root, ".github", "workflows", "*.yml"))):
+        if os.path.basename(path) == os.path.basename(WORKFLOW_PATH):
+            continue
+        with open(path, "r", encoding="utf-8") as handle:
+            try:
+                other = yaml.safe_load(handle.read())
+            except yaml.YAMLError:
+                continue
+        if not isinstance(other, dict):
+            continue
+        for job in (other.get("jobs") or {}).values():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps") or []:
+                if not isinstance(step, dict):
+                    continue
+                if str(step.get("uses", "")).startswith(prefix):
+                    version = str((step.get("with") or {}).get("version"))
+                    if EXACT_VERSION.match(version):
+                        versions.add(version)
+    return versions
 
 
 def check_triggers(document):
@@ -495,6 +525,35 @@ def check_versions_are_the_repository_pins(root, document, jobs):
         else:
             note("the workflow installs the pinned Rust %s" % version)
 
+    foundry = [
+        str((step.get("with") or {}).get("version"))
+        for job in jobs.values()
+        for step in (job.get("steps") or [])
+        if str(step.get("uses", "")).startswith(FOUNDRY_ACTION)
+    ]
+    if not foundry:
+        refuse("no job installs Foundry for the bridge/evm leg")
+    pinned = action_versions(root, FOUNDRY_ACTION)
+    for version in foundry:
+        if not EXACT_VERSION.match(version):
+            refuse(
+                "the workflow installs Foundry %s, a moving channel rather than "
+                "a version, so forge could change what it reports without a "
+                "commit" % version
+            )
+        elif not pinned:
+            refuse(
+                "no other workflow in this repository pins a Foundry version to "
+                "follow"
+            )
+        elif version not in pinned:
+            refuse(
+                "the workflow installs Foundry %s, which is none of the %s this "
+                "repository's workflows pin" % (version, sorted(pinned))
+            )
+        else:
+            note("the workflow installs the pinned Foundry %s" % version)
+
     go_directive = re.search(r"^go (\S+)", read(root, "go.mod"), re.M)
     go_versions = [
         str((step.get("with") or {}).get("go-version"))
@@ -675,6 +734,11 @@ MUTATIONS = {
         1,
     ),
     "renamed-job": ("\n  evm-vault:\n", "\n  everything:\n", 1),
+    "floating-foundry": (
+        "          version: v1.8.1\n",
+        "          version: stable\n",
+        1,
+    ),
     "working-directory": (
         "        run: forge test --root bridge/evm -vvv\n",
         "        run: forge test --root bridge/evm -vvv\n"
@@ -721,6 +785,7 @@ for entry in \
     "dropped-command|forge test" \
     "unpinned-action|actions/checkout@v4" \
     "renamed-job|evm-vault" \
+    "floating-foundry|moving channel" \
     "working-directory|working-directory"; do
     mutation=${entry%%|*}
     keyword=${entry#*|}
