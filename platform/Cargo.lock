@@ -1507,17 +1507,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-interop-gateway"
+version = "0.1.0"
+dependencies = [
+ "layerx-proof",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "layerx-mcp"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "layerx-agent-api",
  "layerx-agentd",
  "layerx-crypto",
+ "layerx-interop-gateway",
+ "layerx-proof",
  "layerx-sdk",
  "layerx-types",
+ "layerx-x402",
  "rustix",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
+ "sha3",
  "zeroize",
 ]
 
@@ -2008,6 +2022,18 @@ name = "layerx-wire"
 version = "0.1.0"
 dependencies = [
  "layerx-types",
+]
+
+[[package]]
+name = "layerx-x402"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "layerx-interop-gateway",
+ "layerx-proof",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]

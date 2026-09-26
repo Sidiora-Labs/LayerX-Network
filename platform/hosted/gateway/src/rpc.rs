@@ -6,6 +6,128 @@ use serde_json::{json, Value};
 
 const LIST_ASSETS_DEFAULT_PAGE: usize = 64;
 const LIST_ASSETS_MAX_PAGE: usize = 256;
+const PROGRAM_EVENTS_MAX_PAGE: u64 = 256;
+const PROGRAM_EVENT_MAX_TOPIC_BYTES: usize = 64;
+const PROGRAM_EVENT_MAX_DATA_BYTES: usize = 65_536;
+
+#[derive(Debug, Eq, PartialEq)]
+struct ProgramEventsQuery {
+    topic: String,
+    from_sequence: u64,
+    limit: u64,
+}
+
+impl ProgramEventsQuery {
+    fn path(&self) -> String {
+        format!(
+            "/v1/programs/events/{}/{}/{}",
+            self.topic, self.from_sequence, self.limit
+        )
+    }
+}
+
+fn lower_hex(value: &str, maximum: usize) -> Option<Vec<u8>> {
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    super::decode_hex(value, maximum).ok()
+}
+
+fn program_events_params(params: Option<&Value>) -> Result<ProgramEventsQuery, i32> {
+    let Some(Value::Array(args)) = params else {
+        return Err(-32602);
+    };
+    let [Value::Object(query)] = args.as_slice() else {
+        return Err(-32602);
+    };
+    if query.len() != 3 {
+        return Err(-32602);
+    }
+    let topic = query
+        .get("topic")
+        .and_then(Value::as_str)
+        .filter(|topic| {
+            lower_hex(topic, PROGRAM_EVENT_MAX_TOPIC_BYTES).is_some_and(|bytes| !bytes.is_empty())
+        })
+        .ok_or(-32602)?;
+    let from_sequence = query
+        .get("from_sequence")
+        .and_then(Value::as_u64)
+        .ok_or(-32602)?;
+    let limit = query
+        .get("limit")
+        .and_then(Value::as_u64)
+        .filter(|limit| (1..=PROGRAM_EVENTS_MAX_PAGE).contains(limit))
+        .ok_or(-32602)?;
+    Ok(ProgramEventsQuery {
+        topic: topic.to_owned(),
+        from_sequence,
+        limit,
+    })
+}
+
+fn program_events_page(query: &ProgramEventsQuery, result: &Value) -> Option<Value> {
+    let next = result
+        .get("next_sequence")
+        .and_then(Value::as_u64)
+        .filter(|next| *next >= query.from_sequence)?;
+    let events = result
+        .get("events")
+        .and_then(Value::as_array)
+        .filter(|events| u64::try_from(events.len()).is_ok_and(|count| count <= query.limit))?;
+    let mut previous = None;
+    let mut page = Vec::with_capacity(events.len());
+    for event in events {
+        let sequence = event
+            .get("sequence")
+            .and_then(Value::as_u64)
+            .filter(|sequence| (query.from_sequence..next).contains(sequence))
+            .filter(|sequence| previous.is_none_or(|previous| previous < *sequence))?;
+        let program_id = event
+            .get("program_id")
+            .and_then(Value::as_str)
+            .filter(|id| lower_hex(id, 32).is_some_and(|bytes| bytes.len() == 32))
+            .filter(|id| *id != "00".repeat(32))?;
+        let topic = event
+            .get("topic")
+            .and_then(Value::as_str)
+            .filter(|topic| *topic == query.topic)?;
+        let data = event
+            .get("data")
+            .and_then(Value::as_str)
+            .filter(|data| lower_hex(data, PROGRAM_EVENT_MAX_DATA_BYTES).is_some())?;
+        previous = Some(sequence);
+        page.push(json!({
+            "sequence": sequence, "program_id": program_id, "topic": topic, "data": data
+        }));
+    }
+    Some(json!({"events": page, "next_sequence": next}))
+}
+
+fn program_events_answer(
+    id: &Value,
+    query: &ProgramEventsQuery,
+    upstream: &OutgoingResponse,
+) -> Value {
+    let answer = read_response(id, upstream);
+    let Some(result) = answer.get("result") else {
+        return answer;
+    };
+    program_events_page(query, result).map_or_else(
+        || error(id, -32603, "Invalid upstream response"),
+        |page| json!({"jsonrpc":"2.0", "id":id, "result":page}),
+    )
+}
+
+fn program_events(config: &Config, id: &Value, params: Option<&Value>) -> Value {
+    match program_events_params(params) {
+        Ok(query) => program_events_answer(id, &query, &public_reads::read(config, &query.path())),
+        Err(code) => error(id, code, "Invalid params"),
+    }
+}
 
 pub(super) fn error(id: &Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc":"2.0", "id":id, "error":{"code":code,"message":message}})
@@ -244,6 +366,10 @@ pub(super) fn dispatch(config: &Config, request: &IncomingRequest, value: &Value
     }
     if method == "lx_listAssets" {
         let result = list_assets(config, &id, value.get("params"));
+        return value.get("id").map(|_| result);
+    }
+    if method == "lx_getProgramEvents" {
+        let result = program_events(config, &id, value.get("params"));
         return value.get("id").map(|_| result);
     }
     if method == "lx_estimateFee" {
@@ -605,6 +731,228 @@ mod tests {
             assert!(refusal.get("result").is_none());
             assert!(refusal["error"]["data"].get("commitment").is_none());
         }
+    }
+
+    fn fixture(bytes: &[u8]) -> Value {
+        serde_json::from_slice(bytes).unwrap_or_else(|error| panic!("fixture: {error}"))
+    }
+
+    fn exchanges(document: &Value, pointer: &str) -> Vec<Value> {
+        document
+            .pointer(pointer)
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("{pointer} missing"))
+            .clone()
+    }
+
+    fn replay(exchange: &Value) -> (ProgramEventsQuery, Value) {
+        assert_eq!(exchange["method"], "lx_getProgramEvents");
+        let query = program_events_params(exchange.get("params"))
+            .unwrap_or_else(|code| panic!("params refused with {code}"));
+        assert_eq!(query.path(), exchange["upstream"]["path"]);
+        let upstream = json_response(
+            u16::try_from(
+                exchange["upstream"]["status"]
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("upstream status missing")),
+            )
+            .unwrap_or_else(|error| panic!("{error}")),
+            &exchange["upstream"]["body"],
+        );
+        let answer = program_events_answer(&json!(9), &query, &upstream);
+        assert_eq!(answer["jsonrpc"], "2.0");
+        assert_eq!(answer["id"], 9);
+        (query, answer)
+    }
+
+    #[test]
+    fn program_events_replay_the_recorded_upstream_exchange() {
+        let recorded = fixture(include_bytes!("../tests/fixtures/program-events.json"));
+        for exchange in exchanges(&recorded, "/exchanges") {
+            let (_, answer) = replay(&exchange);
+            if let Some(result) = exchange.get("result") {
+                assert_eq!(&answer["result"], result);
+                assert!(answer.get("error").is_none());
+            } else {
+                assert_eq!(answer["error"], exchange["error"]);
+                assert!(answer.get("result").is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn program_events_answer_in_the_shape_the_kernel_watcher_pins() {
+        let watch = fixture(include_bytes!(
+            "../../../../interop/crates/x-websearch/tests/fixtures/kernel/watch.json"
+        ));
+        let recorded = fixture(include_bytes!("../tests/fixtures/program-events.json"));
+        let recorded = exchanges(&recorded, "/exchanges");
+        let pinned = exchanges(&watch, "/endpoints/gateway/*");
+        let mut matched = 0;
+        for call in &pinned {
+            assert_eq!(call["method"], "lx_getProgramEvents");
+            let query = program_events_params(call.get("params"))
+                .unwrap_or_else(|code| panic!("sidecar params refused with {code}"));
+            let Some(result) = call.get("result") else {
+                continue;
+            };
+            let consistent = program_events_page(&query, result);
+            let events = result["events"]
+                .as_array()
+                .unwrap_or_else(|| panic!("events missing"));
+            if events.iter().all(|event| event["topic"] == query.topic) {
+                assert_eq!(consistent.as_ref(), Some(result));
+            } else {
+                assert_eq!(consistent, None);
+            }
+            for exchange in recorded
+                .iter()
+                .filter(|exchange| exchange["params"] == call["params"])
+            {
+                let (_, answer) = replay(exchange);
+                if let Some(served) = answer.get("result") {
+                    assert_eq!(served, result);
+                    for event in served["events"]
+                        .as_array()
+                        .unwrap_or_else(|| panic!("events missing"))
+                    {
+                        let mut keys: Vec<_> = event
+                            .as_object()
+                            .unwrap_or_else(|| panic!("event is not an object"))
+                            .keys()
+                            .map(String::as_str)
+                            .collect();
+                        keys.sort_unstable();
+                        assert_eq!(keys, ["data", "program_id", "sequence", "topic"]);
+                    }
+                    matched += 1;
+                }
+            }
+        }
+        assert_eq!(matched, 2);
+    }
+
+    #[test]
+    fn program_events_cursor_advances_and_the_limit_is_honoured() {
+        let recorded = fixture(include_bytes!("../tests/fixtures/program-events.json"));
+        let paged: Vec<_> = exchanges(&recorded, "/exchanges")
+            .into_iter()
+            .filter(|exchange| {
+                exchange["params"][0]["limit"] == 1 && exchange.get("result").is_some()
+            })
+            .collect();
+        assert_eq!(paged.len(), 2);
+        let mut cursor = 40;
+        let mut sequences = Vec::new();
+        for exchange in &paged {
+            let (query, answer) = replay(exchange);
+            assert_eq!(query.from_sequence, cursor);
+            let events = answer["result"]["events"]
+                .as_array()
+                .unwrap_or_else(|| panic!("events missing"));
+            assert!(u64::try_from(events.len()).is_ok_and(|count| count <= query.limit));
+            let next = answer["result"]["next_sequence"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("next_sequence missing"));
+            assert!(next > cursor);
+            sequences.extend(events.iter().filter_map(|event| event["sequence"].as_u64()));
+            cursor = next;
+        }
+        assert_eq!(sequences, [41, 43]);
+        assert_eq!(cursor, 44);
+        let query = ProgramEventsQuery {
+            topic: "504158454552585f5745425f524551554553545f5631".into(),
+            from_sequence: 40,
+            limit: 2,
+        };
+        let event = |sequence: u64, topic: &str| json!({"sequence": sequence, "program_id": "ab".repeat(32), "topic": topic, "data": "01"});
+        let topic = query.topic.clone();
+        assert!(program_events_page(
+            &query,
+            &json!({"events": [event(40, &topic), event(41, &topic)], "next_sequence": 42})
+        )
+        .is_some());
+        for refused in [
+            json!({"events": [event(40, &topic), event(41, &topic), event(42, &topic)],
+                "next_sequence": 43}),
+            json!({"events": [], "next_sequence": 39}),
+            json!({"events": [event(44, &topic)], "next_sequence": 44}),
+            json!({"events": [event(39, &topic)], "next_sequence": 44}),
+            json!({"events": [event(42, &topic), event(41, &topic)], "next_sequence": 44}),
+            json!({"events": [event(41, &topic), event(41, &topic)], "next_sequence": 44}),
+            json!({"events": [event(41, "00")], "next_sequence": 44}),
+            json!({"events": [{"sequence": 41, "program_id": "00".repeat(32), "topic": topic,
+                "data": "01"}], "next_sequence": 44}),
+            json!({"events": [{"sequence": 41, "program_id": "AB".repeat(32), "topic": topic,
+                "data": "01"}], "next_sequence": 44}),
+            json!({"events": [{"sequence": 41, "program_id": "ab".repeat(32), "topic": topic,
+                "data": "0"}], "next_sequence": 44}),
+            json!({"events": [{"sequence": 41, "program_id": "ab".repeat(32), "topic": topic,
+                "data": "ab".repeat(PROGRAM_EVENT_MAX_DATA_BYTES + 1)}], "next_sequence": 44}),
+            json!({"events": [{"sequence": 41, "program_id": "ab".repeat(32), "topic": topic}],
+                "next_sequence": 44}),
+            json!({"events": {}, "next_sequence": 44}),
+            json!({"events": []}),
+        ] {
+            assert_eq!(program_events_page(&query, &refused), None, "{refused}");
+        }
+        let trimmed = program_events_page(
+            &query,
+            &json!({"events": [{"sequence": 41, "program_id": "ab".repeat(32), "topic": topic,
+                "data": "01", "extra": true}], "next_sequence": 42}),
+        )
+        .unwrap_or_else(|| panic!("page refused"));
+        assert!(trimmed["events"][0].get("extra").is_none());
+    }
+
+    #[test]
+    fn program_events_params_are_exact() {
+        let topic = "504158454552585f5745425f524551554553545f5631";
+        assert_eq!(
+            program_events_params(Some(
+                &json!([{"topic": topic, "from_sequence": 0, "limit": 1}])
+            )),
+            Ok(ProgramEventsQuery {
+                topic: topic.into(),
+                from_sequence: 0,
+                limit: 1
+            })
+        );
+        assert_eq!(
+            program_events_params(Some(
+                &json!([{"topic": "ab".repeat(64), "from_sequence": u64::MAX, "limit": 256}])
+            ))
+            .map(|query| query.path()),
+            Ok(format!(
+                "/v1/programs/events/{}/{}/256",
+                "ab".repeat(64),
+                u64::MAX
+            ))
+        );
+        for params in [
+            json!([]),
+            json!({}),
+            json!([{"topic": topic, "from_sequence": 0}]),
+            json!([{"topic": topic, "from_sequence": 0, "limit": 0}]),
+            json!([{"topic": topic, "from_sequence": 0, "limit": 257}]),
+            json!([{"topic": topic, "from_sequence": -1, "limit": 1}]),
+            json!([{"topic": topic, "from_sequence": "1", "limit": 1}]),
+            json!([{"topic": "", "from_sequence": 0, "limit": 1}]),
+            json!([{"topic": "ABCD", "from_sequence": 0, "limit": 1}]),
+            json!([{"topic": "abc", "from_sequence": 0, "limit": 1}]),
+            json!([{"topic": "+a", "from_sequence": 0, "limit": 1}]),
+            json!([{"topic": "../", "from_sequence": 0, "limit": 1}]),
+            json!([{"topic": "ab".repeat(65), "from_sequence": 0, "limit": 1}]),
+            json!([{"topic": topic, "from_sequence": 0, "limit": 1, "extra": 1}]),
+            json!([{"topic": topic, "from_sequence": 0, "limit": 1}, 1]),
+        ] {
+            assert_eq!(
+                program_events_params(Some(&params)),
+                Err(-32602),
+                "{params}"
+            );
+        }
+        assert_eq!(program_events_params(None), Err(-32602));
     }
 
     #[test]

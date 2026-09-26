@@ -211,7 +211,7 @@
     - Extend tests/protocol/lxp_test_dispatch.c so both web activities resolve and dispatch and an activity of module 12 is still unknown, extend tests/protocol/lxp_test_kernel.c for the raised bound in genesis and handover, and change tests/test_web_program_path.c to deliver the observation activity through kernel dispatch rather than by calling intake directly, keeping every existing assertion.
     - Close observations 1.7.1 and 2.2.3 naming the revision.
     - _Requirements: 11.1, 11.3_
-  - [ ] 2.19 Re-sign the observation activity fixture with keys the tests hold and qualify the program request path
+  - [ ] 2.19 Align the kernel test's attestor keys with the intake fixture's signers and qualify the program request path
     - The three signatures in tests/fixtures/web/observation-activity.hex come from keys no test holds, so no sidecar test can reproduce its bytes; re-record the fixture through a recorder in interop/crates/x-websearch/tests/kernel.rs, enabled by an environment variable in the shape of X_WEBSEARCH_RECORD_EXCHANGE, that signs the same origin-2 digest with the attestor keys derived from the scalars 1, 2 and 3 that tests/test_web_program_path.c holds, in ascending signer order, and writes the fixture; the recorder is a test path, never a production one.
     - Pin the new signer addresses and signatures in the shared attestation vectors of tests/modules/test_web_intake.c and wherever tests/network/test_web_adapter.c names a signer, keeping every existing assertion, the unregistered signer and the ascending-order and threshold cases exactly as strong as they are; the digest they sign does not change.
     - Make the kernel test derive its registered attestors from the same three scalars, so the_observation_activity_equals_the_kernel_adapter_fixture compares the sidecar's bytes with a fixture signed by keys the test holds; the assertion stays exactly as written.
@@ -223,7 +223,7 @@
     - Key SignatureExchange by program id and request id together so two programs' request ids never share a slot, carrying the program id through the exchange messages; re-record tests/fixtures/kernel through the crate's own recorder only if the wire shape changes.
     - Extend tests/kernel.rs for the scoped exchange, two programs with the same request id both answered, tests/config.rs for the new fields and tests/binary.rs for the relay starting and stopping with the binary under a configuration that names it; close observation 2.2.5 naming the revision.
     - _Requirements: 11.3_
-  - [ ] 2.21 Serve program events through the gateway for the sidecar's kernel watcher
+  - [x] 2.21 Serve program events through the gateway for the sidecar's kernel watcher
     - In platform/hosted/gateway/src/rpc.rs add the method lx_getProgramEvents taking a topic, a start sequence and a limit and answering events that carry sequence, program_id, topic and data, exactly the shape interop/crates/x-websearch/tests/fixtures/kernel/watch.json pins, backed by the program event store of src/modules/programs/event.c through the upstream read the gateway proxies; where the upstream surface has no topic-filtered, sequence-cursored program event read, add one beside the existing /v1/programs reads in the same service with its own test.
     - Cover the method in the gateway crate's tests against a recorded upstream exchange, asserting the request and response shapes of the sidecar fixture, the cursor advancing and the limit honoured, and extend platform/hosted/gateway/tests/local/events.rs so the local qualification run emits events from a deployed program and reads them back through the method; close observation 2.2.4 naming the revision.
     - Bring platform/Cargo.lock up to date without network access so the platform workspace resolves under --locked with the mcp crate's x402 and interop gateway dependencies, changing nothing in the lock beyond what that resolution requires; close observation 2.21.1 naming the revision.
@@ -246,6 +246,21 @@
     - Add the unit test in interop/crates/x-websearch/tests/api.rs that parses that literal, asserts the double's bits are 0x44ba249b1f10a06d and asserts the canonical digits are 1.2345678901234569e+23, so the vector and the code are pinned to the same value.
     - Run this task's verify_cmd once; on exit 0 record tasks 2.14, 2.17 and 2.24 done with that revision, command, exit code and log, and close observations 2.14.1, 2.14.2, 2.17.1 and 2.24.1 naming the revision.
     - _Requirements: 17.3, 17.6_
+  - [ ] 2.26 Keep a call's full program event list beside the receipt's artifacts, bound to the outcome's event envelope digest
+    - The kernel receives a call's full raw event list as the terminal events section, hashes it into the call outcome event's event_envelope_digest in terminal_publish in src/modules/programs/call.c and then frees it, so no store holds a program's web request bytes; add an event envelope payload span to lxp_program_outcome in include/layerx/lxp_receipt.h, fill it from the terminal event list in terminal_publish before the buffer is freed, and copy it with the other artifacts in outcome_copy_artifacts in src/protocol/lxp_module_ctx.c; the committed receipt and every consensus-visible byte stay exactly as they are.
+    - Extend lxp_receipt_bind_program_artifacts in src/protocol/lxp_receipt.c so a bound artifact set whose event list's SHA-256 differs from the call outcome event's event_envelope_digest is refused, and cover the accepting and the refusing case in tests/protocol/lxp_test_receipts.c.
+    - In tests/test_web_program_path.c read the web request record back from the outcome's event list after the reference program's request call, check the list hashes to the outcome's digest, and check the record's payload hashes to the pending request's payload hash.
+    - _Requirements: 11.2_
+  - [ ] 2.27 Persist the event list in the node's receipt authority log and serve program events by topic and sequence
+    - Carry the event list as a third artifact span through the batch WAL in cmd/layerxd/lxp_daemon_batch_wal.c and the pending receipt collection and artifact append in cmd/layerxd/lxp_daemon_process.c, and append it to the receipt authority log as a record format 3 in cmd/layerxd/lxp_daemon_receipt_authority.c with the authority record bound raised to hold it; records the recovery and replica paths append without artifacts decode exactly as before.
+    - Serve GET /v1/programs/events/<topic-hex>/<from_sequence>/<limit> from route_inner in cmd/layerxd/lxp_daemon_protocol.c, placed before the program identifier parse: scan the authority log from the sequence, decode each record's event list, and answer the events whose topic matches as an object with events, each carrying sequence, program_id, topic and data, and next_sequence, in the shape of interop/crates/x-websearch/tests/fixtures/kernel/watch.json; sequence is the activity's global sequence, only successful outcomes contribute, a record without an event list contributes nothing, and next_sequence never passes the durable head.
+    - Cover storing, binding and the route in tests/daemon/lxp_test_program_artifacts.c with the reference program's request: the page holds the web request event with its raw bytes, a topic that matches nothing answers an empty page, and a sequence past the head answers an empty page whose next_sequence is the head.
+    - _Requirements: 11.2_
+  - [ ] 2.28 Relay program events through core and list the gateway method so the sidecar's watcher reads real request bytes
+    - Add the v1 programs events path with hex topic and unsigned integer sequence and limit validation to the core boundary's relay allowlist in platform/hosted/core/src/main.rs, and cover the allowed and the refused shapes in platform/hosted/core/tests/boundary.rs.
+    - List lx_getProgramEvents with its parameters and result shape in platform/hosted/gateway/openrpc.json, matching the method task 2.21 wrote in platform/hosted/gateway/src/rpc.rs.
+    - Extend platform/hosted/gateway/tests/local/events.rs so the local qualification runs the reference web-reader program's request through a real node and core and reads the request event with its raw bytes through lx_getProgramEvents; close observation 2.21.2 naming the revision.
+    - _Requirements: 11.2_
 
 ## Wave 3 - One Run, Recorded
 
@@ -263,7 +278,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17", "1.18"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23", "2.24", "2.25"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23", "2.24", "2.25", "2.26", "2.27", "2.28"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }

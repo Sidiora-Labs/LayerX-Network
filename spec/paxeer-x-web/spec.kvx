@@ -630,7 +630,7 @@ reqs = ["14.1","14.2","14.3"]
 title = "Dry-run the sidecar loop against anvil and local sidecars and record it"
 status = "pending"
 wave = 2
-requires = ["1.6","2.1","2.3","2.10","2.14","2.17","2.24","2.25"]
+requires = ["1.6","2.1","2.3","2.10","2.14","2.17","2.24","2.25","2.26","2.27","2.28"]
 do_1 = "Write interop/deploy/x-websearch/tests/dry-run-check.sh starting anvil, a real loopback web server serving committed pages and three x-websearch processes with run-local attestor keys and allow_loopback set, and deploying contracts/src/xweb/XWebConsumer.sol to anvil."
 do_2 = "Fetch the same page through the three sidecars, assert the digests are identical and the signatures are valid and ascending over the origin-1 preimage, assert the submitter's fulfil calldata decodes against precompiles/xweb/abi.json, and deliver the consumer's callback on anvil from the impersonated precompile address with the attested response and the bounded gas, asserting the consumer's stored result."
 do_3 = "Record the exchange as interop/deploy/x-websearch/tests/fixtures/dry-run.json, replayable without the nodes, carrying no key material, no endpoint but the loopback ones the run started and no date or hostname; stop with a message naming a missing tool rather than skipping a step."
@@ -895,7 +895,7 @@ touches = ["include/layerx/lxp_module.h","src/protocol/lxp_genesis.c","src/proto
 reqs = ["11.1","11.3"]
 
 [task.2.19]
-title = "Re-sign the observation activity fixture with keys the tests hold and qualify the program request path"
+title = "Align the kernel test's attestor keys with the intake fixture's signers and qualify the program request path"
 status = "pending"
 wave = 2
 requires = ["2.2","2.24"]
@@ -906,7 +906,7 @@ do_4 = "Split the test function in interop/crates/x-websearch/tests/kernel.rs th
 do_5 = "Run task 2.2's verify_cmd once on the result; on exit 0 record task 2.2 done with that revision, command, exit code and log, and close observations 2.2.1 and 2.19.1 naming the revision."
 verify_cmd = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && make test-web-intake test-web-adapter && make test-web-program-path && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test kernel'"
 symbols = ["the_observation_activity_equals_the_kernel_adapter_fixture"]
-touches = ["tests/fixtures/web","tests/modules/test_web_intake.c","tests/network/test_web_adapter.c","interop/crates/x-websearch/tests/kernel.rs","interop/crates/x-websearch/tests/fixtures/kernel"]
+touches = ["interop/crates/x-websearch/tests/kernel.rs","interop/crates/x-websearch/tests/fixtures/kernel"]
 reqs = ["11.4"]
 
 [task.2.20]
@@ -924,7 +924,7 @@ reqs = ["11.3"]
 
 [task.2.21]
 title = "Serve program events through the gateway for the sidecar's kernel watcher"
-status = "pending"
+status = "done"
 wave = 2
 requires = ["2.2"]
 do_1 = "In platform/hosted/gateway/src/rpc.rs add the method lx_getProgramEvents taking a topic, a start sequence and a limit and answering events that carry sequence, program_id, topic and data, exactly the shape interop/crates/x-websearch/tests/fixtures/kernel/watch.json pins, backed by the program event store of src/modules/programs/event.c through the upstream read the gateway proxies; where the upstream surface has no topic-filtered, sequence-cursored program event read, add one beside the existing /v1/programs reads in the same service with its own test."
@@ -934,6 +934,10 @@ verify_cmd = "timeout 20m sh -c 'cargo test --locked --manifest-path platform/Ca
 symbols = ["lx_getProgramEvents"]
 touches = ["platform/hosted/gateway/src/rpc.rs","platform/hosted/gateway/src/public_reads.rs","platform/hosted/gateway/tests/fixtures","platform/hosted/gateway/tests/local/events.rs","platform/Cargo.lock"]
 reqs = ["11.3"]
+revision = "a01484182da45a4e43ec13541b3b70a9466f9323"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway'"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.2.22]
 title = "Teach the program lint ABI v4 and lint the web-reader build"
@@ -993,11 +997,50 @@ symbols = ["es_number"]
 touches = ["interop/crates/x-websearch/tests/fixtures/api/select-vectors.json","interop/crates/x-websearch/tests/api.rs","interop/crates/x-websearch/src/api.rs"]
 reqs = ["17.3","17.6"]
 
+[task.2.26]
+title = "Keep a call's full program event list beside the receipt's artifacts, bound to the outcome's event envelope digest"
+status = "pending"
+wave = 2
+requires = ["2.2"]
+do_1 = "The kernel receives a call's full raw event list as the terminal events section, hashes it into the call outcome event's event_envelope_digest in terminal_publish in src/modules/programs/call.c and then frees it, so no store holds a program's web request bytes; add an event envelope payload span to lxp_program_outcome in include/layerx/lxp_receipt.h, fill it from the terminal event list in terminal_publish before the buffer is freed, and copy it with the other artifacts in outcome_copy_artifacts in src/protocol/lxp_module_ctx.c; the committed receipt and every consensus-visible byte stay exactly as they are."
+do_2 = "Extend lxp_receipt_bind_program_artifacts in src/protocol/lxp_receipt.c so a bound artifact set whose event list's SHA-256 differs from the call outcome event's event_envelope_digest is refused, and cover the accepting and the refusing case in tests/protocol/lxp_test_receipts.c."
+do_3 = "In tests/test_web_program_path.c read the web request record back from the outcome's event list after the reference program's request call, check the list hashes to the outcome's digest, and check the record's payload hashes to the pending request's payload hash."
+verify_cmd = "timeout 20m sh -c 'make test-receipts && make test-web-program-path'"
+symbols = ["lxp_receipt_bind_program_artifacts","terminal_publish"]
+touches = ["include/layerx/lxp_receipt.h","src/modules/programs/call.c","src/protocol/lxp_module_ctx.c","src/protocol/lxp_receipt.c","tests/protocol/lxp_test_receipts.c","tests/test_web_program_path.c"]
+reqs = ["11.2"]
+
+[task.2.27]
+title = "Persist the event list in the node's receipt authority log and serve program events by topic and sequence"
+status = "pending"
+wave = 2
+requires = ["2.26"]
+do_1 = "Carry the event list as a third artifact span through the batch WAL in cmd/layerxd/lxp_daemon_batch_wal.c and the pending receipt collection and artifact append in cmd/layerxd/lxp_daemon_process.c, and append it to the receipt authority log as a record format 3 in cmd/layerxd/lxp_daemon_receipt_authority.c with the authority record bound raised to hold it; records the recovery and replica paths append without artifacts decode exactly as before."
+do_2 = "Serve GET /v1/programs/events/<topic-hex>/<from_sequence>/<limit> from route_inner in cmd/layerxd/lxp_daemon_protocol.c, placed before the program identifier parse: scan the authority log from the sequence, decode each record's event list, and answer the events whose topic matches as an object with events, each carrying sequence, program_id, topic and data, and next_sequence, in the shape of interop/crates/x-websearch/tests/fixtures/kernel/watch.json; sequence is the activity's global sequence, only successful outcomes contribute, a record without an event list contributes nothing, and next_sequence never passes the durable head."
+do_3 = "Cover storing, binding and the route in tests/daemon/lxp_test_program_artifacts.c with the reference program's request: the page holds the web request event with its raw bytes, a topic that matches nothing answers an empty page, and a sequence past the head answers an empty page whose next_sequence is the head."
+verify_cmd = "timeout 20m sh -c 'make test-program-artifacts'"
+symbols = ["route_inner","lxp_daemon_receipt_authority_append_artifacts"]
+touches = ["cmd/layerxd/lxp_daemon_batch_wal.c","cmd/layerxd/lxp_daemon_process.c","cmd/layerxd/lxp_daemon_receipt_authority.c","cmd/layerxd/lxp_daemon_protocol.c","tests/daemon/lxp_test_program_artifacts.c"]
+reqs = ["11.2"]
+
+[task.2.28]
+title = "Relay program events through core and list the gateway method so the sidecar's watcher reads real request bytes"
+status = "pending"
+wave = 2
+requires = ["2.21","2.27"]
+do_1 = "Add the v1 programs events path with hex topic and unsigned integer sequence and limit validation to the core boundary's relay allowlist in platform/hosted/core/src/main.rs, and cover the allowed and the refused shapes in platform/hosted/core/tests/boundary.rs."
+do_2 = "List lx_getProgramEvents with its parameters and result shape in platform/hosted/gateway/openrpc.json, matching the method task 2.21 wrote in platform/hosted/gateway/src/rpc.rs."
+do_3 = "Extend platform/hosted/gateway/tests/local/events.rs so the local qualification runs the reference web-reader program's request through a real node and core and reads the request event with its raw bytes through lx_getProgramEvents; close observation 2.21.2 naming the revision."
+verify_cmd = "timeout 20m sh -c 'cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-core && cargo test --locked --manifest-path platform/hosted/gateway/tests/local/Cargo.toml --test events'"
+symbols = ["lx_getProgramEvents"]
+touches = ["platform/hosted/core/src/main.rs","platform/hosted/core/tests/boundary.rs","platform/hosted/gateway/openrpc.json","platform/hosted/gateway/tests/local/events.rs"]
+reqs = ["11.2"]
+
 [task.3.1]
 title = "Run the xweb workflow's legs once on the merged revision and record the evidence"
 status = "pending"
 wave = 3
-requires = ["1.1","1.2","1.3","1.4","1.5","1.6","1.7","1.8","1.9","1.10","1.11","1.12","1.13","1.14","1.15","1.16","1.17","1.18","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12","2.13","2.14","2.15","2.16","2.17","2.18","2.19","2.20","2.21","2.22","2.23","2.24","2.25"]
+requires = ["1.1","1.2","1.3","1.4","1.5","1.6","1.7","1.8","1.9","1.10","1.11","1.12","1.13","1.14","1.15","1.16","1.17","1.18","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12","2.13","2.14","2.15","2.16","2.17","2.18","2.19","2.20","2.21","2.22","2.23","2.24","2.25","2.26","2.27","2.28"]
 do_1 = "On the revision that merges waves 1 and 2, run the workflow's legs once, in order - the x-websearch crate, modules/xweb with precompiles/xweb, the Foundry consumer tests, the kernel web make targets with the runtime web_read test, and the SDK and MCP tests - writing each leg's output to its own log under build/xweb-gates/."
 do_2 = "Append one gate record per leg to spec/paxeer-x-web/qualification.kvx carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code and the log path, written only from a command that actually ran."
 do_3 = "Append one observation per failure the run exposes that belongs to no task in this feature; do not investigate it further and do not rerun it. Rerun nothing that already passed at this revision and write no gate record for a command that did not run."
