@@ -98,3 +98,11 @@ symbol = "cargo build-sbf"
 observed = "cargo build-sbf cannot resolve the dependency graph: the cargo shipped in platform-tools rejects the 35 transitive manifests that declare edition 2024, failing first on zeroize_derive with 'feature edition2024 is required'."
 assumption = "Pre-existing and environment-level, not introduced here: interop/contracts/solana-mirror pins the identical 35 manifests and fails the same way, so the SBF leg of the wave 3 gate needs a newer platform-tools on the gate runner rather than a change to this crate."
 severity = "blocker"
+
+[observation.1.6.1]
+task = "1.6"
+file = "spec/paxeer-x-bridge/spec.kvx"
+symbol = "req.14.ac_1"
+observed = "Requirement 14.1 says the workflow SHALL carry no path filter other than bridge/** and interop/crates/layerx-bridge-relayer/**, and 14.4 says every path filter SHALL name a directory that exists, while task 1.6 do_1 requires the workflow file itself as a third filter; a workflow that changes its own legs without rerunning them would be the alternative, so the task followed do_1 and carries three filters, the third naming a file."
+assumption = "do_1 is the narrower and later instruction and the merge group carries no filter at all because GitHub applies none there, so bridge/deploy/tests/workflow-check.sh asserts the two directory globs as directories and the third filter as the workflow file by name rather than relaxing either check."
+severity = "note"
