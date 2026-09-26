@@ -199,12 +199,39 @@
     - For every test that fails outside this feature's crates, fix its real cause in code or fixtures, starting with the native terminal evidence test in agent/crates/layerx-agentd/src/protocol_evidence_native_tests.rs, which fails to decode tests/fixtures/custody/daemon-credit-receipt with Decode(MalformedPayload): determine which side drifted from the receipt format the platform writes and correct that side, regenerating the fixture through the tool that produced it when the fixture is stale; never ignore, delete, relax or skip a test.
     - Close observation 2.9.1 naming the revision at which make agent-test passes.
     - _Requirements: 9.1_
-  - [ ] 2.17 Qualify the sidecar api request path and serve api answers from the content store
+  - [ ] 2.17 Qualify the sidecar api request path and serve api answers from the content store — **Implemented - qualification pending**
     - In interop/crates/x-websearch/tests/api.rs clear the clippy findings recorded in observation 2.14.1 without an allow attribute: split the envelope vector test into one test per vector group over a shared helper, pass a single root through std::slice::from_ref, and keep every assertion as written.
     - Make the loopback API server in tests/api.rs answer 401 to a call carrying no credential header or an unknown credential and 200 only to the known credential, so the no-envelope refusal test observes the status it asserts.
     - In interop/crates/x-websearch/src/canonical.rs add ContentKind::Api with byte 3, accepted by from_byte and the canonical header, and store an api answer's canonical bytes in the content store at the point the fetch path stores its own, so GET /content/<digest> serves an api answer and a consumer can read the full answer behind the on-chain digest; extend tests/canonical.rs and tests/content.rs for the new kind and tests/api.rs with a request whose answer is read back through GET /content/<digest> and scanned for the credential.
     - Run task 2.14's build command and its verify_cmd once on the result; on exit 0 record task 2.14 done with that revision, command, exit code and log, and close observations 2.14.1 and 2.14.2 naming the revision.
     - _Requirements: 17.2, 17.3, 17.6_
+  - [ ] 2.18 Register the web module with the kernel and route its activities through dispatch
+    - In include/layerx/lxp_module.h add LXP_MODULE_WEB = 11 and raise LXP_MODULE_RESERVED_COUNT to 11, and follow every bound and ordered table that uses it in src/protocol/lxp_genesis.c and src/protocol/lxp_handover.c, so a genesis manifest, a handover and a registration may name module 11 while module 12 stays refused.
+    - Register the web module's lxp_module_registration, carrying LX_WEB_OBSERVATION_ACTIVITY and LX_WEB_ATTESTOR_SET_ACTIVITY, where the kernel's module registrations are assembled beside the programs module's, so lxp_kernel_module_for_activity resolves both and lxp_kernel_dispatch runs the observation intake of src/modules/web/lx_web_intake.c and the attestor-set handler through the module context, with the web root of the committed observations bound into the batch header.
+    - Extend tests/protocol/lxp_test_dispatch.c so both web activities resolve and dispatch and an activity of module 12 is still unknown, extend tests/protocol/lxp_test_kernel.c for the raised bound in genesis and handover, and change tests/test_web_program_path.c to deliver the observation activity through kernel dispatch rather than by calling intake directly, keeping every existing assertion.
+    - Close observations 1.7.1 and 2.2.3 naming the revision.
+    - _Requirements: 11.1, 11.3_
+  - [ ] 2.19 Align the kernel test's attestor keys with the intake fixture's signers and qualify the program request path
+    - Make the three attestor keys interop/crates/x-websearch/tests/kernel.rs derives the keys that signed tests/fixtures/web/observation-activity.hex, deriving them from the same seeds tests/test_web_program_path.c uses for its attestors; the registered-signer assertion stays exactly as written and the C test and the fixture are not changed.
+    - Run task 2.2's verify_cmd once on the result; on exit 0 record task 2.2 done with that revision, command, exit code and log, and close observation 2.2.1 naming the revision.
+    - _Requirements: 11.4_
+  - [ ] 2.20 Wire the kernel relay into the sidecar binary and scope the signature exchange by program
+    - In interop/crates/x-websearch/src/config.rs add the kernel relay settings, the gateway endpoint, the poll interval and the program topics to watch, validated the way the existing fields are; in src/main.rs start KernelRelay beside the attest loop when they are set and stop it on the same shutdown signal; in src/server.rs expose the relay's peer signature exchange beside the existing peer endpoint.
+    - Key SignatureExchange by program id and request id together so two programs' request ids never share a slot, carrying the program id through the exchange messages; re-record tests/fixtures/kernel through the crate's own recorder only if the wire shape changes.
+    - Extend tests/kernel.rs for the scoped exchange, two programs with the same request id both answered, tests/config.rs for the new fields and tests/binary.rs for the relay starting and stopping with the binary under a configuration that names it; close observation 2.2.5 naming the revision.
+    - _Requirements: 11.3_
+  - [ ] 2.21 Serve program events through the gateway for the sidecar's kernel watcher
+    - In platform/hosted/gateway/src/rpc.rs add the method lx_getProgramEvents taking a topic, a start sequence and a limit and answering events that carry sequence, program_id, topic and data, exactly the shape interop/crates/x-websearch/tests/fixtures/kernel/watch.json pins, backed by the program event store of src/modules/programs/event.c through the upstream read the gateway proxies; where the upstream surface has no topic-filtered, sequence-cursored program event read, add one beside the existing /v1/programs reads in the same service with its own test.
+    - Cover the method in the gateway crate's tests against a recorded upstream exchange, asserting the request and response shapes of the sidecar fixture, the cursor advancing and the limit honoured, and extend platform/hosted/gateway/tests/local/events.rs so the local qualification run emits events from a deployed program and reads them back through the method; close observation 2.2.4 naming the revision.
+    - _Requirements: 11.3_
+  - [ ] 2.22 Teach the program lint ABI v4 and lint the web-reader build
+    - In programs/sdk/rust/lint/src/lib.rs make lint_artifact_for_abi and lint_project_for_abi accept layerx_programs_runtime::ABI_V3_VERSION and ABI_V4_VERSION with the host function set each version exports, refusing an import outside that set exactly as the v2 path does, and keep the unsupported-version refusal for anything above v4.
+    - Add the lint step to programs/sdk/rust/examples/web-reader/build.sh in the shape of the escrow example's build.sh, and cover the v3 and v4 paths in the lint crate's tests with the web-reader artifact and a v4 artifact importing a host function outside the set; close observation 2.2.6 naming the revision.
+    - _Requirements: 11.2_
+  - [ ] 2.23 Let the prepare pass stage module values so a program's first paying call creates the web fee account
+    - In src/protocol/lxp_kernel.c make lxp_kernel_prepare_activity open a journal over its snapshot for the duration of a program call, so lxp_ctx_account_stage_module_value in src/protocol/lxp_module_ctx.c stages the way it does on the commit path, and discard that journal with the snapshot; the prepare pass changes no committed state.
+    - Extend tests/protocol/lxp_test_module_ctx.c and tests/protocol/lxp_test_kernel.c for staging under prepare and its discard, and extend tests/test_web_program_path.c with a run whose genesis carries no web fee account and whose first paying call creates it, keeping the genesis-provisioned run as it is; close observation 2.2.2 naming the revision.
+    - _Requirements: 11.1_
 
 ## Wave 3 - One Run, Recorded
 
@@ -222,7 +249,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17", "1.18"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }

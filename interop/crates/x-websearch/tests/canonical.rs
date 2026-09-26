@@ -1,8 +1,9 @@
 use std::fmt::Write as _;
 use x_websearch::canonical::{
-    canonical_bytes, canonicalise, collapse_blank_lines, collapse_spaces, content_digest, decode,
-    digest_hex, media_type_essence, remove_controls, trim_line_ends, unify_line_breaks,
-    CanonicalContent, CanonicalError, ContentKind, CONTENT_DOMAIN,
+    answer_canonical_bytes, canonical_bytes, canonicalise, check, collapse_blank_lines,
+    collapse_spaces, content_digest, decode, digest_hex, media_type_essence, remove_controls,
+    trim_line_ends, unify_line_breaks, CanonicalContent, CanonicalError, ContentKind,
+    CONTENT_DOMAIN,
 };
 
 const SEARCH_TEXT: &str =
@@ -145,8 +146,12 @@ fn canonical_bytes_follow_the_layout_and_match_the_committed_vector() -> Result<
 {
     assert_eq!(ContentKind::Fetch.byte(), 1);
     assert_eq!(ContentKind::Search.byte(), 2);
+    assert_eq!(ContentKind::Api.byte(), 3);
+    assert_eq!(ContentKind::from_byte(1), Some(ContentKind::Fetch));
     assert_eq!(ContentKind::from_byte(2), Some(ContentKind::Search));
-    assert_eq!(ContentKind::from_byte(3), None);
+    assert_eq!(ContentKind::from_byte(3), Some(ContentKind::Api));
+    assert_eq!(ContentKind::from_byte(0), None);
+    assert_eq!(ContentKind::from_byte(4), None);
 
     let bytes = canonical_bytes(
         ContentKind::Search,
@@ -192,18 +197,88 @@ fn canonical_bytes_parse_back_and_nothing_else_does() -> Result<(), CanonicalErr
     let mut short = bytes.clone();
     short.pop();
     let mut wrong_kind = bytes.clone();
-    wrong_kind[CONTENT_DOMAIN.len()] = 3;
+    wrong_kind[CONTENT_DOMAIN.len()] = 4;
+    let mut zero_kind = bytes.clone();
+    zero_kind[CONTENT_DOMAIN.len()] = 0;
     let mut wrong_domain = bytes.clone();
     wrong_domain[0] = b'Q';
     let upper = canonical_bytes(ContentKind::Fetch, b"", "text/plain", "x")?
         .into_iter()
         .map(|byte| if byte == b'p' { b'P' } else { byte })
         .collect::<Vec<_>>();
-    for malformed in [trailing, short, wrong_kind, wrong_domain, upper, Vec::new()] {
+    for malformed in [
+        trailing,
+        short,
+        wrong_kind,
+        zero_kind,
+        wrong_domain,
+        upper,
+        Vec::new(),
+    ] {
         assert_eq!(
             CanonicalContent::parse(&malformed),
             Err(CanonicalError::Malformed)
         );
+        assert_eq!(check(&malformed), Err(CanonicalError::Malformed));
     }
+    Ok(())
+}
+
+#[test]
+fn an_api_answer_carries_kind_three_and_parses_back() -> Result<(), CanonicalError> {
+    let payload = b"\x01\x01\x00api payload";
+    let answer = b"[\"3.114\",3]";
+    let bytes = answer_canonical_bytes(payload, "Application/JSON; charset=utf-8", answer)?;
+
+    let mut expected = b"PAXEERX_WEB_CONTENT_V1".to_vec();
+    expected.push(3);
+    expected.extend_from_slice(&[0, 0, 0, 14]);
+    expected.extend_from_slice(payload);
+    expected.extend_from_slice(&[0, 0, 0, 16]);
+    expected.extend_from_slice(b"application/json");
+    expected.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 11]);
+    expected.extend_from_slice(answer);
+    assert_eq!(bytes, expected);
+    assert_eq!(
+        canonical_bytes(
+            ContentKind::Api,
+            payload,
+            "application/json",
+            "[\"3.114\",3]"
+        )?,
+        bytes
+    );
+
+    let parsed = CanonicalContent::parse(&bytes)?;
+    assert_eq!(parsed.kind, ContentKind::Api);
+    assert_eq!(parsed.payload, payload);
+    assert_eq!(parsed.media_type, "application/json");
+    assert_eq!(parsed.text.as_bytes(), answer);
+    assert_eq!(check(&bytes), Ok(ContentKind::Api));
+    assert_eq!(
+        answer_canonical_bytes(payload, "json", answer),
+        Err(CanonicalError::InvalidMediaType)
+    );
+    Ok(())
+}
+
+#[test]
+fn only_an_api_answer_may_carry_bytes_that_are_not_utf8() -> Result<(), CanonicalError> {
+    let raw = b"raw \xff\xfe body";
+    let answer = answer_canonical_bytes(b"payload", "application/octet-stream", raw)?;
+    assert_eq!(check(&answer), Ok(ContentKind::Api));
+    assert_eq!(
+        CanonicalContent::parse(&answer),
+        Err(CanonicalError::Malformed)
+    );
+    assert_eq!(&answer[answer.len() - raw.len()..], raw);
+
+    for kind in [ContentKind::Fetch, ContentKind::Search] {
+        let mut bytes = answer.clone();
+        bytes[CONTENT_DOMAIN.len()] = kind.byte();
+        assert_eq!(check(&bytes), Err(CanonicalError::Malformed), "{kind:?}");
+    }
+    let page = canonical_bytes(ContentKind::Fetch, b"url", "text/plain", "hi")?;
+    assert_eq!(check(&page), Ok(ContentKind::Fetch));
     Ok(())
 }

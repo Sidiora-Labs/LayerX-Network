@@ -407,8 +407,10 @@ impl Attestor {
     }
 
     /// Performs an api request: the answer's digest, its stored response
-    /// and full length, and its level. Nothing of it is written to the
-    /// content store or the index.
+    /// and full length, and its level. The answer's canonical bytes are
+    /// written to the content store as a fetch writes its own, so the full
+    /// answer behind the digest is served at `GET /content/<digest>`; the
+    /// opened credential is never part of them and nothing reaches the index.
     fn api(&self, request: &WebRequest) -> Result<([u8; 32], Vec<u8>, u32, Level), AttestError> {
         let payload = ApiPayload::decode(&request.payload).map_err(AttestError::Api)?;
         let level = payload.attestation_level();
@@ -421,8 +423,12 @@ impl Attestor {
             ApiClient::new(Arc::clone(&self.fetcher), &self.api_roots).map_err(AttestError::Api)?;
         let answer = api::answer(&client, &self.key, &request.payload, &payload)
             .map_err(AttestError::Api)?;
+        let digest = self
+            .store
+            .put(&answer.canonical)
+            .map_err(|_| AttestError::Store)?;
         let (response, full_length) = stored_answer(&answer.answer)?;
-        Ok((answer.digest, response, full_length, level))
+        Ok((digest, response, full_length, level))
     }
 
     /// Answers one request: the content, the stored response and the

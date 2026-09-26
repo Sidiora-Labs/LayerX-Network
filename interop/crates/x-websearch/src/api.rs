@@ -15,7 +15,7 @@ use openssl::symm::{encrypt_aead, Cipher, Crypter, Mode};
 use zeroize::Zeroizing;
 
 use crate::attest::{address_of, signer_address, Level};
-use crate::canonical::{self, CONTENT_DOMAIN};
+use crate::canonical::{self, CanonicalError, ContentKind};
 use crate::fetch::{FetchError, Fetcher, Url};
 use crate::watch::hex0x;
 
@@ -50,7 +50,7 @@ use crate::watch::hex0x;
 // the kind byte 3.
 
 /// The request kind of an api call.
-pub const KIND_API: u8 = 3;
+pub const KIND_API: u8 = ContentKind::Api.byte();
 
 /// The first byte of every api payload.
 pub const API_VERSION: u8 = 1;
@@ -1330,6 +1330,30 @@ pub fn resolve<'a>(document: &'a Json, pointer: &str) -> Option<&'a Json> {
     Some(current)
 }
 
+/// The shortest scientific digits that read back as `value`, and among
+/// those the ones closest to it, as ECMAScript requires: the shortest form
+/// fixes the digit count, the correctly rounded form at that count picks the
+/// closest digits.
+fn closest_shortest(value: f64) -> String {
+    let shortest = format!("{value:e}");
+    let precision = shortest
+        .split_once('e')
+        .map_or(shortest.as_str(), |(mantissa, _)| mantissa)
+        .bytes()
+        .filter(u8::is_ascii_digit)
+        .count()
+        .saturating_sub(1);
+    let closest = format!("{value:.precision$e}");
+    if closest
+        .parse::<f64>()
+        .is_ok_and(|parsed| parsed.to_bits() == value.to_bits())
+    {
+        closest
+    } else {
+        shortest
+    }
+}
+
 /// A number as ECMAScript's `Number.prototype.toString` writes it, the form
 /// RFC 8785 requires.
 #[must_use]
@@ -1337,7 +1361,7 @@ pub fn es_number(value: f64) -> String {
     if value.classify() == FpCategory::Zero {
         return "0".to_owned();
     }
-    let formatted = format!("{value:e}");
+    let formatted = closest_shortest(value);
     let (sign, body) = formatted
         .strip_prefix('-')
         .map_or(("", formatted.as_str()), |body| ("-", body));
@@ -1479,22 +1503,10 @@ pub fn api_canonical_bytes(
     media_type: &str,
     answer: &[u8],
 ) -> Result<Vec<u8>, ApiError> {
-    let media_type = canonical::media_type_essence(media_type).map_err(|_| ApiError::MediaType)?;
-    let payload_length = u32::try_from(payload.len()).map_err(|_| ApiError::TooLarge)?;
-    let media_length = u32::try_from(media_type.len()).map_err(|_| ApiError::TooLarge)?;
-    let answer_length = u64::try_from(answer.len()).map_err(|_| ApiError::TooLarge)?;
-    let mut bytes = Vec::with_capacity(
-        CONTENT_DOMAIN.len() + 1 + 4 + payload.len() + 4 + media_type.len() + 8 + answer.len(),
-    );
-    bytes.extend_from_slice(CONTENT_DOMAIN);
-    bytes.push(KIND_API);
-    bytes.extend_from_slice(&payload_length.to_be_bytes());
-    bytes.extend_from_slice(payload);
-    bytes.extend_from_slice(&media_length.to_be_bytes());
-    bytes.extend_from_slice(media_type.as_bytes());
-    bytes.extend_from_slice(&answer_length.to_be_bytes());
-    bytes.extend_from_slice(answer);
-    Ok(bytes)
+    canonical::answer_canonical_bytes(payload, media_type, answer).map_err(|error| match error {
+        CanonicalError::InvalidMediaType => ApiError::MediaType,
+        _ => ApiError::TooLarge,
+    })
 }
 
 /// What the API answered.

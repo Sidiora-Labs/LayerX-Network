@@ -30,13 +30,14 @@ use x_websearch::attest::{
     recover_signer, sign_digest, signer_address, AttestError, Attestor, AttestorSet, Level, Ready,
     SignatureExchange,
 };
-use x_websearch::canonical::content_digest;
+use x_websearch::canonical::{content_digest, digest_hex, CanonicalContent, ContentKind};
 use x_websearch::config::FetchLimits;
 use x_websearch::content::ContentStore;
 use x_websearch::fetch::Fetcher;
 use x_websearch::index::WebIndex;
 use x_websearch::submit::{fulfil_calldata, Outcome, Submitter};
 use x_websearch::watch::{hex0x, keccak, unhex0x, EvmRpc, WebRequest};
+use x_websearch::{Limits, Request, Route, RouteTable, RunningServer, Server};
 
 type Checked<T = ()> = Result<T, Box<dyn Error>>;
 
@@ -244,7 +245,9 @@ fn respond(head: &str, body: Vec<u8>, quote: &Value, counter: &AtomicU64) -> (Ca
         .map(|(_, value)| value.clone());
     let known = matches!(credential.as_deref(), Some(CREDENTIAL_ONE | CREDENTIAL_TWO));
     let path = target.split('?').next().unwrap_or_default();
-    let (status, media, answered) = if known && path == "/quote" {
+    let (status, media, answered) = if !known {
+        ("401 Unauthorized", "text/plain", Vec::new())
+    } else if path == "/quote" {
         let count = counter.fetch_add(1, Ordering::SeqCst);
         let mut answer = quote.clone();
         if let Some(object) = answer.as_object_mut() {
@@ -260,19 +263,19 @@ fn respond(head: &str, body: Vec<u8>, quote: &Value, counter: &AtomicU64) -> (Ca
             "application/json; charset=utf-8",
             answer.to_string().into_bytes(),
         )
-    } else if known && path == "/raw" {
+    } else if path == "/raw" {
         (
             "200 OK",
             "text/plain; charset=utf-8",
             b"status: operational\n".to_vec(),
         )
-    } else if known && path == "/html" {
+    } else if path == "/html" {
         (
             "200 OK",
             "text/html",
             b"<html><body>quote</body></html>".to_vec(),
         )
-    } else if known && path == "/moved" {
+    } else if path == "/moved" {
         ("302 Found", "text/plain", b"moved".to_vec())
     } else {
         ("404 Not Found", "text/plain", Vec::new())
@@ -550,68 +553,85 @@ fn the_api_payload_codec_matches_every_pinned_vector_and_refusal() -> Checked {
     Ok(())
 }
 
+fn envelope_vectors() -> Checked<Value> {
+    read_json(&testdata("envelope-vectors.json"))
+}
+
+/// Checks one sealing vector: the keys, the shared secret, the derived key,
+/// the associated data, the plaintext, the sealed bytes and the opening.
+fn check_envelope_vector(vector: &Value) -> Checked {
+    let name = text(vector, "/name")?;
+    let attestor = labelled_key(text(vector, "/attestor_key_label")?)?;
+    let ephemeral = labelled_key(text(vector, "/ephemeral_key_label")?)?;
+    assert_eq!(
+        attestor.verifying_key().to_encoded_point(true).as_bytes(),
+        bytes(vector, "/attestor_public_key")?.as_slice(),
+        "{name}"
+    );
+    assert_eq!(
+        ephemeral.verifying_key().to_encoded_point(true).as_bytes(),
+        bytes(vector, "/ephemeral_public_key")?.as_slice(),
+        "{name}"
+    );
+    let address: [u8; 20] = fixed(vector, "/attestor")?;
+    assert_eq!(signer_address(&attestor), address, "{name}");
+    let origin = text(vector, "/origin")?;
+    let shared = envelope_shared_x(
+        attestor.as_nonzero_scalar(),
+        &PublicKey::from(ephemeral.verifying_key()),
+    )?;
+    assert_eq!(shared.to_vec(), bytes(vector, "/shared_x")?, "{name}");
+    let from_sender = envelope_shared_x(
+        ephemeral.as_nonzero_scalar(),
+        &PublicKey::from(attestor.verifying_key()),
+    )?;
+    assert_eq!(*shared, *from_sender, "{name}");
+    let compressed = bytes(vector, "/ephemeral_public_key")?;
+    let key = envelope_key(&shared[..], &compressed)?;
+    assert_eq!(key.to_vec(), bytes(vector, "/aes_key")?, "{name}");
+    assert_eq!(
+        envelope_aad(&address, origin),
+        bytes(vector, "/aad")?,
+        "{name}"
+    );
+    let credential = headers_of(&vector["credential"])?;
+    let plaintext = Credential::encode(&credential)?;
+    assert_eq!(plaintext.to_vec(), bytes(vector, "/plaintext")?, "{name}");
+    let raw = bytes(vector, "/envelope")?;
+    let sealed = seal_envelope_with(
+        &PublicKey::from(attestor.verifying_key()),
+        &ephemeral,
+        fixed(vector, "/nonce")?,
+        origin,
+        &plaintext,
+    )?;
+    assert_eq!(sealed, raw, "{name}");
+    let parsed = Envelope::parse(&raw)?;
+    assert_eq!(parsed.bytes(), raw, "{name}");
+    assert_eq!(parsed.ciphertext, bytes(vector, "/ciphertext")?, "{name}");
+    let opened = open_envelope(&raw, &attestor, origin)?;
+    assert_eq!(opened.to_vec(), plaintext.to_vec(), "{name}");
+    let decoded = Credential::decode(&opened, &[])?;
+    let names: Vec<&str> = credential
+        .iter()
+        .map(|header| header.name.as_str())
+        .collect();
+    assert_eq!(decoded.names(), names, "{name}");
+    Ok(())
+}
+
 #[test]
 fn envelopes_open_and_seal_exactly_as_the_shared_vectors_pin() -> Checked {
-    let envelopes = read_json(&testdata("envelope-vectors.json"))?;
+    let envelopes = envelope_vectors()?;
     for vector in array(&envelopes, "/vectors")? {
-        let name = text(vector, "/name")?;
-        let attestor = labelled_key(text(vector, "/attestor_key_label")?)?;
-        let ephemeral = labelled_key(text(vector, "/ephemeral_key_label")?)?;
-        assert_eq!(
-            attestor.verifying_key().to_encoded_point(true).as_bytes(),
-            bytes(vector, "/attestor_public_key")?.as_slice(),
-            "{name}"
-        );
-        assert_eq!(
-            ephemeral.verifying_key().to_encoded_point(true).as_bytes(),
-            bytes(vector, "/ephemeral_public_key")?.as_slice(),
-            "{name}"
-        );
-        let address: [u8; 20] = fixed(vector, "/attestor")?;
-        assert_eq!(signer_address(&attestor), address, "{name}");
-        let origin = text(vector, "/origin")?;
-        let shared = envelope_shared_x(
-            attestor.as_nonzero_scalar(),
-            &PublicKey::from(ephemeral.verifying_key()),
-        )?;
-        assert_eq!(shared.to_vec(), bytes(vector, "/shared_x")?, "{name}");
-        let from_sender = envelope_shared_x(
-            ephemeral.as_nonzero_scalar(),
-            &PublicKey::from(attestor.verifying_key()),
-        )?;
-        assert_eq!(*shared, *from_sender, "{name}");
-        let compressed = bytes(vector, "/ephemeral_public_key")?;
-        let key = envelope_key(&shared[..], &compressed)?;
-        assert_eq!(key.to_vec(), bytes(vector, "/aes_key")?, "{name}");
-        assert_eq!(
-            envelope_aad(&address, origin),
-            bytes(vector, "/aad")?,
-            "{name}"
-        );
-        let credential = headers_of(&vector["credential"])?;
-        let plaintext = Credential::encode(&credential)?;
-        assert_eq!(plaintext.to_vec(), bytes(vector, "/plaintext")?, "{name}");
-        let raw = bytes(vector, "/envelope")?;
-        let sealed = seal_envelope_with(
-            &PublicKey::from(attestor.verifying_key()),
-            &ephemeral,
-            fixed(vector, "/nonce")?,
-            origin,
-            &plaintext,
-        )?;
-        assert_eq!(sealed, raw, "{name}");
-        let parsed = Envelope::parse(&raw)?;
-        assert_eq!(parsed.bytes(), raw, "{name}");
-        assert_eq!(parsed.ciphertext, bytes(vector, "/ciphertext")?, "{name}");
-        let opened = open_envelope(&raw, &attestor, origin)?;
-        assert_eq!(opened.to_vec(), plaintext.to_vec(), "{name}");
-        let decoded = Credential::decode(&opened, &[])?;
-        let names: Vec<&str> = credential
-            .iter()
-            .map(|header| header.name.as_str())
-            .collect();
-        assert_eq!(decoded.names(), names, "{name}");
+        check_envelope_vector(vector)?;
     }
+    Ok(())
+}
+
+#[test]
+fn envelopes_refuse_exactly_as_the_shared_vectors_pin() -> Checked {
+    let envelopes = envelope_vectors()?;
     for refusal in array(&envelopes, "/refusals")? {
         let name = text(refusal, "/name")?;
         let key = labelled_key(text(refusal, "/open_with")?)?;
@@ -626,6 +646,11 @@ fn envelopes_open_and_seal_exactly_as_the_shared_vectors_pin() -> Checked {
             Ok(_) => return Err(fail(format!("{name}: opened, want {refuses}"))),
         }
     }
+    Ok(())
+}
+
+#[test]
+fn a_refused_credential_is_never_named_in_the_refusal() -> Checked {
     let public = vec![ApiHeader::new("x-api-key", "public")];
     let plaintext = Credential::encode(&credential(CREDENTIAL_ONE))?;
     match Credential::decode(&plaintext, &public) {
@@ -756,7 +781,14 @@ fn two_sidecars_holding_different_envelopes_sign_the_same_digest() -> Checked {
         recover_signer(&second.digest, &second.signature)?,
         two.address()
     );
-    assert_eq!(one.store.get(&first.attestation.content_digest)?, None);
+    assert_eq!(
+        one.store.get(&first.attestation.content_digest)?,
+        Some(canonical.clone())
+    );
+    assert_eq!(
+        two.store.get(&second.attestation.content_digest)?,
+        Some(canonical.clone())
+    );
 
     let set = AttestorSet {
         signers: vec![
@@ -864,6 +896,25 @@ fn a_request_without_an_envelope_for_this_attestor_is_refused_before_any_call() 
     assert_eq!(refused, Err(AttestError::Api(ApiError::Status(302))));
     assert_eq!(server.calls().len(), 2);
 
+    let unknown = quote_payload(
+        &server,
+        vec![envelope(
+            &one.key,
+            8,
+            &origin,
+            &credential("loopback-credential-unknown-6e0b"),
+        )?],
+    );
+    let refused = one.attestor.attest(&request(36, &unknown)?);
+    assert_eq!(refused, Err(AttestError::Api(ApiError::Status(401))));
+    let calls = server.calls();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(
+        calls[2].credential.as_deref(),
+        Some("loopback-credential-unknown-6e0b")
+    );
+    assert!(calls[2].answered.is_empty());
+
     assert_credentials_absent(&scratch.0, &lines)?;
     Ok(())
 }
@@ -875,7 +926,10 @@ fn a_call_answers_the_raw_body_or_names_what_it_refuses() -> Checked {
     let one = Sidecar::open(scratch.0.join("one"), 1, &server)?;
     let origin = server.origin();
     let mut lines = Vec::new();
-    let client = ApiClient::new(Arc::new(loopback_fetcher()?), &[server.root.clone()])?;
+    let client = ApiClient::new(
+        Arc::new(loopback_fetcher()?),
+        std::slice::from_ref(&server.root),
+    )?;
     let raw = ApiPayload {
         url: server.url("/raw"),
         pointers: Vec::new(),
@@ -897,6 +951,7 @@ fn a_call_answers_the_raw_body_or_names_what_it_refuses() -> Checked {
 
     let html = ApiPayload {
         url: server.url("/html"),
+        pointers: vec!["/quote/amount".to_owned()],
         ..raw.clone()
     };
     let refused = api::answer(&client, &one.key, &html.encode()?, &html);
@@ -923,7 +978,7 @@ fn a_call_answers_the_raw_body_or_names_what_it_refuses() -> Checked {
             max_redirects: 3,
             allow_loopback: false,
         })?),
-        &[server.root.clone()],
+        std::slice::from_ref(&server.root),
     )?;
     let before = server.calls().len();
     let refused = api::answer(&strict, &one.key, &raw_bytes, &raw);
@@ -934,6 +989,94 @@ fn a_call_answers_the_raw_body_or_names_what_it_refuses() -> Checked {
     assert_eq!(server.calls().len(), before);
 
     assert_credentials_absent(&scratch.0, &lines)?;
+    Ok(())
+}
+
+/// A sidecar's `GET /content/<digest>` route over its own store.
+fn serve_content(store: &Arc<ContentStore>) -> Checked<RunningServer> {
+    let store = Arc::clone(store);
+    let mut routes = RouteTable::new();
+    routes.set(Route::Content, move |request: &Request| {
+        store.handle(request)
+    })?;
+    Ok(Server::bind("127.0.0.1:0".parse()?, Limits::default(), routes)?.spawn()?)
+}
+
+/// The status and body `GET /content/<digest>` answers.
+fn get_content(address: SocketAddr, digest: &[u8; 32]) -> Checked<(u16, Vec<u8>)> {
+    let mut stream = TcpStream::connect(address)?;
+    stream.set_read_timeout(Some(Duration::from_secs(15)))?;
+    stream.write_all(
+        format!(
+            "GET /content/{} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+            digest_hex(digest)
+        )
+        .as_bytes(),
+    )?;
+    let mut bytes = Vec::new();
+    stream.read_to_end(&mut bytes)?;
+    let split = bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| fail("no header terminator"))?;
+    let head = String::from_utf8(bytes[..split].to_vec())?;
+    let status = head
+        .split(' ')
+        .nth(1)
+        .ok_or_else(|| fail("no status"))?
+        .parse()?;
+    Ok((status, bytes[split + 4..].to_vec()))
+}
+
+#[test]
+fn an_api_answer_is_read_back_through_get_content_without_the_credential() -> Checked {
+    let scratch = Scratch::new("content")?;
+    let server = ApiServer::start()?;
+    let one = Sidecar::open(scratch.0.join("one"), 1, &server)?;
+    let origin = server.origin();
+    let payload = quote_payload(
+        &server,
+        vec![envelope(&one.key, 9, &origin, &credential(CREDENTIAL_ONE))?],
+    );
+    let request = request(41, &payload)?;
+    let answer = one.attestor.attest(&request)?;
+    let digest = answer.attestation.content_digest;
+    assert_eq!(server.calls().len(), 1);
+    assert!(one.store.directory().join(digest_hex(&digest)).is_file());
+
+    let content = serve_content(&one.store)?;
+    let (status, read_back) = get_content(content.local_addr(), &digest)?;
+    assert_eq!(status, 200);
+    assert_eq!(content_digest(&read_back), digest);
+    let parsed = CanonicalContent::parse(&read_back)?;
+    assert_eq!(parsed.kind, ContentKind::Api);
+    assert_eq!(parsed.payload, request.payload);
+    assert_eq!(parsed.media_type, ANSWER_MEDIA_TYPE);
+    assert_eq!(parsed.text.as_bytes(), b"[\"3.114\",3]");
+    assert_eq!(parsed.text.as_bytes(), answer.response.as_slice());
+    assert_eq!(
+        u32::try_from(parsed.text.len())?,
+        answer.attestation.full_length
+    );
+
+    let asker = ContentStore::open(
+        &scratch.0.join("asker").join("data"),
+        &[format!("http://{}", content.local_addr())],
+    )?;
+    assert_eq!(asker.retrieve(&digest)?, Some(read_back.clone()));
+    assert_eq!(asker.get(&digest)?, Some(read_back.clone()));
+    content.shutdown()?;
+
+    for credential in [CREDENTIAL_ONE, CREDENTIAL_TWO] {
+        assert!(!contains(&read_back, credential.as_bytes()));
+    }
+    let lines = vec![
+        format!("{answer:?}"),
+        answer.record().to_string(),
+        format!("{parsed:?}"),
+        String::from_utf8_lossy(&read_back).into_owned(),
+    ];
+    assert!(assert_credentials_absent(&scratch.0, &lines)? >= 2);
     Ok(())
 }
 
