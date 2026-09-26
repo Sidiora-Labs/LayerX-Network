@@ -63,7 +63,7 @@
     - Write agent/sdk/python/layerx_sdk/web_search.py and web_search.pyi with the same surface and rules on the SDK's existing x402 modules, exported from __init__.py and __init__.pyi.
     - Write agent/sdk/typescript/test/web-search.test.ts and add it to the package test script, and agent/sdk/python/tests/test_web_search.py, each replaying interop/crates/x-websearch/tests/fixtures/client-exchange.json from a real loopback server and covering a paid success in each asset, a refused settlement and a digest mismatch, and asserting the digest against interop/crates/x-websearch/tests/fixtures/content-vectors.json.
     - _Requirements: 9.1, 9.2, 9.4_
-  - [ ] 1.10 Add the web tool to the MCP server
+  - [x] 1.10 Add the web tool to the MCP server
     - Write agent/crates/layerx-mcp/src/tools/web.rs with search, fetch and content operations that perform the 402LXP exchange against a configured sidecar endpoint, verify settlement and the content digest before returning, and pass every spend through the crate's existing approval boundary in src/approval.rs.
     - Register the tool in src/tools/mod.rs and src/catalogue.rs with input validation in the shape the existing write tools use, and mark it untrusted-output in the shape src/untrusted.rs applies to external content.
     - Write agent/crates/layerx-mcp/tests/web.rs replaying interop/crates/x-websearch/tests/fixtures/client-exchange.json from a real loopback server and covering a paid success, an unapproved spend refused, a refused settlement and a digest mismatch.

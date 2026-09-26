@@ -174,3 +174,35 @@ symbol = "verify_payment_receipt"
 observed = "verify_payment_receipt verifies only protocol version 2 and the recorded receipts are version 3, and the Python SDK configures no type checker."
 assumption = "web_search.py calls verify_receipt with the configured protocol_version, and the Python build check is py_compile."
 severity = "note"
+
+[observation.1.10.1]
+task = "1.10"
+file = "agent/crates/layerx-mcp/Cargo.toml"
+symbol = "layerx-mcp dependencies"
+observed = "The buyer path, receipt verification and content digest need layerx-x402, layerx-interop-gateway, layerx-proof, base64, serde and sha3, and Cargo.toml and agent/Cargo.lock are outside this task's touches."
+assumption = "The manifest gains those dependencies and the lock gains only the two interop crates and the layerx-mcp dependency list."
+severity = "assumption"
+
+[observation.1.10.2]
+task = "1.10"
+file = "agent/crates/layerx-mcp/src/server.rs"
+symbol = "TOOL_CATALOGUE"
+observed = "The web tools are described, validated and listed through catalogue::WEB_TOOLS and web_surface, but server.rs, which routes tools/list and tools/call for a bound server, is outside this task's touches."
+assumption = "A later task adds the web tools to the bound server's routing with a configured sidecar endpoint and payer."
+severity = "assumption"
+
+[observation.1.10.3]
+task = "1.10"
+file = "interop/crates/x-websearch/tests/fixtures/client-exchange.json"
+symbol = "exchange"
+observed = "The recorded paid bodies are placeholders, the recorded fetch url is the bare word paxeer and no /content exchange is recorded."
+assumption = "The test replays every recorded payment header exactly, serves fetch and content bodies built from content-vectors.json, and answers /content with the recorded exact USDC exchange."
+severity = "note"
+
+[observation.1.10.4]
+task = "1.10"
+file = "agent/crates/layerx-types/src/payload.rs"
+symbol = "PerpsPayload"
+observed = "cargo clippy -p layerx-mcp --all-targets -- -D warnings also lints the path dependency and fails on a pre-existing large_enum_variant in layerx-types (.logs/build.log); with --no-deps the crate is clean (.logs/clippy.log, exit 0)."
+assumption = "The dependency lint belongs to layerx-types and is left unchanged."
+severity = "note"
