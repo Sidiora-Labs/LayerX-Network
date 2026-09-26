@@ -405,6 +405,7 @@ task = "2.6"; file = "modules/evm/keeper/abci.go"
 observed = "EndBlock sweeps the transaction coinbase in the network base denom only, leaving collected fee tokens at that address."
 assumption = "Task 2.8 owns fee-token collection and distribution; this task does not alter the sweep."
 severity = "note"
+closed = "EndBlock now sweeps every allowed non-network fee denom from each transaction coinbase to the block's coinbase, failing the block on a rejected sweep, and RouteCollectedFeeTokens then holds or distributes it; the FeeTokenSweep and SidioraFeeCollection tests pass at exit 0 on ecebaa2f51cecadf1de6ca104b4609548e1c72a9."
 
 [observation.2.6.3]
 task = "2.6"; file = "node/app.go"
@@ -446,6 +447,7 @@ task = "2.6"; file = "modules/evm/keeper/abci.go"; symbol = "EndBlock"
 observed = "Supplement to observation.2.6.2: task 2.8 routes the fee tokens the fee collector already holds, so the per-transaction coinbase sweep that carries only the base denom and wei still leaves a fee-token reward at that address and nothing downstream collects it."
 assumption = "Extending the sweep is a consensus change outside this task's touches and belongs with the activation work; the routing step and the sweep both stay exactly as written."
 severity = "blocker"
+closed = "EndBlock now sweeps every allowed non-network fee denom from each transaction coinbase to the block's coinbase, failing the block on a rejected sweep, and RouteCollectedFeeTokens then holds or distributes it; the FeeTokenSweep and SidioraFeeCollection tests pass at exit 0 on ecebaa2f51cecadf1de6ca104b4609548e1c72a9."
 
 [observation.2.9.1]
 task = "2.9"; file = "node/upgrades.go"; symbol = "RegisterUpgradeHandlers"
@@ -465,6 +467,7 @@ task = "2.9"; file = "modules/evm/keeper/abci.go"; symbol = "EndBlock"
 observed = "Task 2.8 routes fee tokens out of the fee collector, so the per-transaction coinbase credit state.AddBalance writes in the selected fee denom still has no sweep, which the assumption recorded in observation.2.6.2 expected 2.8 to supply."
 assumption = "The coinbase sweep belongs to the fee-collection surface whose file list includes abci.go, not to this upgrade-gating task; the fee-token parameter defaults this migration writes keep the path off until governance enables it."
 severity = "suspect"
+closed = "EndBlock now sweeps every allowed non-network fee denom from each transaction coinbase to the block's coinbase, failing the block on a rejected sweep, and RouteCollectedFeeTokens then holds or distributes it; the FeeTokenSweep and SidioraFeeCollection tests pass at exit 0 on ecebaa2f51cecadf1de6ca104b4609548e1c72a9."
 
 [observation.2.11.1]
 task = "2.11"
