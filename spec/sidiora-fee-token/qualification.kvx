@@ -372,6 +372,7 @@ task = "1.3"; file = "interop/crates/layerx-gas-station/src/price.rs"; symbol = 
 observed = "OraclePriceSource targets the retired oracle precompile whose methods return ErrOraclePrecompileRetired."
 assumption = "The station accepts a governed rate provider through PriceSource and does not implement OracleTransport over its RPC transport."
 severity = "blocker"
+closed = "At ecebaa2f51cecadf1de6ca104b4609548e1c72a9 the oracle source was removed and PaymasterRateSource reads the paymaster's currentRate and rateUpdatedAt over the crate's JsonRpc transport, so the station prices only from the governed rate."
 
 [observation.1.3.2]
 task = "1.3"; file = "contracts/src/BatchCallAndSponsor.sol"; symbol = "_checkPrice"

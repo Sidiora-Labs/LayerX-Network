@@ -1,0 +1,26 @@
+{
+  "fresh": {
+    "rateUpdatedAt()": {"jsonrpc":"2.0","id":1,"result":"0x00000000000000000000000000000000000000000000000000000000000003e8"},
+    "currentRate()": {"jsonrpc":"2.0","id":2,"result":"0x00000000000000000000000000000000000000000000000000000000002f8410"}
+  },
+  "stale": {
+    "rateUpdatedAt()": {"jsonrpc":"2.0","id":1,"result":"0x0000000000000000000000000000000000000000000000000000000000000258"},
+    "currentRate()": {"jsonrpc":"2.0","id":2,"error":{"code":3,"message":"execution reverted"}}
+  },
+  "missing": {
+    "rateUpdatedAt()": {"jsonrpc":"2.0","id":1,"result":"0x0000000000000000000000000000000000000000000000000000000000000000"},
+    "currentRate()": {"jsonrpc":"2.0","id":2,"error":{"code":3,"message":"execution reverted"}}
+  },
+  "unavailable": {
+    "rateUpdatedAt()": {"fault":"unavailable"},
+    "currentRate()": {"fault":"unavailable"}
+  },
+  "short": {
+    "rateUpdatedAt()": {"jsonrpc":"2.0","id":1,"result":"0x00"},
+    "currentRate()": {"jsonrpc":"2.0","id":2,"result":"0x00000000000000000000000000000000000000000000000000000000002f8410"}
+  },
+  "wide": {
+    "rateUpdatedAt()": {"jsonrpc":"2.0","id":1,"result":"0x00000000000000000000000000000000000000000000000000000000000003e8"},
+    "currentRate()": {"jsonrpc":"2.0","id":2,"result":"0x01000000000000000000000000000000000000000000000000000000002f8410"}
+  }
+}
