@@ -96,6 +96,13 @@
     - In agent/crates/layerx-mcp/src/server.rs list catalogue::WEB_TOOLS in tools/list and route their tools/call through tools/web.rs behind the same approval boundary the other paid tools use, carrying the layerx/output untrusted marker on every result (observation 1.10.2); change no other tool's routing.
     - Extend agent/crates/layerx-mcp/tests/web.rs to drive a bound server through tools/list and tools/call for search, fetch and content over the recorded exchange, asserting the listing, a paid call, a held spend and the untrusted marker.
     - _Requirements: 9.1, 9.2_
+  - [ ] 1.17 Settle main-account offers and grant evidence in the buyer and the web tool
+    - In interop/crates/layerx-x402/src/buyer.rs let LayerXEvidence carry the optional purposeHash the Seller repeats, and make Buyer::capture_settlement refuse a grant settlement whose purposeHash is absent or differs from the purposeHash of the payment it built, and refuse an exact settlement that carries one, exactly as spec/402lxp/protocol.md states for buyers (observation 1.15.3), with tests in interop/crates/layerx-x402/tests/buyer.rs for the accepted repeat, the missing one, the differing one and the exact settlement carrying one.
+    - In agent/crates/layerx-mcp/src/tools/web.rs make offer_facts accept the receiver account agent:<did>:main when the offer's asset is PAX, the kernel's native coin, and derive the payer's account the same way, keeping agent:<did>:asset:<id> for SID, USDC and USDL exactly as interop/crates/x-websearch/src/payment.rs derives them (observation 1.15.1).
+    - Make the web tool's content call request GET /content/<digest> without a payment, accept a 200 whose body's digest equals the digest it asked for, refuse a body whose digest differs, and treat a 402 on the content path as a protocol mismatch rather than paying for it (observation 1.15.2).
+    - Extend agent/crates/layerx-mcp/tests/web.rs so the recording task 1.15 made replays through the web tool end to end: the PAX exact success to the main account, the SID metered success whose settlement repeats purposeHash, the USDC and USDL exact successes and the unpaid content fetch, plus a refusal for a content body whose digest differs.
+    - With these in place, run task 1.15's verify_cmd once on this revision and set task 1.15 to done with its four evidence fields when it passes, leaving it implemented with the run's fields otherwise.
+    - _Requirements: 4.1, 4.2, 9.1, 9.4_
 
 ## Wave 2 - Integration
 
@@ -165,7 +172,7 @@
 ```json
 {
   "waves": [
-    { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16"] },
+    { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17"] },
     { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
