@@ -534,7 +534,7 @@ reqs = ["13.4","13.5"]
 [task.2.11]
 title = "Write the page that explains Sidiora and its two gas paths"
 status = "done"
-revision = "03b7bddf1f32fa261f3415e2025cc8e2d5526b5b"
+revision = "91ebf8c9e015ecb3d314f43c08dfe4ca46cc5166"
 command = "timeout 20m sh -c 'python3 -m venv build/sidiora-docs-venv && build/sidiora-docs-venv/bin/pip install -r docs/site/requirements.txt && build/sidiora-docs-venv/bin/mkdocs build --strict -f docs/site/mkdocs.yml'"
 exit_code = 0
 log_path = "/root/lx-lanes/sid-t2-11/.logs/verify.log"
