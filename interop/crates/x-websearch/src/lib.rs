@@ -7,8 +7,13 @@
 //! `server::Server` serves `GET /health` free and `GET /search`, `GET /fetch`
 //! and `GET /content/<digest>` through its route table.
 
+pub mod canonical;
 pub mod config;
+pub mod content;
+pub mod extract;
+pub mod fetch;
 pub mod keys;
+pub mod robots;
 pub mod server;
 
 pub use config::{load, Config, ConfigError};

@@ -1,0 +1,38 @@
+{
+  "kind": 1,
+  "domain": "PAXEERX_WEB_CONTENT_V1",
+  "vectors": [
+    {
+      "path": "/index.html",
+      "content_type": "text/html; charset=utf-8",
+      "payload": "https://paxeer.app/index.html",
+      "media_type": "text/html",
+      "text": "Paxeer X Network & the web\n\nSearch the web\n\nCaf\u00e9 <tag> \u00a9 \u2014 done\u00a0now\n\nFirst line\nSecond line\n\nOne\n\nTwo & three\n\n keep\n indent\n\nUnknown &bogus; entity and a lone &amp ampersand\n\nCaf\u00e9 composed",
+      "digest": "1f336e9077153eb9c757ee7c59c0645dbff4acdd91a25655b0fbb0700e4da148"
+    },
+    {
+      "path": "/plain.txt",
+      "content_type": "text/plain",
+      "payload": "https://paxeer.app/plain.txt",
+      "media_type": "text/plain",
+      "text": "Line one with tabs\nLine two\nLine three bell\n\nAfter blanks",
+      "digest": "c7a47c5e2eb41d7cf65154ba8ecfdfaefced43ad10216a0039011c6468102159"
+    },
+    {
+      "path": "/data.json",
+      "content_type": "Application/JSON",
+      "payload": "https://paxeer.app/data.json",
+      "media_type": "application/json",
+      "text": "{\n \"name\": \"x-websearch\",\n \"tags\": [\"a\", \"b\"]\n}",
+      "digest": "db2ea51ba862fb9ee981793f9a0054335de9d0c31cd1867c20c1c7b607cbd57a"
+    },
+    {
+      "path": "/latin1.txt",
+      "content_type": "text/plain; charset=ISO-8859-1",
+      "payload": "https://paxeer.app/latin1.txt",
+      "media_type": "text/plain",
+      "text": "Caf\u00e9 cr\u00e8me br\u00fbl\u00e9e",
+      "digest": "6e35647fe1f609d43257a8ef71cc9d28b905678cbee87ab957eb263dbd40bd2d"
+    }
+  ]
+}

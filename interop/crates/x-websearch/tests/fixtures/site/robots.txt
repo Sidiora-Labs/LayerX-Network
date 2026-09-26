@@ -1,0 +1,8 @@
+# Every other crawler is kept out; x-websearch has its own group.
+User-agent: *
+Disallow: /
+
+User-agent: x-websearch
+Allow: /private/open.html
+Disallow: /private/
+Disallow: /*.xml$
