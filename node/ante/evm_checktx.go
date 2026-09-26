@@ -265,12 +265,37 @@ func EvmCheckAndChargeFees(ctx sdk.Context, sender common.Address, ek *evmkeeper
 			return nil, sdkerrors.ErrInsufficientFee
 		}
 	}
+	charge, err := ek.GetFeeTokenCharge(ctx, sender)
+	if err != nil {
+		return nil, err
+	}
 	emsg := ek.GetEVMMessage(ctx, etx, sender)
 	stateDB := state.NewDBImpl(ctx, ek, false)
 	gp := ek.GetGasPool()
 	blockCtx, err := ek.GetVMBlockContext(ctx, gp)
 	if err != nil {
 		return nil, err
+	}
+	if charge != nil {
+		fee := new(big.Int).Mul(new(big.Int).SetUint64(emsg.GasLimit), emsg.GasPrice)
+		if len(emsg.BlobHashes) > 0 && ethCfg.IsCancun(blockCtx.BlockNumber, blockCtx.Time) {
+			fee.Add(fee, new(big.Int).Mul(new(big.Int).SetUint64(etx.BlobGas()), blockCtx.BlobBaseFee))
+		}
+		if fee.Sign() < 0 || fee.BitLen() > 256 {
+			return nil, evmkeeper.ErrFeeTokenOverflow
+		}
+		converted, err := evmkeeper.ConvertFeeToDenom(sdk.NewIntFromBigInt(fee), charge.Rate, true)
+		if err != nil {
+			return nil, err
+		}
+		payer := ek.GetPaxAddressOrDefault(ctx, charge.Payer)
+		if ek.BankKeeper().SpendableCoins(ctx, payer).AmountOf(charge.Denom).LT(converted) {
+			return nil, sdkerrors.Wrapf(sdkerrors.ErrInsufficientFunds, "insufficient %s for gas", charge.Denom)
+		}
+		if ek.GetBalance(ctx, payer).Cmp(emsg.Value) < 0 {
+			return nil, sdkerrors.Wrap(sdkerrors.ErrInsufficientFunds, "insufficient network coin for value")
+		}
+		stateDB.SetFeeTokenCharge(charge, false)
 	}
 	txCtx := core.NewEVMTxContext(emsg)
 	evmInstance := vm.NewEVM(*blockCtx, stateDB, ethCfg, vm.Config{}, ek.CustomPrecompiles(ctx))
@@ -282,7 +307,18 @@ func EvmCheckAndChargeFees(ctx sdk.Context, sender common.Address, ek *evmkeeper
 		}
 	}
 	if err := st.BuyGas(); err != nil {
+		if charge != nil && stateDB.Error() != nil {
+			return nil, stateDB.Error()
+		}
 		return nil, sdkerrors.Wrap(sdkerrors.ErrInsufficientFunds, err.Error())
+	}
+	if charge != nil {
+		if err := stateDB.Error(); err != nil {
+			return nil, err
+		}
+		if err := ek.SetAnteFeeTokenCharge(ctx, etx.Hash(), charge); err != nil {
+			return nil, err
+		}
 	}
 	return stateDB, nil
 }

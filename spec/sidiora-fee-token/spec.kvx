@@ -522,15 +522,11 @@ reqs = ["13.1","13.2","13.3","13.6"]
 
 [task.2.10]
 title = "Prove the whole path over real blocks"
-status = "implemented"
-revision = "d215b7185417b10b9050b5dc5dcabe60ed4aadbd"
+status = "done"
+revision = "c69c004dc53f6a067c6d16ac735eec94dc3d5cb2"
 command = "timeout 20m sh -c 'go test -count=1 -run SidioraFee ./tests/chain/'"
-exit_code = 1
-log_path = ".logs/verify.log"
-implemented_revision = "007b27c8ec5210ec9344e966db6bbc8c4caf3999"
-implemented_command = "timeout 20m sh -c 'go test -count=1 -run SidioraFee ./tests/chain/'"
-implemented_exit_code = 1
-implemented_log_path = ".logs/verify-2.10.log"
+exit_code = 0
+log_path = ".logs/verify-2.10.log"
 wave = 2
 requires = ["2.9"]
 do_1 = "Add testutil/processblock/msgs/feetoken.go building the messages this proof needs in the shape testutil/processblock/msgs/bank.go builds its own: an attested Sidiora bridge in, a fee-preference set through the precompile, and a transaction sent by an account whose preference is Sidiora."
@@ -617,7 +613,11 @@ reqs = ["9.1", "9.2", "9.3", "9.4", "9.5", "13.1", "13.2", "13.3", "13.6"]
 
 [task.2.15]
 title = "Charge the fee token on the transaction delivery path"
-status = "pending"
+status = "done"
+revision = "c69c004dc53f6a067c6d16ac735eec94dc3d5cb2"
+command = "timeout 20m sh -c 'go test -count=1 ./node/ante/... && go test -count=1 -run SidioraFee ./tests/chain/'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.13"]
 do_1 = "Make EvmCheckAndChargeFees in node/ante/evm_checktx.go, and through it the delivery path in node/ante/evm_delivertx.go, charge gas in the payer's fee denom at the governed rate through the keeper's GetFeeTokenCharge and SetAnteFeeTokenCharge exactly as node/app.go charges it on the block execution path since task 2.13, refusing a payer whose fee denom balance cannot cover the gas with the same error, so the two paths charge and refuse the same transaction identically; charge the network coin as today for a payer without a fee denom."
