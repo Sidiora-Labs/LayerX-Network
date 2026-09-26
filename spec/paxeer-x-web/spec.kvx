@@ -391,7 +391,11 @@ reqs = ["8.1","8.2","8.3","8.4","8.5"]
 
 [task.1.9]
 title = "Add the TypeScript and Python web search clients"
-status = "pending"
+status = "done"
+revision = "30889d097ee0ce0ae233015428b87e2df73b686b"
+command = "timeout 20m sh -c 'cd agent/sdk/typescript && npm ci && npm run build && node dist/test/web-search.test.js && cd ../python && python3 -m pytest -q tests/test_web_search.py'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 1
 requires = ["1.2","1.4"]
 do_1 = "Write agent/sdk/typescript/src/web-search.ts exposing search, fetch and content-by-digest against a sidecar endpoint, performing the 402LXP exchange with the SDK's existing x402 grant, draw and receive helpers, verifying PAYMENT-RESPONSE before returning content, refusing a payer or purpose mismatch, and recomputing the PAXEERX_WEB_CONTENT_V1 digest of a fetch or content response; export it from src/index.ts."

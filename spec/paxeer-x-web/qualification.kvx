@@ -150,3 +150,27 @@ symbol = "clippy::byte_char_slices"
 observed = "Clippy with -D warnings on the Rust program SDK refuses the unchanged naming.rs line 183 byte-char slice, so the SDK lint gate fails before this task's SDK modules are linted."
 assumption = "The naming.rs lint is outside this task's touches and is left for its owner."
 severity = "suspect"
+
+[observation.1.9.1]
+task = "1.9"
+file = "interop/crates/x-websearch/tests/fixtures/client-exchange.json"
+symbol = "walletAccount"
+observed = "The recorded PAX offers pay to agent:<did>:asset:<PAX id> and the PAX grant draws from the per-asset payer account, while the SDK's walletAccount and _wallet_account derive agent:<did>:main for the kernel's native asset, so both clients refuse every PAX offer with offer-account-mismatch."
+assumption = "Neither side is adapted; the sidecar or the SDK derivation must be changed by the owner before a PAX payment can succeed."
+severity = "blocker"
+
+[observation.1.9.2]
+task = "1.9"
+file = "interop/crates/x-websearch/tests/fixtures/client-exchange.json"
+symbol = "WebSearchClient"
+observed = "The recording holds paid successes only for SID metered and USDC exact, its resource bodies are {path, results} placeholders, and its SID settlement lacks purposeHash (observation 1.4.2), so the clients refuse it with settlement-purpose-mismatch and no paid success in PAX, USDL or metered SID can be replayed."
+assumption = "Tests replay the USDC success with a route-shaped fetch body from content-vectors.json and prove every other asset's offer and payment up to the unrecorded paid reply."
+severity = "blocker"
+
+[observation.1.9.3]
+task = "1.9"
+file = "agent/sdk/python/layerx_sdk/x402.py"
+symbol = "verify_payment_receipt"
+observed = "verify_payment_receipt verifies only protocol version 2 and the recorded receipts are version 3, and the Python SDK configures no type checker."
+assumption = "web_search.py calls verify_receipt with the configured protocol_version, and the Python build check is py_compile."
+severity = "note"
