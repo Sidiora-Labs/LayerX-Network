@@ -302,7 +302,7 @@ reqs = ["4.1","4.2","4.3","4.4","4.5","4.6"]
 
 [task.1.5]
 title = "Write the xweb module: requests, fulfilment, fees and governance"
-status = "pending"
+status = "done"
 wave = 1
 requires = []
 do_1 = "Write modules/xweb/types in the shape of modules/layerxbridge/types: keys.go, state.go (Request, Result, Attestor, Params with fee, payload cap, callback cap and timeout), msgs.go (MsgRegisterAttestor, MsgRemoveAttestor, MsgSetThreshold, MsgSetParams, MsgPause, MsgUnpause carrying the gov authority), errors.go, events.go (XWebRequested, XWebFulfilled, XWebRefunded), genesis.go and expected_keepers.go."
@@ -314,6 +314,10 @@ symbols = ["Keeper","Request","Fulfil","Refund","verifySignatures","Preimage","M
 touches = ["modules/xweb/module.go","modules/xweb/ATTESTATION.md","modules/xweb/types/keys.go","modules/xweb/types/state.go","modules/xweb/types/msgs.go","modules/xweb/types/errors.go","modules/xweb/types/events.go","modules/xweb/types/genesis.go","modules/xweb/types/expected_keepers.go","modules/xweb/types/attestation.go","modules/xweb/types/attestation_test.go","modules/xweb/types/msgs_test.go","modules/xweb/types/testdata/preimage-vectors.json","modules/xweb/keeper/keeper.go","modules/xweb/keeper/request.go","modules/xweb/keeper/fulfil.go","modules/xweb/keeper/refund.go","modules/xweb/keeper/msg_server.go","modules/xweb/keeper/genesis.go","modules/xweb/keeper/keeper_test.go","modules/xweb/keeper/request_test.go","modules/xweb/keeper/fulfil_test.go","modules/xweb/keeper/refund_test.go","modules/xweb/keeper/msg_server_test.go","modules/xweb/testutil/store.go","modules/xweb/testutil/attestors.go"]
 tests = ["modules/xweb/types/attestation_test.go","modules/xweb/types/msgs_test.go","modules/xweb/keeper/keeper_test.go","modules/xweb/keeper/request_test.go","modules/xweb/keeper/fulfil_test.go","modules/xweb/keeper/refund_test.go","modules/xweb/keeper/msg_server_test.go"]
 reqs = ["5.1","5.2","5.3","5.4","5.5","5.6"]
+revision = "affe190ec825c9f007566e7693e36dfe9747adbe"
+command = "timeout 20m sh -c 'go test -count=1 ./modules/xweb/...'"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.1.6]
 title = "Write the xweb precompile, its Solidity interface and the reference consumer"
