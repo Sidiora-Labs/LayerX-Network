@@ -75,6 +75,9 @@ on:
       - '!scripts/qualify-mirror-verification-live.sh'
       - '.github/workflows/paxeer-buf-check.yml'
   merge_group:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
   pull-requests: write

@@ -152,6 +152,10 @@ on:
       - '!scripts/qualify-mirror-verification-live.sh'
       - '.github/workflows/paxeer-forge-test.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   FOUNDRY_PROFILE: ci
   FOUNDRY_CONFIG: foundry.paxeer.toml

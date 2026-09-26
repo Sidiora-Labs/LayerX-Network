@@ -4,6 +4,10 @@ name: Paxeer / Run Dapp Tests
 on:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 defaults:
   run:
     working-directory: .

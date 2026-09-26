@@ -75,6 +75,9 @@ on:
       - '!scripts/qualify-mirror-live.sh'
       - '!scripts/qualify-mirror-verification-live.sh'
       - '.github/workflows/paxeer-enforce-labels.yml'
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   enforce-label:
     runs-on: ubuntu-latest
