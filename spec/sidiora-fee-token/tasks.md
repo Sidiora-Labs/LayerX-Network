@@ -168,6 +168,11 @@
     - In precompiles/setup_test.go make TestFeeTokenRegistration build the custom precompile set at the fee-token upgrade name node/upgrades.go declares and require the fee-token entry there with exactly one version keyed by that name, and require the set built below that upgrade to carry no fee-token entry, in the shape TestXWebRegistration asserts for xweb; every other assertion of the test stays as written (observation 2.14.1).
     - Close observation 2.14.1 naming the revision at which the precompiles package tests pass.
     - _Requirements: 9.1, 13.1, 13.2_
+  - [ ] 2.17 Bring the evm module's genesis export and consensus version tests to the fee-token state
+    - In modules/evm/module_test.go extend the expected export JSON of TestModuleExportGenesis with the five fee-token parameters task 2.4 added, in the order and with the exact default values types.DefaultParams carries (allowed_fee_denoms, max_fee_token_spread, fee_token_enabled, fee_token_distribution, max_fee_token_rate_age), keeping the assertion an exact comparison of the whole exported string.
+    - Set the value TestConsensusVersion expects to the consensus version modules/evm/module.go reports after the raise task 2.9 made, keeping the equality assertion; change no production file.
+    - Run the verify_cmd once and record it; the aggregate gate of task 3.1 is rerun on the merged revision by that task, not here.
+    - _Requirements: 9.1, 15.1_
 
 ## Wave 3 - One Aggregate Run, Recorded
 
@@ -186,7 +191,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }
