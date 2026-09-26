@@ -716,7 +716,7 @@ log_path = ".logs/verify.log"
 
 [task.4.2]
 title = "Release a refused sponsor nonce and journal replacement and cancellation"
-status = "done"
+status = "pending"
 wave = 4
 requires = ["4.1"]
 do_1 = "In interop/crates/layerx-gas-station/src/station.rs release the sponsor nonce a prepared transaction reserved when the node refuses it deterministically or drops it, so the next submission reuses that nonce, and never rebroadcast a journalled transaction whose quote deadline has passed."
@@ -728,10 +728,6 @@ verify_cmd = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Car
 symbols = ["GasStation","submit","resume","Journal","Entry"]
 touches = ["interop/crates/layerx-gas-station/src/station.rs","interop/crates/layerx-gas-station/src/journal.rs","interop/crates/layerx-gas-station/src/tx.rs","interop/crates/layerx-gas-station/tests/station.rs","interop/crates/layerx-gas-station/tests/fixtures"]
 reqs = ["2.4","2.5","2.6"]
-revision = "2954102ca01c51d999daa2f64923e2e9c4d19e78"
-command = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p layerx-gas-station --lib --test station'"
-exit_code = 0
-log_path = ".logs/verify.log"
 
 [task.4.3]
 title = "Serve the quote and sponsored submission endpoints from the station binary"
@@ -873,7 +869,7 @@ log_path = ".logs/verify.log"
 
 [task.4.11]
 title = "Bound every governed rate update by the maximum spread"
-status = "pending"
+status = "done"
 wave = 4
 requires = []
 do_1 = "In modules/evm/keeper/params.go add ValidateFeeTokenRateUpdate comparing each allowed denom's new rate with the rate stored for it and refusing, with a named error carrying the denom, both rates and the bound, a relative change whose absolute value exceeds GetMaxFeeTokenSpread; a denom with no stored rate is a first rate and is bounded by the validators alone."
@@ -884,6 +880,10 @@ verify_cmd = "timeout 20m sh -c 'go test -count=1 -run \"FeeTokenParams|FeeToken
 symbols = ["ValidateFeeTokenRateUpdate","GetMaxFeeTokenSpread","NewParamChangeProposalHandler"]
 touches = ["modules/evm/keeper/params.go","modules/evm/keeper/params_test.go","modules/evm/gov.go","modules/evm/gov_test.go","node/app.go","node/app_feetoken_test.go"]
 reqs = ["8.6","10.2"]
+revision = "3da2964a7c55a39d0c0d30327312af3e77b7d9c7"
+command = "timeout 20m sh -c 'go test -count=1 -run \"FeeTokenParams|FeeTokenRateBound\" ./modules/evm/keeper/... ./modules/evm/ && go test -count=1 -run FeeTokenRateBound ./node/'"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.4.12]
 title = "Regenerate the evm parameters with the pinned protobuf pipeline"

@@ -75,38 +75,7 @@ impl Fees {
             .checked_mul(self.max_fee_per_gas)
             .ok_or(TxError::Invalid)
     }
-    /// The lowest fees a node accepts for a cancellation in place of a pending
-    /// transaction paying `self`: both fee caps raised by the minimum bump.
-    /// # Errors
-    /// Refuses invalid original fees or overflow.
-    pub fn replacement(self) -> Result<Self, TxError> {
-        self.gas_cost()?;
-        let bump = |fee: u128| {
-            fee.checked_mul(100 + REPLACEMENT_BUMP_PERCENT)
-                .map(|raised| raised.div_ceil(100))
-                .ok_or(TxError::Invalid)
-        };
-        let fees = Self {
-            gas_limit: CANCELLATION_GAS,
-            max_fee_per_gas: bump(self.max_fee_per_gas)?,
-            max_priority_fee_per_gas: bump(self.max_priority_fee_per_gas)?,
-        };
-        fees.gas_cost()?;
-        Ok(fees)
-    }
-    /// # Errors
-    /// Refuses invalid original fees.
-    pub fn replaces(self, original: Self) -> Result<bool, TxError> {
-        let floor = original.replacement()?;
-        Ok(self.gas_limit == CANCELLATION_GAS
-            && self.gas_cost().is_ok()
-            && self.max_fee_per_gas >= floor.max_fee_per_gas
-            && self.max_priority_fee_per_gas >= floor.max_priority_fee_per_gas)
-    }
 }
-
-pub const CANCELLATION_GAS: u64 = 21_000;
-pub const REPLACEMENT_BUMP_PERCENT: u128 = 10;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignedTransaction {
@@ -354,49 +323,6 @@ pub fn sign(
     })
 }
 
-/// Signs the zero-value self-transfer that fills a sponsor nonce in place of a
-/// dropped or expired sponsored transaction.
-/// # Errors
-/// Refuses a zero chain, fees that are not cancellation fees, or signer failures.
-pub fn sign_cancellation(
-    chain_id: u64,
-    nonce: u64,
-    fees: Fees,
-    signer: &impl QuoteSigner,
-) -> Result<SignedTransaction, TxError> {
-    if chain_id == 0 || fees.gas_limit != CANCELLATION_GAS {
-        return Err(TxError::Invalid);
-    }
-    fees.gas_cost()?;
-    let mut payload = Vec::new();
-    for bytes in [
-        chain_id.to_be_bytes().to_vec(),
-        nonce.to_be_bytes().to_vec(),
-        fees.max_priority_fee_per_gas.to_be_bytes().to_vec(),
-        fees.max_fee_per_gas.to_be_bytes().to_vec(),
-        fees.gas_limit.to_be_bytes().to_vec(),
-    ] {
-        integer(&bytes, &mut payload)?;
-    }
-    rlp_bytes(&signer.address(), &mut payload)?;
-    integer(&[], &mut payload)?;
-    rlp_bytes(&[], &mut payload)?;
-    payload.push(192);
-    let unsigned = [vec![2], list(&payload)?].concat();
-    let signature = signer
-        .sign_digest(keccak(&unsigned))
-        .map_err(TxError::Signer)?;
-    if recover(keccak(&unsigned), &signature)? != signer.address() {
-        return Err(TxError::Signature);
-    }
-    signature_fields(&signature, &mut payload)?;
-    let raw = [vec![2], list(&payload)?].concat();
-    Ok(SignedTransaction {
-        hash: keccak(&raw),
-        raw,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,82 +382,6 @@ mod tests {
             .gas_cost(),
             Err(TxError::Invalid)
         );
-        Ok(())
-    }
-    #[test]
-    fn cancellation_fills_the_nonce_at_the_bumped_fee() -> Result<(), Box<dyn std::error::Error>> {
-        let signer = crate::signer::tests::signer()?;
-        let original = Fees {
-            gas_limit: 200_000,
-            max_fee_per_gas: 5_000_000_000_000,
-            max_priority_fee_per_gas: 1_000_000_000,
-        };
-        let fees = original.replacement()?;
-        assert_eq!(
-            fees,
-            Fees {
-                gas_limit: CANCELLATION_GAS,
-                max_fee_per_gas: 5_500_000_000_000,
-                max_priority_fee_per_gas: 1_100_000_000,
-            }
-        );
-        assert_eq!(
-            Fees {
-                gas_limit: 1,
-                max_fee_per_gas: 11,
-                max_priority_fee_per_gas: 1
-            }
-            .replacement()?,
-            Fees {
-                gas_limit: CANCELLATION_GAS,
-                max_fee_per_gas: 13,
-                max_priority_fee_per_gas: 2
-            }
-        );
-        assert!(fees.replaces(original)?);
-        let mut low = fees;
-        low.max_fee_per_gas -= 1;
-        assert!(!low.replaces(original)?);
-        let mut low = fees;
-        low.max_priority_fee_per_gas -= 1;
-        assert!(!low.replaces(original)?);
-        assert!(!original.replaces(original)?);
-        assert_eq!(
-            sign_cancellation(1325, 5, original, &signer),
-            Err(TxError::Invalid)
-        );
-        assert_eq!(
-            sign_cancellation(0, 5, fees, &signer),
-            Err(TxError::Invalid)
-        );
-        let signed = sign_cancellation(1325, 5, fees, &signer)?;
-        assert_eq!(signed.hash, keccak(&signed.raw));
-        assert_eq!(&signed.raw[..2], &[2, 0xf8]);
-        assert_eq!(usize::from(signed.raw[2]), signed.raw.len() - 3);
-        let mut fields = vec![
-            0x82, 0x05, 0x2d, 0x05, 0x84, 0x41, 0x90, 0xab, 0x00, 0x86, 0x05, 0x00, 0x91, 0x8b,
-            0xd8, 0x00, 0x82, 0x52, 0x08, 0x94,
-        ];
-        fields.extend_from_slice(&signer.address());
-        fields.extend_from_slice(&[0x80, 0x80, 0xc0]);
-        assert_eq!(&signed.raw[3..3 + fields.len()], fields.as_slice());
-        let tail = &signed.raw[3 + fields.len()..];
-        let parity = match tail[0] {
-            0x80 => 0,
-            1 => 1,
-            _ => return Err("invalid parity".into()),
-        };
-        let r_length = usize::from(tail[1] - 0x80);
-        let r = &tail[2..2 + r_length];
-        let s_length = usize::from(tail[2 + r_length] - 0x80);
-        let s = &tail[3 + r_length..];
-        assert_eq!(s.len(), s_length);
-        let mut signature = [0_u8; 65];
-        signature[32 - r.len()..32].copy_from_slice(r);
-        signature[64 - s.len()..64].copy_from_slice(s);
-        signature[64] = 27 + parity;
-        let unsigned = [vec![2], list(&fields)?].concat();
-        assert_eq!(recover(keccak(&unsigned), &signature)?, signer.address());
         Ok(())
     }
 }

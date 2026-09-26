@@ -10,6 +10,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	sdkerrors "github.com/sidiora-labs/paxeer-network/sdk/types/errors"
+	"github.com/sidiora-labs/paxeer-network/sdk/x/params/types/proposal"
 	testkeeper "github.com/sidiora-labs/paxeer-network/testutil/keeper"
 	"github.com/stretchr/testify/require"
 )
@@ -116,4 +117,41 @@ func TestPointerBindingProposalRefusesAMessageForAnotherAuthority(t *testing.T) 
 	require.ErrorIs(t, evm.NewProposalHandler(*k)(ctx, proposal), sdkerrors.ErrUnauthorized)
 	_, _, exists := k.GetERC20NativePointer(ctx, denom)
 	require.False(t, exists)
+}
+
+func feeTokenRateBoundProposal(t *testing.T, denoms []types.AllowedFeeDenom) *proposal.ParameterChangeProposal {
+	t.Helper()
+	value, err := testkeeper.EVMTestApp.LegacyAmino().MarshalAsJSON(denoms)
+	require.NoError(t, err)
+	return proposal.NewParameterChangeProposal("rate", "rate", []proposal.ParamChange{
+		proposal.NewParamChange(types.ModuleName, string(types.KeyAllowedFeeDenoms), string(value)),
+	}, false)
+}
+
+func feeTokenRateBoundContext() sdk.Context {
+	k := &testkeeper.EVMTestApp.EvmKeeper
+	ctx, _ := testkeeper.EVMTestApp.GetContextForDeliverTx(nil).CacheContext()
+	params := k.GetParams(ctx)
+	params.AllowedFeeDenoms = []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.MustNewDecFromStr("3.114"), RateUpdateHeight: 1}}
+	params.MaxFeeTokenSpread = sdk.NewDecWithPrec(5, 2)
+	k.SetParams(ctx, params)
+	return ctx
+}
+
+func TestFeeTokenRateBoundHandlerRefusesBeyondBound(t *testing.T) {
+	k := &testkeeper.EVMTestApp.EvmKeeper
+	ctx := feeTokenRateBoundContext()
+	handler := evm.NewParamChangeProposalHandler(k, testkeeper.EVMTestApp.ParamsKeeper)
+	err := handler(ctx, feeTokenRateBoundProposal(t, []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.MustNewDecFromStr("3.5"), RateUpdateHeight: 2}}))
+	require.ErrorIs(t, err, keeper.ErrFeeTokenRateSpread)
+	require.Equal(t, []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.MustNewDecFromStr("3.114"), RateUpdateHeight: 1}}, k.GetAllowedFeeDenoms(ctx))
+}
+
+func TestFeeTokenRateBoundHandlerAppliesInBoundUpdate(t *testing.T) {
+	k := &testkeeper.EVMTestApp.EvmKeeper
+	ctx := feeTokenRateBoundContext()
+	handler := evm.NewParamChangeProposalHandler(k, testkeeper.EVMTestApp.ParamsKeeper)
+	updated := []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.MustNewDecFromStr("3.2697"), RateUpdateHeight: 2}}
+	require.NoError(t, handler(ctx, feeTokenRateBoundProposal(t, updated)))
+	require.Equal(t, updated, k.GetAllowedFeeDenoms(ctx))
 }

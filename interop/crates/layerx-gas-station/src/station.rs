@@ -1,9 +1,7 @@
 use serde_json::{json, Value};
 
 use crate::config::StationConfig;
-use crate::journal::{
-    Completion, Entry, Journal, JournalError, Key, QuoteRecord, Replacement, Submission,
-};
+use crate::journal::{Completion, Entry, Journal, JournalError, Key, QuoteRecord, Submission};
 use crate::price::{PriceError, PriceSource};
 use crate::quote::{address_word, keccak, word, Address, Word};
 use crate::rpc::{bytes, hex, quantity, read, JsonRpc, RpcFault};
@@ -52,11 +50,6 @@ pub enum QuoteOutcome {
 pub enum Progress {
     Pending,
     Completed(Completion),
-}
-enum Receipt {
-    Absent,
-    Unfinalized,
-    Final(Value),
 }
 pub struct SubmitRequest {
     pub key: Key,
@@ -144,89 +137,6 @@ impl<S: QuoteSigner, R: JsonRpc, P: PriceSource> GasStation<S, R, P> {
             value if value == word(0) => Ok(false),
             value if value == word(1) => Ok(true),
             _ => Err(RpcFault::Malformed.into()),
-        }
-    }
-    fn transaction_count(&self, address: Address, block: &str) -> Result<u64, StationError> {
-        let count: String = read(
-            &self.rpc,
-            "eth_getTransactionCount",
-            json!([hex(&address), block]),
-        )?;
-        u64::try_from(quantity(&count)?).map_err(|_| StationError::Invalid)
-    }
-    /// A transaction the node neither holds nor needs, because its sponsor nonce
-    /// is still free in the pending state, was refused or dropped.
-    fn refused(&self, submission: &Submission) -> Result<bool, StationError> {
-        let known = self
-            .rpc
-            .call("eth_getTransactionByHash", json!([hex(&submission.hash)]))?;
-        Ok(known.is_null()
-            && self.transaction_count(self.station.signer.address(), "pending")?
-                <= submission.nonce)
-    }
-    fn receipt(&self, hash: &Word) -> Result<Receipt, StationError> {
-        let receipt = self
-            .rpc
-            .call("eth_getTransactionReceipt", json!([hex(hash)]))?;
-        if receipt.is_null() {
-            return Ok(Receipt::Absent);
-        }
-        let block = field_quantity(&receipt, "blockNumber")?;
-        let finalized = self
-            .rpc
-            .call("eth_getBlockByNumber", json!(["finalized", false]))?;
-        if field_quantity(&finalized, "number")? < block {
-            return Ok(Receipt::Unfinalized);
-        }
-        let canonical = self.rpc.call(
-            "eth_getBlockByNumber",
-            json!([format!("0x{block:x}"), false]),
-        )?;
-        if receipt["blockHash"].as_str().is_none() || canonical["hash"] != receipt["blockHash"] {
-            return Err(RpcFault::Divergence.into());
-        }
-        Ok(Receipt::Final(receipt))
-    }
-    /// Fills the sponsor nonce of a dropped or expired submission with a
-    /// zero-value self-transfer, journalled before it is broadcast.
-    fn replace(
-        &mut self,
-        key: Key,
-        submission: &Submission,
-        quote: &QuoteRecord,
-    ) -> Result<(), StationError> {
-        let fees = quote.fees.replacement()?;
-        let signed =
-            tx::sign_cancellation(quote.chain_id, submission.nonce, fees, &self.station.signer)?;
-        let replacement = Replacement {
-            nonce: submission.nonce,
-            fees,
-            hash: signed.hash,
-            raw: signed.raw,
-        };
-        self.journal.append(&Entry::Replaced {
-            key,
-            replacement: replacement.clone(),
-        })?;
-        self.send_replacement(&replacement)
-    }
-    fn send_replacement(&self, replacement: &Replacement) -> Result<(), StationError> {
-        if replacement.raw.first() != Some(&2) || keccak(&replacement.raw) != replacement.hash {
-            return Err(RpcFault::Malformed.into());
-        }
-        match self
-            .rpc
-            .call("eth_sendRawTransaction", json!([hex(&replacement.raw)]))
-        {
-            Ok(_)
-            | Err(
-                RpcFault::Unavailable
-                | RpcFault::RateLimited
-                | RpcFault::Divergence
-                | RpcFault::Malformed
-                | RpcFault::Rejected { .. },
-            ) => Ok(()),
-            Err(error) => Err(error.into()),
         }
     }
     fn complete(
@@ -320,7 +230,7 @@ impl<S: QuoteSigner, R: JsonRpc, P: PriceSource> GasStation<S, R, P> {
                 return Ok(Progress::Completed(done));
             }
             if item.submission.is_some() {
-                return self.resume(request.key, now);
+                return self.resume(request.key);
             }
         }
         if self.consumed(request.key, request.account)? {
@@ -348,9 +258,16 @@ impl<S: QuoteSigner, R: JsonRpc, P: PriceSource> GasStation<S, R, P> {
         {
             return Err(StationError::Invalid);
         }
-        let mut nonce = self.transaction_count(request.key.sponsor, "pending")?;
-        while self.journal.state().holds(request.key.sponsor, nonce) {
-            nonce = nonce.checked_add(1).ok_or(StationError::Invalid)?;
+        let pending: String = read(
+            &self.rpc,
+            "eth_getTransactionCount",
+            json!([hex(&request.key.sponsor), "pending"]),
+        )?;
+        let mut nonce = u64::try_from(quantity(&pending)?).map_err(|_| StationError::Invalid)?;
+        for item in self.journal.state().items.values() {
+            if let Some(previous) = &item.submission {
+                nonce = nonce.max(previous.nonce.checked_add(1).ok_or(StationError::Invalid)?);
+            }
         }
         let transaction = tx::sign(
             &TransactionRequest {
@@ -367,28 +284,15 @@ impl<S: QuoteSigner, R: JsonRpc, P: PriceSource> GasStation<S, R, P> {
             },
             &self.station.signer,
         )?;
-        let submission = Submission {
-            nonce,
-            hash: transaction.hash,
-            raw: transaction.raw,
-        };
         self.journal.append(&Entry::Prepared {
             key: request.key,
-            submission: submission.clone(),
+            submission: Submission {
+                nonce,
+                hash: transaction.hash,
+                raw: transaction.raw,
+            },
         })?;
-        match self.broadcast(request.key) {
-            Err(StationError::Rpc(RpcFault::Rejected { code })) => {
-                if self.refused(&submission)? {
-                    self.journal.append(&Entry::Released {
-                        key: request.key,
-                        nonce,
-                    })?;
-                    return Err(RpcFault::Rejected { code }.into());
-                }
-                Ok(Progress::Pending)
-            }
-            result => result,
-        }
+        self.broadcast(request.key)
     }
     fn broadcast(&self, key: Key) -> Result<Progress, StationError> {
         let submission = self
@@ -413,11 +317,8 @@ impl<S: QuoteSigner, R: JsonRpc, P: PriceSource> GasStation<S, R, P> {
         }
     }
     /// # Errors
-    /// Refuses malformed receipts or RPC failures; every rebroadcast uses the
-    /// durable bytes, a submission whose quote deadline passed is never
-    /// rebroadcast, and a dropped or expired submission's still unused sponsor
-    /// nonce is filled by a journalled replacement.
-    pub fn resume(&mut self, key: Key, now: u64) -> Result<Progress, StationError> {
+    /// Refuses malformed receipts or RPC failures; every rebroadcast uses the durable bytes.
+    pub fn resume(&mut self, key: Key) -> Result<Progress, StationError> {
         let item = self
             .journal
             .state()
@@ -428,13 +329,32 @@ impl<S: QuoteSigner, R: JsonRpc, P: PriceSource> GasStation<S, R, P> {
         if let Some(done) = item.completion {
             return Ok(Progress::Completed(done));
         }
-        let Some(submission) = item.submission else {
-            return Ok(Progress::Pending);
-        };
-        let quote = item.quote.as_ref().ok_or(StationError::Missing)?;
-        match self.receipt(&submission.hash)? {
-            Receipt::Final(receipt) => {
-                let completion = receipt_completion(&receipt, &submission, quote)?;
+        if let Some(submission) = &item.submission {
+            let receipt = self
+                .rpc
+                .call("eth_getTransactionReceipt", json!([hex(&submission.hash)]))?;
+            if !receipt.is_null() {
+                let block = field_quantity(&receipt, "blockNumber")?;
+                let finalized = self
+                    .rpc
+                    .call("eth_getBlockByNumber", json!(["finalized", false]))?;
+                if field_quantity(&finalized, "number")? < block {
+                    return Ok(Progress::Pending);
+                }
+                let canonical = self.rpc.call(
+                    "eth_getBlockByNumber",
+                    json!([format!("0x{block:x}"), false]),
+                )?;
+                if receipt["blockHash"].as_str().is_none()
+                    || canonical["hash"] != receipt["blockHash"]
+                {
+                    return Err(RpcFault::Divergence.into());
+                }
+                let completion = receipt_completion(
+                    &receipt,
+                    submission,
+                    item.quote.as_ref().ok_or(StationError::Missing)?,
+                )?;
                 if matches!(completion, Completion::Reverted { .. })
                     && self.consumed(key, item.account)?
                 {
@@ -442,47 +362,17 @@ impl<S: QuoteSigner, R: JsonRpc, P: PriceSource> GasStation<S, R, P> {
                 }
                 return self.complete(key, item.account, completion);
             }
-            Receipt::Unfinalized => return Ok(Progress::Pending),
-            Receipt::Absent => (),
-        }
-        if let Some(replacement) = &item.replacement {
-            return match self.receipt(&replacement.hash)? {
-                Receipt::Final(receipt) => {
-                    let block_number = cancellation_block(&receipt, replacement, key.sponsor)?;
-                    self.journal.append(&Entry::Cancelled {
-                        key,
-                        hash: replacement.hash,
-                        block_number,
-                    })?;
-                    Ok(Progress::Completed(Completion::Cancelled {
-                        hash: replacement.hash,
-                        block_number,
-                    }))
-                }
-                Receipt::Unfinalized => Ok(Progress::Pending),
-                Receipt::Absent => {
-                    self.send_replacement(replacement)?;
-                    Ok(Progress::Pending)
-                }
-            };
         }
         if self.consumed(key, item.account)? {
             return self.complete(key, item.account, Completion::Consumed);
         }
-        if quote.deadline < now {
-            if self.transaction_count(key.sponsor, "latest")? <= submission.nonce {
-                self.replace(key, &submission, quote)?;
+        if item.submission.is_some() {
+            match self.broadcast(key) {
+                Err(StationError::Rpc(RpcFault::Rejected { .. })) => Ok(Progress::Pending),
+                result => result,
             }
-            return Ok(Progress::Pending);
-        }
-        match self.broadcast(key) {
-            Err(StationError::Rpc(RpcFault::Rejected { .. })) => {
-                if self.refused(&submission)? {
-                    self.replace(key, &submission, quote)?;
-                }
-                Ok(Progress::Pending)
-            }
-            result => result,
+        } else {
+            Ok(Progress::Pending)
         }
     }
 }
@@ -496,20 +386,6 @@ fn amount(value: Word) -> Result<u128, StationError> {
 }
 fn field_quantity(value: &Value, name: &str) -> Result<u128, RpcFault> {
     quantity(value[name].as_str().ok_or(RpcFault::Malformed)?)
-}
-fn cancellation_block(
-    receipt: &Value,
-    replacement: &Replacement,
-    sponsor: Address,
-) -> Result<u64, StationError> {
-    if receipt["transactionHash"] != hex(&replacement.hash)
-        || receipt["from"] != hex(&sponsor)
-        || receipt["to"] != hex(&sponsor)
-        || field_quantity(receipt, "status")? != 1
-    {
-        return Err(RpcFault::Malformed.into());
-    }
-    u64::try_from(field_quantity(receipt, "blockNumber")?).map_err(|_| RpcFault::Malformed.into())
 }
 fn receipt_completion(
     receipt: &Value,

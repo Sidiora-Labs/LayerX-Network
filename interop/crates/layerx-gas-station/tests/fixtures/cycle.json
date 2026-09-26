@@ -34,57 +34,111 @@
       {"method":"eth_sendRawTransaction","params":["$raw"],"result":"$hash"}
     ],
     "included": [
-      {"method":"eth_getTransactionReceipt","params":["$hash"],"result":{"transactionHash":"$hash","from":"$sponsor","to":"$account","status":"0x1","blockNumber":"0x10","blockHash":"$block","gasUsed":"0x186a0","effectiveGasPrice":"0x48c27395000","logs":[{"address":"$token","topics":["$transfer_topic","$account_word","$sponsor_word"],"data":"$amount","removed":false},{"address":"$account","topics":["$sponsored_topic","$sponsor_word","$token_word"],"data":"$sponsored_data","removed":false}]}},
+      {"method":"eth_getTransactionReceipt","params":["$hash"],"result":{
+        "transactionHash":"$hash","from":"$sponsor","to":"$account","status":"0x1","blockNumber":"0x10","blockHash":"$block",
+        "gasUsed":"0x186a0","effectiveGasPrice":"0x48c27395000",
+        "logs":[
+          {"address":"$token","topics":["$transfer_topic","$account_word","$sponsor_word"],"data":"$amount","removed":false},
+          {"address":"$account","topics":["$sponsored_topic","$sponsor_word","$token_word"],"data":"$sponsored_data","removed":false}
+        ]
+      }},
       {"method":"eth_getBlockByNumber","params":["finalized",false],"result":{"number":"0x12","hash":"$finalized"}},
       {"method":"eth_getBlockByNumber","params":["0x10",false],"result":{"number":"0x10","hash":"$block"}},
       {"method":"eth_getBalance","params":["$sponsor","latest"],"result":"0x30927f74c9de0000"},
       {"method":"eth_call","params":[{"to":"$token","data":"$balance_call"},"latest"],"result":"$amount"}
     ],
     "refused": [
-      {"method":"eth_getTransactionReceipt","params":["$hash"],"result":null},
-      {"method":"eth_call","params":[{"to":"$account","data":"$consumed_call"},"finalized"],"result":"$zero"},
-      {"method":"eth_sendRawTransaction","params":["$raw"],"error":{"code":-32000,"message":"insufficient funds for gas * price + value"}},
-      {"method":"eth_getTransactionByHash","params":["$hash"],"result":null}
+      {
+        "method": "eth_getTransactionReceipt",
+        "params": [
+          "$hash"
+        ],
+        "result": null
+      },
+      {
+        "method": "eth_call",
+        "params": [
+          {
+            "to": "$account",
+            "data": "$consumed_call"
+          },
+          "finalized"
+        ],
+        "result": "$zero"
+      },
+      {
+        "method": "eth_sendRawTransaction",
+        "params": [
+          "$raw"
+        ],
+        "error": {
+          "code": -32000,
+          "message": "insufficient funds for gas * price + value"
+        }
+      }
     ],
     "already_known": [
-      {"method":"eth_getTransactionReceipt","params":["$hash"],"result":null},
-      {"method":"eth_call","params":[{"to":"$account","data":"$consumed_call"},"finalized"],"result":"$zero"},
-      {"method":"eth_sendRawTransaction","params":["$raw"],"error":{"code":-32000,"message":"already known"}},
-      {"method":"eth_getTransactionByHash","params":["$hash"],"result":{"hash":"$hash","nonce":"0x5"}}
+      {
+        "method": "eth_getTransactionReceipt",
+        "params": [
+          "$hash"
+        ],
+        "result": null
+      },
+      {
+        "method": "eth_call",
+        "params": [
+          {
+            "to": "$account",
+            "data": "$consumed_call"
+          },
+          "finalized"
+        ],
+        "result": "$zero"
+      },
+      {
+        "method": "eth_sendRawTransaction",
+        "params": [
+          "$raw"
+        ],
+        "error": {
+          "code": -32000,
+          "message": "already known"
+        }
+      }
     ],
     "nonce_too_low": [
-      {"method":"eth_getTransactionReceipt","params":["$hash"],"result":null},
-      {"method":"eth_call","params":[{"to":"$account","data":"$consumed_call"},"finalized"],"result":"$zero"},
-      {"method":"eth_sendRawTransaction","params":["$raw"],"error":{"code":-32000,"message":"nonce too low"}},
-      {"method":"eth_getTransactionByHash","params":["$hash"],"result":null},
-      {"method":"eth_getTransactionCount","params":["$sponsor","pending"],"result":"0x6"}
+      {
+        "method": "eth_getTransactionReceipt",
+        "params": [
+          "$hash"
+        ],
+        "result": null
+      },
+      {
+        "method": "eth_call",
+        "params": [
+          {
+            "to": "$account",
+            "data": "$consumed_call"
+          },
+          "finalized"
+        ],
+        "result": "$zero"
+      },
+      {
+        "method": "eth_sendRawTransaction",
+        "params": [
+          "$raw"
+        ],
+        "error": {
+          "code": -32000,
+          "message": "nonce too low"
+        }
+      }
     ],
     "consumed": [
       {"method":"eth_call","params":[{"to":"$account","data":"$consumed_call"},"finalized"],"result":"$one"}
-    ],
-    "dropped": [
-      {"method":"eth_getTransactionReceipt","params":["$hash"],"result":null},
-      {"method":"eth_call","params":[{"to":"$account","data":"$consumed_call"},"finalized"],"result":"$zero"},
-      {"method":"eth_sendRawTransaction","params":["$raw"],"error":{"code":-32000,"message":"transaction underpriced"}},
-      {"method":"eth_getTransactionByHash","params":["$hash"],"result":null},
-      {"method":"eth_sendRawTransaction","params":["$replacement_raw"],"result":"$replacement_hash"}
-    ],
-    "expired": [
-      {"method":"eth_getTransactionReceipt","params":["$hash"],"result":null},
-      {"method":"eth_call","params":[{"to":"$account","data":"$consumed_call"},"finalized"],"result":"$zero"},
-      {"method":"eth_getTransactionCount","params":["$sponsor","latest"],"result":"0x5"},
-      {"method":"eth_sendRawTransaction","params":["$replacement_raw"],"result":"$replacement_hash"}
-    ],
-    "replacement_pending": [
-      {"method":"eth_getTransactionReceipt","params":["$hash"],"result":null},
-      {"method":"eth_getTransactionReceipt","params":["$replacement_hash"],"result":null},
-      {"method":"eth_sendRawTransaction","params":["$replacement_raw"],"result":"$replacement_hash"}
-    ],
-    "cancelled": [
-      {"method":"eth_getTransactionReceipt","params":["$hash"],"result":null},
-      {"method":"eth_getTransactionReceipt","params":["$replacement_hash"],"result":{"transactionHash":"$replacement_hash","from":"$sponsor","to":"$sponsor","status":"0x1","blockNumber":"0x11","blockHash":"$cancel_block","gasUsed":"0x5208","effectiveGasPrice":"0x500918bd800","logs":[]}},
-      {"method":"eth_getBlockByNumber","params":["finalized",false],"result":{"number":"0x12","hash":"$finalized"}},
-      {"method":"eth_getBlockByNumber","params":["0x11",false],"result":{"number":"0x11","hash":"$cancel_block"}}
     ]
   }
 }

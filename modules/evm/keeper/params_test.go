@@ -271,3 +271,41 @@ func TestFeeTokenParamsRateInvalidStoredValues(t *testing.T) {
 		})
 	}
 }
+
+func feeTokenRateBoundKeeper(t *testing.T) (*evmkeeper.Keeper, sdk.Context) {
+	t.Helper()
+	k, ctx := feeTokenParamsKeeper(t)
+	params := types.DefaultParams()
+	params.AllowedFeeDenoms = []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.MustNewDecFromStr("3.114"), RateUpdateHeight: 7}}
+	params.MaxFeeTokenSpread = sdk.NewDecWithPrec(5, 2)
+	k.SetParams(ctx, params)
+	return k, ctx
+}
+
+func TestFeeTokenParamsRateUpdateBeyondSpreadRefused(t *testing.T) {
+	k, ctx := feeTokenRateBoundKeeper(t)
+	for _, rate := range []string{"3.269700000000000001", "2.958299999999999999"} {
+		err := k.ValidateFeeTokenRateUpdate(ctx, []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.MustNewDecFromStr(rate), RateUpdateHeight: 8}})
+		require.ErrorIs(t, err, evmkeeper.ErrFeeTokenRateSpread, rate)
+		require.ErrorContains(t, err, `"usid"`)
+		require.ErrorContains(t, err, "3.114000000000000000")
+		require.ErrorContains(t, err, rate)
+		require.ErrorContains(t, err, "0.050000000000000000")
+	}
+	require.Equal(t, sdk.MustNewDecFromStr("3.114"), k.GetAllowedFeeDenoms(ctx)[0].Rate)
+}
+
+func TestFeeTokenParamsRateUpdateAtSpreadAccepted(t *testing.T) {
+	k, ctx := feeTokenRateBoundKeeper(t)
+	for _, rate := range []string{"3.2697", "2.9583"} {
+		require.NoError(t, k.ValidateFeeTokenRateUpdate(ctx, []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.MustNewDecFromStr(rate), RateUpdateHeight: 8}}), rate)
+	}
+}
+
+func TestFeeTokenParamsFirstRateAccepted(t *testing.T) {
+	k, ctx := feeTokenRateBoundKeeper(t)
+	require.NoError(t, k.ValidateFeeTokenRateUpdate(ctx, []types.AllowedFeeDenom{
+		{Denom: "usid", Rate: sdk.MustNewDecFromStr("3.114"), RateUpdateHeight: 8},
+		{Denom: "uasset", Rate: sdk.NewDec(1_000_000), RateUpdateHeight: 8},
+	}))
+}

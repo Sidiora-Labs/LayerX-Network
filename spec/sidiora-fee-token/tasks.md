@@ -195,7 +195,7 @@
     - Rewrite the #[cfg(test)] modules of price.rs and config.rs and tests/station.rs so the pricing refusals, the stale and missing rate refusals and the full quote, submit and collect cycle run against the governed rate, recording the currentRate and rateUpdatedAt responses in tests/fixtures; add no oracle fixture and no fake transport.
     - Close observation 1.3.1 in spec/sidiora-fee-token/qualification.kvx naming the revision at which the verify_cmd passes.
     - _Requirements: 2.2, 2.6_
-  - [x] 4.2 Release a refused sponsor nonce and journal replacement and cancellation
+  - [ ] 4.2 Release a refused sponsor nonce and journal replacement and cancellation
     - In interop/crates/layerx-gas-station/src/station.rs release the sponsor nonce a prepared transaction reserved when the node refuses it deterministically or drops it, so the next submission reuses that nonce, and never rebroadcast a journalled transaction whose quote deadline has passed.
     - For a submission that is dropped or whose quote has expired while its sponsor nonce is still unused on chain, fill the nonce with a replacement: a zero-value self-transfer at a replacement fee above the original by the minimum bump the node accepts, built in src/tx.rs and signed with the station key, so the nonce is never left open.
     - In src/journal.rs add append-only entries for a released nonce, a replacement with its fee and signed bytes, and a cancellation, written before the replacement is broadcast, so a restart resumes each lifecycle from the journal rather than re-signing; keep the duplicate-sponsor-nonce refusal for any entry that is not one of these.
@@ -252,7 +252,7 @@
     - Extend precompiles/feetoken/feetoken_test.go so clearing a withdrawn preference succeeds and a later read returns the network coin.
     - Close observation 2.6.4 in spec/sidiora-fee-token/qualification.kvx naming the revision at which the verify_cmd passes.
     - _Requirements: 9.2, 9.6, 10.2, 10.5, 10.7_
-  - [ ] 4.11 Bound every governed rate update by the maximum spread
+  - [x] 4.11 Bound every governed rate update by the maximum spread
     - In modules/evm/keeper/params.go add ValidateFeeTokenRateUpdate comparing each allowed denom's new rate with the rate stored for it and refusing, with a named error carrying the denom, both rates and the bound, a relative change whose absolute value exceeds GetMaxFeeTokenSpread; a denom with no stored rate is a first rate and is bounded by the validators alone.
     - In modules/evm/gov.go add a parameter-change handler that runs ValidateFeeTokenRateUpdate for a change to the x/evm allowed fee denoms before delegating to the params handler, and register it in node/app.go in place of the params route so no parameter change reaches the store unbounded; a change to any other key or subspace passes through unchanged.
     - Extend modules/evm/keeper/params_test.go under the FeeTokenParams prefix with an update beyond the bound upward and downward refused, an update exactly at the bound accepted and a first rate accepted; extend modules/evm/gov_test.go under the FeeTokenRateBound prefix with the handler refusing a beyond-bound proposal and leaving the stored rate unchanged, and node/app_feetoken_test.go under the FeeTokenRateBound prefix asserting the application routes parameter changes through it.
