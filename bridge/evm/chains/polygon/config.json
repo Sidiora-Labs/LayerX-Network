@@ -1,0 +1,34 @@
+{
+  "chain": "polygon",
+  "kind": "evm",
+  "chain_id": 137,
+  "native": {
+    "symbol": "POL",
+    "decimals": 18
+  },
+  "environment": {
+    "rpc_url": "PAXEER_BRIDGE_POLYGON_RPC_URL",
+    "deploy_key": "PAXEER_BRIDGE_POLYGON_DEPLOY_KEY",
+    "explorer_key": "PAXEER_BRIDGE_POLYGON_EXPLORER_KEY"
+  },
+  "owner": "PLACEHOLDER:owner",
+  "attestors": [
+    "PLACEHOLDER:attestor-1",
+    "PLACEHOLDER:attestor-2",
+    "PLACEHOLDER:attestor-3",
+    "PLACEHOLDER:attestor-4",
+    "PLACEHOLDER:attestor-5"
+  ],
+  "threshold": 3,
+  "finality_depth": 256,
+  "assets": [
+    {
+      "symbol": "POL",
+      "address": "0x0000000000000000000000000000000000000000",
+      "asset_id": "0x0000000000000000000000000000000000000000",
+      "decimals": 18,
+      "per_tx_cap": "500000000000000000000000",
+      "total_cap": "10000000000000000000000000"
+    }
+  ]
+}

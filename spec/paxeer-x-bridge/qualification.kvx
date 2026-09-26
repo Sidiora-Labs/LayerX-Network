@@ -34,3 +34,27 @@
 # Note: a [gate.*] record also carries exit_code, the exit status the command
 #   returned; evidence is the repository-relative log path that run wrote. An [observation.*] entry
 #   carries only the workflow.kvx shape keys listed above.
+
+[observation.1.4.1]
+task = "1.4"
+file = "bridge/deploy/chainconfig/config.go"
+symbol = "SolanaHandle"
+observed = "The Solana identity handle - the last twenty bytes of the keccak256 of a thirty-two byte key - is derived inside chainconfig because bridge/vectors does not exist at this revision, so the same derivation now lives in two packages once task 1.3 lands."
+assumption = "Task 1.3 owns the derivation and its vectors; the copy here is asserted against the committed wrapped SOL handle and should import that package once it exists rather than be re-derived a second time."
+severity = "assumption"
+
+[observation.1.4.2]
+task = "1.4"
+file = "bridge/deploy/deploy-solana-program.sh"
+symbol = "PAXEER_BRIDGE_SOLANA_ADMIN_CLI"
+observed = "Initialising the deployed program with its owner, attestor set and threshold and registering each asset needs a client that encodes those instructions, and no task in this feature creates one, so the script requires it through PAXEER_BRIDGE_SOLANA_ADMIN_CLI and refuses to deploy without an executable."
+assumption = "The bridge/solana program's own client is delivered elsewhere; until it exists the Solana deployment cannot be completed past the program upload, and the refusal names the variable rather than defaulting to anything."
+severity = "blocker"
+
+[observation.1.4.3]
+task = "1.4"
+file = "bridge/deploy/tests/deploy-scripts-check.sh"
+symbol = "deploy-scripts-check"
+observed = "The pinned Solana toolchain and the bridge/evm and bridge/solana sources are not present at this revision, so the offline check drives the Solana run only as far as the toolchain refusal and the two EVM scripts check the sources where they are used instead of at preflight."
+assumption = "A real build and deployment is the Solana dry run's ground, not this check's; the toolchain refusal proves every configuration and environment check before it passed."
+severity = "assumption"
