@@ -188,7 +188,7 @@
 ## Wave 4 - Close the ledger
 
 - [ ] 4. Resolve every open observation a task can resolve, then rerun the gate once
-  - [ ] 4.1 Price the gas station from the paymaster's governed rate
+  - [x] 4.1 Price the gas station from the paymaster's governed rate
     - In interop/crates/layerx-gas-station/src/price.rs make PriceSource return the governed rate - Sidiora base units per whole Paxeer coin and the time it was set - and add a source that reads it from the configured paymaster by eth_call to currentRate() and rateUpdatedAt() through the crate's JsonRpc transport, decoding each uint256 word and treating a revert (the paymaster's InvalidRate or StaleRate) as a missing or stale rate.
     - Remove OraclePriceSource, OracleTransport, the ORACLE address, decode_exchange_rates and OracleRate with its eth_call to the retired oracle precompile, and make Pricing compute the expected Sidiora amount from the one governed rate in integer arithmetic, keeping ceil_div, the margin, the spread check and every refusal: a missing, invalid, stale or overflowing rate and a zero gas cost.
     - In src/config.rs drop the oracle denom fields and keep the acceptable rate age, the spread and the margin with their typed refusals; in src/station.rs read the rate through the new PriceSource; update the lib documentation in src/lib.rs so it names the paymaster's governed rate as the station's only price source.

@@ -697,7 +697,7 @@ status = "pending"
 
 [task.4.1]
 title = "Price the gas station from the paymaster's governed rate"
-status = "pending"
+status = "done"
 wave = 4
 requires = []
 do_1 = "In interop/crates/layerx-gas-station/src/price.rs make PriceSource return the governed rate - Sidiora base units per whole Paxeer coin and the time it was set - and add a source that reads it from the configured paymaster by eth_call to currentRate() and rateUpdatedAt() through the crate's JsonRpc transport, decoding each uint256 word and treating a revert (the paymaster's InvalidRate or StaleRate) as a missing or stale rate."
@@ -709,6 +709,10 @@ verify_cmd = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/C
 symbols = ["PriceSource","PaymasterRateSource","GovernedRate","Pricing","PriceError"]
 touches = ["interop/crates/layerx-gas-station/src/price.rs","interop/crates/layerx-gas-station/src/config.rs","interop/crates/layerx-gas-station/src/station.rs","interop/crates/layerx-gas-station/src/lib.rs","interop/crates/layerx-gas-station/tests/station.rs","interop/crates/layerx-gas-station/tests/fixtures"]
 reqs = ["2.2","2.6"]
+revision = "ecebaa2f51cecadf1de6ca104b4609548e1c72a9"
+command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p layerx-gas-station --all-targets -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p layerx-gas-station'"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.4.2]
 title = "Release a refused sponsor nonce and journal replacement and cancellation"

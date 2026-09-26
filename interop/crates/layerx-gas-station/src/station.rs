@@ -193,10 +193,10 @@ impl<S: QuoteSigner, R: JsonRpc, P: PriceSource> GasStation<S, R, P> {
             "eth_getBalance",
             json!([hex(&key.sponsor), "pending"]),
         )?;
-        let rates = self.prices.exchange_rates().map_err(StationError::Price)?;
+        let rate = self.prices.governed_rate().map_err(StationError::Price)?;
         let signed = self
             .station
-            .quote(request, &rates, quantity(&balance)?, now)
+            .quote(request, &rate, quantity(&balance)?, now)
             .map_err(StationError::Quote)?;
         self.journal.append(&Entry::Quoted {
             quote: Box::new(QuoteRecord {

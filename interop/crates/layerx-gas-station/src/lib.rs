@@ -1,15 +1,17 @@
 //! Paxeer X Network sponsored submission library.
 //!
 //! Pass the JSON configuration file path to `StationConfig::load`. Fields are
-//! `chain_id`, `endpoints`, `paymaster`, `token`, `decimals`, `sid_denom`,
-//! `pax_denom`, `max_rate_age`, `spread_bps`, `margin_bps`, `per_account_limit`,
-//! `per_interval_limit`, `per_quote_limit`, `interval_seconds`, `balance_floor`,
-//! and `relayer_key_env`. Amount limits use SID base units; the balance floor
+//! `chain_id`, `endpoints`, `paymaster`, `token`, `decimals`, `max_rate_age`,
+//! `spread_bps`, `margin_bps`, `per_account_limit`, `per_interval_limit`,
+//! `per_quote_limit`, `interval_seconds`, `balance_floor`, and `relayer_key_env`. Amount limits use SID base units; the balance floor
 //! uses PAX base units. The configured `relayer_key_env` names the signing
 //! environment variable, conventionally `PAXEER_RELAYER_KEY`.
 //!
-//! Supply a governed `PriceSource` to `GasStation`; the retired oracle cannot
-//! supply rates. The paymaster also requires a governed rate before live use.
+//! The station's only price source is the paymaster's governed rate:
+//! `PaymasterRateSource` reads `currentRate()` and `rateUpdatedAt()` from the
+//! configured paymaster, in Sidiora base units per whole Paxeer coin. A revert,
+//! a missing rate, or a rate older than `max_rate_age` refuses the quote, and the
+//! quoted amount is the governed price plus `margin_bps`, within `spread_bps`.
 //! The caller opens a journal path such as `state/sponsorship.jsonl` and passes
 //! it to the station. Each JSON line is `quoted`, `prepared`, or `completed`,
 //! keyed by sponsor and quote nonce. Quotes persist reservations and signatures;
@@ -33,7 +35,7 @@ pub mod signer;
 
 use config::{ConfigError, StationConfig};
 use policy::{PolicyRefusal, QuotePolicy};
-use price::{OracleRate, PriceError, Pricing};
+use price::{GovernedRate, PriceError, Pricing};
 use quote::{quote_digest, word, Address, Quote, Word};
 use signer::{QuoteSigner, SignerError};
 
@@ -86,11 +88,11 @@ impl<S: QuoteSigner> Station<S> {
     }
 
     /// # Errors
-    /// Refuses invalid requests, oracle prices, exhausted budgets or signer failures.
+    /// Refuses invalid requests, unusable governed rates, exhausted budgets or signer failures.
     pub fn quote(
         &mut self,
         request: &QuoteRequest,
-        rates: &[OracleRate],
+        rate: &GovernedRate,
         balance: u128,
         now: u64,
     ) -> Result<SignedQuote, QuoteError> {
@@ -103,7 +105,7 @@ impl<S: QuoteSigner> Station<S> {
         }
         let amount = self
             .pricing
-            .quote(rates, request.gas_cost, now)
+            .quote(rate, request.gas_cost, now)
             .map_err(QuoteError::Price)?;
         if amount > request.max_token_amount {
             return Err(QuoteError::AboveMaximum);
@@ -147,34 +149,34 @@ mod tests {
         let mut station = Station::new(config, signer)?;
         let mut request = QuoteRequest {
             account: [0x11; 20],
-            max_token_amount: 2_100_000,
-            gas_cost: 1_000_000_000_000_000_000,
+            max_token_amount: 2_400_000,
+            gas_cost: 750_000_000_000_000_000,
             deadline: 1019,
             quote_nonce: word(7),
         };
-        let rates = price::tests::rates();
+        let rate = price::tests::RATE;
         request.max_token_amount = 1;
         assert!(matches!(
-            station.quote(&request, &rates, u128::MAX, 1000),
+            station.quote(&request, &rate, u128::MAX, 1000),
             Err(QuoteError::AboveMaximum)
         ));
-        request.max_token_amount = 2_100_000;
+        request.max_token_amount = 2_400_000;
         let result = station
-            .quote(&request, &rates, u128::MAX, 1000)
+            .quote(&request, &rate, u128::MAX, 1000)
             .unwrap_or_else(|e| panic!("{e:?}"));
-        assert_eq!(result.quote.token_amount, word(2_020_000));
+        assert_eq!(result.quote.token_amount, word(2_358_855));
         assert_eq!(
             result.digest,
             quote_digest(word(1325), request.account, &result.quote)
         );
         assert!(matches!(result.signature[64], 27 | 28));
         assert!(matches!(
-            station.quote(&request, &rates, u128::MAX, 1000),
+            station.quote(&request, &rate, u128::MAX, 1000),
             Err(QuoteError::Policy(PolicyRefusal::PerAccount))
         ));
         request.deadline = 1020;
         assert!(matches!(
-            station.quote(&request, &rates, u128::MAX, 1000),
+            station.quote(&request, &rate, u128::MAX, 1000),
             Err(QuoteError::InvalidRequest)
         ));
         Ok(())

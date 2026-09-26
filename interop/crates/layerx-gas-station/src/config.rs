@@ -23,8 +23,6 @@ pub struct StationConfig {
     pub paymaster: Address,
     pub token: Address,
     pub decimals: u8,
-    pub sid_denom: String,
-    pub pax_denom: String,
     pub max_rate_age: u64,
     pub spread_bps: u16,
     pub margin_bps: u16,
@@ -70,8 +68,6 @@ impl StationConfig {
             paymaster: address(&mut map, "paymaster")?,
             token: address(&mut map, "token")?,
             decimals: field(&mut map, "decimals")?,
-            sid_denom: field(&mut map, "sid_denom")?,
-            pax_denom: field(&mut map, "pax_denom")?,
             max_rate_age: field(&mut map, "max_rate_age")?,
             spread_bps: field(&mut map, "spread_bps")?,
             margin_bps: field(&mut map, "margin_bps")?,
@@ -136,8 +132,6 @@ impl StationConfig {
             ),
             ("token", self.token == SIDIORA),
             ("decimals", self.decimals == 6),
-            ("sid_denom", self.sid_denom == "usid"),
-            ("pax_denom", self.pax_denom == "uhpx"),
             (
                 "max_rate_age",
                 self.max_rate_age > 0 && self.max_rate_age <= 300,
@@ -183,8 +177,6 @@ pub(crate) mod tests {
             paymaster: [0x44; 20],
             token: SIDIORA,
             decimals: 6,
-            sid_denom: "usid".into(),
-            pax_denom: "uhpx".into(),
             max_rate_age: 300,
             spread_bps: 500,
             margin_bps: 100,
@@ -201,8 +193,7 @@ pub(crate) mod tests {
         serde_json::json!({"chain_id":1325,"endpoints":["https://paxeer.app"],
             "paymaster":"0x4444444444444444444444444444444444444444",
             "token":"0x21f7b20a555199fa73A238B1a91FD0f549068fEe","decimals":6,
-            "sid_denom":"usid","pax_denom":"uhpx","max_rate_age":300,"spread_bps":500,
-            "margin_bps":100,"per_account_limit":4_000_000,"per_interval_limit":8_000_000,
+            "max_rate_age":300,"spread_bps":500,"margin_bps":100,"per_account_limit":4_000_000,"per_interval_limit":8_000_000,
             "per_quote_limit":3_000_000,"interval_seconds":60,"balance_floor":100,
             "relayer_key_env":"PAXEER_RELAYER_KEY"})
     }
@@ -233,8 +224,6 @@ pub(crate) mod tests {
             ),
             ("token", serde_json::json!("invalid")),
             ("decimals", serde_json::json!(18)),
-            ("sid_denom", serde_json::json!("sid")),
-            ("pax_denom", serde_json::json!("pax")),
             ("max_rate_age", serde_json::json!(301)),
             ("spread_bps", serde_json::json!(501)),
             ("margin_bps", serde_json::json!(501)),
@@ -260,6 +249,37 @@ pub(crate) mod tests {
                 field: "unknown_field"
             })
         );
+    }
+
+    #[test]
+    fn rate_age_spread_and_margin_bounds_and_no_oracle_denoms() {
+        for (name, value) in [
+            ("max_rate_age", serde_json::json!(0)),
+            ("spread_bps", serde_json::json!(-1)),
+            ("margin_bps", serde_json::json!(-1)),
+        ] {
+            let mut value_map = json();
+            value_map[name] = value;
+            assert_eq!(
+                StationConfig::parse(&value_map.to_string()).err(),
+                Some(ConfigError { field: name })
+            );
+        }
+        let mut bounded = json();
+        bounded["max_rate_age"] = serde_json::json!(1);
+        bounded["spread_bps"] = serde_json::json!(0);
+        bounded["margin_bps"] = serde_json::json!(0);
+        assert!(StationConfig::parse(&bounded.to_string()).is_ok());
+        for retired in ["sid_denom", "pax_denom"] {
+            let mut value = json();
+            value[retired] = Value::String("usid".into());
+            assert_eq!(
+                StationConfig::parse(&value.to_string()).err(),
+                Some(ConfigError {
+                    field: "unknown_field"
+                })
+            );
+        }
     }
 
     #[test]

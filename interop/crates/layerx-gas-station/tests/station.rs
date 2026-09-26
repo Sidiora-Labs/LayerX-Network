@@ -7,7 +7,7 @@ use k256::ecdsa::SigningKey;
 use k256::elliptic_curve::rand_core::OsRng;
 use layerx_gas_station::config::StationConfig;
 use layerx_gas_station::journal::{Completion, Entry, Journal, Key};
-use layerx_gas_station::price::{OracleRate, PriceError, PriceSource};
+use layerx_gas_station::price::{PaymasterRateSource, PriceError};
 use layerx_gas_station::quote::{address_word, keccak, word, Address, Word, SIDIORA};
 use layerx_gas_station::rpc::{
     bytes, hex, quantity, ConfiguredRpc, Exchange, HttpsExchange, JsonRpc, RpcFault,
@@ -17,10 +17,12 @@ use layerx_gas_station::station::{
     GasStation, Progress, QuoteOutcome, StationError, SubmitRequest,
 };
 use layerx_gas_station::tx::{authorization_digest, batch_digest, Authorization, Call, Fees};
-use layerx_gas_station::QuoteRequest;
+use layerx_gas_station::{QuoteError, QuoteRequest};
 use serde_json::{json, Value};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+const AMOUNT: u128 = 3_145_140;
 
 struct CountedSigner {
     inner: LocalSigner,
@@ -33,32 +35,6 @@ impl QuoteSigner for CountedSigner {
     fn sign_digest(&self, digest: Word) -> Result<[u8; 65], SignerError> {
         self.count.set(self.count.get() + 1);
         self.inner.sign_digest(digest)
-    }
-}
-struct RecordedRates(Value);
-impl PriceSource for RecordedRates {
-    fn exchange_rates(&self) -> Result<Vec<OracleRate>, PriceError> {
-        self.0
-            .as_array()
-            .ok_or(PriceError::Malformed)?
-            .iter()
-            .map(|v| {
-                Ok(OracleRate {
-                    denom: v["denom"].as_str().ok_or(PriceError::Malformed)?.into(),
-                    exchange_rate: v["exchange_rate"]
-                        .as_str()
-                        .ok_or(PriceError::Malformed)?
-                        .into(),
-                    last_update: v["last_update"]
-                        .as_str()
-                        .ok_or(PriceError::Malformed)?
-                        .into(),
-                    last_update_timestamp: v["last_update_timestamp"]
-                        .as_i64()
-                        .ok_or(PriceError::Malformed)?,
-                })
-            })
-            .collect()
     }
 }
 struct Recording {
@@ -139,14 +115,12 @@ fn config() -> StationConfig {
         paymaster: [0x44; 20],
         token: SIDIORA,
         decimals: 6,
-        sid_denom: "usid".into(),
-        pax_denom: "uhpx".into(),
         max_rate_age: 300,
         spread_bps: 500,
         margin_bps: 100,
-        per_account_limit: 4_000_000,
-        per_interval_limit: 8_000_000,
-        per_quote_limit: 3_000_000,
+        per_account_limit: 8_000_000,
+        per_interval_limit: 16_000_000,
+        per_quote_limit: 4_000_000,
         interval_seconds: 60,
         balance_floor: 100,
         relayer_key_env: "PAXEER_STATION_TEST_KEY".into(),
@@ -173,6 +147,9 @@ fn recording(
     .concat();
     let bindings = BTreeMap::from([
         ("$sponsor", hex(&sponsor)),
+        ("$paymaster", hex(&[0x44; 20])),
+        ("$current_rate_call", hex(&keccak(b"currentRate()")[..4])),
+        ("$rate_updated_call", hex(&keccak(b"rateUpdatedAt()")[..4])),
         ("$account", hex(&account)),
         ("$token", hex(&SIDIORA)),
         ("$zero", hex(&word(0))),
@@ -184,7 +161,7 @@ fn recording(
         ("$account_word", hex(&address_word(account))),
         ("$sponsor_word", hex(&address_word(sponsor))),
         ("$token_word", hex(&address_word(SIDIORA))),
-        ("$amount", hex(&word(2_020_000))),
+        ("$amount", hex(&word(AMOUNT))),
         (
             "$transfer_topic",
             hex(&keccak(b"Transfer(address,address,uint256)")),
@@ -193,7 +170,7 @@ fn recording(
             "$sponsored_topic",
             hex(&keccak(b"Sponsored(address,address,uint256,uint256)")),
         ),
-        ("$sponsored_data", hex(&[word(2_020_000), word(7)].concat())),
+        ("$sponsored_data", hex(&[word(AMOUNT), word(7)].concat())),
         (
             "$balance_call",
             hex(&[
@@ -214,7 +191,11 @@ fn recording(
         journal: path,
     }))
 }
-type TestStation = GasStation<SharedSigner, ConfiguredRpc<ReplayExchange>, RecordedRates>;
+type TestStation = GasStation<
+    SharedSigner,
+    ConfiguredRpc<ReplayExchange>,
+    PaymasterRateSource<ConfiguredRpc<ReplayExchange>>,
+>;
 fn prepare_submission(
     station: &mut TestStation,
     config: &StationConfig,
@@ -231,7 +212,7 @@ fn prepare_submission(
     };
     let request = QuoteRequest {
         account,
-        max_token_amount: 2_100_000,
+        max_token_amount: 3_200_000,
         gas_cost: fees.gas_cost()?,
         deadline: 1019,
         quote_nonce: word(7),
@@ -239,7 +220,7 @@ fn prepare_submission(
     let QuoteOutcome::Signed(quoted) = station.quote(&request, fees, 1000)? else {
         panic!("expected quote")
     };
-    assert_eq!(quoted.quote.token_amount, word(2_020_000));
+    assert_eq!(quoted.quote.token_amount, word(AMOUNT));
     assert_eq!(signer.count.get(), 1);
     assert!(matches!(
         station.quote(&request, fees, 1000)?,
@@ -294,8 +275,25 @@ fn assert_balances(
         "eth_call",
         json!([{"to":hex(&SIDIORA),"data":data},"latest"]),
     )?;
-    assert_eq!(balance, hex(&word(2_020_000)));
+    assert_eq!(balance, hex(&word(AMOUNT)));
     Ok(())
+}
+fn open_station(
+    config: &StationConfig,
+    signer: &Rc<CountedSigner>,
+    recorded: &Rc<Recording>,
+    path: &std::path::Path,
+) -> Result<TestStation, StationError> {
+    GasStation::new(
+        config.clone(),
+        SharedSigner(Rc::clone(signer)),
+        ConfiguredRpc::new(config, ReplayExchange(Rc::clone(recorded)))?,
+        PaymasterRateSource::new(
+            ConfiguredRpc::new(config, ReplayExchange(Rc::clone(recorded)))?,
+            config.paymaster,
+        ),
+        Journal::open(path)?,
+    )
 }
 fn full_cycle(initial_phase: &str) -> TestResult {
     let config = config();
@@ -314,15 +312,7 @@ fn full_cycle(initial_phase: &str) -> TestResult {
     }
     let recorded = recording(path.clone(), account, sponsor)?;
     *recorded.phase.borrow_mut() = initial_phase.into();
-    let start = || {
-        GasStation::new(
-            config.clone(),
-            SharedSigner(Rc::clone(&signer)),
-            ConfiguredRpc::new(&config, ReplayExchange(Rc::clone(&recorded)))?,
-            RecordedRates(recorded.fixture["rates"].clone()),
-            Journal::open(&path)?,
-        )
-    };
+    let start = || open_station(&config, &signer, &recorded, &path);
     let mut station = start()?;
     let mut submit =
         prepare_submission(&mut station, &config, &account_signer, &signer, &recorded)?;
@@ -369,7 +359,7 @@ fn full_cycle(initial_phase: &str) -> TestResult {
     let expected = Completion::Included {
         hash: keccak(&recorded.sent.borrow()[0]),
         block_number: 16,
-        sid_collected: word(2_020_000),
+        sid_collected: word(AMOUNT),
         pax_spent: word(500_000_000_000_000_000),
     };
     assert_eq!(station.resume(key)?, Progress::Completed(expected));
@@ -411,6 +401,56 @@ impl QuoteSigner for SharedSigner {
 fn quote_submit_collect_restart_and_consumed_nonce() -> TestResult {
     full_cycle("submit")?;
     full_cycle("refused")
+}
+
+#[test]
+fn quote_refused_when_governed_rate_is_stale_or_missing() -> TestResult {
+    let mut config = config();
+    config.relayer_key_env = "PAXEER_STATION_RATE_TEST_KEY".into();
+    let inner = install_ephemeral_signer(&config)?;
+    let account = install_ephemeral_signer(&config)?.address();
+    let sponsor = inner.address();
+    let count = Rc::new(Cell::new(0));
+    let signer = Rc::new(CountedSigner {
+        inner,
+        count: Rc::clone(&count),
+    });
+    let path = std::env::temp_dir().join(format!("paxeer-rate-{}.jsonl", std::process::id()));
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    let recorded = recording(path.clone(), account, sponsor)?;
+    let mut station = open_station(&config, &signer, &recorded, &path)?;
+    let fees = Fees {
+        gas_limit: 200_000,
+        max_fee_per_gas: 5_000_000_000_000,
+        max_priority_fee_per_gas: 1_000_000_000,
+    };
+    let request = QuoteRequest {
+        account,
+        max_token_amount: 3_200_000,
+        gas_cost: fees.gas_cost()?,
+        deadline: 1019,
+        quote_nonce: word(7),
+    };
+    for (phase, source_refusal, pricing_refusal) in [
+        ("stale_rate", Some(PriceError::StaleRate), None),
+        ("aged_rate", None, Some(PriceError::StaleRate)),
+        ("missing_rate", Some(PriceError::MissingRate), None),
+    ] {
+        *recorded.phase.borrow_mut() = phase.into();
+        let refusal = match station.quote(&request, fees, 1000) {
+            Err(StationError::Price(refusal)) => (Some(refusal), None),
+            Err(StationError::Quote(QuoteError::Price(refusal))) => (None, Some(refusal)),
+            _ => (None, None),
+        };
+        assert_eq!(refusal, (source_refusal, pricing_refusal));
+        assert!(station.journal().state().items.is_empty());
+        assert_eq!(count.get(), 0);
+    }
+    drop(station);
+    std::fs::remove_file(&path)?;
+    Ok(())
 }
 
 #[test]

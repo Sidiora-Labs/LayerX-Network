@@ -1,15 +1,28 @@
 {
-  "rates": [
-    {"denom":"usid","exchange_rate":"1.000000000000000000","last_update":"10","last_update_timestamp":1000},
-    {"denom":"uhpx","exchange_rate":"2.000000000000000000","last_update":"10","last_update_timestamp":1000}
-  ],
   "phases": {
     "*": [
       {"method":"eth_chainId","params":[],"result":"0x52d"},
       {"method":"eth_getBalance","params":["$sponsor","pending"],"result":"0x3782dace9d900000"},
       {"method":"eth_getTransactionCount","params":["$account","pending"],"result":"0x0"},
       {"method":"eth_getTransactionCount","params":["$sponsor","pending"],"result":"0x5"},
-      {"method":"eth_call","params":[{"to":"$account","data":"$batch_nonce_call"},"pending"],"result":"$zero"}
+      {"method":"eth_call","params":[{"to":"$account","data":"$batch_nonce_call"},"pending"],"result":"$zero"},
+      {"method":"eth_call","params":[{"to":"$paymaster","data":"$rate_updated_call"},"latest"],"result":"0x00000000000000000000000000000000000000000000000000000000000003e8"},
+      {"method":"eth_call","params":[{"to":"$paymaster","data":"$current_rate_call"},"latest"],"result":"0x00000000000000000000000000000000000000000000000000000000002f8410"}
+    ],
+    "stale_rate": [
+      {"method":"eth_call","params":[{"to":"$account","data":"$consumed_call"},"finalized"],"result":"$zero"},
+      {"method":"eth_call","params":[{"to":"$paymaster","data":"$rate_updated_call"},"latest"],"result":"0x0000000000000000000000000000000000000000000000000000000000000258"},
+      {"method":"eth_call","params":[{"to":"$paymaster","data":"$current_rate_call"},"latest"],"error":{"code":3,"message":"execution reverted"}}
+    ],
+    "aged_rate": [
+      {"method":"eth_call","params":[{"to":"$account","data":"$consumed_call"},"finalized"],"result":"$zero"},
+      {"method":"eth_call","params":[{"to":"$paymaster","data":"$rate_updated_call"},"latest"],"result":"0x0000000000000000000000000000000000000000000000000000000000000258"},
+      {"method":"eth_call","params":[{"to":"$paymaster","data":"$current_rate_call"},"latest"],"result":"0x00000000000000000000000000000000000000000000000000000000002f8410"}
+    ],
+    "missing_rate": [
+      {"method":"eth_call","params":[{"to":"$account","data":"$consumed_call"},"finalized"],"result":"$zero"},
+      {"method":"eth_call","params":[{"to":"$paymaster","data":"$rate_updated_call"},"latest"],"result":"0x0000000000000000000000000000000000000000000000000000000000000000"},
+      {"method":"eth_call","params":[{"to":"$paymaster","data":"$current_rate_call"},"latest"],"error":{"code":3,"message":"execution reverted"}}
     ],
     "submit": [
       {"method":"eth_call","params":[{"to":"$account","data":"$consumed_call"},"finalized"],"result":"$zero"},

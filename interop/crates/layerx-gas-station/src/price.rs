@@ -1,9 +1,10 @@
-use crate::config::{ConfigError, StationConfig};
-use crate::quote::{keccak, Address};
+use serde_json::json;
 
-pub const ORACLE: Address = [
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10, 0x08,
-];
+use crate::config::{ConfigError, StationConfig};
+use crate::quote::{keccak, Address, Word};
+use crate::rpc::{bytes, hex, read, JsonRpc, RpcFault};
+
+pub const PAX_BASE_UNITS: u128 = 1_000_000_000_000_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PriceError {
@@ -18,161 +19,77 @@ pub enum PriceError {
 }
 impl std::fmt::Display for PriceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "oracle price refused: {self:?}")
+        write!(f, "governed rate refused: {self:?}")
     }
 }
 impl std::error::Error for PriceError {}
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OracleRate {
-    pub denom: String,
-    pub exchange_rate: String,
-    pub last_update: String,
-    pub last_update_timestamp: i64,
-}
-
-pub trait OracleTransport {
-    /// # Errors
-    /// Returns an unavailable or malformed response; never substitutes a rate.
-    fn eth_call(&self, address: Address, calldata: &[u8]) -> Result<Vec<u8>, PriceError>;
+/// The paymaster's governed rate: Sidiora base units per whole Paxeer coin,
+/// and the chain time at which that rate was set.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GovernedRate {
+    pub rate: u128,
+    pub updated_at: u64,
 }
 
 pub trait PriceSource {
     /// # Errors
-    /// Refuses unavailable or malformed oracle data.
-    fn exchange_rates(&self) -> Result<Vec<OracleRate>, PriceError>;
+    /// Refuses an unavailable, malformed, missing or stale governed rate; never substitutes one.
+    fn governed_rate(&self) -> Result<GovernedRate, PriceError>;
 }
 
-pub struct OraclePriceSource<T> {
-    transport: T,
+pub struct PaymasterRateSource<R> {
+    rpc: R,
+    paymaster: Address,
 }
-impl<T: OracleTransport> OraclePriceSource<T> {
+impl<R: JsonRpc> PaymasterRateSource<R> {
     #[must_use]
-    pub const fn new(transport: T) -> Self {
-        Self { transport }
+    pub const fn new(rpc: R, paymaster: Address) -> Self {
+        Self { rpc, paymaster }
     }
-}
-impl<T: OracleTransport> PriceSource for OraclePriceSource<T> {
-    fn exchange_rates(&self) -> Result<Vec<OracleRate>, PriceError> {
-        let selector = keccak(b"getExchangeRates()");
-        decode_exchange_rates(&self.transport.eth_call(ORACLE, &selector[..4])?)
-    }
-}
 
-fn abi_word(bytes: &[u8], start: usize) -> Result<&[u8], PriceError> {
-    bytes
-        .get(start..start.checked_add(32).ok_or(PriceError::Malformed)?)
-        .ok_or(PriceError::Malformed)
-}
-fn abi_offset(bytes: &[u8], start: usize) -> Result<usize, PriceError> {
-    let raw = abi_word(bytes, start)?;
-    if raw[..24].iter().any(|b| *b != 0) {
-        return Err(PriceError::Malformed);
-    }
-    let mut value = [0; 8];
-    value.copy_from_slice(&raw[24..]);
-    usize::try_from(u64::from_be_bytes(value)).map_err(|_| PriceError::Malformed)
-}
-fn offset(base: usize, relative: usize) -> Result<usize, PriceError> {
-    if !relative.is_multiple_of(32) {
-        return Err(PriceError::Malformed);
-    }
-    base.checked_add(relative).ok_or(PriceError::Malformed)
-}
-fn abi_string(bytes: &[u8], base: usize, head: usize) -> Result<String, PriceError> {
-    let start = offset(base, abi_offset(bytes, head)?)?;
-    let length = abi_offset(bytes, start)?;
-    let data = start.checked_add(32).ok_or(PriceError::Malformed)?;
-    let end = data.checked_add(length).ok_or(PriceError::Malformed)?;
-    let raw = bytes.get(data..end).ok_or(PriceError::Malformed)?;
-    String::from_utf8(raw.to_vec()).map_err(|_| PriceError::Malformed)
-}
-
-/// # Errors
-/// Refuses invalid ABI offsets, lengths, strings and signed timestamps.
-pub fn decode_exchange_rates(bytes: &[u8]) -> Result<Vec<OracleRate>, PriceError> {
-    if bytes.len() > 1_048_576 || !bytes.len().is_multiple_of(32) || abi_offset(bytes, 0)? != 32 {
-        return Err(PriceError::Malformed);
-    }
-    let count = abi_offset(bytes, 32)?;
-    if count > bytes.len() / 32 {
-        return Err(PriceError::Malformed);
-    }
-    let mut rates = Vec::with_capacity(count);
-    for index in 0..count {
-        let pair = offset(64, abi_offset(bytes, 64 + index * 32)?)?;
-        let denom = abi_string(bytes, pair, pair)?;
-        let rate = offset(
-            pair,
-            abi_offset(bytes, pair.checked_add(32).ok_or(PriceError::Malformed)?)?,
+    fn call(&self, signature: &[u8]) -> Result<Word, RpcFault> {
+        let result: String = read(
+            &self.rpc,
+            "eth_call",
+            json!([{"to":hex(&self.paymaster),"data":hex(&keccak(signature)[..4])},"latest"]),
         )?;
-        let raw = abi_word(bytes, rate.checked_add(64).ok_or(PriceError::Malformed)?)?;
-        let mut timestamp = [0; 8];
-        timestamp.copy_from_slice(&raw[24..]);
-        let timestamp = i64::from_be_bytes(timestamp);
-        let extension = if timestamp < 0 { 255 } else { 0 };
-        if raw[..24].iter().any(|byte| *byte != extension) {
-            return Err(PriceError::Malformed);
-        }
-        rates.push(OracleRate {
-            denom,
-            exchange_rate: abi_string(bytes, rate, rate)?,
-            last_update: abi_string(
-                bytes,
-                rate,
-                rate.checked_add(32).ok_or(PriceError::Malformed)?,
-            )?,
-            last_update_timestamp: timestamp,
-        });
+        bytes(&result)?.try_into().map_err(|_| RpcFault::Malformed)
     }
-    Ok(rates)
+}
+impl<R: JsonRpc> PriceSource for PaymasterRateSource<R> {
+    fn governed_rate(&self) -> Result<GovernedRate, PriceError> {
+        let updated_at = match self.call(b"rateUpdatedAt()") {
+            Ok(value) => uint(value).ok_or(PriceError::Malformed)?,
+            Err(RpcFault::Rejected { .. }) => return Err(PriceError::MissingRate),
+            Err(fault) => return Err(transport(fault)),
+        };
+        let updated_at = u64::try_from(updated_at).map_err(|_| PriceError::Malformed)?;
+        match self.call(b"currentRate()") {
+            Ok(value) => Ok(GovernedRate {
+                rate: uint(value).ok_or(PriceError::Overflow)?,
+                updated_at,
+            }),
+            Err(RpcFault::Rejected { .. }) if updated_at == 0 => Err(PriceError::MissingRate),
+            Err(RpcFault::Rejected { .. }) => Err(PriceError::StaleRate),
+            Err(fault) => Err(transport(fault)),
+        }
+    }
 }
 
-fn decimal(raw: &str) -> Result<u128, PriceError> {
-    if raw.is_empty() || raw.starts_with('.') || raw.ends_with('.') {
-        return Err(PriceError::InvalidRate);
+fn transport(fault: RpcFault) -> PriceError {
+    if fault == RpcFault::Malformed {
+        PriceError::Malformed
+    } else {
+        PriceError::Unavailable
     }
-    let mut value = 0_u128;
-    let mut fraction = None;
-    for byte in raw.bytes() {
-        if byte == b'.' && fraction.is_none() {
-            fraction = Some(0_u32);
-            continue;
-        }
-        if !byte.is_ascii_digit() {
-            return Err(PriceError::InvalidRate);
-        }
-        if let Some(count) = fraction.as_mut() {
-            *count += 1;
-            if *count > 18 {
-                return Err(PriceError::InvalidRate);
-            }
-        }
-        value = value
-            .checked_mul(10)
-            .and_then(|v| v.checked_add(u128::from(byte - b'0')))
-            .ok_or(PriceError::Overflow)?;
-    }
-    value = value
-        .checked_mul(10_u128.pow(18 - fraction.unwrap_or(0)))
-        .ok_or(PriceError::Overflow)?;
-    if value == 0 {
-        return Err(PriceError::InvalidRate);
-    }
-    Ok(value)
 }
 
-fn rate(rates: &[OracleRate], denom: &str, now: u64, max_age: u64) -> Result<u128, PriceError> {
-    let mut found = rates.iter().filter(|rate| rate.denom == denom);
-    let rate = found.next().ok_or(PriceError::MissingRate)?;
-    if found.next().is_some() {
-        return Err(PriceError::InvalidRate);
+fn uint(value: Word) -> Option<u128> {
+    if value[..16] != [0; 16] {
+        return None;
     }
-    let timestamp = u64::try_from(rate.last_update_timestamp).map_err(|_| PriceError::StaleRate)?;
-    if timestamp == 0 || timestamp > now || now - timestamp > max_age {
-        return Err(PriceError::StaleRate);
-    }
-    decimal(&rate.exchange_rate)
+    Some(u128::from_be_bytes(value[16..].try_into().ok()?))
 }
 
 fn ceil_div(value: u128, divisor: u128) -> Result<u128, PriceError> {
@@ -187,7 +104,7 @@ pub struct Pricing {
 }
 impl Pricing {
     /// # Errors
-    /// Refuses policy that exceeds the paymaster's oracle constraints.
+    /// Refuses policy that exceeds the paymaster's rate constraints.
     pub fn new(config: &StationConfig) -> Result<Self, ConfigError> {
         config.validate()?;
         Ok(Self {
@@ -196,14 +113,9 @@ impl Pricing {
     }
 
     /// # Errors
-    /// Refuses missing, invalid, stale or overflowing prices and a margin outside the spread.
-    pub fn quote(
-        &self,
-        rates: &[OracleRate],
-        gas_cost: u128,
-        now: u64,
-    ) -> Result<u128, PriceError> {
-        let expected = self.expected(rates, gas_cost, now)?;
+    /// Refuses missing, invalid, stale or overflowing rates and a margin outside the spread.
+    pub fn quote(&self, rate: &GovernedRate, gas_cost: u128, now: u64) -> Result<u128, PriceError> {
+        let expected = self.expected(rate, gas_cost, now)?;
         let amount = ceil_div(
             expected
                 .checked_mul(10_000 + u128::from(self.config.margin_bps))
@@ -215,25 +127,36 @@ impl Pricing {
     }
 
     /// # Errors
-    /// Refuses an implied rate outside the configured spread or invalid oracle data.
+    /// Refuses an implied rate outside the configured spread or an unusable governed rate.
     pub fn validate_amount(
         &self,
-        rates: &[OracleRate],
+        rate: &GovernedRate,
         gas_cost: u128,
         amount: u128,
         now: u64,
     ) -> Result<(), PriceError> {
-        self.check_spread(self.expected(rates, gas_cost, now)?, amount)
+        self.check_spread(self.expected(rate, gas_cost, now)?, amount)
     }
 
-    fn expected(&self, rates: &[OracleRate], gas_cost: u128, now: u64) -> Result<u128, PriceError> {
+    fn expected(&self, rate: &GovernedRate, gas_cost: u128, now: u64) -> Result<u128, PriceError> {
         if gas_cost == 0 {
             return Err(PriceError::ZeroGas);
         }
-        let sid = rate(rates, &self.config.sid_denom, now, self.config.max_rate_age)?;
-        let pax = rate(rates, &self.config.pax_denom, now, self.config.max_rate_age)?;
-        let sid_wei = ceil_div(gas_cost.checked_mul(pax).ok_or(PriceError::Overflow)?, sid)?;
-        ceil_div(sid_wei, 1_000_000_000_000)
+        if rate.rate == 0 {
+            return Err(PriceError::InvalidRate);
+        }
+        if rate.updated_at == 0 {
+            return Err(PriceError::MissingRate);
+        }
+        if rate.updated_at > now || now - rate.updated_at > self.config.max_rate_age {
+            return Err(PriceError::StaleRate);
+        }
+        ceil_div(
+            gas_cost
+                .checked_mul(rate.rate)
+                .ok_or(PriceError::Overflow)?,
+            PAX_BASE_UNITS,
+        )
     }
 
     fn check_spread(&self, expected: u128, amount: u128) -> Result<(), PriceError> {
@@ -259,139 +182,153 @@ impl Pricing {
 pub(crate) mod tests {
     use super::*;
     use crate::config::tests::config;
-    use crate::quote::word;
+    use crate::rpc::{ConfiguredRpc, Exchange};
+    use serde_json::Value;
 
-    pub(crate) fn rates() -> Vec<OracleRate> {
-        vec![
-            OracleRate {
-                denom: "usid".into(),
-                exchange_rate: "1.000000000000000000".into(),
-                last_update: "10".into(),
-                last_update_timestamp: 1000,
-            },
-            OracleRate {
-                denom: "uhpx".into(),
-                exchange_rate: "2.000000000000000000".into(),
-                last_update: "10".into(),
-                last_update_timestamp: 1000,
-            },
-        ]
+    pub(crate) const RATE: GovernedRate = GovernedRate {
+        rate: 3_114_000,
+        updated_at: 1000,
+    };
+
+    struct RecordedPaymaster {
+        paymaster: Address,
+        responses: Value,
     }
-    fn string(value: &str) -> Vec<u8> {
-        let mut bytes = word(value.len() as u128).to_vec();
-        bytes.extend_from_slice(value.as_bytes());
-        bytes.resize(bytes.len().div_ceil(32) * 32, 0);
-        bytes
-    }
-    fn encoded_rates() -> Vec<u8> {
-        let mut pairs = Vec::new();
-        for rate in rates() {
-            let denom = string(&rate.denom);
-            let value = string(&rate.exchange_rate);
-            let updated = string(&rate.last_update);
-            let pair = [
-                word(64).to_vec(),
-                word((64 + denom.len()) as u128).to_vec(),
-                denom,
-                word(96).to_vec(),
-                word((96 + value.len()) as u128).to_vec(),
-                word(1000).to_vec(),
-                value,
-                updated,
-            ]
-            .concat();
-            pairs.push(pair);
+    impl Exchange for RecordedPaymaster {
+        fn request(&self, _: &str, method: &str, params: &Value) -> Result<Value, RpcFault> {
+            assert_eq!(method, "eth_call");
+            assert_eq!(params[0]["to"], hex(&self.paymaster));
+            assert_eq!(params[1], "latest");
+            let name = ["currentRate()", "rateUpdatedAt()"]
+                .into_iter()
+                .find(|name| params[0]["data"] == hex(&keccak(name.as_bytes())[..4]))
+                .ok_or(RpcFault::Malformed)?;
+            let response = &self.responses[name];
+            if response["fault"] == "unavailable" {
+                return Err(RpcFault::Unavailable);
+            }
+            if let Some(code) = response["error"]["code"].as_i64() {
+                return Err(RpcFault::Rejected { code });
+            }
+            Ok(response["result"].clone())
         }
-        [
-            word(32).to_vec(),
-            word(2).to_vec(),
-            word(64).to_vec(),
-            word((64 + pairs[0].len()) as u128).to_vec(),
-            pairs.concat(),
-        ]
-        .concat()
     }
-    #[test]
-    fn oracle_abi_nested_tuples_and_malformed_inputs() {
-        let bytes = encoded_rates();
-        assert_eq!(decode_exchange_rates(&bytes), Ok(rates()));
-        for length in 0..bytes.len() {
-            assert!(decode_exchange_rates(&bytes[..length]).is_err());
-        }
-        let mut bad = bytes;
-        bad[64] = 255;
-        assert_eq!(decode_exchange_rates(&bad), Err(PriceError::Malformed));
-        let abi: serde_json::Value =
-            serde_json::from_str(include_str!("../../../../precompiles/oracle/abi.json"))
-                .unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(abi[0]["name"], "getExchangeRates");
-        assert_eq!(abi[0]["inputs"].as_array().map(Vec::len), Some(0));
-        assert_eq!(
-            abi[0]["outputs"][0]["components"][1]["components"][2]["type"],
-            "int64"
-        );
+    fn source(case: &str) -> Result<PaymasterRateSource<impl JsonRpc>, Box<dyn std::error::Error>> {
+        let recorded: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/paymaster_rate.json"))?;
+        let config = config();
+        let rpc = ConfiguredRpc::new(
+            &config,
+            RecordedPaymaster {
+                paymaster: config.paymaster,
+                responses: recorded[case].clone(),
+            },
+        )?;
+        Ok(PaymasterRateSource::new(rpc, config.paymaster))
     }
+
     #[test]
-    fn pricing_and_all_refusals() -> Result<(), Box<dyn std::error::Error>> {
-        let pricing = Pricing::new(&config())?;
+    fn paymaster_rate_read_from_current_rate_and_update_time(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(source("fresh")?.governed_rate(), Ok(RATE));
+        Ok(())
+    }
+
+    #[test]
+    fn paymaster_revert_reads_as_stale_or_missing() -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(source("stale")?.governed_rate(), Err(PriceError::StaleRate));
         assert_eq!(
-            pricing.quote(&rates(), 1_000_000_000_000_000_000, 1000),
-            Ok(2_020_000)
-        );
-        assert_eq!(pricing.quote(&[], 1, 1000), Err(PriceError::MissingRate));
-        assert_eq!(
-            pricing.quote(&rates()[..1], 1, 1000),
+            source("missing")?.governed_rate(),
             Err(PriceError::MissingRate)
         );
-        for timestamp in [-1, 0, 699, 1001] {
-            let mut raw = rates();
-            raw[0].last_update_timestamp = timestamp;
-            assert_eq!(pricing.quote(&raw, 1, 1000), Err(PriceError::StaleRate));
-        }
-        let mut raw = rates();
-        raw[0].last_update_timestamp = 700;
-        assert!(pricing.quote(&raw, 1_000_000_000_000_000_000, 1000).is_ok());
-        for invalid in [
-            "0",
-            "-1",
-            "1.2.3",
-            "1e18",
-            ".1",
-            "1.",
-            "1.0000000000000000001",
-            "",
-        ] {
-            let mut raw = rates();
-            raw[0].exchange_rate = invalid.into();
-            assert_eq!(pricing.quote(&raw, 1, 1000), Err(PriceError::InvalidRate));
-        }
-        let mut raw = rates();
-        raw.push(raw[0].clone());
-        assert_eq!(pricing.quote(&raw, 1, 1000), Err(PriceError::InvalidRate));
-        assert_eq!(pricing.quote(&rates(), 0, 1000), Err(PriceError::ZeroGas));
+        Ok(())
+    }
+
+    #[test]
+    fn paymaster_unreadable_responses_refused() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(
-            pricing.quote(&rates(), u128::MAX, 1000),
+            source("unavailable")?.governed_rate(),
+            Err(PriceError::Unavailable)
+        );
+        assert_eq!(source("short")?.governed_rate(), Err(PriceError::Malformed));
+        assert_eq!(source("wide")?.governed_rate(), Err(PriceError::Overflow));
+        Ok(())
+    }
+
+    #[test]
+    fn pricing_from_governed_rate() -> Result<(), Box<dyn std::error::Error>> {
+        let pricing = Pricing::new(&config())?;
+        assert_eq!(pricing.quote(&RATE, PAX_BASE_UNITS, 1000), Ok(3_145_140));
+        let mut aged = RATE;
+        aged.updated_at = 700;
+        assert_eq!(pricing.quote(&aged, PAX_BASE_UNITS, 1000), Ok(3_145_140));
+        let mut cfg = config();
+        cfg.margin_bps = 0;
+        let unit = GovernedRate {
+            rate: 1,
+            updated_at: 1000,
+        };
+        assert_eq!(Pricing::new(&cfg)?.quote(&unit, 1, 1000), Ok(1));
+        Ok(())
+    }
+
+    #[test]
+    fn missing_invalid_and_stale_rates_refused() -> Result<(), Box<dyn std::error::Error>> {
+        let pricing = Pricing::new(&config())?;
+        let mut missing = RATE;
+        missing.updated_at = 0;
+        assert_eq!(
+            pricing.quote(&missing, 1, 1000),
+            Err(PriceError::MissingRate)
+        );
+        let mut invalid = RATE;
+        invalid.rate = 0;
+        assert_eq!(
+            pricing.quote(&invalid, 1, 1000),
+            Err(PriceError::InvalidRate)
+        );
+        for updated_at in [699, 1001] {
+            let mut stale = RATE;
+            stale.updated_at = updated_at;
+            assert_eq!(pricing.quote(&stale, 1, 1000), Err(PriceError::StaleRate));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn zero_gas_and_overflow_refused() -> Result<(), Box<dyn std::error::Error>> {
+        let pricing = Pricing::new(&config())?;
+        assert_eq!(pricing.quote(&RATE, 0, 1000), Err(PriceError::ZeroGas));
+        assert_eq!(
+            pricing.quote(&RATE, u128::MAX, 1000),
             Err(PriceError::Overflow)
         );
-        for amount in [1_899_999, 2_100_001] {
+        Ok(())
+    }
+
+    #[test]
+    fn amounts_outside_spread_refused() -> Result<(), Box<dyn std::error::Error>> {
+        let pricing = Pricing::new(&config())?;
+        for amount in [2_958_299, 3_269_701] {
             assert_eq!(
-                pricing.validate_amount(&rates(), 1_000_000_000_000_000_000, amount, 1000),
+                pricing.validate_amount(&RATE, PAX_BASE_UNITS, amount, 1000),
                 Err(PriceError::OutsideSpread)
             );
         }
-        for amount in [1_900_000, 2_100_000] {
+        for amount in [2_958_300, 3_269_700] {
             assert_eq!(
-                pricing.validate_amount(&rates(), 1_000_000_000_000_000_000, amount, 1000),
+                pricing.validate_amount(&RATE, PAX_BASE_UNITS, amount, 1000),
                 Ok(())
             );
         }
-        let mut cfg = config();
-        cfg.margin_bps = 0;
-        let mut raw = rates();
-        raw[0].exchange_rate = "3".into();
-        raw[1].exchange_rate = "1".into();
-        assert_eq!(Pricing::new(&cfg)?.quote(&raw, 1, 1000), Ok(1));
-        assert_eq!(pricing.quote(&raw, 1, 1000), Err(PriceError::OutsideSpread));
+        let unit = GovernedRate {
+            rate: 1,
+            updated_at: 1000,
+        };
+        assert_eq!(
+            pricing.quote(&unit, 1, 1000),
+            Err(PriceError::OutsideSpread)
+        );
         Ok(())
     }
 }
