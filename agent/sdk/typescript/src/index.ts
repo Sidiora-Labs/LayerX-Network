@@ -31,3 +31,4 @@ export * from "./bridge.js";
 export * from "./launchpad.js";
 export * from "./perps.js";
 export * from "./spot.js";
+export * from "./web-search.js";

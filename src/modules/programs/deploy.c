@@ -87,10 +87,12 @@ lxp_result lxp_programs_abi_transition_validate(uint16_t current,
 {
     if ((current != 0U && current != LX_PROGRAMS_ABI_VERSION &&
          current != LX_PROGRAMS_ACCOUNT_ABI_VERSION &&
-         current != LX_PROGRAMS_SANDBOX_ABI_VERSION) ||
+         current != LX_PROGRAMS_SANDBOX_ABI_VERSION &&
+         current != LX_PROGRAMS_GUEST_ABI_V4_VERSION) ||
         (requested != LX_PROGRAMS_ABI_VERSION &&
          requested != LX_PROGRAMS_ACCOUNT_ABI_VERSION &&
-         requested != LX_PROGRAMS_SANDBOX_ABI_VERSION) ||
+         requested != LX_PROGRAMS_SANDBOX_ABI_VERSION &&
+         requested != LX_PROGRAMS_GUEST_ABI_V4_VERSION) ||
         (current != 0U && requested < current))
         return LXP_ERR_VERSION_UNSUPPORTED;
     return LXP_OK;

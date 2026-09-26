@@ -574,7 +574,7 @@ impl PerpsMarket {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PerpsPayload {
     /// `0x00060001`: create a market.
-    MarketCreate(PerpsMarket),
+    MarketCreate(Box<PerpsMarket>),
     /// `0x00060002`: halt or resume a market.
     MarketHalt { market_id: [u8; 32], halted: bool },
     /// `0x00060003`: push an oracle observation.
@@ -794,7 +794,7 @@ impl PerpsPayload {
         }
         let mut reader = Reader(bytes);
         let decoded = match activity_type.ordinal() {
-            1 => Self::MarketCreate(PerpsMarket::decode(&mut reader)?),
+            1 => Self::MarketCreate(Box::new(PerpsMarket::decode(&mut reader)?)),
             2 => {
                 let market_id = reader.nonzero_id()?;
                 Self::MarketHalt {

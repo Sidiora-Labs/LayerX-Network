@@ -1,0 +1,9 @@
+  Line one		with  tabs   
+Line two
+Line three bell
+
+
+
+
+After blanks   
+	

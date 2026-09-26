@@ -7,6 +7,7 @@ use layerx_programs_runtime::{
     admit_abi_upgrade, admit_abi_version, AbiRevision, ActivityBudgetBinding, CompositionContext,
     CompositionRefusal, CompositionRules, EngineRefusal, ProgramId, ProgramResolver,
     ValidatedModule, ValidationRefusal, WasmEngine, ABI_V1_VERSION, ABI_V2_VERSION, ABI_V3_VERSION,
+    ABI_V4_VERSION,
 };
 
 use crate::{ProgramLifecycle, ReadFreshness, VerifiedDeploymentEvidence, VerifiedProgramHead};
@@ -182,6 +183,7 @@ impl VerifiedProgramCatalog {
             ABI_V1_VERSION => AbiRevision::V1,
             ABI_V2_VERSION => AbiRevision::V2,
             ABI_V3_VERSION => AbiRevision::V3,
+            ABI_V4_VERSION => AbiRevision::V4,
             declared => {
                 return Err(ExecutableAdmissionError::AbiVersion(
                     layerx_programs_runtime::AbiVersionRefusal::Unsupported {
@@ -194,6 +196,7 @@ impl VerifiedProgramCatalog {
             AbiRevision::V1 => self.engine.validate(evidence.module()),
             AbiRevision::V2 => self.engine.validate_v2(evidence.module()),
             AbiRevision::V3 => self.engine.validate_v3(evidence.module()),
+            AbiRevision::V4 => self.engine.validate_v4(evidence.module()),
         }
         .map_err(ExecutableAdmissionError::Validation)?;
         if module.abi_revision() != expected_revision {

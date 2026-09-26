@@ -180,7 +180,7 @@ impl<'a> Request<'a> {
     /// reserved identifiers, labels outside the grammar and occupancy terms
     /// outside the reference bound.
     pub fn decode(input: &'a [u8]) -> Result<Self, ProgramError> {
-        if input.get(..3) != Some(&[b'L', b'X', b'N']) || input.get(4..6) != Some(&[1, 0x20]) {
+        if input.get(..3) != Some(b"LXN") || input.get(4..6) != Some(&[1, 0x20]) {
             return Err(malformed());
         }
         let length =

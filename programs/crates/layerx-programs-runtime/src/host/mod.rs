@@ -11,6 +11,7 @@ mod scan;
 mod signature;
 mod storage;
 mod transfer;
+mod web;
 
 use wasmi::{Caller, Engine, InstancePre, Linker, Module, Store};
 
@@ -166,6 +167,7 @@ fn abi_revision_byte(revision: AbiRevision) -> u8 {
         AbiRevision::V1 => 1,
         AbiRevision::V2 => 2,
         AbiRevision::V3 => 3,
+        AbiRevision::V4 => 4,
     }
 }
 
@@ -1090,6 +1092,7 @@ pub(crate) fn linker(engine: &Engine) -> Result<HostLinker, ExecutionFault> {
     transfer::register_v2(&mut linker)?;
     balance::register_v2(&mut linker)?;
     oracle::register_v3(&mut linker)?;
+    web::register_v4(&mut linker)?;
     transfer::register(&mut linker)?;
     linker
         .func_wrap(
@@ -1129,7 +1132,8 @@ pub(crate) fn linker(engine: &Engine) -> Result<HostLinker, ExecutionFault> {
         .map_err(|error| linker_fault(&error))?;
     let registered_function_count = crate::abi::HOST_FUNCTIONS.len()
         + crate::abi::manifest::ABI_V2_HOST_FUNCTIONS.len()
-        + crate::abi::manifest::ABI_V3_HOST_FUNCTIONS.len();
+        + crate::abi::manifest::ABI_V3_HOST_FUNCTIONS.len()
+        + crate::abi::manifest::ABI_V4_HOST_FUNCTIONS.len();
     Ok(HostLinker {
         linker,
         construction_count: 1,

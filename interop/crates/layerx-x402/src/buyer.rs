@@ -59,6 +59,8 @@ struct LayerXEvidence {
     receipt: String,
     receipt_digest: String,
     verification_level: String,
+    #[serde(default)]
+    purpose_hash: Option<String>,
 }
 
 /// x402 buyer with a closed list of supported scheme/network pairs.
@@ -151,7 +153,9 @@ impl Buyer {
     /// # Errors
     ///
     /// Refuses pending/failed responses as success, missing or mismatched
-    /// evidence, malformed receipts and unauthorised sequencer signatures.
+    /// evidence, malformed receipts and unauthorised sequencer signatures,
+    /// a grant settlement whose `purposeHash` is absent or is not the one the
+    /// accepted offer carries, and an exact settlement carrying one.
     pub fn capture_settlement(
         response_header: &str,
         expected: &BuiltPayment,
@@ -171,7 +175,10 @@ impl Buyer {
             .ok_or_else(|| fail(X402Error::EvidenceMissing))?;
         let evidence: LayerXEvidence =
             serde_json::from_value(evidence_value).map_err(|_| fail(X402Error::EvidenceMissing))?;
-        if evidence.verification_level != "sequencer-signed" {
+        if evidence.verification_level != "sequencer-signed"
+            || evidence.purpose_hash
+                != expected_purpose(&expected.payload.accepted).map_err(fail)?
+        {
             return Err(fail(X402Error::EvidenceMismatch));
         }
         let canonical_receipt = STANDARD
@@ -208,6 +215,28 @@ impl Buyer {
             receipt_digest,
         })
     }
+}
+
+/// The `purposeHash` a settlement of `accepted` must repeat: none for an
+/// exact offer, and for a metered or subscription grant offer the 64 lowercase
+/// hexadecimal characters of its challenge, which such an offer must carry.
+fn expected_purpose(accepted: &PaymentRequirements) -> Result<Option<String>, X402Error> {
+    if !matches!(accepted.scheme.as_str(), "metered" | "subscription") {
+        return Ok(None);
+    }
+    accepted
+        .extra
+        .as_ref()
+        .and_then(|extra| extra.pointer("/layerx/purposeHash"))
+        .and_then(Value::as_str)
+        .filter(|purpose| {
+            purpose.len() == 64
+                && purpose
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+        .map(|purpose| Some(purpose.to_owned()))
+        .ok_or(X402Error::EvidenceMismatch)
 }
 
 fn hex(bytes: &[u8; 32]) -> String {

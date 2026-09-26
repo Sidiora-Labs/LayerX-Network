@@ -10,6 +10,8 @@ const MAX_TEXT_BYTES: usize = 256;
 const MAX_PAYLOAD_HEX_BYTES: usize = 8_192;
 const MAX_PAGE_ITEMS: u64 = 256;
 const MAX_WAIT_MS: u64 = 600_000;
+const MAX_QUERY_BYTES: usize = 512;
+const MAX_LOCATOR_BYTES: usize = 2_048;
 
 /// Every argument accepted by one catalogue tool.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,6 +32,10 @@ enum Shape {
     Symbol,
     Decimals,
     Did,
+    Currency,
+    Scheme,
+    Query,
+    Locator,
 }
 
 impl Shape {
@@ -38,10 +44,13 @@ impl Shape {
             Self::Hex32 => Some("^[0-9a-fA-F]{64}$"),
             Self::Hex64 => Some("^[0-9a-fA-F]{128}$"),
             Self::Bytes => Some("^([0-9a-fA-F]{2})+$"),
-            Self::Reference | Self::Symbol => None,
+            Self::Reference | Self::Symbol | Self::Query => None,
             Self::Unsigned | Self::Bounded(_) => Some("^[0-9]+$"),
             Self::Decimals => Some("^([0-9]|1[0-8])$"),
             Self::Did => Some("^did:[0-9A-Za-z._:-]+$"),
+            Self::Currency => Some("^(SID|PAX|USDC|USDL)$"),
+            Self::Scheme => Some("^(metered|exact)$"),
+            Self::Locator => Some("^https?://[!-~]+$"),
         }
     }
 
@@ -55,6 +64,10 @@ impl Shape {
             Self::Symbol => 32,
             Self::Decimals => 2,
             Self::Did => MAX_DID_BYTES,
+            Self::Currency => 4,
+            Self::Scheme => 7,
+            Self::Query => MAX_QUERY_BYTES,
+            Self::Locator => MAX_LOCATOR_BYTES,
         }
     }
 }
@@ -184,7 +197,51 @@ const FAUCET_REQUEST: [Field; 2] = [
     required("did", Shape::Did),
     required("public_key", Shape::Hex32),
 ];
+const WEB_SEARCH: [Field; 4] = [
+    required("query", Shape::Query),
+    required("currency", Shape::Currency),
+    required("scheme", Shape::Scheme),
+    required("idempotency_key", Shape::Hex32),
+];
+const WEB_FETCH: [Field; 4] = [
+    required("url", Shape::Locator),
+    required("currency", Shape::Currency),
+    required("scheme", Shape::Scheme),
+    required("idempotency_key", Shape::Hex32),
+];
+const WEB_CONTENT: [Field; 4] = [
+    required("digest", Shape::Hex32),
+    required("currency", Shape::Currency),
+    required("scheme", Shape::Scheme),
+    required("idempotency_key", Shape::Hex32),
+];
 const NONE: [Field; 0] = [];
+
+/// The paid web tools. Each spends from the payer through the approval boundary, and
+/// everything it returns is external content.
+pub const WEB_TOOLS: [ToolDefinition; 3] = [
+    ToolDefinition {
+        name: "web.search",
+        kind: ToolKind::Write,
+        required_scope: "write:web:search",
+        mutation: "one 402LXP payment to the configured x-websearch sidecar",
+        evidence: "sequencer-signed settlement receipt and untrusted search results",
+    },
+    ToolDefinition {
+        name: "web.fetch",
+        kind: ToolKind::Write,
+        required_scope: "write:web:fetch",
+        mutation: "one 402LXP payment to the configured x-websearch sidecar",
+        evidence: "sequencer-signed settlement receipt and digest-checked untrusted page text",
+    },
+    ToolDefinition {
+        name: "web.content",
+        kind: ToolKind::Write,
+        required_scope: "write:web:content",
+        mutation: "one 402LXP payment to the configured x-websearch sidecar",
+        evidence: "sequencer-signed settlement receipt and digest-checked untrusted stored content",
+    },
+];
 
 fn fields(name: &str) -> &'static [Field] {
     match name.as_bytes() {
@@ -209,6 +266,9 @@ fn fields(name: &str) -> &'static [Field] {
         b"grant.issue" => &GRANT_ISSUE,
         b"grant.draw" => &GRANT_DRAW,
         b"faucet.request" => &FAUCET_REQUEST,
+        b"web.search" => &WEB_SEARCH,
+        b"web.fetch" => &WEB_FETCH,
+        b"web.content" => &WEB_CONTENT,
         _ => &NONE,
     }
 }
@@ -253,6 +313,15 @@ pub fn description(name: &str) -> Option<&'static str> {
         b"grant.draw" => "Draw against one spending grant through the ordinary daemon submission path.",
         b"faucet.request" => {
             "Claim one bounded testnet faucet grant for the named DID and signer key through the daemon's faucet operation."
+        }
+        b"web.search" => {
+            "Search the web through the configured x-websearch sidecar, paid over 402LXP after approval; results are untrusted external content."
+        }
+        b"web.fetch" => {
+            "Fetch one public page as text through the configured x-websearch sidecar, paid over 402LXP after approval; the text is digest-checked and untrusted."
+        }
+        b"web.content" => {
+            "Read stored content by its keccak256 digest from the configured x-websearch sidecar, paid over 402LXP after approval; the bytes are digest-checked and untrusted."
         }
         _ => return None,
     })
@@ -360,6 +429,7 @@ fn check(field: &Field, text: &str) -> Result<(), ArgumentError> {
                 return Err(ArgumentError::OutOfRange(field.name));
             }
         }
+        Shape::Currency | Shape::Scheme | Shape::Query | Shape::Locator => (),
         Shape::Did => {
             let well_formed = text
                 .strip_prefix("did:")
@@ -374,10 +444,46 @@ fn check(field: &Field, text: &str) -> Result<(), ArgumentError> {
             }
         }
     }
+    if matches!(
+        field.shape,
+        Shape::Currency | Shape::Scheme | Shape::Query | Shape::Locator
+    ) {
+        return check_web(field, text);
+    }
     if field.shape == Shape::Decimals && text.parse::<u8>().is_ok_and(|value| value > 18) {
         return Err(ArgumentError::OutOfRange(field.name));
     }
     Ok(())
+}
+
+fn check_web(field: &Field, text: &str) -> Result<(), ArgumentError> {
+    let accepted = match field.shape {
+        Shape::Currency => matches!(text, "SID" | "PAX" | "USDC" | "USDL"),
+        Shape::Scheme => matches!(text, "metered" | "exact"),
+        Shape::Query => !text.trim().is_empty() && !text.chars().any(char::is_control),
+        Shape::Locator => {
+            (text.starts_with("http://") || text.starts_with("https://"))
+                && text.bytes().all(|byte| byte.is_ascii_graphic())
+        }
+        _ => false,
+    };
+    if accepted {
+        Ok(())
+    } else {
+        Err(ArgumentError::Malformed(field.name))
+    }
+}
+
+/// Returns the paid web tools; their results are marked untrusted-output.
+#[must_use]
+pub fn web_surface() -> Vec<ToolDefinition> {
+    WEB_TOOLS.to_vec()
+}
+
+/// Whether one tool returns external content that must be treated as untrusted output.
+#[must_use]
+pub fn untrusted_output(name: &str) -> bool {
+    WEB_TOOLS.iter().any(|tool| tool.name == name)
 }
 
 /// Returns the catalogue filtered to the tools one deployment mode can reach.
@@ -394,7 +500,7 @@ pub fn surface(mode: DeploymentMode) -> Vec<ToolDefinition> {
 #[must_use]
 pub fn listing(tool: ToolDefinition) -> Option<Value> {
     let read_only = tool.kind == ToolKind::Read;
-    Some(json!({
+    let mut listing = json!({
         "name": tool.name,
         "description": description(tool.name)?,
         "inputSchema": input_schema(tool.name)?,
@@ -409,5 +515,11 @@ pub fn listing(tool: ToolDefinition) -> Option<Value> {
             "layerx/mutation": tool.mutation,
             "layerx/evidence": tool.evidence,
         },
-    }))
+    });
+    if untrusted_output(tool.name) {
+        if let Some(meta) = listing.get_mut("_meta").and_then(Value::as_object_mut) {
+            meta.insert("layerx/output".to_owned(), json!("untrusted"));
+        }
+    }
+    Some(listing)
 }

@@ -1,0 +1,489 @@
+// Package xweb is the precompile over the xweb module: contracts request
+// attested web data with a fee, a submitter posts the attestors' answer, and
+// the precompile stores it and calls the requester back with bounded gas.
+//
+// Gas is charged before anything runs:
+//
+//	gas = base(method) + GasPerByte * len(calldata after the selector)
+//	    + GasPerSignature * len(signatures)   (fulfil only)
+//
+// base is ViewBaseGas for views and WriteBaseGas for request, fulfil and
+// refund. A fulfil then refuses unless the gas left covers the callback's
+// bound, min(the request's callback gas, the module's maximum), plus
+// CallbackRecordGas; it charges the gas the callback used and
+// CallbackRecordGas, and returns the rest to the caller. The callback is
+// onXWebResponse(uint64,bytes32,uint32,bytes) on the requester, called from
+// the precompile address. A callback that reverts or runs out of gas is
+// recorded in the result and the fulfilment stands.
+//
+// Before an application wires the xweb keeper into its precompile keepers the
+// precompile carries no keeper and refuses every call.
+package xweb
+
+import (
+	"embed"
+	"errors"
+	"fmt"
+	"math/big"
+
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/holiman/uint256"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/state"
+	xwebkeeper "github.com/sidiora-labs/paxeer-network/modules/xweb/keeper"
+	"github.com/sidiora-labs/paxeer-network/modules/xweb/types"
+	pcommon "github.com/sidiora-labs/paxeer-network/precompiles/common"
+	"github.com/sidiora-labs/paxeer-network/precompiles/utils"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+)
+
+const (
+	RequestMethod      = "request"
+	FulfilMethod       = "fulfil"
+	RefundMethod       = "refund"
+	GetRequestMethod   = "getRequest"
+	GetResultMethod    = "getResult"
+	GetAttestorsMethod = "getAttestors"
+	ThresholdMethod    = "threshold"
+	FeeMethod          = "fee"
+	GetParamsMethod    = "getParams"
+
+	CallbackMethod    = "onXWebResponse"
+	CallbackSignature = "onXWebResponse(uint64,bytes32,uint32,bytes)"
+)
+
+const (
+	XWebAddress    = "0x0000000000000000000000000000000000001019"
+	PrecompileName = "xweb"
+
+	ViewBaseGas       uint64 = 3000
+	WriteBaseGas      uint64 = 30000
+	GasPerByte        uint64 = 16
+	GasPerSignature   uint64 = 8000
+	CallbackRecordGas uint64 = 10000
+)
+
+//go:embed abi.json
+var f embed.FS
+
+// callbackArguments are the arguments of onXWebResponse.
+var callbackArguments = func() abi.Arguments {
+	mustType := func(name string) abi.Type {
+		t, err := abi.NewType(name, "", nil)
+		if err != nil {
+			panic(err)
+		}
+		return t
+	}
+	return abi.Arguments{{Type: mustType("uint64")}, {Type: mustType("bytes32")}, {Type: mustType("uint32")},
+		{Type: mustType("bytes")}}
+}()
+
+// RequestView is the ABI tuple returned by getRequest(uint64).
+type RequestView struct {
+	Id            uint64 //nolint:revive,stylecheck
+	Requester     common.Address
+	Kind          uint8
+	PayloadHash   [32]byte
+	CallbackGas   uint64
+	Fee           *big.Int
+	Height        uint64
+	TimeoutHeight uint64
+	Status        uint8
+}
+
+// ResultView is the ABI tuple returned by getResult(uint64).
+type ResultView struct {
+	RequestId       uint64 //nolint:revive,stylecheck
+	Response        []byte
+	ContentDigest   [32]byte
+	FullLength      uint32
+	Signers         []common.Address
+	Height          uint64
+	Callback        uint8
+	CallbackGasUsed uint64
+}
+
+// AttestorView is one entry of getAttestors().
+type AttestorView struct {
+	Signer common.Address
+	Payout string
+}
+
+// ParamsView is the ABI tuple returned by getParams().
+type ParamsView struct {
+	Fee             *big.Int
+	MaxPayloadBytes uint32
+	MaxCallbackGas  uint64
+	TimeoutBlocks   uint64
+	Paused          bool
+}
+
+type PrecompileExecutor struct {
+	abi        abi.ABI
+	address    common.Address
+	keeper     *xwebkeeper.Keeper
+	bankKeeper utils.BankKeeper
+	evmKeeper  utils.EVMKeeper
+}
+
+// Precompile is the xweb precompile. It is dispatched by the EVM through
+// RunAndCalculateGas so a fulfil can meter the requester's callback.
+type Precompile struct {
+	*pcommon.Precompile
+	executor *PrecompileExecutor
+}
+
+var _ vm.DynamicGasPrecompiledContract = (*Precompile)(nil)
+
+// NewPrecompile builds the precompile on the application's keepers. The xweb
+// keeper comes from utils.XWebKeepers; keepers that do not provide one leave
+// the precompile refusing every call.
+func NewPrecompile(keepers utils.Keepers) (*Precompile, error) {
+	var keeper *xwebkeeper.Keeper
+	if wired, ok := keepers.(utils.XWebKeepers); ok {
+		keeper = wired.XWebK()
+	}
+	return NewPrecompileWithKeeper(keeper, keepers.BankK(), keepers.EVMK()), nil
+}
+
+func NewPrecompileWithKeeper(keeper *xwebkeeper.Keeper, bankKeeper utils.BankKeeper, evmKeeper utils.EVMKeeper) *Precompile {
+	newABI := pcommon.MustGetABI(f, "abi.json")
+	executor := &PrecompileExecutor{
+		abi:        newABI,
+		address:    common.HexToAddress(XWebAddress),
+		keeper:     keeper,
+		bankKeeper: bankKeeper,
+		evmKeeper:  evmKeeper,
+	}
+	return &Precompile{
+		Precompile: pcommon.NewPrecompile(newABI, executor, executor.address, PrecompileName).WithRevertReasons(),
+		executor:   executor,
+	}
+}
+
+func isTransaction(method string) bool {
+	switch method {
+	case RequestMethod, FulfilMethod, RefundMethod:
+		return true
+	default:
+		return false
+	}
+}
+
+func (PrecompileExecutor) IsTransaction(method string) bool { return isTransaction(method) }
+
+func (p PrecompileExecutor) RequiredGas(input []byte, method *abi.Method) uint64 {
+	gas := ViewBaseGas + GasPerByte*uint64(len(input))
+	if isTransaction(method.Name) {
+		gas = WriteBaseGas + GasPerByte*uint64(len(input))
+	}
+	if method.Name == FulfilMethod {
+		gas += GasPerSignature * signatureCount(method, input)
+	}
+	return gas
+}
+
+// signatureCount is the number of signatures a fulfil carries; calldata that
+// does not decode is charged the largest set a fulfil may carry and reverts.
+func signatureCount(method *abi.Method, input []byte) uint64 {
+	args, err := method.Inputs.Unpack(input)
+	if err != nil || len(args) != 5 {
+		return types.MaxAttestors
+	}
+	signatures, ok := args[4].([][]byte)
+	if !ok {
+		return types.MaxAttestors
+	}
+	return uint64(len(signatures))
+}
+
+// RunAndCalculateGas charges the documented gas, runs fulfil with its metered
+// callback and every other method through the precompile's Run.
+func (p Precompile) RunAndCalculateGas(evm *vm.EVM, caller common.Address, callingContract common.Address,
+	input []byte, suppliedGas uint64, value *big.Int, hooks *tracing.Hooks, readOnly bool,
+	isFromDelegateCall bool) ([]byte, uint64, error) {
+	cost := p.RequiredGas(input)
+	if suppliedGas < cost {
+		return nil, 0, vm.ErrOutOfGas
+	}
+	remaining := suppliedGas - cost
+	if methodID, err := pcommon.ExtractMethodID(input); err == nil {
+		if method, err := p.MethodById(methodID); err == nil && method.Name == FulfilMethod {
+			ret, used, err := p.fulfil(evm, caller, input, remaining, value, readOnly, isFromDelegateCall)
+			return ret, remaining - used, err
+		}
+	}
+	ret, err := p.Run(evm, caller, callingContract, input, value, readOnly, isFromDelegateCall, hooks)
+	return ret, remaining, err
+}
+
+func (p PrecompileExecutor) Execute(ctx sdk.Context, method *abi.Method, caller common.Address, _ common.Address,
+	args []interface{}, value *big.Int, readOnly bool, evm *vm.EVM, hooks *tracing.Hooks) ([]byte, error) {
+	if err := p.guard(ctx.EVMPrecompileCalledFromDelegateCall(), method.Name, readOnly); err != nil {
+		return nil, err
+	}
+	if method.Name != RequestMethod {
+		if err := pcommon.ValidateNonPayable(value); err != nil {
+			return nil, err
+		}
+	}
+	switch method.Name {
+	case RequestMethod:
+		return p.request(ctx, method, caller, args, value, evm, hooks)
+	case FulfilMethod:
+		return nil, errors.New("xweb: fulfil runs only through the EVM, which meters its callback")
+	case RefundMethod:
+		return p.refund(ctx, method, args, evm)
+	case GetRequestMethod:
+		return p.getRequest(ctx, method, args)
+	case GetResultMethod:
+		return p.getResult(ctx, method, args)
+	case GetAttestorsMethod:
+		if err := pcommon.ValidateArgsLength(args, 0); err != nil {
+			return nil, err
+		}
+		set := p.keeper.GetAttestorSet(ctx)
+		attestors := make([]AttestorView, len(set.Attestors))
+		for i, attestor := range set.Attestors {
+			attestors[i] = AttestorView{Signer: common.Address(attestor.Signer), Payout: attestor.Payout}
+		}
+		return method.Outputs.Pack(attestors, set.Threshold)
+	case ThresholdMethod:
+		if err := pcommon.ValidateArgsLength(args, 0); err != nil {
+			return nil, err
+		}
+		return method.Outputs.Pack(p.keeper.Threshold(ctx))
+	case FeeMethod:
+		if err := pcommon.ValidateArgsLength(args, 0); err != nil {
+			return nil, err
+		}
+		return method.Outputs.Pack(wei(p.keeper.Fee(ctx)))
+	case GetParamsMethod:
+		if err := pcommon.ValidateArgsLength(args, 0); err != nil {
+			return nil, err
+		}
+		params := p.keeper.GetParams(ctx)
+		return method.Outputs.Pack(ParamsView{Fee: wei(params.Fee), MaxPayloadBytes: params.MaxPayloadBytes,
+			MaxCallbackGas: params.MaxCallbackGas, TimeoutBlocks: params.TimeoutBlocks, Paused: p.keeper.IsPaused(ctx)})
+	default:
+		return nil, fmt.Errorf("xweb: unknown method %s", method.Name)
+	}
+}
+
+// guard refuses a delegatecall, a state change from a static call and any
+// call while no xweb keeper is wired.
+func (p PrecompileExecutor) guard(delegate bool, method string, readOnly bool) error {
+	if delegate {
+		return errors.New("cannot delegatecall xweb")
+	}
+	if readOnly && isTransaction(method) {
+		return fmt.Errorf("cannot call xweb %s from staticcall", method)
+	}
+	if p.keeper == nil {
+		return errors.New("xweb: the xweb keeper is not wired into this application")
+	}
+	return nil
+}
+
+// wei is a base-denom amount in wei.
+func wei(amount sdk.Int) *big.Int {
+	return amount.Mul(state.SdkUhpxToSweiMultiplier).BigInt()
+}
+
+func (p PrecompileExecutor) request(ctx sdk.Context, method *abi.Method, caller common.Address, args []interface{},
+	value *big.Int, evm *vm.EVM, hooks *tracing.Hooks) ([]byte, error) {
+	if err := pcommon.ValidateArgsLength(args, 3); err != nil {
+		return nil, err
+	}
+	kind, payload, callbackGas := args[0].(uint8), args[1].([]byte), args[2].(uint64)
+	paid := sdk.ZeroInt()
+	if value != nil && value.Sign() > 0 {
+		coin, err := pcommon.HandlePaymentUhpx(ctx, p.evmKeeper.GetPaxAddressOrDefault(ctx, p.address),
+			p.evmKeeper.GetPaxAddressOrDefault(ctx, caller), value, p.bankKeeper, p.evmKeeper, hooks, evm.GetDepth())
+		if err != nil {
+			return nil, err
+		}
+		paid = coin.Amount
+	}
+	id, err := p.keeper.Request(ctx, caller, kind, payload, callbackGas, paid)
+	if err != nil {
+		return nil, err
+	}
+	request, _ := p.keeper.GetRequest(ctx, id)
+	if err := p.log(evm, "XWebRequested", []common.Hash{topicUint64(id), common.BytesToHash(caller.Bytes())},
+		kind, payload, callbackGas, wei(request.Fee), uint64(request.TimeoutHeight)); err != nil { //nolint:gosec
+		return nil, err
+	}
+	return method.Outputs.Pack(id)
+}
+
+func (p PrecompileExecutor) refund(ctx sdk.Context, method *abi.Method, args []interface{}, evm *vm.EVM) ([]byte, error) {
+	if err := pcommon.ValidateArgsLength(args, 1); err != nil {
+		return nil, err
+	}
+	request, err := p.keeper.Refund(ctx, args[0].(uint64))
+	if err != nil {
+		return nil, err
+	}
+	if err := p.log(evm, "XWebRefunded", []common.Hash{topicUint64(request.ID),
+		common.BytesToHash(request.Requester[:])}, wei(request.Fee)); err != nil {
+		return nil, err
+	}
+	return method.Outputs.Pack()
+}
+
+func (p PrecompileExecutor) getRequest(ctx sdk.Context, method *abi.Method, args []interface{}) ([]byte, error) {
+	if err := pcommon.ValidateArgsLength(args, 1); err != nil {
+		return nil, err
+	}
+	id := args[0].(uint64)
+	request, found := p.keeper.GetRequest(ctx, id)
+	if !found {
+		return nil, types.ErrUnknownRequest.Wrapf("request %d", id)
+	}
+	return method.Outputs.Pack(RequestView{Id: request.ID, Requester: common.Address(request.Requester),
+		Kind: request.Kind, PayloadHash: [32]byte(request.PayloadHash), CallbackGas: request.CallbackGas, Fee: wei(request.Fee),
+		Height: uint64(request.Height), TimeoutHeight: uint64(request.TimeoutHeight), //nolint:gosec
+		Status: uint8(request.Status)})
+}
+
+func (p PrecompileExecutor) getResult(ctx sdk.Context, method *abi.Method, args []interface{}) ([]byte, error) {
+	if err := pcommon.ValidateArgsLength(args, 1); err != nil {
+		return nil, err
+	}
+	id := args[0].(uint64)
+	result, found := p.keeper.GetResult(ctx, id)
+	if !found {
+		return nil, types.ErrUnknownRequest.Wrapf("no result for request %d", id)
+	}
+	signers := make([]common.Address, len(result.Signers))
+	for i, signer := range result.Signers {
+		signers[i] = common.Address(signer)
+	}
+	return method.Outputs.Pack(ResultView{RequestId: result.RequestID, Response: result.Response,
+		ContentDigest: [32]byte(result.ContentDigest), FullLength: result.FullLength, Signers: signers,
+		Height: uint64(result.Height), Callback: uint8(result.Callback), //nolint:gosec
+		CallbackGasUsed: result.CallbackGasUsed})
+}
+
+// fulfil accepts the attested answer and delivers the callback. budget is the
+// gas left after the documented charge; used is what fulfil spends of it.
+func (p Precompile) fulfil(evm *vm.EVM, caller common.Address, input []byte, budget uint64, value *big.Int,
+	readOnly bool, delegate bool) (ret []byte, used uint64, err error) {
+	defer func() {
+		if err == nil {
+			return
+		}
+		if abortErr, ok := err.(vm.AbortError); ok && abortErr.IsAbortError() {
+			return
+		}
+		pcommon.HandlePrecompileError(err, evm, FulfilMethod)
+		ret, used, err = pcommon.RevertReason(err), 0, vm.ErrExecutionReverted
+	}()
+	ctx, method, args, err := p.Prepare(evm, input)
+	if err != nil {
+		return nil, 0, err
+	}
+	x := p.executor
+	if err := x.guard(delegate, method.Name, readOnly); err != nil {
+		return nil, 0, err
+	}
+	if err := pcommon.ValidateNonPayable(value); err != nil {
+		return nil, 0, err
+	}
+	if err := pcommon.ValidateArgsLength(args, 5); err != nil {
+		return nil, 0, err
+	}
+	id, response, digest := args[0].(uint64), args[1].([]byte), args[2].([32]byte)
+	fullLength, signatures := args[3].(uint32), args[4].([][]byte)
+
+	em := ctx.EventManager()
+	ctx = ctx.WithEventManager(sdk.NewEventManager())
+	if pending, found := x.keeper.GetRequest(ctx, id); found {
+		if bound := x.callbackBound(ctx, pending); budget < bound+CallbackRecordGas {
+			return nil, 0, fmt.Errorf("xweb: fulfil of request %d needs %d gas for its callback and its record, %d left",
+				id, bound+CallbackRecordGas, budget)
+		}
+	}
+	request, result, err := x.keeper.Fulfil(ctx, id, response, types.Hash32(digest), fullLength, signatures)
+	if err != nil {
+		return nil, 0, err
+	}
+	outcome, gasUsed, err := x.deliver(evm, request, result, x.callbackBound(ctx, request))
+	if err != nil {
+		return nil, 0, err
+	}
+	// The callback may have opened a new state branch; the outcome is recorded
+	// on the branch the EVM continues with.
+	recordCtx := state.GetDBImpl(evm.StateDB).Ctx().WithEventManager(ctx.EventManager())
+	if err := x.keeper.RecordCallback(recordCtx, id, outcome, gasUsed); err != nil {
+		return nil, 0, err
+	}
+	if err := x.log(evm, "XWebFulfilled", []common.Hash{topicUint64(id), common.BytesToHash(request.Requester[:])},
+		digest, fullLength, uint8(outcome), gasUsed); err != nil {
+		return nil, 0, err
+	}
+	ret, err = method.Outputs.Pack(uint8(outcome), gasUsed)
+	if err != nil {
+		return nil, 0, err
+	}
+	if events := ctx.EventManager().Events(); len(events) > 0 {
+		em.EmitEvents(events)
+	}
+	return ret, gasUsed + CallbackRecordGas, nil
+}
+
+// callbackBound is the gas a request's callback may use: its own callback gas
+// capped by the module's current maximum.
+func (p PrecompileExecutor) callbackBound(ctx sdk.Context, request types.Request) uint64 {
+	bound := request.CallbackGas
+	if maximum := p.keeper.GetParams(ctx).MaxCallbackGas; maximum < bound {
+		bound = maximum
+	}
+	return bound
+}
+
+// deliver calls onXWebResponse on the requester from the precompile address
+// with gas and classifies the outcome. Only an abort of the whole execution is
+// returned as an error.
+func (p PrecompileExecutor) deliver(evm *vm.EVM, request types.Request, result types.Result,
+	gas uint64) (types.CallbackOutcome, uint64, error) {
+	packed, err := callbackArguments.Pack(request.ID, [32]byte(result.ContentDigest), result.FullLength, result.Response)
+	if err != nil {
+		return types.CallbackPending, 0, err
+	}
+	input := append(common.CopyBytes(callbackSelector), packed...)
+	_, left, callErr := evm.Call(p.address, common.Address(request.Requester), input, gas, uint256.NewInt(0))
+	if abortErr, ok := callErr.(vm.AbortError); ok && abortErr.IsAbortError() {
+		return types.CallbackPending, 0, callErr
+	}
+	used := gas - left
+	switch {
+	case callErr == nil:
+		return types.CallbackDelivered, used, nil
+	case errors.Is(callErr, vm.ErrOutOfGas):
+		return types.CallbackOutOfGas, used, nil
+	default:
+		return types.CallbackReverted, used, nil
+	}
+}
+
+var callbackSelector = abi.NewMethod(CallbackMethod, CallbackMethod, abi.Function, "nonpayable", false, false,
+	callbackArguments, nil).ID
+
+func (p PrecompileExecutor) log(evm *vm.EVM, name string, indexed []common.Hash, data ...interface{}) error {
+	event, ok := p.abi.Events[name]
+	if !ok {
+		return fmt.Errorf("xweb: no event %s", name)
+	}
+	packed, err := event.Inputs.NonIndexed().Pack(data...)
+	if err != nil {
+		return err
+	}
+	return pcommon.EmitEVMLog(evm, p.address, append([]common.Hash{event.ID}, indexed...), packed)
+}
+
+func topicUint64(value uint64) common.Hash { return common.BigToHash(new(big.Int).SetUint64(value)) }

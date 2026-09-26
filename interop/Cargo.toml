@@ -13,6 +13,7 @@ members = [
     "crates/layerx-ucp",
     "crates/layerx-visa-tap",
     "crates/layerx-x402",
+    "crates/x-websearch",
 ]
 resolver = "2"
 

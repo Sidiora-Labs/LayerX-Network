@@ -23,6 +23,7 @@ pub enum AbiRevision {
     V1,
     V2,
     V3,
+    V4,
 }
 
 /// A typed refusal produced while validating a module.
@@ -727,6 +728,7 @@ fn interface_capability_for_import(name: &str) -> u16 {
         "receipt_read" => 1 << 8,
         "balance_read" => 1 << 9,
         "oracle_read" => 1 << 10,
+        "web_read" => 1 << 11,
         _ => 0,
     }
 }
@@ -749,6 +751,7 @@ fn refuse_import(
         AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION,
         AbiRevision::V2 => crate::abi::manifest::ABI_V2_VERSION,
         AbiRevision::V3 => crate::abi::manifest::ABI_V3_VERSION,
+        AbiRevision::V4 => crate::abi::manifest::ABI_V4_VERSION,
     };
     let declaration = crate::abi::manifest::permitted_import(version, import.module, import.name)
         .ok_or_else(|| ValidationRefusal::ForbiddenImport {
@@ -1037,6 +1040,7 @@ mod linker_invariant_tests {
             crate::abi::HOST_FUNCTIONS.len()
                 + crate::abi::manifest::ABI_V2_HOST_FUNCTIONS.len()
                 + crate::abi::manifest::ABI_V3_HOST_FUNCTIONS.len()
+                + crate::abi::manifest::ABI_V4_HOST_FUNCTIONS.len()
         );
 
         let wasm = add_module();

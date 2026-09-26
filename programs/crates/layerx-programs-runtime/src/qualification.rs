@@ -593,6 +593,7 @@ fn differential_observation(
         crate::validate::AbiRevision::V1 => crate::ABI_V1_VERSION,
         crate::validate::AbiRevision::V2 => crate::ABI_V2_VERSION,
         crate::validate::AbiRevision::V3 => crate::ABI_V3_VERSION,
+        crate::validate::AbiRevision::V4 => crate::ABI_V4_VERSION,
     };
     success_observation(
         abi_version,
@@ -651,6 +652,7 @@ fn legacy_reference_observation(
         crate::ABI_V1_VERSION => crate::validate::AbiRevision::V1,
         crate::ABI_V2_VERSION => crate::validate::AbiRevision::V2,
         crate::ABI_V3_VERSION => crate::validate::AbiRevision::V3,
+        crate::ABI_V4_VERSION => crate::validate::AbiRevision::V4,
         _ => return validation_observation(&format!("unsupported ABI version {abi_version}")),
     };
     let module =

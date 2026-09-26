@@ -248,6 +248,7 @@ const fn recorded_abi_version(revision: AbiRevision) -> u16 {
         AbiRevision::V1 => crate::ABI_V1_VERSION,
         AbiRevision::V2 => crate::ABI_V2_VERSION,
         AbiRevision::V3 => crate::ABI_V3_VERSION,
+        AbiRevision::V4 => crate::ABI_V4_VERSION,
     }
 }
 
@@ -2040,6 +2041,7 @@ impl V2AuthorizedExecutionRecord {
                 AbiRevision::V1 => crate::ABI_V1_VERSION,
                 AbiRevision::V2 => crate::ABI_V2_VERSION,
                 AbiRevision::V3 => crate::ABI_V3_VERSION,
+                AbiRevision::V4 => crate::ABI_V4_VERSION,
             },
             runtime_version: self.execution.runtime_version,
             fee_schedule_version: self.execution.fee_schedule_version,
@@ -2128,6 +2130,7 @@ impl V2AuthorizedExecutionRecord {
             AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION,
             AbiRevision::V2 => 2,
             AbiRevision::V3 => 3,
+            AbiRevision::V4 => 4,
         };
         evidence.extend_from_slice(&abi_revision.to_be_bytes());
         match &self.outcome {
@@ -2209,6 +2212,7 @@ impl V2AuthorizedExecutionRecord {
                 AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION,
                 AbiRevision::V2 => 2,
                 AbiRevision::V3 => 3,
+                AbiRevision::V4 => 4,
             }
             .to_be_bytes(),
         );
@@ -2619,7 +2623,14 @@ pub struct BudgetedAuthorizedExecutionRequest<'a> {
     execution_context: Option<ExecutionContext>,
     access_declaration: crate::AccessDeclaration,
     committed_oracle: Option<std::sync::Arc<dyn crate::abi::CommittedOracle + Send + Sync>>,
+    committed_web: Option<std::sync::Arc<dyn crate::abi::CommittedWeb + Send + Sync>>,
     transfer_authority_v2: bool,
+}
+
+/// Core-owned committed-state boundaries attached to one root execution.
+struct CommittedViews {
+    oracle: Option<std::sync::Arc<dyn crate::abi::CommittedOracle + Send + Sync>>,
+    web: Option<std::sync::Arc<dyn crate::abi::CommittedWeb + Send + Sync>>,
 }
 
 impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
@@ -2640,6 +2651,7 @@ impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
             transfer_authority_v2: false,
             access_declaration: crate::AccessDeclaration::absent(),
             committed_oracle: None,
+            committed_web: None,
         }
     }
 
@@ -2652,6 +2664,18 @@ impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
         oracle: std::sync::Arc<dyn crate::abi::CommittedOracle + Send + Sync>,
     ) -> Self {
         self.committed_oracle = Some(oracle);
+        self
+    }
+
+    /// Attaches the core-owned boundary serving web answers already committed
+    /// in module storage.
+    #[must_use]
+    #[cfg(feature = "host-ffi")]
+    pub(crate) fn with_committed_web(
+        mut self,
+        web: std::sync::Arc<dyn crate::abi::CommittedWeb + Send + Sync>,
+    ) -> Self {
+        self.committed_web = Some(web);
         self
     }
 
@@ -2921,6 +2945,7 @@ impl Executor {
             crate::ABI_V1_VERSION => Ok(AbiRevision::V1),
             crate::ABI_V2_VERSION => Ok(AbiRevision::V2),
             crate::ABI_V3_VERSION => Ok(AbiRevision::V3),
+            crate::ABI_V4_VERSION => Ok(AbiRevision::V4),
             _ => Err(ExecutionError::Abi(AbiError::WrongVersion)),
         }
     }
@@ -3377,6 +3402,7 @@ impl Executor {
             execution_context: _,
             access_declaration,
             committed_oracle: _,
+            committed_web: _,
             transfer_authority_v2: _,
         } = budgeted;
         self.validate_budget_token(&admitted_budget, payer, activity_binding)?;
@@ -3704,6 +3730,7 @@ impl Executor {
             execution_context,
             access_declaration,
             committed_oracle,
+            committed_web,
             transfer_authority_v2: _,
         } = budgeted;
         let executor = self.for_abi(crate::ABI_V2_VERSION);
@@ -3715,7 +3742,10 @@ impl Executor {
             Some(activity_binding),
             execution_context,
             access_declaration,
-            committed_oracle,
+            Some(CommittedViews {
+                oracle: committed_oracle,
+                web: committed_web,
+            }),
         )
     }
 
@@ -3733,6 +3763,7 @@ impl Executor {
             execution_context,
             access_declaration,
             committed_oracle,
+            committed_web,
             transfer_authority_v2: _,
         } = budgeted;
         self.validate_budget_token(&admitted_budget, payer, activity_binding)?;
@@ -3755,7 +3786,10 @@ impl Executor {
             Some(activity_binding),
             Some(execution_context),
             access_declaration,
-            committed_oracle,
+            Some(CommittedViews {
+                oracle: committed_oracle,
+                web: committed_web,
+            }),
         )
     }
 
@@ -3768,12 +3802,12 @@ impl Executor {
         activity_binding: Option<ActivityBudgetBinding>,
         execution_context: Option<ExecutionContext>,
         access_declaration: crate::AccessDeclaration,
-        committed_oracle: Option<std::sync::Arc<dyn crate::abi::CommittedOracle + Send + Sync>>,
+        committed: Option<CommittedViews>,
     ) -> Result<V2AuthorizedExecutionRecord, ExecutionError> {
         let budgeted = activity_binding.is_some();
         if !matches!(
             request.module.abi_revision(),
-            AbiRevision::V2 | AbiRevision::V3
+            AbiRevision::V2 | AbiRevision::V3 | AbiRevision::V4
         ) || self.abi_version != recorded_abi_version(request.module.abi_revision())
         {
             return Err(ExecutionError::Abi(AbiError::WrongVersion));
@@ -3817,8 +3851,13 @@ impl Executor {
         )
         .map_err(ExecutionError::Abi)?;
         abi.set_access_declaration(access_declaration);
-        if let Some(oracle) = committed_oracle {
-            abi.set_committed_oracle(oracle);
+        if let Some(committed) = committed {
+            if let Some(oracle) = committed.oracle {
+                abi.set_committed_oracle(oracle);
+            }
+            if let Some(web) = committed.web {
+                abi.set_committed_web(web);
+            }
         }
         let composition = Composition::new(
             request

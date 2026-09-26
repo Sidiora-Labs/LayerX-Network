@@ -4,10 +4,12 @@ use super::{AbiValueType, HostFunction, HostFunctionType};
 
 pub const ABI_V1_VERSION: u16 = 1;
 pub const ABI_V2_VERSION: u16 = 2;
-pub const ABI_V3_VERSION: u16 = crate::ABI_VERSION;
+pub const ABI_V3_VERSION: u16 = 3;
+pub const ABI_V4_VERSION: u16 = crate::ABI_VERSION;
 pub const ABI_V1_MODULE: &str = "layerx_v1";
 pub const ABI_V2_MODULE: &str = "layerx_v2";
 pub const ABI_V3_MODULE: &str = "layerx_v3";
+pub const ABI_V4_MODULE: &str = "layerx_v4";
 
 // This value is the originally published v1 byte string. It must never be
 // regenerated from the current host linker because later linkers deliberately
@@ -18,7 +20,11 @@ pub const ABI_V1_MANIFEST: &str = "layerx_v1\0storage_read(i32,i32,i32,i32)->i32
 // immutable v1 namespace followed by the frozen v2 namespace and nothing else.
 pub const ABI_V2_MANIFEST: &str = "layerx_v1\0storage_read(i32,i32,i32,i32)->i32\0storage_write(i32,i32,i32,i32)->i32\0storage_delete(i32,i32)->i32\0event_emit(i32,i32,i32,i32)->i32\0program_call(i32,i32,i32,i32,i32,i32)->i32\0transfer_402(i64,i64,i32,i32,i32,i32)->i32\0receipt_read(i32,i32,i32,i32)->i32\0layerx_v2\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0transfer_program_402(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0fund_program_402(i64,i64,i32,i32,i32,i32,i32,i32)->i32\0context_read(i32,i32,i32)->i32\0balance_read(i32,i32,i32,i32,i32,i32)->i32\0hash(i32,i32,i32,i32)->i32\0signature_verify(i32,i32,i32,i32,i32,i32,i32)->i32\0signature_recover(i32,i32,i32,i32,i32,i32,i32)->i32\0bigint_mul_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_div_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_rem_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_modexp_256(i32,i32,i32,i32,i32,i32,i32,i32)->i32\0";
 
-pub const ABI_V3_MANIFEST: &str = crate::ABI_MANIFEST;
+// This value is the originally published v3 byte string. It carries the
+// immutable v1 and v2 namespaces followed by the frozen v3 namespace.
+pub const ABI_V3_MANIFEST: &str = "layerx_v1\0storage_read(i32,i32,i32,i32)->i32\0storage_write(i32,i32,i32,i32)->i32\0storage_delete(i32,i32)->i32\0event_emit(i32,i32,i32,i32)->i32\0program_call(i32,i32,i32,i32,i32,i32)->i32\0transfer_402(i64,i64,i32,i32,i32,i32)->i32\0receipt_read(i32,i32,i32,i32)->i32\0layerx_v2\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0transfer_program_402(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0fund_program_402(i64,i64,i32,i32,i32,i32,i32,i32)->i32\0context_read(i32,i32,i32)->i32\0balance_read(i32,i32,i32,i32,i32,i32)->i32\0hash(i32,i32,i32,i32)->i32\0signature_verify(i32,i32,i32,i32,i32,i32,i32)->i32\0signature_recover(i32,i32,i32,i32,i32,i32,i32)->i32\0bigint_mul_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_div_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_rem_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_modexp_256(i32,i32,i32,i32,i32,i32,i32,i32)->i32\0layerx_v3\0oracle_read(i32,i32,i32,i32)->i32\0";
+
+pub const ABI_V4_MANIFEST: &str = crate::ABI_MANIFEST;
 
 pub const ABI_V2_HOST_FUNCTIONS: [HostFunction; 19] = [
     host("response_write", "(i32,i32,i32)->i32"),
@@ -56,6 +62,8 @@ pub const ABI_V2_HOST_FUNCTIONS: [HostFunction; 19] = [
 
 pub const ABI_V3_HOST_FUNCTIONS: [HostFunction; 1] =
     [host("oracle_read", "(i32,i32,i32,i32)->i32")];
+
+pub const ABI_V4_HOST_FUNCTIONS: [HostFunction; 1] = [host("web_read", "(i32,i32,i32,i32)->i32")];
 
 const fn host(name: &'static str, signature: &'static str) -> HostFunction {
     HostFunction { name, signature }
@@ -100,6 +108,8 @@ const ABI_V2_FUNCTION_TYPES: [HostFunctionType; 19] = [
 
 const ABI_V3_FUNCTION_TYPES: [HostFunctionType; 1] = [function_type(I32_4, I32_RESULT)];
 
+const ABI_V4_FUNCTION_TYPES: [HostFunctionType; 1] = [function_type(I32_4, I32_RESULT)];
+
 const fn function_type(
     params: &'static [AbiValueType],
     results: &'static [AbiValueType],
@@ -121,9 +131,17 @@ pub(crate) fn v3_function_type(name: &str) -> Option<HostFunctionType> {
         .map(|index| ABI_V3_FUNCTION_TYPES[index])
 }
 
+pub(crate) fn v4_function_type(name: &str) -> Option<HostFunctionType> {
+    ABI_V4_HOST_FUNCTIONS
+        .iter()
+        .position(|function| function.name == name)
+        .map(|index| ABI_V4_FUNCTION_TYPES[index])
+}
+
 /// Returns the exact permitted import declaration for a recorded ABI. V2
 /// inherits the immutable v1 namespace and adds only the v2 namespace; V3
-/// inherits both and adds only the v3 namespace.
+/// inherits both and adds only the v3 namespace; V4 inherits all three and
+/// adds only the v4 namespace.
 pub(crate) fn permitted_import(version: u16, module: &str, name: &str) -> Option<HostFunctionType> {
     if module == ABI_V1_MODULE {
         let index = super::HOST_FUNCTIONS
@@ -131,16 +149,24 @@ pub(crate) fn permitted_import(version: u16, module: &str, name: &str) -> Option
             .position(|function| function.name == name)?;
         return (version == ABI_V1_VERSION
             || version == ABI_V2_VERSION
-            || version == ABI_V3_VERSION)
+            || version == ABI_V3_VERSION
+            || version == ABI_V4_VERSION)
             .then_some(super::HOST_FUNCTION_TYPES[index]);
     }
     if module == ABI_V2_MODULE {
-        return (version == ABI_V2_VERSION || version == ABI_V3_VERSION)
+        return (version == ABI_V2_VERSION
+            || version == ABI_V3_VERSION
+            || version == ABI_V4_VERSION)
             .then(|| v2_function_type(name))
             .flatten();
     }
-    (version == ABI_V3_VERSION && module == ABI_V3_MODULE)
-        .then(|| v3_function_type(name))
+    if module == ABI_V3_MODULE {
+        return (version == ABI_V3_VERSION || version == ABI_V4_VERSION)
+            .then(|| v3_function_type(name))
+            .flatten();
+    }
+    (version == ABI_V4_VERSION && module == ABI_V4_MODULE)
+        .then(|| v4_function_type(name))
         .flatten()
 }
 
@@ -150,6 +176,7 @@ pub const fn manifest(version: u16) -> Option<&'static str> {
         ABI_V1_VERSION => Some(ABI_V1_MANIFEST),
         ABI_V2_VERSION => Some(ABI_V2_MANIFEST),
         ABI_V3_VERSION => Some(ABI_V3_MANIFEST),
+        ABI_V4_VERSION => Some(ABI_V4_MANIFEST),
         _ => None,
     }
 }

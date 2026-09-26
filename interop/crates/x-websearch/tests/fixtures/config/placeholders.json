@@ -1,0 +1,50 @@
+{
+  "listen": "REPLACE_WITH_LISTEN_ADDRESS",
+  "data_dir": "/path/to/x-websearch",
+  "seeds": [
+    "https://seed.example.com/"
+  ],
+  "crawl": {
+    "pages_per_cycle": 0,
+    "pages_per_host": 0,
+    "max_depth": 0,
+    "politeness_delay_ms": 0
+  },
+  "fetch": {
+    "connect_timeout_ms": 3000,
+    "total_timeout_ms": 10000,
+    "max_body_bytes": 2097152,
+    "max_redirects": 3,
+    "allow_loopback": false
+  },
+  "assets": {
+    "SID": {
+      "asset_id": "REPLACE_WITH_SID_ASSET_ID",
+      "price": "REPLACE_WITH_SID_PRICE"
+    },
+    "PAX": {
+      "asset_id": "REPLACE_WITH_PAX_ASSET_ID",
+      "price": "REPLACE_WITH_PAX_PRICE"
+    },
+    "USDC": {
+      "asset_id": "REPLACE_WITH_USDC_ASSET_ID",
+      "price": "REPLACE_WITH_USDC_PRICE"
+    },
+    "USDL": {
+      "asset_id": "REPLACE_WITH_USDL_ASSET_ID",
+      "price": "REPLACE_WITH_USDL_PRICE"
+    }
+  },
+  "gateway": {
+    "endpoint": "https://gateway.example",
+    "sequencer_id": "REPLACE_WITH_SEQUENCER_ID",
+    "sequencer_public_key": "REPLACE_WITH_SEQUENCER_PUBLIC_KEY"
+  },
+  "evm": {
+    "endpoint": "https://evm.example",
+    "chain_id": 0,
+    "confirmations": 0
+  },
+  "kernel_network_id": 0,
+  "peers": []
+}
