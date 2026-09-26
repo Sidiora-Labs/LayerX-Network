@@ -1,14 +1,18 @@
 //! The web tool: search, fetch and content by digest from one configured
 //! x-websearch sidecar, paid per request over 402LXP.
 //!
-//! Every call asks the sidecar for its offers, keeps the one offer in the
-//! chosen asset and scheme, passes the spend through the approval boundary,
-//! builds `PAYMENT-SIGNATURE` through the x402 [`Buyer`], and releases the
-//! resource only after the `PAYMENT-RESPONSE` receipt verifies under the
-//! configured sequencer key and pays exactly the offer from this payer. A
-//! fetch or content response whose recomputed content digest differs from
-//! the one it claims is refused. Everything the sidecar returns is external
-//! content and is carried in `opaque_` fields.
+//! Every search and fetch asks the sidecar for its offers, keeps the one offer
+//! in the chosen asset and scheme, passes the spend through the approval
+//! boundary, builds `PAYMENT-SIGNATURE` through the x402 [`Buyer`], and
+//! releases the resource only after the `PAYMENT-RESPONSE` receipt verifies
+//! under the configured sequencer key and pays exactly the offer from this
+//! payer. PAX, the kernel's native coin, is paid from and into the main
+//! accounts `agent:<did>:main`; SID, USDC and USDL from and into the per-asset
+//! accounts `agent:<did>:asset:<id>`. Content by digest is served unpaid and
+//! is never paid for. A fetch or content response whose recomputed content
+//! digest differs from the one it claims or was asked for is refused.
+//! Everything the sidecar returns is external content and is carried in
+//! `opaque_` fields.
 
 use std::fmt::Write as _;
 use std::io::{Read as _, Write as _};
@@ -180,7 +184,8 @@ impl WebOperation {
     }
 }
 
-/// One validated web tool call.
+/// One validated web tool call. The currency, scheme and idempotency key
+/// bind the payment of a search or a fetch; content by digest is unpaid.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WebCall {
     pub operation: WebOperation,
@@ -469,16 +474,17 @@ pub enum WebResult {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WebOutcome {
     pub tool: &'static str,
-    pub settlement: WebSettlement,
+    /// The verified settlement of a paid search or fetch; `None` for the
+    /// unpaid content by digest.
+    pub settlement: Option<WebSettlement>,
     pub result: WebResult,
 }
 
 impl WebOutcome {
-    /// The tool result: the settlement evidence and the external content,
-    /// marked untrusted.
+    /// The tool result: the settlement evidence of a paid call and the
+    /// external content, marked untrusted.
     #[must_use]
     pub fn evidence(&self) -> Value {
-        let settlement = &self.settlement;
         let content = match &self.result {
             WebResult::Search { opaque_results } => json!({
                 "results": opaque_results.iter().map(|hit| json!({
@@ -516,40 +522,51 @@ impl WebOutcome {
                 "text": opaque_text,
             }),
         };
-        json!({
+        let mut evidence = json!({
             "tool": self.tool,
-            "settlement": {
-                "scheme": settlement.scheme.code(),
-                "currency": settlement.currency.code(),
-                "network": settlement.network,
-                "asset": hex(&settlement.asset),
-                "payTo": hex(&settlement.pay_to),
-                "amount": settlement.amount.to_string(),
-                "payer": hex(&settlement.payer),
-                "receiptDigest": hex(&settlement.receipt_digest),
-                "transaction": settlement.transaction,
-                "verificationLevel": SEQUENCER_SIGNED,
-            },
             "untrusted": true,
             "content": content,
-        })
+        });
+        if let (Some(settlement), Some(fields)) = (&self.settlement, evidence.as_object_mut()) {
+            fields.insert(
+                "settlement".to_owned(),
+                json!({
+                    "scheme": settlement.scheme.code(),
+                    "currency": settlement.currency.code(),
+                    "network": settlement.network,
+                    "asset": hex(&settlement.asset),
+                    "payTo": hex(&settlement.pay_to),
+                    "amount": settlement.amount.to_string(),
+                    "payer": hex(&settlement.payer),
+                    "receiptDigest": hex(&settlement.receipt_digest),
+                    "transaction": settlement.transaction,
+                    "verificationLevel": SEQUENCER_SIGNED,
+                }),
+            );
+        }
+        evidence
     }
 }
 
-/// Performs one paid web call against the configured sidecar.
+/// Performs one web call against the configured sidecar: a paid search or
+/// fetch, or the unpaid content by digest.
 ///
 /// # Errors
 /// Refuses an unavailable or inconsistent offer, a spend the approval
 /// boundary holds, rejects or has not approved, a payer artifact that does
 /// not bind the offer, a settlement that is refused, pending past the retry
 /// bound, unverified under the sequencer key or not paying the offer from
-/// this payer, and content whose digest does not match.
+/// this payer, a payment challenge on the content path, and content whose
+/// digest does not match.
 pub fn web_tool(
     config: &WebConfig,
     call: &WebCall,
     approval: &WebApproval<'_>,
     payer: &mut dyn WebPayer,
 ) -> Result<WebOutcome, WebToolError> {
+    if let WebOperation::Content(content) = &call.operation {
+        return stored_content(config, content);
+    }
     let target = call.operation.target();
     let mut headers = Vec::new();
     if call.scheme == Scheme::Metered {
@@ -594,9 +611,26 @@ pub fn web_tool(
     let result = verify_resource(&call.operation, &reply.body)?;
     Ok(WebOutcome {
         tool: call.operation.tool_name(),
-        settlement,
+        settlement: Some(settlement),
         result,
     })
+}
+
+/// Reads stored content by digest. The sidecar serves it unpaid, so a
+/// payment challenge on this path is a protocol mismatch and is never paid,
+/// and the body is released only when its digest is the one asked for.
+fn stored_content(config: &WebConfig, content: &WebContent) -> Result<WebOutcome, WebToolError> {
+    let operation = WebOperation::Content(*content);
+    let reply = request(config, &operation.target(), &[])?;
+    match reply.status {
+        200 => Ok(WebOutcome {
+            tool: operation.tool_name(),
+            settlement: None,
+            result: verify_content(&content.digest, &reply.body)?,
+        }),
+        402 => Err(WebToolError::Protocol("content_payment_required")),
+        status => Err(WebToolError::Status(status)),
+    }
 }
 
 fn settle(
@@ -684,12 +718,13 @@ fn offer_facts(
     let receiver_did = terms
         .account
         .strip_prefix("agent:")
-        .and_then(|rest| rest.strip_suffix(&format!(":asset:{}", hex(&asset))))
+        .and_then(|rest| rest.strip_suffix(&account_suffix(call.currency, &asset)))
         .filter(|did| valid_payer(did))
         .ok_or(WebToolError::OfferMismatch("account"))?
         .to_owned();
-    let payer_accounts = account_identifiers(&asset_account(&config.payer_did, &asset))
-        .map_err(WebToolError::Payment)?;
+    let payer_accounts =
+        account_identifiers(&wallet_account(&config.payer_did, call.currency, &asset))
+            .map_err(WebToolError::Payment)?;
     let layerx = offer.extra.as_ref().and_then(|extra| extra.get("layerx"));
     let (metered_payer, purpose_hash) = match call.scheme {
         Scheme::Metered => {
@@ -1190,8 +1225,18 @@ fn purpose_of(receiver_did: &str) -> Option<[u8; 32]> {
     Some(hasher.finalize().into())
 }
 
-fn asset_account(did: &str, asset: &[u8; 32]) -> String {
-    format!("agent:{did}:asset:{}", hex(asset))
+/// The account `did` pays or is paid in `currency`: the main account
+/// `agent:<did>:main` for PAX, the kernel's native coin, and the per-asset
+/// account `agent:<did>:asset:<id>` for SID, USDC and USDL.
+fn wallet_account(did: &str, currency: Currency, asset: &[u8; 32]) -> String {
+    format!("agent:{did}{}", account_suffix(currency, asset))
+}
+
+fn account_suffix(currency: Currency, asset: &[u8; 32]) -> String {
+    match currency {
+        Currency::Pax => ":main".to_owned(),
+        Currency::Sid | Currency::Usdc | Currency::Usdl => format!(":asset:{}", hex(asset)),
+    }
 }
 
 fn valid_payer(did: &str) -> bool {

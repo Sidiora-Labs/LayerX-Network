@@ -29,8 +29,8 @@ use layerx_mcp::server::{Server, WebBoundary, WebRoute};
 use layerx_mcp::stdio::{Bound, Session};
 use layerx_mcp::tools::web::{
     canonical_bytes, content_digest, web_tool, Currency, ExactTerms, GrantTerms, Scheme,
-    WebApproval, WebCall, WebConfig, WebContent, WebFetch, WebOperation, WebPayer, WebPayerError,
-    WebResult, WebSearch, WebToolError,
+    WebApproval, WebCall, WebConfig, WebContent, WebFetch, WebOperation, WebOutcome, WebPayer,
+    WebPayerError, WebResult, WebSearch, WebSettlement, WebToolError,
 };
 use layerx_types::ids::Did;
 use layerx_types::verify::VerificationLevel;
@@ -48,6 +48,7 @@ const FETCH_RECEIPT_DIGEST: &str =
     "289ac16ceaf47010c2eb38f5bf421132b688cc76f7d279a67776835f5a569576";
 const TAMPERED_PAYER: &str = "4aa4897f08c81fcd9b003dfb8f4a369a9ed828f91ab228e04b14e02f03727aaf";
 const ROUTED_FETCH_URL: &str = "https://paxeer.app/index.html";
+const OTHER_PURPOSE: &str = "0d8e6c4a2b9f7e5d3c1a0f6e4b8d9c2a5f1e7b3d0a6c5e4b2d9f8a1c3e7b6d5f";
 const OBSERVED_SEQUENCE: u64 = 50;
 const AGENT_BEARER: &str = "agent-bearer-0123456789abcdef0123456789abcdef";
 
@@ -97,9 +98,16 @@ fn hex(bytes: &[u8]) -> String {
 #[derive(Clone, Default)]
 struct Script {
     fetch_body: Option<Vec<u8>>,
+    /// The body the recorded unpaid content exchange answers with instead.
     content: Option<(String, Vec<u8>)>,
+    /// A paid body served for a target through the recorded paid fetch.
     served: Vec<(String, Vec<u8>)>,
     tamper_payer: bool,
+    /// The purposeHash a settlement repeats instead: a text, or null to
+    /// leave it out.
+    repeated_purpose: Option<Value>,
+    /// Challenge the content path with the recorded fetch offers.
+    challenge_content: bool,
     pending_first: bool,
     refuse_settlement: bool,
 }
@@ -235,13 +243,41 @@ fn answer(mut stream: TcpStream, exchange: &[Value], script: &Script, signatures
     let Some(incoming) = read_request(&stream) else {
         return;
     };
-    let content = script
+    if script.challenge_content && incoming.target.starts_with("/content/") {
+        let challenge = exchange
+            .iter()
+            .find(|entry| {
+                entry["request"]["target"] == RECORDED_FETCH_TARGET
+                    && entry["response"]["status"] == 402
+            })
+            .unwrap_or_else(|| panic!("recorded challenge"));
+        let required = &challenge["response"]["headers"]["PAYMENT-REQUIRED"];
+        let headers = [("PAYMENT-REQUIRED".to_owned(), encode(required))];
+        let body = json!({ "error": "payment_required", "paymentRequired": required });
+        respond(&mut stream, 402, &headers, body.to_string().as_bytes());
+        return;
+    }
+    let served = script
+        .served
+        .iter()
+        .find(|(target, _)| *target == incoming.target);
+    let stored = script
         .content
         .iter()
-        .chain(script.served.iter())
         .find(|(target, _)| *target == incoming.target);
-    let target = if content.is_some() {
+    let content = stored.or(served);
+    let target = if served.is_some() {
         RECORDED_FETCH_TARGET.to_owned()
+    } else if stored.is_some() {
+        exchange
+            .iter()
+            .find_map(|entry| {
+                entry["request"]["target"]
+                    .as_str()
+                    .filter(|target| target.starts_with("/content/"))
+            })
+            .unwrap_or_else(|| panic!("recorded content exchange"))
+            .to_owned()
     } else {
         incoming.target.clone()
     };
@@ -268,6 +304,18 @@ fn answer(mut stream: TcpStream, exchange: &[Value], script: &Script, signatures
         if name == "PAYMENT-RESPONSE" && script.tamper_payer {
             value["payer"] = json!(TAMPERED_PAYER);
         }
+        if let (true, Some(purpose)) = (name == "PAYMENT-RESPONSE", &script.repeated_purpose) {
+            if let Some(layerx) = value
+                .pointer_mut("/extensions/layerx")
+                .and_then(Value::as_object_mut)
+            {
+                if purpose.is_null() {
+                    layerx.remove("purposeHash");
+                } else {
+                    layerx.insert("purposeHash".to_owned(), purpose.clone());
+                }
+            }
+        }
         headers.push((name.clone(), encode(&value)));
     }
     let status = u16::try_from(response["status"].as_u64().unwrap_or(500)).unwrap_or(500);
@@ -277,7 +325,12 @@ fn answer(mut stream: TcpStream, exchange: &[Value], script: &Script, signatures
         (None, true, true) if script.fetch_body.is_some() => {
             script.fetch_body.clone().unwrap_or_default()
         }
-        _ => serde_json::to_vec(&response["body"]).unwrap_or_default(),
+        _ => match response["bodyBase64"].as_str() {
+            Some(recorded) => STANDARD
+                .decode(recorded)
+                .unwrap_or_else(|error| panic!("recorded body: {error}")),
+            None => serde_json::to_vec(&response["body"]).unwrap_or_default(),
+        },
     };
     respond(&mut stream, status, &headers, &body);
 }
@@ -363,6 +416,42 @@ impl WebPayer for RecordedPayer {
     fn pay(&mut self, terms: &ExactTerms) -> Result<Vec<u8>, WebPayerError> {
         self.payments.push(terms.clone());
         Ok(self.receipt.clone())
+    }
+}
+
+fn settled(outcome: &WebOutcome) -> &WebSettlement {
+    outcome
+        .settlement
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} carries no settlement", outcome.tool))
+}
+
+/// The recorded unpaid content exchange: its target and the vector its
+/// canonical bytes encode.
+fn recorded_content() -> (String, Value) {
+    let exchange = fixture("client-exchange.json")["exchange"].clone();
+    let target = exchange
+        .as_array()
+        .and_then(|entries| {
+            entries.iter().find_map(|entry| {
+                entry["request"]["target"]
+                    .as_str()
+                    .filter(|target| target.starts_with("/content/"))
+                    .map(str::to_owned)
+            })
+        })
+        .unwrap_or_else(|| panic!("recorded content exchange"));
+    let vector = vectors()
+        .into_iter()
+        .find(|vector| format!("/content/{}", text(vector, "/digest")) == target)
+        .unwrap_or_else(|| panic!("content vector for {target}"));
+    (target, vector)
+}
+
+fn content_call(digest: [u8; 32]) -> WebCall {
+    WebCall {
+        operation: WebOperation::Content(WebContent { digest }),
+        ..fetch_call()
     }
 }
 
@@ -533,7 +622,7 @@ fn paid_metered_search_settles_and_releases_untrusted_results() {
     assert!(payer.payments.is_empty());
     assert_eq!(payer.grants[0].amount, 3114);
     assert_eq!(payer.grants[0].idempotency_key, metered_key());
-    let settlement = &outcome.settlement;
+    let settlement = settled(&outcome);
     assert_eq!(hex(&settlement.receipt_digest), SEARCH_RECEIPT_DIGEST);
     assert_eq!(hex(&settlement.payer), SEARCH_PAYER);
     assert_eq!(settlement.amount, 3114);
@@ -557,6 +646,42 @@ fn paid_metered_search_settles_and_releases_untrusted_results() {
         .ticket(metered_key())
         .unwrap_or_else(|error| panic!("ticket: {error:?}"))
         .is_none());
+
+    let exchange = fixture("client-exchange.json")["exchange"].clone();
+    let offered = text(
+        &exchange[1]["request"]["headers"]["PAYMENT-SIGNATURE"],
+        "/accepted/extra/layerx/purposeHash",
+    );
+    assert_eq!(
+        text(
+            &exchange[1]["response"]["headers"]["PAYMENT-RESPONSE"],
+            "/extensions/layerx/purposeHash"
+        ),
+        offered
+    );
+    assert_eq!(payer.grants[0].purpose_hash, unhex32(offered));
+}
+
+#[test]
+fn a_metered_settlement_that_does_not_repeat_the_purpose_is_refused() {
+    for repeated in [Value::Null, json!(OTHER_PURPOSE)] {
+        let replay = Replay::start(Script {
+            repeated_purpose: Some(repeated.clone()),
+            ..Script::default()
+        });
+        let registry = ApprovalRegistry::default();
+        let refused = web_tool(
+            &config(&replay, sequencer_key()),
+            &search_call(),
+            &approval(&registry, u128::MAX),
+            &mut RecordedPayer::new(),
+        );
+        assert!(
+            matches!(refused, Err(WebToolError::SettlementMismatch)),
+            "{repeated}: {refused:?}"
+        );
+        assert_eq!(replay.signatures(), 1, "{repeated}");
+    }
 }
 
 #[test]
@@ -575,10 +700,7 @@ fn paid_exact_fetch_settles_and_checks_the_content_digest() {
     assert_eq!(replay.signatures(), 1);
     assert_eq!(payer.payments.len(), 1);
     assert_eq!(payer.payments[0].amount, 1000);
-    assert_eq!(
-        hex(&outcome.settlement.receipt_digest),
-        FETCH_RECEIPT_DIGEST
-    );
+    assert_eq!(hex(&settled(&outcome).receipt_digest), FETCH_RECEIPT_DIGEST);
     let WebResult::Fetch {
         digest: released,
         opaque_text,
@@ -596,11 +718,12 @@ fn paid_exact_fetch_settles_and_checks_the_content_digest() {
 }
 
 #[test]
-fn recorded_exact_fetches_settle_in_each_per_asset_currency() {
+fn recorded_exact_fetches_settle_in_each_currency() {
     let exchange = fixture("client-exchange.json")["exchange"].clone();
     let buyer = fixture("gateway/buyer.json");
     for (position, currency, code, price) in [
         (0, Currency::Sid, "SID", 3114),
+        (1, Currency::Pax, "PAX", 1_000_000_000_000_000),
         (2, Currency::Usdc, "USDC", 1000),
         (3, Currency::Usdl, "USDL", 1000),
     ] {
@@ -626,20 +749,31 @@ fn recorded_exact_fetches_settle_in_each_per_asset_currency() {
             &mut payer,
         )
         .unwrap_or_else(|error| panic!("{code} fetch: {error:?}"));
-        let paid = &exchange[3 + 2 * position]["response"]["headers"]["PAYMENT-RESPONSE"];
+        let recorded = &exchange[3 + 2 * position];
+        let offer = &recorded["request"]["headers"]["PAYMENT-SIGNATURE"]["accepted"];
+        let paid = &recorded["response"]["headers"]["PAYMENT-RESPONSE"];
+        assert_eq!(text(offer, "/extra/layerx/currency"), code);
         assert_eq!(payer.payments.len(), 1, "{code}");
         assert_eq!(payer.payments[0].amount, price, "{code}");
-        assert_eq!(outcome.settlement.amount, price, "{code}");
+        let account = &payer.payments[0].recipient_account;
+        assert_eq!(account, text(offer, "/extra/layerx/account"), "{code}");
+        if currency == Currency::Pax {
+            assert!(account.ends_with(":main"), "{code}: {account}");
+        } else {
+            assert!(
+                account.ends_with(&format!(":asset:{}", text(offer, "/asset"))),
+                "{code}: {account}"
+            );
+        }
+        let settlement = settled(&outcome);
+        assert_eq!(settlement.amount, price, "{code}");
         assert_eq!(
-            hex(&outcome.settlement.receipt_digest),
+            hex(&settlement.receipt_digest),
             text(paid, "/extensions/layerx/receiptDigest"),
             "{code}"
         );
-        assert_eq!(
-            hex(&outcome.settlement.payer),
-            text(paid, "/payer"),
-            "{code}"
-        );
+        assert_eq!(hex(&settlement.payer), text(paid, "/payer"), "{code}");
+        assert!(paid["extensions"]["layerx"].get("purposeHash").is_none());
         let WebResult::Fetch {
             digest,
             opaque_text,
@@ -655,52 +789,53 @@ fn recorded_exact_fetches_settle_in_each_per_asset_currency() {
 }
 
 #[test]
-fn paid_content_by_digest_releases_only_matching_bytes() {
-    let vector = &vectors()[2];
-    let digest = unhex32(text(vector, "/digest"));
-    let canonical = reference_canonical(
-        1,
-        text(vector, "/payload").as_bytes(),
-        text(vector, "/media_type"),
-        text(vector, "/text"),
-    );
-    let call = WebCall {
-        operation: WebOperation::Content(WebContent { digest }),
-        ..fetch_call()
-    };
-    let target = format!("/content/{}", hex(&digest));
-    let replay = Replay::start(Script {
-        content: Some((target.clone(), canonical)),
-        ..Script::default()
-    });
+fn unpaid_content_by_digest_releases_only_matching_bytes() {
+    let (target, vector) = recorded_content();
+    let digest = unhex32(text(&vector, "/digest"));
+    let call = content_call(digest);
+    assert_eq!(call.operation.target(), target);
+    let replay = Replay::start(Script::default());
     let registry = ApprovalRegistry::default();
+    let mut payer = RecordedPayer::new();
     let outcome = web_tool(
         &config(&replay, sequencer_key()),
         &call,
-        &approval(&registry, u128::MAX),
-        &mut RecordedPayer::new(),
+        &approval(&registry, 0),
+        &mut payer,
     )
     .unwrap_or_else(|error| panic!("content: {error:?}"));
+    assert_eq!(outcome.settlement, None);
     let WebResult::Content {
+        digest: released,
         kind,
         opaque_payload,
         media_type,
         opaque_text,
-        ..
     } = &outcome.result
     else {
         panic!("content result");
     };
+    assert_eq!(*released, digest);
     assert_eq!(*kind, 1);
-    assert_eq!(opaque_payload, text(vector, "/payload").as_bytes());
-    assert_eq!(media_type, "application/json");
-    assert_eq!(opaque_text, text(vector, "/text"));
+    assert_eq!(opaque_payload, text(&vector, "/payload").as_bytes());
+    assert_eq!(media_type, text(&vector, "/media_type"));
+    assert_eq!(opaque_text, text(&vector, "/text"));
+    let evidence = outcome.evidence();
+    assert!(evidence.get("settlement").is_none());
+    assert_eq!(evidence["untrusted"], true);
+    assert_eq!(evidence["content"]["digest"], hex(&digest));
+    assert_eq!(replay.signatures(), 0);
+    assert!(payer.payments.is_empty() && payer.grants.is_empty());
+    assert!(registry
+        .ticket(call.idempotency_key)
+        .unwrap_or_else(|error| panic!("ticket: {error:?}"))
+        .is_none());
 
     let mut altered = reference_canonical(
         1,
-        text(vector, "/payload").as_bytes(),
-        text(vector, "/media_type"),
-        text(vector, "/text"),
+        text(&vector, "/payload").as_bytes(),
+        text(&vector, "/media_type"),
+        text(&vector, "/text"),
     );
     if let Some(last) = altered.last_mut() {
         *last ^= 1;
@@ -719,6 +854,56 @@ fn paid_content_by_digest_releases_only_matching_bytes() {
         matches!(refused, Err(WebToolError::DigestMismatch)),
         "{refused:?}"
     );
+
+    let other = unhex32(text(&vectors()[2], "/digest"));
+    let answered = Replay::start(Script {
+        content: Some((
+            format!("/content/{}", hex(&other)),
+            reference_canonical(
+                1,
+                text(&vector, "/payload").as_bytes(),
+                text(&vector, "/media_type"),
+                text(&vector, "/text"),
+            ),
+        )),
+        ..Script::default()
+    });
+    let refused = web_tool(
+        &config(&answered, sequencer_key()),
+        &content_call(other),
+        &approval(&registry, u128::MAX),
+        &mut RecordedPayer::new(),
+    );
+    assert!(
+        matches!(refused, Err(WebToolError::DigestMismatch)),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn a_payment_challenge_on_the_content_path_is_never_paid() {
+    let (_, vector) = recorded_content();
+    let replay = Replay::start(Script {
+        challenge_content: true,
+        ..Script::default()
+    });
+    let registry = ApprovalRegistry::default();
+    let mut payer = RecordedPayer::new();
+    let refused = web_tool(
+        &config(&replay, sequencer_key()),
+        &content_call(unhex32(text(&vector, "/digest"))),
+        &approval(&registry, u128::MAX),
+        &mut payer,
+    );
+    assert!(
+        matches!(
+            refused,
+            Err(WebToolError::Protocol("content_payment_required"))
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(replay.signatures(), 0);
+    assert!(payer.payments.is_empty() && payer.grants.is_empty());
 }
 
 #[test]
@@ -772,7 +957,7 @@ fn an_unapproved_spend_is_held_and_never_paid() {
         .unwrap_or_else(|error| panic!("approve: {error:?}"));
     let outcome = web_tool(&config, &search_call(), &held, &mut payer)
         .unwrap_or_else(|error| panic!("approved search: {error:?}"));
-    assert_eq!(outcome.settlement.amount, 3114);
+    assert_eq!(settled(&outcome).amount, 3114);
     assert_eq!(replay.signatures(), 1);
     assert_eq!(payer.grants.len(), 1);
 }
@@ -875,7 +1060,7 @@ fn a_pending_settlement_is_retried_with_the_same_signature() {
         &mut payer,
     )
     .unwrap_or_else(|error| panic!("pending search: {error:?}"));
-    assert_eq!(outcome.settlement.amount, 3114);
+    assert_eq!(settled(&outcome).amount, 3114);
     assert_eq!(replay.signatures(), 2);
     assert_eq!(payer.grants.len(), 1);
 }
@@ -1383,22 +1568,13 @@ fn assert_unpaid_refusals(session: &mut Session<WebBoundary<ProgramReads>>, repl
 #[test]
 fn a_bound_server_lists_and_pays_the_web_tools_through_tools_call() {
     let (fetch, fetch_digest) = fetch_answer(ROUTED_FETCH_URL, false);
-    let vector = &vectors()[2];
-    let content_digest_hex = text(vector, "/digest").to_owned();
-    let canonical = reference_canonical(
-        1,
-        text(vector, "/payload").as_bytes(),
-        text(vector, "/media_type"),
-        text(vector, "/text"),
-    );
+    let (_, vector) = recorded_content();
+    let content_digest_hex = text(&vector, "/digest").to_owned();
     let replay = Replay::start(Script {
-        served: vec![
-            (
-                "/fetch?url=https%3A%2F%2Fpaxeer.app%2Findex.html".to_owned(),
-                fetch,
-            ),
-            (format!("/content/{content_digest_hex}"), canonical),
-        ],
+        served: vec![(
+            "/fetch?url=https%3A%2F%2Fpaxeer.app%2Findex.html".to_owned(),
+            fetch,
+        )],
         ..Script::default()
     });
     let approvals = Arc::new(ApprovalRegistry::default());
@@ -1437,23 +1613,29 @@ fn a_bound_server_lists_and_pays_the_web_tools_through_tools_call() {
     assert_eq!(fetched["content"]["text"], text(&vectors()[0], "/text"));
     assert_eq!(replay.signatures(), 2);
 
-    let stored = paid(
-        &call(
-            &mut session,
-            "web.content",
-            &json!({
-                "digest": content_digest_hex,
-                "currency": "USDC",
-                "scheme": "exact",
-                "idempotency_key": "5b".repeat(32),
-            }),
-        ),
+    let stored = call(
+        &mut session,
         "web.content",
+        &json!({
+            "digest": content_digest_hex,
+            "currency": "USDC",
+            "scheme": "exact",
+            "idempotency_key": "5b".repeat(32),
+        }),
     );
+    assert_eq!(stored["isError"], false, "{stored}");
+    assert_eq!(stored["structuredContent"]["tool"], "web.content");
+    let stored = &stored["structuredContent"]["result"];
+    assert_eq!(stored["_meta"]["layerx/output"], "untrusted");
+    assert_eq!(stored["untrusted"], true);
+    assert!(stored.get("settlement").is_none(), "{stored}");
     assert_eq!(stored["content"]["digest"], content_digest_hex);
-    assert_eq!(stored["content"]["media_type"], "application/json");
-    assert_eq!(stored["content"]["text"], text(vector, "/text"));
-    assert_eq!(replay.signatures(), 3);
+    assert_eq!(
+        stored["content"]["media_type"],
+        text(&vector, "/media_type")
+    );
+    assert_eq!(stored["content"]["text"], text(&vector, "/text"));
+    assert_eq!(replay.signatures(), 2);
 
     for key in [metered_key(), [0x5a; 32], [0x5b; 32]] {
         assert!(approvals
