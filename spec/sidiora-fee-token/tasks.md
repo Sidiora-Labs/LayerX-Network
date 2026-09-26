@@ -150,6 +150,15 @@
     - In modules/evm/keeper/params.go return governed rates from IsAllowedFeeDenom, expose GetMaxFeeTokenRateAge with its unset default, and add GetFeeTokenRate refusing missing, invalid, future or stale rates with named errors and no fallback.
     - Extend modules/evm/types/params_test.go with validator refusals and acceptances, defaults, the initial-rate scale, parameter-store and protobuf round trips, and extend modules/evm/keeper/params_test.go under the FeeTokenParams prefix with fresh, boundary, stale and unset reads through a real parameter store.
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
+  - [ ] 2.13 Charge the fee-token path on the block execution path
+    - In node/app.go make validateGigaEVMTx and executeEVMTxWithGigaExecutor consult the x/evm keeper's GetFeeTokenCharge when the fee-token switch is on and the payer's preference is a fee denom: check the balance in that denom at the governed rate instead of the network coin, refuse a short balance and an unusable rate with the errors the ante path returns, pre-charge and refund in that denom at the recorded rate, and record the charge the way SetAnteFeeTokenCharge does so the message server applies it; with the switch off, and for every block below the upgrade height, the path stays exactly what it is today (observations 2.6.3 and 2.10.1).
+    - Add node/app_feetoken_test.go asserting through the application's real block path the debit in the fee denom, the refund at the recorded rate, the short-balance and unusable-rate refusals, and the unchanged network-coin charge with the switch off.
+    - With this in place, re-qualify task 2.10 on this revision: run its verify_cmd once and set task 2.10 to done with its four evidence fields when it passes, leaving it implemented with the run's fields otherwise, and add a closing line to observations 2.6.3 and 2.10.1 in spec/sidiora-fee-token/qualification.kvx when the run proves them resolved.
+    - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 13.4, 13.5_
+  - [ ] 2.14 Serve the fee-token precompile only at or after the upgrade
+    - In precompiles/setup.go make the fee-token entry of GetCustomPrecompiles absent below the upgrade height task 2.9 named, in the shape the xweb entry is gated there, and in modules/evm/keeper/keeper.go make CustomPrecompiles select the set for the block's upgrade height for ordinary execution instead of latestCustomPrecompiles (observation 2.5.3), changing no other precompile's version selection.
+    - Extend node/upgrades_test.go so the custom precompile set below the upgrade height holds no fee-token entry and the precompile answers only after the upgrade, and cover the keeper's selection in modules/evm/keeper.
+    - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 13.1, 13.2, 13.3, 13.6_
 
 ## Wave 3 - One Aggregate Run, Recorded
 
@@ -168,7 +177,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }
