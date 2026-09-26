@@ -170,6 +170,10 @@
     - Run make agent-lint on this revision, and fix every clippy finding it reports in crates this feature did not write - starting with too_many_arguments in agent/crates/layerx-proof/src/program.rs verify_program_execution_receipt (observation 1.18.1) - by restructuring the code, never by an allow attribute, a lint-level change or a clippy configuration change, keeping every public signature the agent SDKs and services call unchanged unless a caller in the workspace is updated in the same task.
     - Keep every test of each touched crate passing, and add or extend a test where a restructuring changes a function's shape.
     - _Requirements: 9.1_
+  - [ ] 2.12 Verify a receipt by the protocol version it carries in the Python client
+    - In agent/sdk/python/layerx_sdk/x402.py make verify_payment_receipt verify the receipt with the protocol version the receipt itself carries, refusing by name a version the module does not support, and in layerx_sdk/web_search.py make the client verify the same way when no protocol_version was configured, keeping a configured version as an explicit bound that refuses a receipt of another version (observation 1.9.3).
+    - Extend agent/sdk/python/tests/test_web_search.py so the recorded version 3 receipts verify through a client constructed without protocol_version and are refused by a client configured for version 2, and add agent/sdk/python/tests/test_x402.py covering verify_payment_receipt on a version 3 receipt, a version 2 receipt and an unsupported version; keep the .pyi stubs in step.
+    - _Requirements: 9.1, 9.2, 9.4_
 
 ## Wave 3 - One Run, Recorded
 
@@ -187,7 +191,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17", "1.18"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }
