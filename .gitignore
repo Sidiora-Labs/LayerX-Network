@@ -132,6 +132,7 @@ __pycache__/
 /integration_test/**/*.txt
 coverage.html
 coverage.out
+coverage.cobertura.xml
 /example/cosmwasm/echo/target
 /example/cosmwasm/cw20/target
 /example/cosmwasm/cw721/target
