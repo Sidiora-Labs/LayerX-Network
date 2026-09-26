@@ -132,6 +132,13 @@
     - Make bridge/deploy/proposals/proposals.go emit each bundle as that proposal content, so the chain's submit-proposal transaction carries it as it stands, keeping DecodeBody and the type URLs task 2.9 added.
     - Extend modules/layerxbridge/keeper/keeper_test.go for the handler (each carried message executes, a wrong authority and a malformed proposal are refused), add node/gov_bridge_test.go asserting the application's governance router has the bridge route and executes a generated proposal, and extend bridge/deploy/proposals/proposals_test.go to decode the emitted proposal field for field.
     - _Requirements: 9.1, 9.2_
+  - [ ] 2.12 Pin platform tools whose cargo accepts edition 2024 for every cargo build-sbf
+    - In bridge/deploy/deploy-solana-program.sh declare the platform tools version once, v1.56, and pass it to cargo-build-sbf as --tools-version so the build no longer depends on the platform tools the Solana toolchain installs by default, whose cargo 1.84.1 rejects the 35 transitive manifests that declare edition 2024 (observations 1.2.1 and 2.7.1); keep the toolchain directory variable as the source of solana, solana-keygen and cargo-build-sbf.
+    - Make the cargo build-sbf step of .github/workflows/bridge-test.yml pass the same --tools-version literal, and leave the Solana toolchain release the workflow installs unchanged.
+    - Extend bridge/deploy/tests/deploy-scripts-check.sh so it reads the version the deploy script declares, fails when the workflow's cargo build-sbf step names a different version or none, and fails when the declared version is older than v1.52, the first platform tools release whose cargo accepts edition 2024.
+    - Make bridge/deploy/tests/solana-dry-run-check.sh name the pinned platform tools version in the message it prints when cargo-build-sbf cannot build the program, so an operator sees which tools were asked for.
+    - With the pinned tools, re-qualify task 2.7 on this revision: run its --record once to write bridge/deploy/tests/fixtures/solana_dry_run.json, run its verify_cmd once, and set task 2.7 to done with its four evidence fields only when that run passes.
+    - _Requirements: 10.3, 10.5, 13.2, 14.2_
 
 ## Wave 3 - One Run, Recorded
 
@@ -150,7 +157,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }

@@ -590,17 +590,32 @@ symbols = ["NewProposalHandler","govRouter"]
 touches = ["api/layerxbridge/tx.proto","api/layerxbridge/proposal.proto","modules/layerxbridge/types/proposal.pb.go","modules/layerxbridge/types/proposal.go","modules/layerxbridge/types/codec.go","modules/layerxbridge/handler.go","modules/layerxbridge/keeper/keeper_test.go","node/app.go","node/gov_bridge_test.go","bridge/deploy/proposals/proposals.go","bridge/deploy/proposals/proposals_test.go","bridge/deploy/proposals/testdata"]
 reqs = ["9.1","9.2"]
 
+[task.2.12]
+title = "Pin platform tools whose cargo accepts edition 2024 for every cargo build-sbf"
+status = "pending"
+wave = 2
+requires = ["1.6","2.10"]
+do_1 = "In bridge/deploy/deploy-solana-program.sh declare the platform tools version once, v1.56, and pass it to cargo-build-sbf as --tools-version so the build no longer depends on the platform tools the Solana toolchain installs by default, whose cargo 1.84.1 rejects the 35 transitive manifests that declare edition 2024 (observations 1.2.1 and 2.7.1); keep the toolchain directory variable as the source of solana, solana-keygen and cargo-build-sbf."
+do_2 = "Make the cargo build-sbf step of .github/workflows/bridge-test.yml pass the same --tools-version literal, and leave the Solana toolchain release the workflow installs unchanged."
+do_3 = "Extend bridge/deploy/tests/deploy-scripts-check.sh so it reads the version the deploy script declares, fails when the workflow's cargo build-sbf step names a different version or none, and fails when the declared version is older than v1.52, the first platform tools release whose cargo accepts edition 2024."
+do_4 = "Make bridge/deploy/tests/solana-dry-run-check.sh name the pinned platform tools version in the message it prints when cargo-build-sbf cannot build the program, so an operator sees which tools were asked for."
+do_5 = "With the pinned tools, re-qualify task 2.7 on this revision: run its --record once to write bridge/deploy/tests/fixtures/solana_dry_run.json, run its verify_cmd once, and set task 2.7 to done with its four evidence fields only when that run passes."
+verify_cmd = "timeout 20m sh -c 'cargo build-sbf --tools-version v1.56 --manifest-path bridge/solana/Cargo.toml && bash bridge/deploy/tests/deploy-scripts-check.sh'"
+symbols = ["PLATFORM_TOOLS_VERSION"]
+touches = [".github/workflows/bridge-test.yml","bridge/deploy/deploy-solana-program.sh","bridge/deploy/tests/deploy-scripts-check.sh","bridge/deploy/tests/solana-dry-run-check.sh","bridge/deploy/tests/fixtures/solana_dry_run.json"]
+reqs = ["10.3","10.5","13.2","14.2"]
+
 [task.3.1]
 title = "Run the bridge workflow's command set once on the merged revision and record the evidence"
 status = "pending"
 wave = 3
-requires = ["1.1","1.2","1.3","1.4","1.5","1.6","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11"]
+requires = ["1.1","1.2","1.3","1.4","1.5","1.6","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12"]
 do_1 = "On the revision that merges waves 1 and 2, run the workflow's four legs once, in order - the bridge/evm Foundry suite after bootstrapping the pinned libraries, the bridge/solana crate with its release tests and cargo build-sbf, the layerx-bridge-relayer crate, and the bridge/deploy and bridge/vectors Go packages with the offline check scripts - writing each leg's output to its own log under build/bridge-gates/."
 do_2 = "Append one gate record per leg to spec/paxeer-x-bridge/qualification.kvx carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code, the log path, the outcome and the evidence, written only from a command that actually ran."
 do_3 = "Append one [observation.*] entry per failure the run exposes that belongs to no task in this feature, in the spec/workflow.kvx [qualification_log] shape: task, file, symbol, one sentence observed, one sentence assumption and severity; do not investigate it further and do not rerun it."
 do_4 = "Rerun nothing that already passed at this revision, spawn no review of a task whose verify_cmd passed, and write no gate record for a command that did not run."
 do_5 = "Deploy nothing: the deployment scripts and the generated governance proposals are left for their owner, and no task in this feature touches a public network."
-verify_cmd = "timeout 20m sh -c 'bash bridge/evm/bootstrap-libs.sh && forge test --root bridge/evm && cargo test --locked --manifest-path bridge/solana/Cargo.toml && cargo build-sbf --manifest-path bridge/solana/Cargo.toml && cargo test --locked --manifest-path interop/Cargo.toml -p layerx-bridge-relayer && go test -count=1 ./bridge/vectors/... ./bridge/deploy/... && for s in bridge/deploy/tests/*-check.sh; do bash $s || exit 1; done'"
+verify_cmd = "timeout 20m sh -c 'bash bridge/evm/bootstrap-libs.sh && forge test --root bridge/evm && cargo test --locked --manifest-path bridge/solana/Cargo.toml && cargo build-sbf --tools-version v1.56 --manifest-path bridge/solana/Cargo.toml && cargo test --locked --manifest-path interop/Cargo.toml -p layerx-bridge-relayer && go test -count=1 ./bridge/vectors/... ./bridge/deploy/... && for s in bridge/deploy/tests/*-check.sh; do bash $s || exit 1; done'"
 symbols = ["paxeer-x-bridge-gate"]
 touches = ["spec/paxeer-x-bridge/qualification.kvx"]
 reqs = ["15.1","15.2","15.3","15.4"]
