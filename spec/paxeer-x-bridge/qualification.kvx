@@ -31,3 +31,19 @@
 #
 # No record carries a hostname, an IP address, an internal URL, a credential or
 # the name of an agent or a working branch.
+
+[observation.1.5.1]
+task = "1.5"
+file = "bridge/deploy/proposals/proposals.go"
+symbol = "ChainConfig"
+observed = "Task 1.4 owns bridge/deploy/chainconfig and the nine committed configurations, which do not exist on this branch, so the generator declares the minimal schema it reads from [design.chains] p2 plus the two fields no governance body can be built without: governance_authority, the bech32 account the keeper executes these messages for, and vault, the deployed vault address or Solana vault handle."
+assumption = "The wave merge reconciles the two declarations - the canonical chainconfig package keeps ownership of the schema and gains these two fields, and the Solana slot finality depth is the single finality_depth field this generator reads - because both read the same file."
+severity = "assumption"
+
+[observation.1.5.2]
+task = "1.5"
+file = "modules/layerxbridge/keeper/sidiora.go"
+symbol = "EnsureSidioraDenom"
+observed = "No production path calls EnsureSidioraDenom at this revision, and MsgSetCap creates Denom(chain, asset) for an asset that is not registered yet, so submitting Solana's Sidiora cap before something registers (chain, 0x21f7b20a555199fa73A238B1a91FD0f549068fEe, usid) binds that cap to an lxb denom instead of the module's usid denom."
+assumption = "The Sidiora cap must be submitted after the asset is registered against usid; the chain is frozen, so the ordering belongs in the operator runbook and the checklist read-back rather than in a chain change."
+severity = "suspect"

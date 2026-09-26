@@ -1,0 +1,29 @@
+{
+  "name": "ethereum",
+  "chain_id": 1,
+  "native_symbol": "ETH",
+  "native_decimals": 18,
+  "rpc_endpoint_env": "PAXEER_BRIDGE_ETHEREUM_RPC_URL",
+  "explorer_key_env": "PAXEER_BRIDGE_ETHEREUM_EXPLORER_KEY",
+  "governance_authority": "pax10d07y265gmmuvt4z0w9aw880jnsr700jxdwa9m",
+  "owner": "0x2222222222222222222222222222222222222222",
+  "vault": "0x7a3e5c81b04d296f8e1a7c35d92b6f04e8c1a37d",
+  "attestors": [
+    "0x1d4a7f3b6e2c95840b1f8d3e7a6c5049b28e1f37",
+    "0x3f81c2d5e40a9b76135c8e2f4d7a6b09e83f1c24",
+    "0x6b2e9d47a1c30f582d94e7b6a3c518fd20e94b76",
+    "0x9c58e1f3a7d24b60c8e5934f1a6d7b28e04c3f95",
+    "0xd27a4e9b16c38f50a3d7e284b95c1f60d8a34e7b"
+  ],
+  "threshold": 3,
+  "finality_depth": 64,
+  "assets": [
+    {
+      "address": "0x0000000000000000000000000000000000000000",
+      "asset_id": "0x0000000000000000000000000000000000000000",
+      "decimals": 18,
+      "max_per_tx": "50000000000000000000",
+      "max_total": "1000000000000000000000"
+    }
+  ]
+}
