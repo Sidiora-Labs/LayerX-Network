@@ -53,6 +53,7 @@ symbol = "MockAddr"
 observed = "forge compiles the whole contracts tree despite --match-path, and MockAddr in CW1155ERC1155PointerTest.t.sol and CW721ERC721PointerTest.t.sol does not implement the LayerX binding methods of IAddr, so compilation fails (Error 3656) before XWebConsumer.t.sol runs; the Go legs and xweb-forge-libs.sh passed."
 assumption = "The stale mocks predate this task and sit outside its touches; updating them belongs to the addr precompile owner, after which the verify_cmd reruns unchanged."
 severity = "blocker"
+closed = "Task 1.12 brought both MockAddr doubles up to IAddr; the verify_cmd passed unchanged at revision 4f95b1f5355f608647c6149bc56d06d53e596950."
 
 [observation.1.6.2]
 task = "1.6"

@@ -60,6 +60,19 @@ contract MockJson is IJson {
 }
 
 contract MockAddr is IAddr {
+    bytes32 internal constant MockCallerDidPublicKey =
+        0x1111111111111111111111111111111111111111111111111111111111111111;
+    bytes32 internal constant MockOperatorDidPublicKey =
+        0x2222222222222222222222222222222222222222222222222222222222222222;
+    string internal constant MockCallerDid =
+        "did:layerx:1111111111111111111111111111111111111111111111111111111111111111";
+    string internal constant MockOperatorDid =
+        "did:layerx:2222222222222222222222222222222222222222222222222222222222222222";
+    bytes32 internal constant MockCallerMainAccountId =
+        0x3333333333333333333333333333333333333333333333333333333333333333;
+    bytes32 internal constant MockOperatorMainAccountId =
+        0x4444444444444444444444444444444444444444444444444444444444444444;
+
     function getPaxAddr(address addr) external pure returns (string memory) {
         if (addr == MockCallerEVMAddr) {
             return MockCallerPaxAddr;
@@ -72,6 +85,43 @@ contract MockAddr is IAddr {
             return MockCallerEVMAddr;
         }
         return MockOperatorEVMAddr;
+    }
+
+    function bindLayerX(bytes32 didPublicKey, bytes memory signature) external {
+        require(signature.length == 64, "MockAddr: signature must be 64 bytes");
+        bytes32 expected = msg.sender == MockCallerEVMAddr ? MockCallerDidPublicKey : MockOperatorDidPublicKey;
+        require(didPublicKey == expected, "MockAddr: DID key is bound to another address");
+        emit LayerXBound(msg.sender, didPublicKey, 0);
+    }
+
+    function unbindLayerX() external {
+        bytes32 didPublicKey = msg.sender == MockCallerEVMAddr ? MockCallerDidPublicKey : MockOperatorDidPublicKey;
+        emit LayerXUnbound(msg.sender, didPublicKey, 0);
+    }
+
+    function getLayerXDid(address addr) external pure returns (bytes32, string memory) {
+        if (addr == MockCallerEVMAddr) {
+            return (MockCallerDidPublicKey, MockCallerDid);
+        }
+        return (MockOperatorDidPublicKey, MockOperatorDid);
+    }
+
+    function getEvmAddrByLayerX(bytes32 didPublicKey) external pure returns (address) {
+        if (didPublicKey == MockCallerDidPublicKey) {
+            return MockCallerEVMAddr;
+        }
+        return MockOperatorEVMAddr;
+    }
+
+    function layerXBindNonce(address) external pure returns (uint64) {
+        return 0;
+    }
+
+    function getUnifiedAccount(address addr) external pure returns (address, string memory, bytes32, bytes32) {
+        if (addr == MockCallerEVMAddr) {
+            return (addr, MockCallerPaxAddr, MockCallerDidPublicKey, MockCallerMainAccountId);
+        }
+        return (addr, MockOperatorPaxAddr, MockOperatorDidPublicKey, MockOperatorMainAccountId);
     }
 }
 

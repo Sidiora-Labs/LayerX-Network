@@ -325,10 +325,10 @@ log_path = ".logs/verify.log"
 
 [task.1.6]
 title = "Write the xweb precompile, its Solidity interface and the reference consumer"
-status = "implemented"
-revision = "4e18d087a1708364ba03f08b1d2bfc3410f87c13"
+status = "done"
+revision = "4f95b1f5355f608647c6149bc56d06d53e596950"
 command = "timeout 20m sh -c 'go test -count=1 ./precompiles/xweb/... ./precompiles/ && bash tools/ci/xweb-forge-libs.sh && FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague --match-path contracts/test/XWebConsumer.t.sol -vvv'"
-exit_code = 1
+exit_code = 0
 log_path = ".logs/verify.log"
 wave = 1
 requires = ["1.5"]
@@ -430,7 +430,11 @@ status = "pending"
 
 [task.1.12]
 title = "Repair the pointer test doubles so the Foundry suite compiles and qualify the xweb precompile"
-status = "pending"
+status = "done"
+revision = "4f95b1f5355f608647c6149bc56d06d53e596950"
+command = "timeout 20m sh -c 'go test -count=1 ./precompiles/xweb/... ./precompiles/ && bash tools/ci/xweb-forge-libs.sh && FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague --match-path contracts/test/XWebConsumer.t.sol -vvv'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 1
 requires = ["1.6"]
 do_1 = "In contracts/test/CW1155ERC1155PointerTest.t.sol and contracts/test/CW721ERC721PointerTest.t.sol bring MockAddr up to the whole IAddr interface - bindLayerX, unbindLayerX, getLayerXDid, getEvmAddrByLayerX, layerXBindNonce, getUnifiedAccount and every other declared function - with behaviour consistent with the existing getPaxAddr and getEvmAddr doubles, so the contracts tree compiles under forge again; change nothing else in those tests."
