@@ -485,3 +485,4 @@ task = "2.14"; file = "precompiles/setup_test.go"; symbol = "TestFeeTokenRegistr
 observed = "TestFeeTokenRegistration builds GetCustomPrecompiles for v6.6, below the fee-token upgrade, and requires the fee-token entry there with a single version, which the upgrade gating task 2.14 specifies now leaves out."
 assumption = "The test lies outside task 2.14 touches and was not run by its verify_cmd; it stays as written until a task owning it builds the set at or after the fee-token upgrade."
 severity = "suspect"
+closed = "Task 2.16 builds the set at the fee-token upgrade, requires the single version keyed by it and no entry below it; the precompiles package tests pass on d714b6402b9b7d78c6b15bc002fcbc3ad170e58b."

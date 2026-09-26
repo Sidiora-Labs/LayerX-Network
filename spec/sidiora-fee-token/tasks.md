@@ -164,7 +164,7 @@
     - Add the matching node/ante tests: a payer with a fee denom is charged in it and not in the network coin on the delivery path, an uncovered payer is refused with the insufficient-funds error naming the denom, and a payer without a fee denom is charged in the network coin as before.
     - Run task 2.10's verify_cmd once on the result; on exit 0 record task 2.10 done with that revision, command, exit code and log, and close observations 2.10.1 and 2.13.1 naming the revision.
     - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 13.4, 13.5_
-  - [ ] 2.16 Assert the fee-token registration at its upgrade
+  - [x] 2.16 Assert the fee-token registration at its upgrade
     - In precompiles/setup_test.go make TestFeeTokenRegistration build the custom precompile set at the fee-token upgrade name node/upgrades.go declares and require the fee-token entry there with exactly one version keyed by that name, and require the set built below that upgrade to carry no fee-token entry, in the shape TestXWebRegistration asserts for xweb; every other assertion of the test stays as written (observation 2.14.1).
     - Close observation 2.14.1 naming the revision at which the precompiles package tests pass.
     - _Requirements: 9.1, 13.1, 13.2_

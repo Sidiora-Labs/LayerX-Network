@@ -634,7 +634,11 @@ reqs = ["10.1", "10.2", "10.3", "10.4", "10.5", "10.6", "13.4", "13.5"]
 
 [task.2.16]
 title = "Assert the fee-token registration at its upgrade"
-status = "pending"
+status = "done"
+revision = "d714b6402b9b7d78c6b15bc002fcbc3ad170e58b"
+command = "timeout 20m sh -c 'go test -count=1 ./precompiles/ ./precompiles/feetoken/...'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.14"]
 do_1 = "In precompiles/setup_test.go make TestFeeTokenRegistration build the custom precompile set at the fee-token upgrade name node/upgrades.go declares and require the fee-token entry there with exactly one version keyed by that name, and require the set built below that upgrade to carry no fee-token entry, in the shape TestXWebRegistration asserts for xweb; every other assertion of the test stays as written (observation 2.14.1)."

@@ -53,11 +53,15 @@ func TestFeeTokenRegistration(t *testing.T) {
 		require.False(t, exists, "%s collides with %s at %s", name, previous, entry.Address)
 		seen[entry.Address] = name
 	}
-	versioned := precompiles.GetCustomPrecompiles("v6.6", testkeeper.EVMTestApp.GetPrecompileKeepers())
+	require.Equal(t, "v6.7", precompiles.FeeTokenUpgrade)
+	below := precompiles.GetCustomPrecompiles("v6.6", testkeeper.EVMTestApp.GetPrecompileKeepers())
+	_, belowFound := below[address]
+	require.False(t, belowFound)
+	versioned := precompiles.GetCustomPrecompiles(precompiles.FeeTokenUpgrade, testkeeper.EVMTestApp.GetPrecompileKeepers())
 	versions, found := versioned[address]
 	require.True(t, found)
 	require.Len(t, versions, 1)
-	p, ok := versions["v6.6"].(precompiles.IPrecompile)
+	p, ok := versions[precompiles.FeeTokenUpgrade].(precompiles.IPrecompile)
 	require.True(t, ok)
 	require.Equal(t, feetoken.PrecompileName, p.GetName())
 	require.Equal(t, address, p.Address())
