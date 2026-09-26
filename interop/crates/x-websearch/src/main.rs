@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::{Handle, Signals};
@@ -12,6 +12,10 @@ use x_websearch::content::{self, ContentStore};
 use x_websearch::crawl::{CrawlBudget, CrawlReport, Crawler, StopSignal};
 use x_websearch::fetch::Fetcher;
 use x_websearch::index::WebIndex;
+use x_websearch::kernel::{
+    self, KernelAttestor, KernelRelay, KernelWatcher, ObservationSubmitter, ProgramExchange, Step,
+};
+use x_websearch::keys::ATTESTOR_KEY_FILE;
 use x_websearch::payment::{system_clock, PaymentGate};
 use x_websearch::server::Stopper;
 use x_websearch::submit::{self, Outcome, Submitter};
@@ -39,13 +43,22 @@ fn config_path(arguments: impl IntoIterator<Item = OsString>) -> Option<PathBuf>
         .then(|| PathBuf::from(path))
 }
 
+/// The kernel relay and what it runs beside: the EVM endpoint it reads the
+/// registered attestor set from and the time between its steps.
+struct RelayLoop {
+    relay: KernelRelay,
+    rpc: EvmRpc,
+    interval: Duration,
+}
+
 /// What the configuration and the keys assemble into: the routes, the
-/// crawler, the index it writes and the attestor's loops.
+/// crawler, the index it writes, the attestor's loops and the kernel relay.
 struct Assembled {
     routes: RouteTable,
     crawler: Crawler,
     index: Arc<WebIndex>,
     pipeline: Option<Pipeline>,
+    relay: Option<RelayLoop>,
 }
 
 /// The routes and the crawler built from the configuration and the keys.
@@ -76,12 +89,72 @@ fn assemble(config: &Config, keys: &Keys) -> Result<Assembled, String> {
     content::register(&mut routes, &gate, &fetcher, &store)
         .map_err(|error| format!("route /fetch or /content: {error}"))?;
     let pipeline = pipeline(config, keys, &mut routes, &fetcher, &index, &store)?;
+    let relay = relay(config, keys, &mut routes, &fetcher, &index, &store)?;
     Ok(Assembled {
         routes,
         crawler,
         index,
         pipeline,
+        relay,
     })
+}
+
+/// The kernel relay when the `kernel` settings are present, with the program
+/// signature-exchange route registered; none without them. The relay signs
+/// with the attestor key and posts as the receiver key.
+fn relay(
+    config: &Config,
+    keys: &Keys,
+    routes: &mut RouteTable,
+    fetcher: &Arc<Fetcher>,
+    index: &Arc<WebIndex>,
+    store: &Arc<ContentStore>,
+) -> Result<Option<RelayLoop>, String> {
+    let Some(settings) = &config.kernel else {
+        return Ok(None);
+    };
+    let attestor_key = keys
+        .attestor()
+        .ok_or_else(|| format!("kernel: the kernel relay needs {ATTESTOR_KEY_FILE}"))?;
+    let rpc =
+        EvmRpc::new(&config.evm.endpoint).map_err(|error| format!("evm.endpoint: {error}"))?;
+    let topics: Vec<&[u8]> = settings.topics.iter().map(String::as_bytes).collect();
+    let watcher = KernelWatcher::open(&settings.endpoint, &config.data_dir.join("kernel"), 0)
+        .map_err(|error| format!("kernel.endpoint or data_dir: {error}"))?
+        .with_topics(&topics)
+        .map_err(|error| format!("kernel.topics: {error}"))?;
+    let exchange = Arc::new(
+        ProgramExchange::open(&config.data_dir.join("kernel-attest"), &config.peers)
+            .map_err(|error| format!("peers or data_dir: {error}"))?,
+    );
+    kernel::register(routes, &exchange)
+        .map_err(|error| format!("route /program-attestations: {error}"))?;
+    let attestor = KernelAttestor::new(
+        attestor_key.clone(),
+        config.kernel_network_id,
+        Arc::clone(fetcher),
+        Arc::clone(index),
+        Arc::clone(store),
+    );
+    let submitter = ObservationSubmitter::new(
+        &settings.endpoint,
+        keys.receiver().clone(),
+        settings.submitter_did.clone(),
+        config.kernel_network_id,
+        settings.fee_limit,
+    )
+    .map_err(|error| format!("kernel.endpoint: {error}"))?;
+    Ok(Some(RelayLoop {
+        relay: KernelRelay::new(
+            watcher,
+            attestor,
+            exchange,
+            attest::AttestorSet::default(),
+            submitter,
+        ),
+        rpc,
+        interval: settings.poll_interval(),
+    }))
 }
 
 /// The attestor's loops when an attestor key is present, with the
@@ -235,6 +308,70 @@ fn start_attestor(mut pipeline: Pipeline, stop: StopSignal) -> std::io::Result<J
         })
 }
 
+/// Milliseconds since the Unix epoch.
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
+}
+
+/// One relay step: refresh the registered attestor set, then answer, exchange
+/// and post the program requests.
+fn relay_round(relay: &mut RelayLoop) {
+    match submit::attestor_set(&relay.rpc) {
+        Ok(set) => relay.relay.set = set,
+        Err(error) => eprintln!("x-websearch could not read the attestor set: {error}"),
+    }
+    match relay.relay.step(now_ms()) {
+        Ok(steps) => {
+            for step in steps {
+                match step {
+                    Step::Posted {
+                        program_id,
+                        request_id,
+                        ..
+                    } => eprintln!(
+                        "x-websearch posted the observation of program {} request {request_id}",
+                        x_websearch::payment::hex(&program_id)
+                    ),
+                    Step::Refused {
+                        program_id,
+                        request_id,
+                        reason,
+                    } => eprintln!(
+                        "x-websearch could not answer program {} request {request_id}: {reason}",
+                        x_websearch::payment::hex(&program_id)
+                    ),
+                }
+            }
+        }
+        Err(error) => eprintln!("x-websearch kernel relay step failed: {error}"),
+    }
+}
+
+/// Runs a relay step every interval on its own thread until `stop` is
+/// raised.
+fn start_relay(mut relay: RelayLoop, stop: StopSignal) -> std::io::Result<JoinHandle<()>> {
+    thread::Builder::new()
+        .name("x-websearch-kernel-relay".to_owned())
+        .spawn(move || {
+            eprintln!(
+                "x-websearch kernel relay started from sequence {}",
+                relay.relay.watcher.next_sequence()
+            );
+            while !stop.is_raised() {
+                let started = Instant::now();
+                relay_round(&mut relay);
+                if stop.wait_timeout(relay.interval.saturating_sub(started.elapsed())) {
+                    break;
+                }
+            }
+            eprintln!("x-websearch kernel relay stopped");
+        })
+}
+
 fn describe(report: &CrawlReport) -> String {
     format!(
         "x-websearch crawl cycle finished: {} visited, {} indexed, {} deferred",
@@ -347,6 +484,7 @@ fn main() -> ExitCode {
         crawler,
         index,
         pipeline,
+        relay,
     } = match assembled {
         Ok(assembled) => assembled,
         Err(error) => {
@@ -382,6 +520,7 @@ fn main() -> ExitCode {
     let (loops, started) = start_loops(
         crawler,
         pipeline,
+        relay,
         config.seeds.clone(),
         config.crawl_interval(),
         &stop,
@@ -406,16 +545,18 @@ fn main() -> ExitCode {
     }
 }
 
-/// Starts the crawler and, with an attestor key, the attestor loop. The
-/// handles of the threads that started come back with the first failure.
+/// Starts the crawler, with an attestor key the attestor loop, and with the
+/// kernel settings the kernel relay. The handles of the threads that started
+/// come back with the first failure.
 fn start_loops(
     crawler: Crawler,
     pipeline: Option<Pipeline>,
+    relay: Option<RelayLoop>,
     seeds: Vec<String>,
     interval: Duration,
     stop: &StopSignal,
 ) -> (Vec<JoinHandle<()>>, Result<(), String>) {
-    let mut loops = Vec::with_capacity(2);
+    let mut loops = Vec::with_capacity(3);
     match start_crawler(crawler, seeds, interval, stop.clone()) {
         Ok(handle) => loops.push(handle),
         Err(error) => return (loops, Err(format!("crawler thread: {error}"))),
@@ -424,6 +565,12 @@ fn start_loops(
         match start_attestor(pipeline, stop.clone()) {
             Ok(handle) => loops.push(handle),
             Err(error) => return (loops, Err(format!("attestor thread: {error}"))),
+        }
+    }
+    if let Some(relay) = relay {
+        match start_relay(relay, stop.clone()) {
+            Ok(handle) => loops.push(handle),
+            Err(error) => return (loops, Err(format!("kernel relay thread: {error}"))),
         }
     }
     (loops, Ok(()))

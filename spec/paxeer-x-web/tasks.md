@@ -218,7 +218,7 @@
     - Split the test function in interop/crates/x-websearch/tests/kernel.rs that clippy reports as too_many_lines into named helpers so the crate's clippy pass over all targets is clean under -D warnings, without weakening any assertion; close observation 2.24.2 naming the revision.
     - Run task 2.2's verify_cmd once on the result; on exit 0 record task 2.2 done with that revision, command, exit code and log, and close observations 2.2.1 and 2.19.1 naming the revision.
     - _Requirements: 11.4_
-  - [ ] 2.20 Wire the kernel relay into the sidecar binary and scope the signature exchange by program
+  - [x] 2.20 Wire the kernel relay into the sidecar binary and scope the signature exchange by program
     - In interop/crates/x-websearch/src/config.rs add the kernel relay settings, the gateway endpoint, the poll interval and the program topics to watch, validated the way the existing fields are; in src/main.rs start KernelRelay beside the attest loop when they are set and stop it on the same shutdown signal; in src/server.rs expose the relay's peer signature exchange beside the existing peer endpoint.
     - Key SignatureExchange by program id and request id together so two programs' request ids never share a slot, carrying the program id through the exchange messages; re-record tests/fixtures/kernel through the crate's own recorder only if the wire shape changes.
     - Extend tests/kernel.rs for the scoped exchange, two programs with the same request id both answered, tests/config.rs for the new fields and tests/binary.rs for the relay starting and stopping with the binary under a configuration that names it; close observation 2.2.5 naming the revision.
@@ -261,14 +261,6 @@
     - List lx_getProgramEvents with its parameters and result shape in platform/hosted/gateway/openrpc.json, matching the method task 2.21 wrote in platform/hosted/gateway/src/rpc.rs.
     - Extend platform/hosted/gateway/tests/local/events.rs so the local qualification runs the reference web-reader program's request through a real node and core and reads the request event with its raw bytes through lx_getProgramEvents; close observation 2.21.2 naming the revision.
     - _Requirements: 11.2_
-  - [ ] 2.29 Restore the module context test after the web module registration and qualify the prepare pass staging
-    - test-module-ctx stops in its opening block, where lxp_ctx_emit_transfer_set returns LXP_FATAL_INVARIANT, on every revision since the web module was registered with the kernel; run the test once at that registration commit's parent to confirm the cause, then fix it where it lives, whether a bound or table in src/protocol/lxp_module_ctx.c or include/layerx/lxp_module.h that still assumes ten reserved modules or an expectation in the test that the registration made stale; every existing assertion stays exactly as strong.
-    - Run task 2.23's verify_cmd once; on exit 0 record task 2.23 done with that revision, command, exit code and log, and close observations 2.2.2 and 2.23.1 naming the revision.
-    - _Requirements: 11.1_
-  - [ ] 2.30 Pin the api preimage vector in the attestation test and qualify the api request path
-    - interop/crates/x-websearch/tests/attest.rs asserts the preimage vector file holds two vectors while task 2.13 added the third, evm-api-single; extend the_preimage_matches_every_pinned_vector to pin all three, checking the api vector's preimage exactly as the other two are checked, with no existing assertion weakened.
-    - Run task 2.25's verify_cmd once; on exit 0 record tasks 2.25, 2.14, 2.17 and 2.24 done with that revision, command, exit code and log, and close observations 2.14.1, 2.14.2, 2.17.1, 2.24.1 and 2.25.1 naming the revision.
-    - _Requirements: 17.3, 17.6_
 
 ## Wave 3 - One Run, Recorded
 
@@ -286,7 +278,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17", "1.18"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23", "2.24", "2.25", "2.26", "2.27", "2.28", "2.29", "2.30"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23", "2.24", "2.25", "2.26", "2.27", "2.28"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }

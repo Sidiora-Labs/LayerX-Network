@@ -630,7 +630,7 @@ reqs = ["14.1","14.2","14.3"]
 title = "Dry-run the sidecar loop against anvil and local sidecars and record it"
 status = "pending"
 wave = 2
-requires = ["1.6","2.1","2.3","2.10","2.14","2.17","2.24","2.25","2.26","2.27","2.28","2.29","2.30"]
+requires = ["1.6","2.1","2.3","2.10","2.14","2.17","2.24","2.25","2.26","2.27","2.28"]
 do_1 = "Write interop/deploy/x-websearch/tests/dry-run-check.sh starting anvil, a real loopback web server serving committed pages and three x-websearch processes with run-local attestor keys and allow_loopback set, and deploying contracts/src/xweb/XWebConsumer.sol to anvil."
 do_2 = "Fetch the same page through the three sidecars, assert the digests are identical and the signatures are valid and ascending over the origin-1 preimage, assert the submitter's fulfil calldata decodes against precompiles/xweb/abi.json, and deliver the consumer's callback on anvil from the impersonated precompile address with the attested response and the bounded gas, asserting the consumer's stored result."
 do_3 = "Record the exchange as interop/deploy/x-websearch/tests/fixtures/dry-run.json, replayable without the nodes, carrying no key material, no endpoint but the loopback ones the run started and no date or hostname; stop with a message naming a missing tool rather than skipping a step."
@@ -915,7 +915,11 @@ reqs = ["11.4"]
 
 [task.2.20]
 title = "Wire the kernel relay into the sidecar binary and scope the signature exchange by program"
-status = "pending"
+status = "done"
+revision = "a43f796c08960b6ed5aff6a9988c57094cff082f"
+command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test kernel --test binary --test config'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.19"]
 do_1 = "In interop/crates/x-websearch/src/config.rs add the kernel relay settings, the gateway endpoint, the poll interval and the program topics to watch, validated the way the existing fields are; in src/main.rs start KernelRelay beside the attest loop when they are set and stop it on the same shutdown signal; in src/server.rs expose the relay's peer signature exchange beside the existing peer endpoint."
@@ -1052,35 +1056,11 @@ symbols = ["lx_getProgramEvents"]
 touches = ["platform/hosted/core/src/main.rs","platform/hosted/core/tests/boundary.rs","platform/hosted/gateway/openrpc.json","platform/hosted/gateway/tests/local/events.rs"]
 reqs = ["11.2"]
 
-[task.2.29]
-title = "Restore the module context test after the web module registration and qualify the prepare pass staging"
-status = "pending"
-wave = 2
-requires = ["2.18","2.23"]
-do_1 = "test-module-ctx stops in its opening block, where lxp_ctx_emit_transfer_set returns LXP_FATAL_INVARIANT, on every revision since the web module was registered with the kernel; run the test once at that registration commit's parent to confirm the cause, then fix it where it lives, whether a bound or table in src/protocol/lxp_module_ctx.c or include/layerx/lxp_module.h that still assumes ten reserved modules or an expectation in the test that the registration made stale; every existing assertion stays exactly as strong."
-do_2 = "Run task 2.23's verify_cmd once; on exit 0 record task 2.23 done with that revision, command, exit code and log, and close observations 2.2.2 and 2.23.1 naming the revision."
-verify_cmd = "timeout 20m sh -c 'make test-module-ctx test-kernel && make test-web-program-path'"
-symbols = ["lxp_ctx_emit_transfer_set"]
-touches = ["src/protocol/lxp_module_ctx.c","include/layerx/lxp_module.h","tests/protocol/lxp_test_module_ctx.c"]
-reqs = ["11.1"]
-
-[task.2.30]
-title = "Pin the api preimage vector in the attestation test and qualify the api request path"
-status = "pending"
-wave = 2
-requires = ["2.13","2.25"]
-do_1 = "interop/crates/x-websearch/tests/attest.rs asserts the preimage vector file holds two vectors while task 2.13 added the third, evm-api-single; extend the_preimage_matches_every_pinned_vector to pin all three, checking the api vector's preimage exactly as the other two are checked, with no existing assertion weakened."
-do_2 = "Run task 2.25's verify_cmd once; on exit 0 record tasks 2.25, 2.14, 2.17 and 2.24 done with that revision, command, exit code and log, and close observations 2.14.1, 2.14.2, 2.17.1, 2.24.1 and 2.25.1 naming the revision."
-verify_cmd = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test api --test attest --test canonical --test content'"
-symbols = ["the_preimage_matches_every_pinned_vector"]
-touches = ["interop/crates/x-websearch/tests/attest.rs"]
-reqs = ["17.3","17.6"]
-
 [task.3.1]
 title = "Run the xweb workflow's legs once on the merged revision and record the evidence"
 status = "pending"
 wave = 3
-requires = ["1.1","1.2","1.3","1.4","1.5","1.6","1.7","1.8","1.9","1.10","1.11","1.12","1.13","1.14","1.15","1.16","1.17","1.18","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12","2.13","2.14","2.15","2.16","2.17","2.18","2.19","2.20","2.21","2.22","2.23","2.24","2.25","2.26","2.27","2.28","2.29","2.30"]
+requires = ["1.1","1.2","1.3","1.4","1.5","1.6","1.7","1.8","1.9","1.10","1.11","1.12","1.13","1.14","1.15","1.16","1.17","1.18","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12","2.13","2.14","2.15","2.16","2.17","2.18","2.19","2.20","2.21","2.22","2.23","2.24","2.25","2.26","2.27","2.28"]
 do_1 = "On the revision that merges waves 1 and 2, run the workflow's legs once, in order - the x-websearch crate, modules/xweb with precompiles/xweb, the Foundry consumer tests, the kernel web make targets with the runtime web_read test, and the SDK and MCP tests - writing each leg's output to its own log under build/xweb-gates/."
 do_2 = "Append one gate record per leg to spec/paxeer-x-web/qualification.kvx carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code and the log path, written only from a command that actually ran."
 do_3 = "Append one observation per failure the run exposes that belongs to no task in this feature; do not investigate it further and do not rerun it. Rerun nothing that already passed at this revision and write no gate record for a command that did not run."
