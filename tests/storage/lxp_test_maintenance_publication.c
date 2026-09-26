@@ -5,6 +5,7 @@
 #include "layerx/lxp_maintenance.h"
 #include "layerx/lx_asset.h"
 #include "layerx/lxp_bridge_credit.h"
+#include "layerx/lxp_module_ctx.h"
 #include "../bridge/files.h"
 #include <unistd.h>
 #define main maintenance_activity_fixture_main
@@ -20,6 +21,7 @@ static const uint8_t maintenance_did[] = "did:lxp:maintenance-publication";
 
 typedef struct maintenance_fixture {
     const lxp_activity *input_activity;
+    const char *evidence_directory;
     lxp_kernel kernel;
     lxp_state_store state;
     lxp_state_journal journal;
@@ -52,6 +54,38 @@ typedef struct maintenance_fixture {
     char directory[128];
     char authority_path[160];
 } maintenance_fixture;
+
+static int write_evidence_file(const char *directory, const char *name,
+    const uint8_t *bytes, size_t length)
+{
+    char path[4096];
+    int written = snprintf(path, sizeof(path), "%s/%s", directory, name);
+    FILE *file;
+    if (written <= 0 || (size_t)written >= sizeof(path)) return 1;
+    file = fopen(path, "wbx");
+    if (file == NULL) return 1;
+    if (fwrite(bytes, 1U, length, file) != length) {
+        (void)fclose(file);
+        return 1;
+    }
+    return fclose(file) == 0 ? 0 : 1;
+}
+
+static int write_evidence_proof(const char *directory, const char *name,
+    const lxp_merkle_proof *proof)
+{
+    uint8_t encoded[10U + LXP_MERKLE_MAX_DEPTH * 32U];
+    encoded[0] = 1U;
+    for (size_t i = 0U; i < 4U; ++i) {
+        encoded[1U + i] = (uint8_t)(proof->leaf_index >> (24U - 8U * i));
+        encoded[5U + i] = (uint8_t)(proof->leaf_count >> (24U - 8U * i));
+    }
+    encoded[9] = proof->depth;
+    if (proof->depth > LXP_MERKLE_MAX_DEPTH) return 1;
+    for (size_t i = 0U; i < proof->depth; ++i)
+        memcpy(encoded + 10U + i * 32U, proof->siblings[i], 32U);
+    return write_evidence_file(directory, name, encoded, 10U + (size_t)proof->depth * 32U);
+}
 
 static int maintenance_fixture_logs(maintenance_fixture *f, uint32_t network_id)
 {
@@ -365,6 +399,22 @@ static int maintenance_publish(maintenance_fixture *f, uint32_t type,
             &f->arena, proof, root) == LXP_OK);
         CHECK(memcmp(root, roots.receipt_merkle_root, 32U) == 0);
     }
+    if (f->evidence_directory != NULL) {
+        CHECK(count == 1U);
+        CHECK(write_evidence_file(f->evidence_directory, "header",
+            input.canonical_header.bytes, input.canonical_header.length) == 0);
+        CHECK(write_evidence_file(f->evidence_directory, "header.signature",
+            input.header_signature, 64U) == 0);
+        CHECK(write_evidence_file(f->evidence_directory, "sequencer.public",
+            f->authorization.public_key, 32U) == 0);
+        CHECK(write_evidence_file(f->evidence_directory, "credit.receipt",
+            receipts[0].bytes, receipts[0].length) == 0);
+        CHECK(write_evidence_proof(f->evidence_directory, "receipt.proof", &proofs[0]) == 0);
+        CHECK(write_evidence_file(f->evidence_directory, "maintenance.receipt",
+            input.maintenance.bytes, input.maintenance.length) == 0);
+        CHECK(write_evidence_proof(f->evidence_directory, "maintenance.proof",
+            &input.maintenance_proof) == 0);
+    }
     CHECK(lxp_daemon_batch_wal_write_prepared(f->directory, &input, durable) == LXP_OK);
     CHECK(lxp_daemon_batch_wal_load(f->directory, &f->authorization, &loaded, &present) == LXP_OK && present);
     CHECK(lxp_daemon_batch_wal_classify(loaded, &input.base, &recovery) == LXP_OK &&
@@ -531,7 +581,8 @@ static uint64_t credit_now_ms(const lxp_bridge_credit *credit)
     return seconds * 1000U;
 }
 
-static int maintenance_bridge(const char *manifest_path, const char *activity_path)
+static int maintenance_bridge(const char *manifest_path, const char *activity_path,
+    const char *evidence_directory)
 {
     maintenance_fixture *f = calloc(1U, sizeof(*f));
     lxp_genesis_manifest *manifest = calloc(1U, sizeof(*manifest));
@@ -567,6 +618,7 @@ static int maintenance_bridge(const char *manifest_path, const char *activity_pa
     CHECK(lxp_kernel_create(&f->kernel, &f->state, &f->journal, manifest, 1U) == LXP_OK);
     CHECK(lxp_kernel_register_module(&f->kernel, programs_module_registration_v4()) == LXP_OK);
     CHECK(lxp_kernel_register_module(&f->kernel, lx_asset_module_iface()) == LXP_OK);
+    CHECK(lxp_kernel_register_module(&f->kernel, lxp_governance_module_iface()) == LXP_OK);
     CHECK(lxp_kernel_register_module(&f->kernel, lxp_bridge_module_iface()) == LXP_OK);
     CHECK(lxp_kernel_set_capabilities(&f->kernel, NULL, lxp_kernel_canonical_ledger_apply) == LXP_OK);
     CHECK(lxp_genesis_materialize(manifest, &f->arena, &f->kernel) == LXP_OK);
@@ -615,6 +667,7 @@ static int maintenance_bridge(const char *manifest_path, const char *activity_pa
     f->fees.multiplier_basis_points = 10000U;
     CHECK(maintenance_fixture_logs(f, manifest->network_id) == 0);
     f->input_activity = &activity;
+    f->evidence_directory = evidence_directory;
     CHECK(maintenance_publish(f, LXP_BRIDGE_CREDIT, activity.payload.bytes,
         activity.payload.length, 1U, 1U) == 0);
     CHECK(lx_account_lookup(&f->accounts, name, name_length, credit.bytes + 107U, &recipient) == LXP_OK);
@@ -637,7 +690,7 @@ static int maintenance_bridge(const char *manifest_path, const char *activity_pa
 
 int main(int argc, char **argv)
 {
-    if (argc == 3) return maintenance_bridge(argv[1], argv[2]);
+    if (argc == 3 || argc == 4) return maintenance_bridge(argv[1], argv[2], argc == 4 ? argv[3] : NULL);
     CHECK(argc == 1);
     maintenance_fixture *f = calloc(1U, sizeof(*f));
     static const uint8_t entry[] = {0x41U, 0U, 0x0bU};

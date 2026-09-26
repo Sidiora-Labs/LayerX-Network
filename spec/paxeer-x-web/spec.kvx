@@ -847,7 +847,11 @@ reqs = ["17.5","17.6"]
 
 [task.2.16]
 title = "Run the agent workspace tests with the binaries the workflow builds for them"
-status = "pending"
+status = "implemented"
+implemented_revision = "ac37ec69819137094154ea94d70c57104018cb8f"
+implemented_command = "timeout 45m sh -c 'make agent-test'"
+implemented_exit_code = 2
+implemented_log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.9"]
 do_1 = "Build the prerequisites the Makefile declares for agent-test (public-tls-test-prerequisites for the boundary and clock binaries, agent-test-native-prerequisites for the native daemon binaries) and run make agent-test once, exactly as the workflow's test step does."
@@ -855,7 +859,7 @@ do_2 = "For every test that fails outside this feature's crates, fix its real ca
 do_3 = "Close observation 2.9.1 naming the revision at which make agent-test passes."
 verify_cmd = "timeout 45m sh -c 'make agent-test'"
 symbols = ["agent-test"]
-touches = ["agent/crates","tests/fixtures/custody"]
+touches = ["agent/crates","tests/fixtures/custody","tests/storage/lxp_test_maintenance_publication.c","tests/bridge/qualify_credit.py","platform/Cargo.lock"]
 reqs = ["9.1"]
 
 [task.2.17]

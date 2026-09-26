@@ -194,7 +194,7 @@
     - Extend docs/site/docs/protocol/xweb.md with a section showing a contract calling an API through XWebApi in a dozen lines, the envelope rule, the selector rule and the two attestation levels, under the page's link and naming rules.
     - Tests: agent/sdk/typescript/test/xweb-api.test.ts and agent/sdk/python/tests/test_xweb_api.py pin the payload bytes and the envelope vectors, and the page builds under mkdocs --strict.
     - _Requirements: 17.5, 17.6_
-  - [ ] 2.16 Run the agent workspace tests with the binaries the workflow builds for them
+  - [ ] 2.16 Run the agent workspace tests with the binaries the workflow builds for them — **Implemented - qualification pending**
     - Build the prerequisites the Makefile declares for agent-test (public-tls-test-prerequisites for the boundary and clock binaries, agent-test-native-prerequisites for the native daemon binaries) and run make agent-test once, exactly as the workflow's test step does.
     - For every test that fails outside this feature's crates, fix its real cause in code or fixtures, starting with the native terminal evidence test in agent/crates/layerx-agentd/src/protocol_evidence_native_tests.rs, which fails to decode tests/fixtures/custody/daemon-credit-receipt with Decode(MalformedPayload): determine which side drifted from the receipt format the platform writes and correct that side, regenerating the fixture through the tool that produced it when the fixture is stale; never ignore, delete, relax or skip a test.
     - Close observation 2.9.1 naming the revision at which make agent-test passes.

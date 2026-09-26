@@ -27,7 +27,10 @@ def main():
     parser.add_argument('--build-dir', default='build')
     parser.add_argument('--maintenance', action='store_true')
     parser.add_argument('--compare-baseline', type=Path)
+    parser.add_argument('--evidence-output', type=Path)
     args = parser.parse_args()
+    if args.evidence_output and not args.maintenance:
+        parser.error('--evidence-output requires --maintenance')
     build = (ROOT / args.build_dir).resolve()
     evidence = ROOT / 'build' / 'custody-qualification'
     evidence.mkdir(parents=True, exist_ok=True)
@@ -100,8 +103,17 @@ def main():
                 raise AssertionError('invalid comparison framing')
             print(f'byte-identical bridge-credit state diff ({diff_size}) and receipt ({receipt_size})')
         if args.maintenance:
+            output = []
+            if args.evidence_output:
+                args.evidence_output.mkdir(parents=True, exist_ok=True)
+                if any(args.evidence_output.iterdir()):
+                    raise ValueError('evidence output directory is not empty')
+                output = [args.evidence_output.resolve()]
             run(build / 'tests/lxp_test_maintenance_publication',
-                work / 'genesis-output/genesis.manifest', work / 'activity')
+                work / 'genesis-output/genesis.manifest', work / 'activity', *output)
+            if args.evidence_output:
+                for name in ('activity', 'credit', 'profile'):
+                    (args.evidence_output / name).write_bytes((work / name).read_bytes())
     print('real Paxeer light-client credit: native verification, rollback, replay and trust advance gates passed')
 
 
