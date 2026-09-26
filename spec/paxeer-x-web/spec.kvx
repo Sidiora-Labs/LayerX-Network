@@ -1139,7 +1139,11 @@ reqs = ["11.2"]
 
 [task.2.32]
 title = "Serve the availability harness's bond and registry at the anchor address and qualify the agent workspace tests"
-status = "pending"
+status = "implemented"
+implemented_revision = "1d1f52709744fa67fe8a6afa05febbaa43223b14"
+implemented_command = "timeout 45m sh -c 'make agent-test'"
+implemented_exit_code = 2
+implemented_log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.16"]
 do_1 = "The daemon accepts a settlement contract and a checkpoint registry only at the layerxAnchor precompile address, and that refusal stays exactly as it is (observation 2.16.1); change tests/daemon/availability-settlement.py so the bond and registry calls the daemon makes at the anchor address reach the GuarantorBond and CheckpointRegistry it deploys on its anvil chain - installing the code of one contract that serves both interfaces at the anchor address through anvil's code-setting method, or whichever placement the anchor's ABI in the repository supports - and have tests/daemon/program-admission.sh export the anchor address for both variables under --availability-batches, keeping every other harness step unchanged."

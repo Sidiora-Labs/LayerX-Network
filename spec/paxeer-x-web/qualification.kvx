@@ -460,3 +460,11 @@ log_path = ".logs/verify.log"
 observed = "test-module-ctx failed identically at the registration commit's parent, because its transfer capability fixture predates the ledger balance check in emit_transfer_set and moved no balances; with the fixture applying the set through lxp_apply_transfer_set, test-module-ctx and test-kernel pass, and test-web-program-path fails only at the event list checks of lines 207 and 667 recorded in observation 2.26.1."
 assumption = "Once observation 2.26.1 is resolved this verify_cmd reruns unchanged and records tasks 2.29 and 2.23 done."
 closed = "Task 2.31 at 418f25459cfeeb26a957e8b8fdac64c6e1fd098f made the event list outlive the prepare arena, so the event list checks of tests/test_web_program_path.c pass and this verify_cmd, run within task 2.31's, exits 0."
+
+[observation.2.32.1]
+task = "2.32"
+file = "agent/crates/layerx-agentd/tests/native_reads_daemon.rs"
+symbol = "real_daemon_availability_refusals"
+observed = "With the harness's bond and registry served at the anchor address, bootstrap, the anvil registration and the daemon's finality registration of batch 1 now succeed, but make agent-test still exits 2 (.logs/verify.log) because the finalized-stage receipt read at native_reads_daemon.rs:137 returns NativeReadError::Unavailable from the route's reconnect or preparation_state, a native read path the settlement address does not reach."
+assumption = "The owner of the native read route or the daemon's preparation state finds why the receipt read is unavailable after finality registration, after which the verify_cmd reruns unchanged; nothing is relaxed."
+severity = "blocker"
