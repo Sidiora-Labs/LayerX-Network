@@ -232,6 +232,11 @@
     - In src/protocol/lxp_kernel.c make lxp_kernel_prepare_activity open a journal over its snapshot for the duration of a program call, so lxp_ctx_account_stage_module_value in src/protocol/lxp_module_ctx.c stages the way it does on the commit path, and discard that journal with the snapshot; the prepare pass changes no committed state.
     - Extend tests/protocol/lxp_test_module_ctx.c and tests/protocol/lxp_test_kernel.c for staging under prepare and its discard, and extend tests/test_web_program_path.c with a run whose genesis carries no web fee account and whose first paying call creates it, keeping the genesis-provisioned run as it is; close observation 2.2.2 naming the revision.
     - _Requirements: 11.1_
+  - [ ] 2.24 Canonicalise JSON numbers as ECMAScript does so the shared vectors agree
+    - Make the sidecar's api canonicaliser produce, for every JSON number, the ECMAScript Number::toString digits of the correctly rounded IEEE 754 double the literal denotes, as RFC 8785 requires: parse the literal to the nearest double, enabling serde_json's float_roundtrip feature for the crate if its default parse is not correctly rounded for long literals, and print the shortest digit string that round-trips, choosing the closest when several do; the vector file stays as written.
+    - Add a unit test in interop/crates/x-websearch/tests/api.rs that parses the literal 123456789012345678901234 and asserts both the double's bits and the printed digits against modules/xweb/types/testdata/api-vectors.json, beside the existing vector test.
+    - Run task 2.17's verify_cmd once on the result, then task 2.14's build command and verify_cmd once each; on exit 0 record tasks 2.17 and 2.14 done with that revision, their commands, exit codes and logs, and close observations 2.17.1, 2.14.1 and 2.14.2 naming the revision.
+    - _Requirements: 17.3, 17.6_
 
 ## Wave 3 - One Run, Recorded
 
@@ -249,7 +254,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17", "1.18"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23", "2.24"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }
