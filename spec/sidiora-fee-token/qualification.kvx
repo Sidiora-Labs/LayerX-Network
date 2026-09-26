@@ -580,3 +580,33 @@ command = "timeout 20m sh -c 'bash scripts/protoc.sh && git diff --exit-code -- 
 observed = "The pinned pipeline reproduces params.pb.go byte for byte but emits no GetRate getter for the customtype rate field, so params_test.go lines 368 and 381, which call GetRate, no longer compile."
 assumption = "The earlier hand-edited getter must move into hand-written code or the test must change, both outside task 4.12 touches and forbidden by its do_3, so observation 2.8.1 stays open."
 closed = "At f67c23e4a3d44fdbe573d9197bd1288422907fae no non-test code calls GetRate, so params_test.go reads the Rate field directly with its assertions unchanged, and the verify_cmd exits 0."
+
+[gate.4.13.1]
+task = "4.13"
+reqs = ["15.1","15.2","15.3","15.4"]
+revision = "a520dd875c84560e717cd494b51e11f6534ba72c"
+command = "go test -count=1 ./modules/evm/... ./modules/layerxbridge/... ./precompiles/ ./precompiles/feetoken/... ./node/antedecorators/..."
+environment = "linux/amd64, go1.25.6, the first leg of the task 4.13 verify_cmd under one timeout 20m"
+outcome = "pass"
+evidence = "build/sidiora-gates/go.log"
+note = "Exit code 0: 23 packages passed and 10 carry no test files."
+
+[gate.4.13.2]
+task = "4.13"
+reqs = ["15.1","15.2","15.3","15.4"]
+revision = "a520dd875c84560e717cd494b51e11f6534ba72c"
+command = "cargo test --locked --manifest-path interop/Cargo.toml -p layerx-gas-station"
+environment = "linux/amd64, cargo 1.91.1, the second leg of the task 4.13 verify_cmd under the same timeout 20m"
+outcome = "pass"
+evidence = "build/sidiora-gates/gas-station.log"
+note = "Exit code 0: 42 tests passed, 0 failed, 0 ignored across the crate's unit, integration and doc test targets."
+
+[gate.4.13.3]
+task = "4.13"
+reqs = ["15.1","15.2","15.3","15.4"]
+revision = "a520dd875c84560e717cd494b51e11f6534ba72c"
+command = "bash contracts/bootstrap-libs.sh && FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague"
+environment = "linux/amd64, forge 1.7.1, the third leg of the task 4.13 verify_cmd under the same timeout 20m"
+outcome = "pass"
+evidence = "build/sidiora-gates/foundry.log"
+note = "Exit code 0: the bootstrap cloned forge-std v1.9.6 and openzeppelin-contracts v5.3.0, then 9 test suites ran, 116 tests passed, 0 failed, 0 skipped; the whole verify_cmd exited 0 with its combined output in .logs/wave-4.log."

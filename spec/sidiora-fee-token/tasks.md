@@ -264,7 +264,7 @@
     - Change no test and no production file: the generated file carries no behaviour of its own, and modules/evm/types tests read it through the hand-written parameter code.
     - Close observation 2.8.1 in spec/sidiora-fee-token/qualification.kvx naming the revision at which the verify_cmd passes.
     - _Requirements: 8.1, 8.5_
-  - [ ] 4.13 Rerun the aggregate suites once on the merged wave 4 revision
+  - [x] 4.13 Rerun the aggregate suites once on the merged wave 4 revision
     - On the revision that merges every wave 4 task, run the three legs of task 3.1 once, in order - the Go packages under modules/evm, modules/layerxbridge, precompiles and node/antedecorators, then the gas-station crate, then the Paxeer Foundry project after contracts/bootstrap-libs.sh - writing each leg's output to its own log under build/sidiora-gates/.
     - Append one gate record per leg that ran to spec/sidiora-fee-token/qualification.kvx under gate.4.13, carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code and the log path, written only from a command that actually ran.
     - Append one observation per failure the run exposes that belongs to no task in this feature, do not investigate or rerun it, rerun nothing that already passed at this revision, and deploy nothing.

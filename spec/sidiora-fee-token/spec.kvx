@@ -933,7 +933,11 @@ reqs = ["8.1","8.5"]
 
 [task.4.13]
 title = "Rerun the aggregate suites once on the merged wave 4 revision"
-status = "pending"
+status = "done"
+revision = "a520dd875c84560e717cd494b51e11f6534ba72c"
+command = "timeout 20m sh -c 'go test -count=1 ./modules/evm/... ./modules/layerxbridge/... ./precompiles/ ./precompiles/feetoken/... ./node/antedecorators/... && cargo test --locked --manifest-path interop/Cargo.toml -p layerx-gas-station && bash contracts/bootstrap-libs.sh && FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague'"
+exit_code = 0
+log_path = ".logs/wave-4.log"
 wave = 4
 requires = ["4.1","4.2","4.3","4.4","4.5","4.6","4.7","4.8","4.9","4.10","4.11","4.12","4.14"]
 do_1 = "On the revision that merges every wave 4 task, run the three legs of task 3.1 once, in order - the Go packages under modules/evm, modules/layerxbridge, precompiles and node/antedecorators, then the gas-station crate, then the Paxeer Foundry project after contracts/bootstrap-libs.sh - writing each leg's output to its own log under build/sidiora-gates/."
