@@ -2,6 +2,9 @@ package proposals
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sidiora-labs/paxeer-network/bridge/deploy/chainconfig"
+	"github.com/sidiora-labs/paxeer-network/bridge/vectors"
 	"github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
 )
 
@@ -490,5 +495,268 @@ func TestRunReportsAMissingConfiguration(t *testing.T) {
 	}
 	if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
 		t.Fatalf("the refused run left %s behind (%v)", out, statErr)
+	}
+}
+
+// committedConfiguration is the path of a chain's committed configuration in
+// the bridge's one schema, bridge/deploy/chainconfig.
+func committedConfiguration(t *testing.T, chain string) string {
+	t.Helper()
+	path, err := chainconfig.Path(filepath.Join("..", "..", ".."), chain)
+	if err != nil {
+		t.Fatalf("%s has no configuration path: %v", chain, err)
+	}
+	return path
+}
+
+// solanaOwner is a real ed25519 public key, the kind of key the owner of the
+// custody program is.
+func solanaOwner() string {
+	seed := sha256.Sum256([]byte("paxeer-x-bridge proposals test owner"))
+	public := ed25519.NewKeyFromSeed(seed[:]).Public().(ed25519.PublicKey)
+	return vectors.EncodeBase58(public)
+}
+
+// deployableConfiguration copies a committed configuration into a run-local
+// chains root with its placeholders filled in - the owner, the manifest's
+// attestor set and, on Solana, the program the pinned vectors derive from -
+// and returns the copy's path, laid out as <root>/<chain>/config.json.
+func deployableConfiguration(t *testing.T, chain string) string {
+	t.Helper()
+	raw, err := os.ReadFile(committedConfiguration(t, chain))
+	if err != nil {
+		t.Fatalf("reading the %s configuration: %v", chain, err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	document := map[string]any{}
+	if err := decoder.Decode(&document); err != nil {
+		t.Fatalf("decoding the %s configuration: %v", chain, err)
+	}
+	attestors := make([]string, 0, 5)
+	for _, signer := range loadManifest(t, testManifest).Signers() {
+		attestors = append(attestors, signer.Hex())
+	}
+	document["attestors"] = attestors
+	if chain == "solana" {
+		document["owner"] = solanaOwner()
+		document["solana"].(map[string]any)["program_id"] = vectors.VectorProgramID.Base58()
+	} else {
+		document["owner"] = "0x2b7e151628aed2a6abf7158809cf4f3c762e7160"
+	}
+	encoded, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		t.Fatalf("encoding the %s configuration: %v", chain, err)
+	}
+	path := filepath.Join(t.TempDir(), chain, "config.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("creating the %s chains root: %v", chain, err)
+	}
+	if err := os.WriteFile(path, encoded, 0o644); err != nil {
+		t.Fatalf("writing the %s configuration: %v", chain, err)
+	}
+	return path
+}
+
+func loadCanonical(t *testing.T, path string) *chainconfig.ChainConfig {
+	t.Helper()
+	cfg, err := chainconfig.Load(path)
+	if err != nil {
+		t.Fatalf("loading %s through chainconfig: %v", path, err)
+	}
+	return cfg
+}
+
+const ethereumVault = "0x7a3e5c81b04d296f8e1a7c35d92b6f04e8c1a37d"
+
+func TestCommittedConfigurationsGenerateNothingWhileTheyCarryPlaceholders(t *testing.T) {
+	for _, chain := range []string{"ethereum", "solana"} {
+		t.Run(chain, func(t *testing.T) {
+			cfg := loadCanonical(t, committedConfiguration(t, chain))
+			_, err := FromChainConfig(cfg, governanceAuthority, vectors.VectorVaultHandle.Hex())
+			if err == nil {
+				t.Fatal("a committed configuration carrying placeholders was read as deployable")
+			}
+			if !strings.Contains(err.Error(), "placeholder") || !strings.Contains(err.Error(), "owner") {
+				t.Fatalf("the refusal does not name the placeholder owner: %v", err)
+			}
+		})
+	}
+}
+
+func TestChainconfigConfigurationsGenerateTheBodiesTheirValuesName(t *testing.T) {
+	path := deployableConfiguration(t, "ethereum")
+	canonical := loadCanonical(t, path)
+	cfg, err := FromChainConfig(canonical, governanceAuthority, ethereumVault)
+	if err != nil {
+		t.Fatalf("a deployable configuration was refused: %v", err)
+	}
+	bundle, err := Generate(cfg, loadManifest(t, testManifest))
+	if err != nil {
+		t.Fatalf("generating from a deployable configuration: %v", err)
+	}
+	if bundle.Register.Chain.ChainID != canonical.ChainID || bundle.Register.Chain.FinalityDepth != canonical.FinalityDepth {
+		t.Fatalf("the registration names chain %d at depth %d, the configuration %d at depth %d",
+			bundle.Register.Chain.ChainID, bundle.Register.Chain.FinalityDepth, canonical.ChainID, canonical.FinalityDepth)
+	}
+	if got := bundle.Register.Chain.Vault.Hex(); got != ethereumVault {
+		t.Fatalf("the registration names the vault %s, want %s", got, ethereumVault)
+	}
+	if len(bundle.Caps) != len(canonical.Assets) {
+		t.Fatalf("%d caps for %d assets", len(bundle.Caps), len(canonical.Assets))
+	}
+	for i, asset := range canonical.Assets {
+		capMsg := bundle.Caps[i]
+		if capMsg.Asset.Hex() != strings.ToLower(asset.AssetID) {
+			t.Fatalf("cap %d is for %s, the configuration lists %s", i, capMsg.Asset.Hex(), asset.AssetID)
+		}
+		if capMsg.MaxPerTx.String() != asset.PerTxCap || capMsg.MaxInFlight.String() != asset.TotalCap {
+			t.Fatalf("cap %d is %s per transaction and %s in total, the configuration names %s and %s",
+				i, capMsg.MaxPerTx, capMsg.MaxInFlight, asset.PerTxCap, asset.TotalCap)
+		}
+	}
+	if bundle.Caps[0].Asset != (types.Address20{}) {
+		t.Fatalf("the first cap is for %s, not the native coin", bundle.Caps[0].Asset.Hex())
+	}
+	zeroVault, err := FromChainConfig(canonical, governanceAuthority, "0x"+strings.Repeat("00", 20))
+	if err == nil {
+		_, err = Generate(zeroVault, loadManifest(t, testManifest))
+	}
+	if err == nil {
+		t.Fatal("a zero vault was accepted")
+	}
+	if refusal := fieldError(t, err); refusal.Field != fieldVault || refusal.File != path {
+		t.Fatalf("the zero vault refusal names %s in %s", refusal.Field, refusal.File)
+	}
+}
+
+func TestSolanaVaultIsTheHandleOfTheVaultAuthority(t *testing.T) {
+	path := deployableConfiguration(t, "solana")
+	canonical := loadCanonical(t, path)
+	cfg, err := FromChainConfig(canonical, governanceAuthority, vectors.VectorVaultHandle.Hex())
+	if err != nil {
+		t.Fatalf("the vault-authority handle was refused: %v", err)
+	}
+	if cfg.Vault != vectors.VectorVaultHandle.Hex() || cfg.ProgramID != vectors.VectorProgramID.Base58() {
+		t.Fatalf("the generator reads the vault %s of program %s", cfg.Vault, cfg.ProgramID)
+	}
+	other := vectors.Handle(vectors.VectorProgramID).Hex()
+	_, err = FromChainConfig(canonical, governanceAuthority, other)
+	if err == nil {
+		t.Fatal("a vault that is not the vault-authority handle was accepted")
+	}
+	refusal := fieldError(t, err)
+	if refusal.Field != fieldVault || !strings.Contains(refusal.Msg, "vault-authority PDA") {
+		t.Fatalf("the refusal names %s: %s", refusal.Field, refusal.Msg)
+	}
+}
+
+func TestSolanaReadbackNamesTheProgramsAccountsAndSidiorasDenom(t *testing.T) {
+	canonical := loadCanonical(t, deployableConfiguration(t, "solana"))
+	cfg, err := FromChainConfig(canonical, governanceAuthority, vectors.VectorVaultHandle.Hex())
+	if err != nil {
+		t.Fatalf("reading the deployable Solana configuration: %v", err)
+	}
+	bundle, err := Generate(cfg, loadManifest(t, testManifest))
+	if err != nil {
+		t.Fatalf("generating the Solana bundle: %v", err)
+	}
+	readback, err := ReadbackOf(canonical, bundle)
+	if err != nil {
+		t.Fatalf("deriving the Solana read-back: %v", err)
+	}
+	if readback.ChainID != SolanaChainID || readback.Vault != vectors.VectorVaultHandle.Hex() {
+		t.Fatalf("the read-back names chain %d and vault %s", readback.ChainID, readback.Vault)
+	}
+	owner, err := vectors.Key(solanaOwner())
+	if err != nil {
+		t.Fatalf("the owner key does not decode: %v", err)
+	}
+	if want := "0x" + hex.EncodeToString(owner[:]); readback.Owner != want {
+		t.Fatalf("the owner reads back as %s, want %s", readback.Owner, want)
+	}
+	configAccount, _, err := vectors.FindProgramAddress(vectors.VectorProgramID, [][]byte{[]byte("config")})
+	if err != nil {
+		t.Fatalf("deriving the config account: %v", err)
+	}
+	if readback.Solana == nil || readback.Solana.ConfigAccount != configAccount.Base58() ||
+		readback.Solana.VaultAuthority != vectors.VectorVaultAuthority.Base58() {
+		t.Fatalf("the read-back names the accounts %+v", readback.Solana)
+	}
+	if len(readback.Assets) != 2 {
+		t.Fatalf("the read-back carries %d assets, want 2", len(readback.Assets))
+	}
+	native, sidiora := readback.Assets[0], readback.Assets[1]
+	if native.AssetID != vectors.WrappedSolAssetID.Hex() || native.Denom != types.Denom(SolanaChainID, types.Address20(vectors.WrappedSolAssetID)) {
+		t.Fatalf("the native coin reads back as %s minted as %s", native.AssetID, native.Denom)
+	}
+	if sidiora.AssetID != SidioraAssetID().Hex() || sidiora.Denom != types.SidioraDenom() {
+		t.Fatalf("Sidiora reads back as %s minted as %s, want %s minted as %s",
+			sidiora.AssetID, sidiora.Denom, SidioraAssetID().Hex(), types.SidioraDenom())
+	}
+	sidioraAccount, _, err := vectors.FindProgramAddress(vectors.VectorProgramID, [][]byte{[]byte("asset"), vectors.SidioraMint[:]})
+	if err != nil {
+		t.Fatalf("deriving Sidiora's asset account: %v", err)
+	}
+	if sidiora.Account != sidioraAccount.Base58() || sidiora.Mint != "0x"+hex.EncodeToString(vectors.SidioraMint[:]) {
+		t.Fatalf("Sidiora's asset account reads back as %s of mint %s", sidiora.Account, sidiora.Mint)
+	}
+	for i, asset := range readback.Assets {
+		if asset.PerTxCap != bundle.Caps[i].MaxPerTx.String() || asset.TotalCap != bundle.Caps[i].MaxInFlight.String() {
+			t.Fatalf("asset %d reads back caps other than the body sets", i)
+		}
+	}
+}
+
+func TestRunWritesTheReadbackBesideTheBodies(t *testing.T) {
+	config := deployableConfiguration(t, "solana")
+	parent := t.TempDir()
+	out := filepath.Join(parent, "bodies")
+	readbackPath := filepath.Join(parent, "readback.json")
+	var report bytes.Buffer
+	args := []string{"-manifest", testManifest, "-authority", governanceAuthority,
+		"-vault", vectors.VectorVaultHandle.Hex(), "-readback", readbackPath, config, out}
+	if err := Run(args, &report); err != nil {
+		t.Fatalf("the command refused a deployable chainconfig configuration: %v", err)
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil || len(entries) != 4 {
+		t.Fatalf("the command wrote %d bodies (%v), want 4", len(entries), err)
+	}
+	raw, err := os.ReadFile(readbackPath)
+	if err != nil {
+		t.Fatalf("reading the read-back expectation: %v", err)
+	}
+	readback := decodeStrict[Readback](t, readbackPath, raw)
+	if readback.Chain != "solana" || len(readback.Assets) != 2 || readback.Assets[1].Denom != types.SidioraDenom() {
+		t.Fatalf("the read-back expectation on disk is %+v", readback)
+	}
+	if !strings.Contains(report.String(), readbackPath) {
+		t.Fatalf("the command did not report %s", readbackPath)
+	}
+
+	again := filepath.Join(parent, "again")
+	err = Run([]string{"-manifest", testManifest, "-authority", governanceAuthority,
+		"-vault", vectors.VectorVaultHandle.Hex(), "-readback", readbackPath, config, again}, &report)
+	if err == nil {
+		t.Fatal("the command overwrote an existing read-back expectation")
+	}
+	if _, statErr := os.Stat(again); !os.IsNotExist(statErr) {
+		t.Fatalf("the refused run left %s behind (%v)", again, statErr)
+	}
+
+	for _, partial := range [][]string{
+		{"-authority", governanceAuthority},
+		{"-vault", vectors.VectorVaultHandle.Hex()},
+		{"-readback", filepath.Join(parent, "partial.json")},
+	} {
+		target := filepath.Join(parent, "partial")
+		args := append(append([]string{"-manifest", testManifest}, partial...), config, target)
+		if err := Run(args, &report); err == nil {
+			t.Fatalf("the command ran with only %v", partial)
+		}
+		if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+			t.Fatalf("the refused run with only %v left %s behind", partial, target)
+		}
 	}
 }

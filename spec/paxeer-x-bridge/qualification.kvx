@@ -146,6 +146,22 @@ observed = "Task 1.2 already delivered the permissionless register-recipient ins
 assumption = "The instruction stays in src/identity.rs; src/recipient.rs carries the release's recipient binding, and tests/release.rs covers the registration, its read-back and each refusal against the instruction as it stands."
 severity = "note"
 
+[observation.2.4.1]
+task = "2.4"
+file = "bridge/deploy/proposals/proposals_test.go"
+symbol = "LoadChainConfig"
+observed = "do_6 asks for the private schema to be replaced by bridge/deploy/chainconfig while every existing proposals test stays unchanged, but those tests and bridge/deploy/proposals/testdata pin the private field names (governance_authority, vault, assets[i].max_per_tx) and its placeholder convention, so removing the loader would break them."
+assumption = "The private loader is kept for those tests only; the generator reads the chainconfig schema through FromChainConfig when given -authority and -vault, and the handle derivation now lives only in bridge/vectors."
+severity = "note"
+
+[observation.2.4.3]
+task = "2.4"
+file = "bridge/deploy/checklist.sh"
+symbol = "PAXEER_BRIDGE_PAXEER_RPC_URL"
+observed = "No chain configuration names the Paxeer endpoint the precompile views are read through."
+assumption = "The checklist reads it from PAXEER_BRIDGE_PAXEER_RPC_URL, following the PAXEER_BRIDGE_<CHAIN>_RPC_URL convention, until the configuration schema carries it."
+severity = "note"
+
 [wave.1]
 revision = "4f2b24deb"
 command = "timeout 20m each: bash bridge/evm/bootstrap-libs.sh && forge test --root bridge/evm -vvv; cargo test --locked --manifest-path bridge/solana/Cargo.toml; go test -count=1 ./bridge/vectors/...; go test -count=1 ./bridge/deploy/chainconfig/... && bash bridge/deploy/tests/deploy-scripts-check.sh; go test -count=1 ./bridge/deploy/proposals/...; bash bridge/deploy/tests/workflow-check.sh"

@@ -1,0 +1,47 @@
+{
+  "chain": "solana",
+  "chain_id": 91600046870081,
+  "kind": "solana",
+  "configuration": "bridge/solana/chains/solana/config.json",
+  "genesis_hash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  "program_id": "A7SZbByPYuHpunZ9pyMDMrhMYvK44ANT1AVqb8U1FpM9",
+  "program_data_account": "7DTvdHwEjifafiZewpkFVVAScX83ry9TpTT12aZMvGqa",
+  "upgradeable_loader_id": "BPFLoaderUpgradeab1e11111111111111111111111",
+  "program_elf_sha256": "b6b2c81e727090de7f9ac4c19f351bfb93e4ac7dc03e929ba05aa761a4e09886",
+  "program_elf_bytes": 412816,
+  "deployment_signature": "4NuJ9kxDk3rVZkTVcFHpu9dKzjzEdeD2uFkRGr6XbLbdnDWGEjwSs4LDQsNcvAxxYSEQpbmyuWgjB8K5ey2PnB5Q",
+  "deployment_slot": 312000017,
+  "rooted_slot": 312000418,
+  "publisher": "CtAAsdhc7vrcVzpnTms7UDuPpvYGMXhv2ps2LF63SvCu",
+  "upgrade_authority": "CtAAsdhc7vrcVzpnTms7UDuPpvYGMXhv2ps2LF63SvCu",
+  "owner": "D9WesEP7Y6zwG9tVLEvCRJBCdNHEkEoobbdN8BLUs1xR",
+  "threshold": 3,
+  "commitment": "finalized",
+  "vault_authority": "GxxA9Cs9v5pAGVsaCe2jjDrtmieeBijcY4S5HHTY8Vq6",
+  "vault_handle": "0x334121a65b47bd45c3f6381537d9180e98e445bc",
+  "attestors": [
+    "0x1d4a7f3b6e2c95840b1f8d3e7a6c5049b28e1f37",
+    "0x3f81c2d5e40a9b76135c8e2f4d7a6b09e83f1c24",
+    "0x6b2e9d47a1c30f582d94e7b6a3c518fd20e94b76",
+    "0x9c58e1f3a7d24b60c8e5934f1a6d7b28e04c3f95",
+    "0xd27a4e9b16c38f50a3d7e284b95c1f60d8a34e7b"
+  ],
+  "assets": [
+    {
+      "symbol": "SOL",
+      "mint": "So11111111111111111111111111111111111111112",
+      "asset_id": "0xcf996523b5d068a26f0aa8a116602fe5033ee3a1",
+      "decimals": 9,
+      "per_tx_cap": "5000000000000",
+      "total_cap": "100000000000000"
+    },
+    {
+      "symbol": "SID",
+      "mint": "5w3wVdJaESaJKyLmStM6Hv9UyUkmZ1b9DLQquAqqpump",
+      "asset_id": "0x21f7b20a555199fa73a238b1a91fd0f549068fee",
+      "decimals": 6,
+      "per_tx_cap": "1000000000000",
+      "total_cap": "50000000000000"
+    }
+  ]
+}

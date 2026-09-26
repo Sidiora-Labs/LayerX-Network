@@ -20,6 +20,8 @@ import (
 	"strings"
 
 	"github.com/cosmos/btcutil/base58"
+	"github.com/sidiora-labs/paxeer-network/bridge/deploy/chainconfig"
+	"github.com/sidiora-labs/paxeer-network/bridge/vectors"
 	"github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 )
@@ -53,6 +55,12 @@ const (
 	// solanaKeyLength is the length of an ed25519 public key, which is what a
 	// Solana owner is: a key, not a twenty-byte address.
 	solanaKeyLength = 32
+
+	// solanaConfigSeed and solanaAssetSeed are the seeds the custody program
+	// derives its config account and each asset account from, as
+	// bridge/solana/src/state.rs declares them.
+	solanaConfigSeed = "config"
+	solanaAssetSeed  = "asset"
 )
 
 const (
@@ -444,13 +452,25 @@ func (b Bundle) Write(dir string) ([]string, error) {
 // already holds anything, and writes the bodies into the output directory.
 // Every refusal happens before the output directory is touched, so a refused
 // run writes nothing at all.
+//
+// Given -authority and -vault, the configuration is read through
+// bridge/deploy/chainconfig, the bridge's one configuration schema, and the two
+// values no configuration carries - the governance authority and the deployed
+// vault - arrive as arguments. -readback then also writes the values the
+// deployed chain and the Paxeer side must read back once the bodies execute.
 func Run(args []string, report io.Writer) error {
 	flags := flag.NewFlagSet(CommandName, flag.ContinueOnError)
 	flags.SetOutput(report)
 	manifestPath := flags.String("manifest", DefaultManifestPath,
 		"path of the committed attestor-set manifest")
+	authority := flags.String("authority", "",
+		"bech32 governance authority the bodies are executed for; reads the configuration through bridge/deploy/chainconfig")
+	vault := flags.String("vault", "",
+		"deployed vault address, on Solana the vault-authority handle; reads the configuration through bridge/deploy/chainconfig")
+	readbackPath := flags.String("readback", "",
+		"path the read-back expectation is written to; needs -authority and -vault")
 	flags.Usage = func() {
-		fmt.Fprintf(report, "usage: %s [-manifest <path>] <chain-configuration.json> <output-directory>\n", CommandName)
+		fmt.Fprintf(report, "usage: %s [-manifest <path>] [-authority <bech32> -vault <address> [-readback <path>]] <chain-configuration.json> <output-directory>\n", CommandName)
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -461,11 +481,29 @@ func Run(args []string, report io.Writer) error {
 		return fmt.Errorf("%s: expected a chain configuration path and an output directory, got %d arguments",
 			CommandName, flags.NArg())
 	}
+	canonical := *authority != "" || *vault != "" || *readbackPath != ""
+	if canonical && (*authority == "" || *vault == "") {
+		return fmt.Errorf("%s: -authority and -vault are both required to read a chain configuration through chainconfig", CommandName)
+	}
 	manifest, err := LoadAttestorManifest(*manifestPath)
 	if err != nil {
 		return err
 	}
-	cfg, err := LoadChainConfig(flags.Arg(0))
+	var (
+		cfg       ChainConfig
+		canonCfg  *chainconfig.ChainConfig
+		expected  []byte
+		readbackF string
+	)
+	if canonical {
+		canonCfg, err = chainconfig.Load(flags.Arg(0))
+		if err != nil {
+			return err
+		}
+		cfg, err = FromChainConfig(canonCfg, *authority, *vault)
+	} else {
+		cfg, err = LoadChainConfig(flags.Arg(0))
+	}
 	if err != nil {
 		return err
 	}
@@ -473,14 +511,264 @@ func Run(args []string, report io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if *readbackPath != "" {
+		readback, err := ReadbackOf(canonCfg, bundle)
+		if err != nil {
+			return err
+		}
+		if expected, err = marshalBody(readback); err != nil {
+			return err
+		}
+		readbackF = filepath.Clean(*readbackPath)
+		if _, err := os.Lstat(readbackF); err == nil {
+			return fmt.Errorf("%s: the read-back expectation already exists", readbackF)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
 	written, err := bundle.Write(flags.Arg(1))
 	if err != nil {
 		return err
+	}
+	if readbackF != "" {
+		if err := writeAtomically(readbackF, expected); err != nil {
+			return err
+		}
+		written = append(written, readbackF)
 	}
 	for _, path := range written {
 		fmt.Fprintln(report, path)
 	}
 	return nil
+}
+
+// writeAtomically writes body to a temporary sibling of path and renames it
+// into place, so a failed write leaves nothing at path.
+func writeAtomically(path string, body []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".readback-*")
+	if err != nil {
+		return err
+	}
+	staged := file.Name()
+	defer os.Remove(staged)
+	if _, err := file.Write(body); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(staged, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(staged, path)
+}
+
+// FromChainConfig is the generator's reading of a configuration in the
+// bridge's one schema, bridge/deploy/chainconfig. The configuration must be
+// deployable - no placeholder owner, attestor or program id - and the two
+// values a configuration does not carry arrive beside it: the bech32 governance
+// authority the keeper executes the bodies for, and the deployed vault. On
+// Solana the vault is the handle of the program's vault-authority PDA, and a
+// vault that is not that handle is refused, because governance would register
+// an address no release can come from.
+func FromChainConfig(cfg *chainconfig.ChainConfig, authority, vault string) (ChainConfig, error) {
+	if err := cfg.RequireDeployable(); err != nil {
+		return ChainConfig{}, err
+	}
+	out := ChainConfig{
+		Name:           cfg.Chain,
+		ChainID:        cfg.ChainID,
+		NativeSymbol:   cfg.Native.Symbol,
+		NativeDecimals: uint32(cfg.Native.Decimals),
+		RPCEndpointEnv: cfg.Environment.RPCURL,
+		ExplorerKeyEnv: cfg.Environment.ExplorerKey,
+		Authority:      authority,
+		Owner:          cfg.Owner,
+		Vault:          vault,
+		Attestors:      append([]string(nil), cfg.Attestors...),
+		Threshold:      cfg.Threshold,
+		FinalityDepth:  cfg.FinalityDepth,
+		Assets:         make([]Asset, 0, len(cfg.Assets)),
+		source:         cfg.Source(),
+	}
+	if cfg.BigBlocks != nil {
+		out.BigBlocksRequired = cfg.BigBlocks.Required
+	}
+	for _, asset := range cfg.Assets {
+		out.Assets = append(out.Assets, Asset{
+			Address:  asset.Address,
+			AssetID:  asset.AssetID,
+			Decimals: uint32(asset.Decimals),
+			MaxPerTx: asset.PerTxCap,
+			MaxTotal: asset.TotalCap,
+		})
+	}
+	if cfg.Solana == nil {
+		return out, nil
+	}
+	out.ProgramID = cfg.Solana.ProgramID
+	out.Commitment = cfg.Solana.Commitment
+	program, err := vectors.Key(cfg.Solana.ProgramID)
+	if err != nil {
+		return ChainConfig{}, refuse(out.file(), "solana.program_id", "%v", err)
+	}
+	handle, err := vectors.VaultHandle(program)
+	if err != nil {
+		return ChainConfig{}, refuse(out.file(), "solana.program_id", "%v", err)
+	}
+	given, err := liveAddress(out.file(), fieldVault, vault)
+	if err != nil {
+		return ChainConfig{}, err
+	}
+	if given != types.Address20(handle) {
+		return ChainConfig{}, refuse(out.file(), fieldVault,
+			"%s is not %s, the handle of the vault-authority PDA of program %s", given.Hex(), handle.Hex(), cfg.Solana.ProgramID)
+	}
+	return out, nil
+}
+
+// Readback is what a deployed chain and the Paxeer side must read back once a
+// chain is deployed from its configuration and its bundle has executed: the
+// owner, the attestor set and threshold, the vault registered on Paxeer with
+// its finality depth, and per asset, native coin first, the caps and the denom
+// the Paxeer side mints it as. On Solana it also names the accounts the
+// program keeps that state in, derived the way the program derives them.
+type Readback struct {
+	Chain         string          `json:"chain"`
+	Kind          string          `json:"kind"`
+	ChainID       uint64          `json:"chain_id"`
+	Owner         string          `json:"owner"`
+	Vault         string          `json:"vault"`
+	FinalityDepth uint64          `json:"finality_depth"`
+	Attestors     []string        `json:"attestors"`
+	Threshold     uint32          `json:"threshold"`
+	Solana        *SolanaReadback `json:"solana,omitempty"`
+	Assets        []AssetReadback `json:"assets"`
+}
+
+// SolanaReadback names the custody program and the accounts it keeps its
+// configuration and its custody authority in.
+type SolanaReadback struct {
+	ProgramID      string `json:"program_id"`
+	Commitment     string `json:"commitment"`
+	ConfigAccount  string `json:"config_account"`
+	VaultAuthority string `json:"vault_authority"`
+}
+
+// AssetReadback is one asset as it must read back: its caps as the bodies set
+// them and the denom the Paxeer side mints it as. Mint and Account are the
+// Solana mint's bytes in hex and the program's asset account of that mint.
+type AssetReadback struct {
+	Symbol   string `json:"symbol"`
+	Address  string `json:"address"`
+	AssetID  string `json:"asset_id"`
+	Decimals uint8  `json:"decimals"`
+	PerTxCap string `json:"per_tx_cap"`
+	TotalCap string `json:"total_cap"`
+	Denom    string `json:"denom"`
+	Mint     string `json:"mint,omitempty"`
+	Account  string `json:"account,omitempty"`
+}
+
+// ReadbackOf derives the read-back expectation of a chain from its
+// configuration and the bundle generated from it. Every cap comes from the
+// bundle's own bodies, in their order, so what the checklist compares against
+// is what governance submits. Sidiora on Solana reads back as the module's
+// usid denom, the pair only the chain's upgrade handler registers; every other
+// asset reads back as the tokenfactory denom of its (chain, asset) pair.
+func ReadbackOf(cfg *chainconfig.ChainConfig, bundle Bundle) (Readback, error) {
+	if cfg == nil {
+		return Readback{}, fmt.Errorf("%s: a read-back expectation is derived from a chainconfig configuration", CommandName)
+	}
+	if bundle.Chain != cfg.Chain || bundle.Register.Chain.ChainID != cfg.ChainID {
+		return Readback{}, refuse(cfg.Source(), fieldChain, "the bundle is for %s (%d), not %s (%d)",
+			bundle.Chain, bundle.Register.Chain.ChainID, cfg.Chain, cfg.ChainID)
+	}
+	if len(bundle.Caps) != len(cfg.Assets) {
+		return Readback{}, refuse(cfg.Source(), fieldAssets, "the bundle carries %d caps for %d assets",
+			len(bundle.Caps), len(cfg.Assets))
+	}
+	out := Readback{
+		Chain:         cfg.Chain,
+		Kind:          string(cfg.Kind),
+		ChainID:       cfg.ChainID,
+		Owner:         strings.ToLower(cfg.Owner),
+		Vault:         bundle.Register.Chain.Vault.Hex(),
+		FinalityDepth: bundle.Register.Chain.FinalityDepth,
+		Attestors:     make([]string, 0, len(bundle.Attestors.Set.Attestors)),
+		Threshold:     bundle.Attestors.Set.Threshold,
+		Assets:        make([]AssetReadback, 0, len(cfg.Assets)),
+	}
+	for _, attestor := range bundle.Attestors.Set.Attestors {
+		out.Attestors = append(out.Attestors, attestor.Signer.Hex())
+	}
+	var program vectors.Key32
+	if cfg.Solana != nil {
+		var err error
+		if program, err = vectors.Key(cfg.Solana.ProgramID); err != nil {
+			return Readback{}, refuse(cfg.Source(), "solana.program_id", "%v", err)
+		}
+		owner, err := vectors.Key(cfg.Owner)
+		if err != nil {
+			return Readback{}, refuse(cfg.Source(), fieldOwner, "%v", err)
+		}
+		out.Owner = "0x" + hex.EncodeToString(owner[:])
+		configAccount, _, err := vectors.FindProgramAddress(program, [][]byte{[]byte(solanaConfigSeed)})
+		if err != nil {
+			return Readback{}, refuse(cfg.Source(), "solana.program_id", "%v", err)
+		}
+		authority, _, err := vectors.VaultAuthority(program)
+		if err != nil {
+			return Readback{}, refuse(cfg.Source(), "solana.program_id", "%v", err)
+		}
+		out.Solana = &SolanaReadback{
+			ProgramID:      cfg.Solana.ProgramID,
+			Commitment:     cfg.Solana.Commitment,
+			ConfigAccount:  configAccount.Base58(),
+			VaultAuthority: authority.Base58(),
+		}
+	}
+	for i, asset := range cfg.Assets {
+		field := fmt.Sprintf("%s[%d]", fieldAssets, i)
+		capMsg := bundle.Caps[i]
+		id, err := decodeField(cfg.Source(), field+".asset_id", asset.AssetID)
+		if err != nil {
+			return Readback{}, err
+		}
+		if capMsg.Asset != id {
+			return Readback{}, refuse(cfg.Source(), field+".asset_id", "the bundle caps %s where the configuration lists %s",
+				capMsg.Asset.Hex(), id.Hex())
+		}
+		entry := AssetReadback{
+			Symbol:   asset.Symbol,
+			Address:  asset.Address,
+			AssetID:  id.Hex(),
+			Decimals: asset.Decimals,
+			PerTxCap: capMsg.MaxPerTx.String(),
+			TotalCap: capMsg.MaxInFlight.String(),
+			Denom:    types.Denom(cfg.ChainID, id),
+		}
+		if cfg.Solana == nil {
+			entry.Address = strings.ToLower(asset.Address)
+		} else {
+			if id == sidioraAssetID {
+				entry.Denom = types.SidioraDenom()
+			}
+			mint, err := vectors.Key(asset.Address)
+			if err != nil {
+				return Readback{}, refuse(cfg.Source(), field+".address", "%v", err)
+			}
+			account, _, err := vectors.FindProgramAddress(program, [][]byte{[]byte(solanaAssetSeed), mint[:]})
+			if err != nil {
+				return Readback{}, refuse(cfg.Source(), field+".address", "%v", err)
+			}
+			entry.Mint = "0x" + hex.EncodeToString(mint[:])
+			entry.Account = account.Base58()
+		}
+		out.Assets = append(out.Assets, entry)
+	}
+	return out, nil
 }
 
 func marshalBody(body any) ([]byte, error) {

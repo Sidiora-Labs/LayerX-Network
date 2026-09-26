@@ -443,7 +443,11 @@ reqs = ["8.1","8.2","8.3","8.4","8.5"]
 
 [task.2.4]
 title = "Read the deployment back with the post-deploy checklist"
-status = "pending"
+status = "done"
+revision = "d3d370a2cc2a69d309fb85ec3f21adcce3e7c26a"
+command = "timeout 20m sh -c 'go test -count=1 ./bridge/deploy/... && bash bridge/deploy/tests/checklist-check.sh'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["1.4","1.5"]
 do_1 = "Write bridge/deploy/checklist.sh taking a chain name and reading the deployed state back through that chain's own RPC: on an EVM chain the vault's owner, attestors, threshold, per-asset caps, paused flag and deployed code hash; on Solana the config PDA's owner, attestors, threshold and paused flag and every asset PDA."
