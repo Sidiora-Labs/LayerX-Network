@@ -586,11 +586,11 @@ log_path = ".logs/verify.log"
 
 [task.2.4]
 title = "Write the v6.8 upgrade plan that wires xweb into the application"
-status = "implemented"
-implemented_revision = "a9171bc99760fe8d1709ace1bba34d3db5cf9db6"
-implemented_command = "timeout 20m sh -c 'go test -count=1 -run Upgrade ./node/ && go test -count=1 ./precompiles/xweb/...'"
-implemented_exit_code = 1
-implemented_log_path = ".logs/verify.log"
+status = "done"
+revision = "c4662b1a14cda1ceba7fe41c60a4a386a375bd80"
+command = "timeout 20m sh -c 'go test -count=1 -run Upgrade ./node/ && go test -count=1 ./storage/common/keys/... ./precompiles/xweb/... ./precompiles/'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["1.5","1.6"]
 do_1 = "Append v6.8 to node/tags in the order the file's parser requires and register its handler in node/upgrades.go beside the v6.7 handler, adding the xweb store key through the upgrade's store loader and initialising the parameters to their documented defaults with an empty attestor set and the module paused."

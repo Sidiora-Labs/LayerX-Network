@@ -207,8 +207,9 @@ func TestSidioraFeeTokenUpgradeIsRegisteredAndRunsTheFeeTokenMigration(t *testin
 	require.NoError(t, err)
 	names := parseUpgradesList(string(tags))
 	require.Contains(t, names, sidioraFeeTokenUpgrade)
-	require.Equal(t, sidioraFeeTokenUpgrade, names[len(names)-1])
-	require.Equal(t, sidioraFeeTokenUpgrade, LatestUpgrade)
+	require.Equal(t, sidioraFeeTokenUpgrade, names[len(names)-2])
+	require.Equal(t, xwebUpgrade, names[len(names)-1])
+	require.Equal(t, xwebUpgrade, LatestUpgrade)
 
 	valPub := secp256k1.GenPrivKey().PubKey()
 	testWrapper := NewTestWrapper(t, time.Now().UTC(), valPub, false)

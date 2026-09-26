@@ -499,7 +499,11 @@ func TestRefusesDelegateCallAndAnUnwiredKeeper(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, reason, "delegatecall")
 
-	unwired, err := xweb.NewPrecompile(testkeeper.EVMTestApp.GetPrecompileKeepers())
+	appKeepers, wires := testkeeper.EVMTestApp.GetPrecompileKeepers().(utils.XWebKeepers)
+	require.True(t, wires)
+	require.NotNil(t, appKeepers.XWebK())
+
+	unwired, err := xweb.NewPrecompile(&utils.EmptyKeepers{})
 	require.NoError(t, err)
 	ret, _, err = unwired.RunAndCalculateGas(h.evm, stranger, stranger, input, supplied, big.NewInt(0), nil, true, false)
 	require.ErrorIs(t, err, vm.ErrExecutionReverted)
