@@ -13,9 +13,17 @@
 enum {
     AUTHORITY_VERSION = 1,
     AUTHORITY_FIXED_BYTES = 5 + 32 + 32 + 8 + 2 + 64 + 1 + 4 + 4 + 4,
+    AUTHORITY_EVENT_LIST_FORMAT = 4,
     AUTHORITY_MAX_BYTES = AUTHORITY_FIXED_BYTES + LXP_BATCH_HEADER_ENCODED_SIZE +
-        LXP_MERKLE_MAX_DEPTH * 32 + 3 * LXP_MAX_ACTIVITY_BYTES + 8
+        LXP_MERKLE_MAX_DEPTH * 32 + 3 * LXP_MAX_ACTIVITY_BYTES + 8 +
+        LXP_PROGRAM_EVENT_LIST_MAX_BYTES + 4
 };
+
+static bool program_artifact_format(uint8_t format_version)
+{
+    return format_version == 2U ||
+           format_version == (uint8_t)AUTHORITY_EVENT_LIST_FORMAT;
+}
 
 static const uint8_t authority_magic[5] = {'L', 'X', 'B', 'E', '1'};
 
@@ -150,7 +158,7 @@ static lxp_result validate_publication(
     lxp_batch_header *header, uint8_t digest[32])
 {
     lxp_result status;
-    if (format_version == 1U || format_version == 2U) {
+    if (format_version == 1U || program_artifact_format(format_version)) {
         lxp_receipt receipt;
         status = validate_evidence(store, receipt_bytes, receipt_length,
             header_bytes, header_length, header_signature, proof, arena,
@@ -228,7 +236,7 @@ static lxp_result decode_body(
     if (body == NULL || evidence == NULL || length < AUTHORITY_FIXED_BYTES ||
         length > AUTHORITY_MAX_BYTES ||
         (memcmp(body, authority_magic, 4U) != 0 ||
-         (body[4] != '1' && body[4] != '2' && body[4] != '3')))
+         (body[4] != '1' && body[4] != '2' && body[4] != '3' && body[4] != '4')))
         return LXP_ERR_LOG_CORRUPT;
     (void)memset(evidence, 0, sizeof(*evidence));
     evidence->format_version = (uint8_t)(body[4] - '0');
@@ -264,26 +272,33 @@ static lxp_result decode_body(
     evidence->canonical_receipt =
         (lxp_byte_span){body + offset, receipt_length};
     offset += receipt_length;
-    if (evidence->format_version == 2U) {
-        lxp_byte_span *spans[2] = {
-            &evidence->terminal_payload, &evidence->call_graph};
+    if (program_artifact_format(evidence->format_version)) {
+        lxp_byte_span *spans[3] = {
+            &evidence->terminal_payload, &evidence->call_graph,
+            &evidence->event_list};
+        const size_t span_count = evidence->format_version == 2U ? 2U : 3U;
         size_t index;
         lxp_receipt receipt;
-        for (index = 0U; index < 2U; ++index) {
+        for (index = 0U; index < span_count; ++index) {
+            const size_t maximum = index == 2U ?
+                (size_t)LXP_PROGRAM_EVENT_LIST_MAX_BYTES :
+                (size_t)LXP_MAX_ACTIVITY_BYTES;
             uint32_t span_length;
             if (length - offset < 4U) return LXP_ERR_LOG_CORRUPT;
             span_length = read_u32(body + offset); offset += 4U;
-            if (span_length > LXP_MAX_ACTIVITY_BYTES ||
-                span_length > length - offset)
+            if (span_length > maximum || span_length > length - offset)
                 return LXP_ERR_LOG_CORRUPT;
             *spans[index] = (lxp_byte_span){body + offset, span_length};
             offset += span_length;
         }
-        if (lxp_receipt_decode(evidence->canonical_receipt.bytes,
+        if ((evidence->format_version == (uint8_t)AUTHORITY_EVENT_LIST_FORMAT &&
+             evidence->event_list.length == 0U) ||
+            lxp_receipt_decode(evidence->canonical_receipt.bytes,
                               evidence->canonical_receipt.length, true,
                               &receipt) != LXP_OK ||
             lxp_receipt_bind_program_artifacts(&receipt,
-                evidence->terminal_payload, evidence->call_graph, (lxp_byte_span){NULL, 0U}) != LXP_OK)
+                evidence->terminal_payload, evidence->call_graph,
+                evidence->event_list) != LXP_OK)
             return LXP_ERR_LOG_CORRUPT;
     }
     return offset == length ? LXP_OK : LXP_ERR_LOG_CORRUPT;
@@ -443,7 +458,8 @@ static lxp_result append_authority(
     const uint8_t *canonical_header, size_t header_length,
     const uint8_t header_signature[64],
     const lxp_merkle_proof *receipt_proof, lxp_arena *arena,
-    uint8_t format_version, lxp_byte_span terminal_payload, lxp_byte_span call_graph)
+    uint8_t format_version, lxp_byte_span terminal_payload, lxp_byte_span call_graph,
+    lxp_byte_span event_list)
 {
     lxp_daemon_receipt_evidence evidence;
     publication_metadata receipt;
@@ -453,22 +469,28 @@ static lxp_result append_authority(
     size_t body_length;
     size_t offset = 0U;
     lxp_result status;
-    if (store == NULL || store->log == NULL || receipt_proof == NULL)
+    if (store == NULL || store->log == NULL || receipt_proof == NULL ||
+        (event_list.length != 0U &&
+         format_version != (uint8_t)AUTHORITY_EVENT_LIST_FORMAT) ||
+        (format_version == (uint8_t)AUTHORITY_EVENT_LIST_FORMAT &&
+         event_list.length == 0U))
         return LXP_ERR_NON_CANONICAL;
     status = validate_publication(
         store, format_version, canonical_receipt, receipt_length, canonical_header,
         header_length, header_signature, receipt_proof, arena, &receipt,
         &header, evidence.receipt_digest);
-    if (status == LXP_OK && format_version == 2U) {
+    if (status == LXP_OK && program_artifact_format(format_version)) {
         lxp_receipt ordinary;
         status = lxp_receipt_decode(canonical_receipt, receipt_length, true, &ordinary);
         if (status == LXP_OK)
-            status = lxp_receipt_bind_program_artifacts(&ordinary, terminal_payload, call_graph, (lxp_byte_span){NULL, 0U});
+            status = lxp_receipt_bind_program_artifacts(&ordinary, terminal_payload,
+                                                        call_graph, event_list);
     }
     if (status != LXP_OK) return status;
     evidence.format_version = format_version;
     evidence.terminal_payload = terminal_payload;
     evidence.call_graph = call_graph;
+    evidence.event_list = event_list;
     (void)memcpy(evidence.batch_id, receipt.batch_id, 32U);
     evidence.global_sequence = receipt.global_sequence;
     {
@@ -477,15 +499,19 @@ static lxp_result append_authority(
         status = lxp_daemon_receipt_authority_lookup(
             store, evidence.receipt_digest, arena, &existing);
         if (status == LXP_OK &&
-            ((format_version == 2U &&
+            ((program_artifact_format(format_version) &&
               (existing.terminal_payload.length != terminal_payload.length ||
                existing.call_graph.length != call_graph.length ||
+               existing.event_list.length != event_list.length ||
                (terminal_payload.length != 0U &&
                 lxp_ct_memcmp(existing.terminal_payload.bytes,
                     terminal_payload.bytes, terminal_payload.length) != 0) ||
                (call_graph.length != 0U &&
                 lxp_ct_memcmp(existing.call_graph.bytes,
-                    call_graph.bytes, call_graph.length) != 0))) ||
+                    call_graph.bytes, call_graph.length) != 0) ||
+               (event_list.length != 0U &&
+                lxp_ct_memcmp(existing.event_list.bytes,
+                    event_list.bytes, event_list.length) != 0))) ||
              existing.canonical_receipt.length != receipt_length ||
              lxp_ct_memcmp(existing.canonical_receipt.bytes,
                            canonical_receipt, receipt_length) != 0 ||
@@ -530,8 +556,10 @@ static lxp_result append_authority(
         return LXP_ERR_SEQUENCE_GAP;
     body_length = AUTHORITY_FIXED_BYTES + header_length +
                   (size_t)receipt_proof->depth * 32U + receipt_length;
-    if (format_version == 2U)
+    if (program_artifact_format(format_version))
         body_length += 8U + terminal_payload.length + call_graph.length;
+    if (format_version == (uint8_t)AUTHORITY_EVENT_LIST_FORMAT)
+        body_length += 4U + event_list.length;
     if (body_length > AUTHORITY_MAX_BYTES || body_length > UINT32_MAX)
         return LXP_ERR_LENGTH_LIMIT;
     body = (uint8_t *)malloc(body_length);
@@ -555,10 +583,11 @@ static lxp_result append_authority(
     write_u32(body + offset, (uint32_t)receipt_length); offset += 4U;
     (void)memcpy(body + offset, canonical_receipt, receipt_length);
     offset += receipt_length;
-    if (format_version == 2U) {
-        const lxp_byte_span spans[2] = {terminal_payload, call_graph};
+    if (program_artifact_format(format_version)) {
+        const lxp_byte_span spans[3] = {terminal_payload, call_graph, event_list};
+        const size_t span_count = format_version == 2U ? 2U : 3U;
         size_t index;
-        for (index = 0U; index < 2U; ++index) {
+        for (index = 0U; index < span_count; ++index) {
             write_u32(body + offset, (uint32_t)spans[index].length); offset += 4U;
             if (spans[index].length != 0U)
                 (void)memcpy(body + offset, spans[index].bytes, spans[index].length);
@@ -607,7 +636,8 @@ lxp_result lxp_daemon_receipt_authority_append(
 {
     return append_authority(store, canonical_receipt, receipt_length,
         canonical_header, header_length, header_signature, receipt_proof,
-        arena, 1U, (lxp_byte_span){NULL, 0U}, (lxp_byte_span){NULL, 0U});
+        arena, 1U, (lxp_byte_span){NULL, 0U}, (lxp_byte_span){NULL, 0U},
+        (lxp_byte_span){NULL, 0U});
 }
 
 lxp_result lxp_daemon_receipt_authority_append_artifacts(
@@ -620,7 +650,22 @@ lxp_result lxp_daemon_receipt_authority_append_artifacts(
 {
     return append_authority(store, canonical_receipt, receipt_length,
         canonical_header, header_length, header_signature, receipt_proof,
-        arena, 2U, terminal_payload, call_graph);
+        arena, 2U, terminal_payload, call_graph, (lxp_byte_span){NULL, 0U});
+}
+
+lxp_result lxp_daemon_receipt_authority_append_event_list(
+    lxp_daemon_receipt_authority_store *store,
+    const uint8_t *canonical_receipt, size_t receipt_length,
+    const uint8_t *canonical_header, size_t header_length,
+    const uint8_t header_signature[64],
+    const lxp_merkle_proof *receipt_proof, lxp_arena *arena,
+    lxp_byte_span terminal_payload, lxp_byte_span call_graph,
+    lxp_byte_span event_list)
+{
+    return append_authority(store, canonical_receipt, receipt_length,
+        canonical_header, header_length, header_signature, receipt_proof,
+        arena, event_list.length == 0U ? 2U : (uint8_t)AUTHORITY_EVENT_LIST_FORMAT,
+        terminal_payload, call_graph, event_list);
 }
 
 lxp_result lxp_daemon_receipt_authority_append_maintenance(
@@ -632,7 +677,8 @@ lxp_result lxp_daemon_receipt_authority_append_maintenance(
 {
     return append_authority(store, canonical_receipt, receipt_length,
         canonical_header, header_length, header_signature, receipt_proof, arena,
-        3U, (lxp_byte_span){NULL, 0U}, (lxp_byte_span){NULL, 0U});
+        3U, (lxp_byte_span){NULL, 0U}, (lxp_byte_span){NULL, 0U},
+        (lxp_byte_span){NULL, 0U});
 }
 
 lxp_result lxp_daemon_receipt_authority_lookup(

@@ -1060,7 +1060,11 @@ reqs = ["11.2"]
 
 [task.2.27]
 title = "Persist the event list in the node's receipt authority log and serve program events by topic and sequence"
-status = "pending"
+status = "done"
+revision = "aea3d8bccf58da52ea11481dc2e6c09d7037748e"
+command = "timeout 20m sh -c 'make test-program-artifacts'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.26"]
 do_1 = "Carry the event list as a third artifact span through the batch WAL in cmd/layerxd/lxp_daemon_batch_wal.c and the pending receipt collection and artifact append in cmd/layerxd/lxp_daemon_process.c, and append it to the receipt authority log as a record format 3 in cmd/layerxd/lxp_daemon_receipt_authority.c with the authority record bound raised to hold it; records the recovery and replica paths append without artifacts decode exactly as before."

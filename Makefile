@@ -2033,7 +2033,8 @@ $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority: \
 .PHONY: test-daemon-finality-authority
 .PHONY: test-program-artifacts
 $(BUILD_DIR)/tests/lxp_test_program_artifacts: \
-		tests/daemon/lxp_test_program_artifacts.c tests/programs/test_call_activity.c \
+		tests/daemon/lxp_test_program_artifacts.c tests/test_web_program_path.c \
+		tests/programs/test_call_activity.c \
 		cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_protocol.c \
 		cmd/layerxd/lxp_daemon_evidence.c cmd/layerxd/lxp_daemon_maintenance_json.h $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
@@ -2043,8 +2044,10 @@ $(BUILD_DIR)/tests/lxp_test_program_artifacts: \
 		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 
 test-program-artifacts: $(BUILD_DIR)/tests/lxp_test_program_artifacts programs-reference-escrow \
+		programs-reference-web-reader \
 		$(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit
-	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_program_artifacts
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_program_artifacts \
+		$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),programs/sdk/rust/examples/web-reader/target)/wasm32-unknown-unknown/release/layerx_reference_web_reader.wasm)
 
 .PHONY: test-daemon-maintenance-protocol
 $(BUILD_DIR)/tests/lxp_test_maintenance_protocol: \
