@@ -1,6 +1,7 @@
 package types
 
 import (
+	"github.com/ethereum/go-ethereum/common"
 	authtypes "github.com/sidiora-labs/paxeer-network/sdk/x/auth/types"
 	govtypes "github.com/sidiora-labs/paxeer-network/sdk/x/gov/types"
 )
@@ -29,6 +30,22 @@ func DefaultGenesis() *GenesisState {
 	return &GenesisState{Params: DefaultParams(DefaultAuthority())}
 }
 
+// IsSidioraPair reports whether (chainID, asset) is the pair
+// RegisterSidioraPair records: Sidiora's remote address on its foreign home.
+func IsSidioraPair(chainID uint64, asset Address20) bool {
+	return chainID == SidioraHomeChainID && asset == Address20(common.HexToAddress(SidioraRemoteAddress))
+}
+
+// AssetDenom is the one denom a (chain, asset) pair may carry: the usid denom
+// for Sidiora's pair and the chain-derived denom for every other pair, so
+// neither form can stand in for the other.
+func AssetDenom(chainID uint64, asset Address20) string {
+	if IsSidioraPair(chainID, asset) {
+		return SidioraDenom()
+	}
+	return Denom(chainID, asset)
+}
+
 func (g GenesisState) Validate() error {
 	if err := g.Params.Validate(); err != nil {
 		return err
@@ -51,8 +68,8 @@ func (g GenesisState) Validate() error {
 		if !chains[asset.ChainID] {
 			return ErrInvalidGenesis.Wrapf("asset of unregistered chain %d", asset.ChainID)
 		}
-		if asset.Denom != Denom(asset.ChainID, asset.Asset) {
-			return ErrInvalidGenesis.Wrapf("asset denom %s is not the derived denom", asset.Denom)
+		if asset.Denom != AssetDenom(asset.ChainID, asset.Asset) {
+			return ErrInvalidGenesis.Wrapf("asset denom %s is not the registered denom of chain %d", asset.Denom, asset.ChainID)
 		}
 		if denoms[asset.Denom] {
 			return ErrInvalidGenesis.Wrapf("duplicate asset %s", asset.Denom)

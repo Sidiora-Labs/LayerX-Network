@@ -209,13 +209,13 @@
     - Add tests/service.rs binding the real service to an ephemeral loopback port over the recorded node fixture, sending the SDK's quote body and the web adapter's submission body over a real socket, and asserting the response shapes, the 4xx and 5xx split, the body size refusal, and that the quote verifies against the relayer address; extend the #[cfg(test)] modules of main.rs and config.rs for the new argument handling and the listen address refusals.
     - Close observation 1.5.2 in spec/sidiora-fee-token/qualification.kvx naming the revision at which the verify_cmd passes.
     - _Requirements: 2.1, 2.4, 2.5, 3.3_
-  - [ ] 4.4 Resolve the Paxeer Foundry libraries without a manual clone
+  - [x] 4.4 Resolve the Paxeer Foundry libraries without a manual clone
     - Add contracts/bootstrap-libs.sh in the shape of bridge/evm/bootstrap-libs.sh, cloning forge-std v1.9.6 and openzeppelin-contracts v5.3.0, the tags .github/workflows/paxeer-forge-test.yml clones, into contracts/lib, doing nothing when both are already at their pinned tag and unmodified and replacing a checkout that is at another tag or was edited.
     - Add to foundry.paxeer.toml the remappings forge-std/=contracts/lib/forge-std/src/ and @openzeppelin/contracts/=contracts/lib/openzeppelin-contracts/contracts/, leaving every other key exactly as it is, so the standalone build resolves Test.sol, Vm.sol and the OpenZeppelin imports with no environment override.
     - Commit nothing under contracts/lib and change no contract or test; the configuration and the script are not production files for the test ratio, and the build in the verify_cmd is their test.
     - Close observations 1.7.2 and 2.2.3 in spec/sidiora-fee-token/qualification.kvx naming the revision at which the verify_cmd passes.
     - _Requirements: 1.7, 6.5_
-  - [ ] 4.5 Accept the registered Sidiora denom in bridge genesis
+  - [x] 4.5 Accept the registered Sidiora denom in bridge genesis
     - In modules/layerxbridge/types/genesis.go make GenesisState.Validate accept an asset whose denom is SidioraDenom() exactly when its (chain, asset) pair is the pair RegisterSidioraPair records - Sidiora's remote address on the chain that message accepts - and keep requiring every other asset's denom to equal Denom(chainID, asset), with the duplicate, cap and in-flight checks unchanged.
     - Refuse the Sidiora denom under any other (chain, asset) pair and refuse the derived denom for Sidiora's own pair, so neither form can stand in for the other.
     - Add modules/layerxbridge/types/genesis_test.go covering the Sidiora pair accepted with the usid denom, the derived denom still required for every other asset, and each cross-substitution refused; add modules/layerxbridge/keeper/genesis_test.go exporting a state in which RegisterSidioraPair ran and a cap was set for Sidiora, validating it and importing it into a fresh keeper with the asset, the cap and the in-flight amount unchanged.

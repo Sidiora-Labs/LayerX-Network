@@ -76,6 +76,7 @@ command = "cat modules/layerxbridge/types/genesis.go"; exit_code = 0
 log_path = ".logs/scope-conflict.log"
 observed = "GenesisState.Validate requires every asset denom to equal the existing chain-derived Denom, which rejects the required Sidiora subdenom; the validator is outside task 2.1 touches."
 assumption = "The genesis compatibility change requires separately authorized scope; this task leaves the existing assertion intact."
+closed = "Verified over ecebaa2f51cecadf1de6ca104b4609548e1c72a9, GenesisState.Validate accepts the usid denom exactly for the Sidiora pair RegisterSidioraPair records and the derived denom for every other pair, and a registered Sidiora state exports, validates and imports unchanged."
 
 [observation.2.1.2]
 revision = "974fcd706f687617f9b4a1e3aa6e2d0b85981143"
@@ -222,6 +223,7 @@ command = "FOUNDRY_CONFIG=foundry.paxeer.toml forge build contracts/test/Sidiora
 log_path = ".logs/build.log"
 observed = "Foundry inferred forge-std/contracts/src instead of the pinned dependency's src directory and could not resolve Test.sol or Vm.sol."
 assumption = "The focused verify run uses explicit dependency remappings in the environment; the failed build is not rerun."
+closed = "At ecebaa2f51cecadf1de6ca104b4609548e1c72a9 contracts/bootstrap-libs.sh fetches forge-std v1.9.6 and openzeppelin-contracts v5.3.0 into contracts/lib and foundry.paxeer.toml remaps forge-std/ to its src directory and @openzeppelin/contracts/ to the contracts directory, so the standalone build resolves Test.sol, Vm.sol and the OpenZeppelin imports with no environment override."
 
 [observation.2.2.4]
 revision = "a9224a86520f442902062b3d8f71afb996646778"
@@ -243,6 +245,7 @@ symbol = "GenesisState.Validate"
 observed = "Review comment 4107758215 identifies the Sidiora genesis export/import conflict already recorded in observation.2.1.1; the validator is outside task 2.2 touches."
 assumption = "The recorded conflict requires separately authorized validator work; it is not reinvestigated here and the existing validation remains intact."
 severity = "blocker"
+closed = "Verified over ecebaa2f51cecadf1de6ca104b4609548e1c72a9, GenesisState.Validate accepts the usid denom exactly for the Sidiora pair RegisterSidioraPair records and the derived denom for every other pair, and a registered Sidiora state exports, validates and imports unchanged."
 
 [observation.1.6.1]
 revision = "17c8ed319f18cbe5a003614c4ee082c2c3c0b122"
@@ -335,6 +338,7 @@ command = "FOUNDRY_CONFIG=foundry.paxeer.toml forge build --evm-version=prague c
 log_path = ".logs/build.log"
 observed = "Foundry resolves forge-std/Test.sol under the absent contracts/lib/forge-std/contracts/src directory, preventing the standalone build from compiling."
 assumption = "The exact verification command requires FOUNDRY_REMAPPINGS pointing forge-std/ to contracts/lib/forge-std/src/ and @openzeppelin/contracts/ to contracts/lib/openzeppelin-contracts/contracts/, with no repository configuration change."
+closed = "At ecebaa2f51cecadf1de6ca104b4609548e1c72a9 contracts/bootstrap-libs.sh fetches forge-std v1.9.6 and openzeppelin-contracts v5.3.0 into contracts/lib and foundry.paxeer.toml remaps forge-std/ to its src directory and @openzeppelin/contracts/ to the contracts directory, so the standalone build resolves Test.sol, Vm.sol and the OpenZeppelin imports with no environment override."
 
 [observation.1.7.3]
 task = "1.7"; file = "contracts/src/BatchCallAndSponsor.sol"; symbol = "currentRate"
