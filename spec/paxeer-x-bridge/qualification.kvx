@@ -31,3 +31,11 @@
 #
 # No record carries a hostname, an IP address, an internal URL, a credential or
 # the name of an agent or a working branch.
+
+[observation.1.2.1]
+task = "1.2"
+file = "bridge/solana/Cargo.lock"
+symbol = "cargo build-sbf"
+observed = "cargo build-sbf cannot resolve the dependency graph: the cargo shipped in platform-tools rejects the 35 transitive manifests that declare edition 2024, failing first on zeroize_derive with 'feature edition2024 is required'."
+assumption = "Pre-existing and environment-level, not introduced here: interop/contracts/solana-mirror pins the identical 35 manifests and fails the same way, so the SBF leg of the wave 3 gate needs a newer platform-tools on the gate runner rather than a change to this crate."
+severity = "blocker"
