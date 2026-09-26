@@ -977,7 +977,11 @@ log_path = ".logs/verify.log"
 
 [task.2.23]
 title = "Let the prepare pass stage module values so a program's first paying call creates the web fee account"
-status = "implemented"
+status = "done"
+revision = "418f25459cfeeb26a957e8b8fdac64c6e1fd098f"
+command = "timeout 20m sh -c 'make test-module-ctx test-kernel test-receipts && make test-web-program-path'"
+exit_code = 0
+log_path = ".logs/verify.log"
 implemented_revision = "a01484182da45a4e43ec13541b3b70a9466f9323"
 implemented_command = "timeout 20m sh -c 'make test-module-ctx test-kernel && make test-web-program-path'"
 implemented_exit_code = 2
@@ -1035,7 +1039,11 @@ reqs = ["17.3","17.6"]
 
 [task.2.26]
 title = "Keep a call's full program event list beside the receipt's artifacts, bound to the outcome's event envelope digest"
-status = "implemented"
+status = "done"
+revision = "418f25459cfeeb26a957e8b8fdac64c6e1fd098f"
+command = "timeout 20m sh -c 'make test-module-ctx test-kernel test-receipts && make test-web-program-path'"
+exit_code = 0
+log_path = ".logs/verify.log"
 implemented_revision = "a43f796c08960b6ed5aff6a9988c57094cff082f"
 implemented_command = "timeout 20m sh -c 'make test-receipts && make test-web-program-path'"
 implemented_exit_code = 2
@@ -1078,7 +1086,11 @@ reqs = ["11.2"]
 
 [task.2.29]
 title = "Restore the module context test after the web module registration and qualify the prepare pass staging"
-status = "implemented"
+status = "done"
+revision = "418f25459cfeeb26a957e8b8fdac64c6e1fd098f"
+command = "timeout 20m sh -c 'make test-module-ctx test-kernel test-receipts && make test-web-program-path'"
+exit_code = 0
+log_path = ".logs/verify.log"
 implemented_revision = "5ff0d17cdd3ba8c027e226701689b1b573afaefe"
 implemented_command = "timeout 20m sh -c 'make test-module-ctx test-kernel && make test-web-program-path'"
 implemented_exit_code = 2
@@ -1110,7 +1122,11 @@ reqs = ["17.3","17.6"]
 
 [task.2.31]
 title = "Reconcile the bound event list with the call outcome's event envelope digest and qualify the web program path"
-status = "pending"
+status = "done"
+revision = "418f25459cfeeb26a957e8b8fdac64c6e1fd098f"
+command = "timeout 20m sh -c 'make test-module-ctx test-kernel test-receipts && make test-web-program-path'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.26","2.29"]
 do_1 = "Diagnose observation 2.26.1: after the reference program's request call, the event list bound beside the receipt's artifacts does not hash to the call outcome event's event_envelope_digest; compare the bytes terminal_publish in src/modules/programs/call.c hashes with the span outcome_copy_artifacts in src/protocol/lxp_module_ctx.c copies and with what the pending batch copies in src/protocol/lxp_kernel.c carry, which were noted not to deep-copy the span, and fix the cause where it lives so the bound list is byte-identical to the hashed list, keeping the SHA-256 in terminal_publish as the single digest source and the committed receipt and every consensus-visible byte exactly as they are."
