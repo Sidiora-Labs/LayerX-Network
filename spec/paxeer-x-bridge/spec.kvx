@@ -500,7 +500,11 @@ reqs = ["13.2","13.3","13.4","13.5"]
 
 [task.2.8]
 title = "Write the Solana admin client"
-status = "pending"
+status = "done"
+revision = "d3d370a2cc2a69d309fb85ec3f21adcce3e7c26a"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path bridge/solana/Cargo.toml -p paxeer-x-bridge-solana-admin'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["1.2","1.4"]
 do_1 = "Write the client as a Rust binary crate at bridge/solana/admin, a member of the bridge/solana workspace, not as a Go subcommand under bridge/deploy: the repository's Solana client code in interop/crates/layerx-mirror/src/solana.rs is Rust, the instruction and account layouts it must encode live in the bridge/solana program crate it can import directly, and solana-program-test is a Rust harness, so Rust keeps one definition of every byte and tests it against the real program."

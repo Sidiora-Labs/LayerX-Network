@@ -109,7 +109,7 @@
     - Record the exchange as a fixture under bridge/deploy/tests/fixtures in the same format, carrying no key material, no endpoint but the local one and no date or hostname, and make it replayable without a validator.
     - Stop the run with a message naming the missing tool when solana-test-validator or cargo-build-sbf is absent, and skip nothing.
     - _Requirements: 13.2, 13.3, 13.4, 13.5_
-  - [ ] 2.8 Write the Solana admin client
+  - [x] 2.8 Write the Solana admin client
     - Write the client as a Rust binary crate at bridge/solana/admin, a member of the bridge/solana workspace, not as a Go subcommand under bridge/deploy: the repository's Solana client code in interop/crates/layerx-mirror/src/solana.rs is Rust, the instruction and account layouts it must encode live in the bridge/solana program crate it can import directly, and solana-program-test is a Rust harness, so Rust keeps one definition of every byte and tests it against the real program.
     - Read bridge/solana/chains/solana/config.json through the same fields bridge/deploy/chainconfig validates, refuse every placeholder, and take the owner and fee-payer keys only through the environment variable names the configuration declares, carrying no default endpoint, key or address.
     - Initialise the program config with the owner, the attestor set, the threshold and paused=false; register the assets in configuration order, native wrapped SOL first and then the Sidiora mint 5w3wVdJaESaJKyLmStM6Hv9UyUkmZ1b9DLQquAqqpump with its fixed id 0x21f7b20a555199fa73A238B1a91FD0f549068fEe; set every per-transaction and total cap; then read the config and asset PDAs back and print the resulting on-chain state.

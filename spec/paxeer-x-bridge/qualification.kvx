@@ -130,3 +130,19 @@ exit_codes = "lint 0; legs 1.1 0, 1.2 0, 1.3 0, 1.4 0, 1.5 0, 1.6 0"
 evidence = ".logs/wave1-union.log"
 observed = "All six wave-one verify legs and the spec lint (0 errors, 34 warnings for wave-two paths not yet created) pass on the merged feature revision; the public-text scan of the diff against main found three wording hits in spec/paxeer-x-bridge (spec.kvx lines 50 and 54, qualification.kvx line 67)."
 assumption = "The lint warnings name files wave-two tasks create and the three scan hits are spec wording left unedited here, so neither blocks the wave."
+
+[observation.2.8.1]
+task = "2.8"
+file = "bridge/deploy/deploy-solana-program.sh"
+symbol = "VAULT_AUTHORITY_SEED"
+observed = "The script derives the vault-authority PDA from the seed vault while the program and the admin client derive it from vault-authority, so the deployment record's vault authority and handle are not the program's; and the client refuses the placeholder solana.program_id the script's first-deployment path still carries."
+assumption = "The script belongs to task 1.4 and is left as written; the client prints the program's own vault authority and handle, and the operator fills solana.program_id from the program keypair before the initialise step."
+severity = "blocker"
+
+[observation.2.8.2]
+task = "2.8"
+file = "bridge/solana/admin/src/main.rs"
+symbol = "OWNER_KEY_VARIABLE"
+observed = "The chain configuration names only the deploy key variable, while set-attestors, register-asset, set-cap and pause need the owner's signature, so the client reads the owner keypair file through the fixed PAXEER_BRIDGE_SOLANA_OWNER_KEYPAIR_FILE and refuses a key that is not the configured owner."
+assumption = "An owner-key variable in the configuration schema would belong to bridge/deploy/chainconfig and the committed configuration, which this task does not own; this resolves observation 1.4.2 for the admin client itself."
+severity = "note"
