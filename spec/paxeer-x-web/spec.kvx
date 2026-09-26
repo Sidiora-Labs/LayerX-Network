@@ -578,7 +578,11 @@ status = "pending"
 
 [task.1.14]
 title = "Track guest ABI 4 in the registration probe and the SDK lint"
-status = "pending"
+status = "done"
+revision = "4b2d4fade89e09b9e3882635e96fe1c259f79f02"
+command = "timeout 20m sh -c 'make build/tests/programs_registration && build/tests/programs_registration && cd programs && cargo clippy --locked -p layerx-program-sdk --all-targets -- -D warnings'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 1
 requires = ["1.8"]
 do_1 = "In tests/programs/test_registration.c keep every existing transition probe and move the unsupported-version probe from LX_PROGRAMS_SANDBOX_ABI_VERSION + 1U to LX_PROGRAMS_GUEST_ABI_V4_VERSION + 1U, the version one past the highest guest ABI src/modules/programs/deploy.c admits since task 1.8; add probes asserting that 0 to LX_PROGRAMS_GUEST_ABI_V4_VERSION and LX_PROGRAMS_SANDBOX_ABI_VERSION to LX_PROGRAMS_GUEST_ABI_V4_VERSION validate LXP_OK and that LX_PROGRAMS_GUEST_ABI_V4_VERSION to LX_PROGRAMS_SANDBOX_ABI_VERSION is unsupported; change nothing in deploy.c."

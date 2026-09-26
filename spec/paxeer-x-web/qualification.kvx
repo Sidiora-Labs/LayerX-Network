@@ -134,6 +134,7 @@ symbol = "LX_PROGRAMS_SANDBOX_ABI_VERSION"
 observed = "Raising LX_PROGRAMS_SANDBOX_ABI_VERSION to 4 collides with LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION = 4, so guest ABI 4 is LX_PROGRAMS_GUEST_ABI_V4_VERSION and tests/programs/test_registration.c, which expects transition_validate(0, SANDBOX + 1) to be unsupported, now disagrees with deploy admission."
 assumption = "The test stays unedited as instructed; whether that assertion moves to the new constant is a decision for the feature owner."
 severity = "blocker"
+closed = "Task 1.14 moved the unsupported-version probe to LX_PROGRAMS_GUEST_ABI_V4_VERSION + 1U and added the guest ABI 4 transition probes; the verify_cmd passed at revision 4b2d4fade89e09b9e3882635e96fe1c259f79f02."
 
 [observation.1.8.2]
 task = "1.8"
