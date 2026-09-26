@@ -10,9 +10,13 @@ export type LaunchpadQuoteAnswer =
 const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/u;
 const DECIMAL = /^[1-9][0-9]{0,77}$/u;
 
+function isLaunchpadSide(side: string): side is "buy" | "sell" {
+  return side === "buy" || side === "sell";
+}
+
 /** The curve's quote for a buy or sell, read server side through the gateway before the wallet opens. */
-export async function quoteLaunchpadSwap(token: string, side: "buy" | "sell", amountIn: string): Promise<LaunchpadQuoteAnswer> {
-  if (!EVM_ADDRESS.test(token) || (side !== "buy" && side !== "sell") || !DECIMAL.test(amountIn)) {
+export async function quoteLaunchpadSwap(token: string, side: string, amountIn: string): Promise<LaunchpadQuoteAnswer> {
+  if (!EVM_ADDRESS.test(token) || !isLaunchpadSide(side) || !DECIMAL.test(amountIn)) {
     return { ok: false, detail: "Choose a market and a positive amount." };
   }
   try {

@@ -59,6 +59,8 @@ jobs:
             PROGRAMS_RUNTIME_LIB="$CARGO_TARGET_DIR/debug/liblayerx_programs_sandbox.a" \
             build/bin/layerxd build/bin/layerx-genesis-build build/tests/bridge/sign-credit
           echo "LAYERX_TEST_SIGN_CREDIT_BIN=$PWD/build/tests/bridge/sign-credit" >> "$GITHUB_ENV"
+      - name: Install the locked agent SDK workspace dependencies
+        run: npm --prefix agent/sdk/typescript ci --ignore-scripts --no-audit --no-fund
       - name: Install locked Human web dependencies
         run: make human-js-install
       - name: Enforce component-library integrity, copy, policies, and strict lints

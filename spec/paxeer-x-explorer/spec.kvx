@@ -302,7 +302,7 @@ reqs = ["1.5","1.9"]
 
 [task.1.7]
 title = "Repair the human workspace lint gate and its web image"
-status = "pending"
+status = "implemented"
 wave = 1
 requires = []
 do_1 = "Diagnose from the job log: `gh run view --job 36149017895 --log` and read both the step that enforces component-library integrity, copy, policies and strict lints and the browser-performance job's image build; the recorded findings are four eslint errors in the web application and a failed image build for the human web image."
@@ -314,6 +314,7 @@ verify_cmd = "timeout 20m sh -c 'make human-js-install && npm --prefix human/app
 symbols = ["human-web-image-build"]
 touches = ["human/apps/web/src/api/abi-read.ts","human/apps/web/src/app/launchpad/actions.ts","human/apps/web/src/app/launchpad/launchpad-client.tsx","human/apps/web/Dockerfile","human/apps/web/Dockerfile.dockerignore",".github/workflows/human.yml","tools/ci/human-web-image-build.sh"]
 reqs = ["1.6","1.9"]
+note = "Implemented, not qualified. The verify_cmd `timeout 20m sh -c 'make human-js-install && npm --prefix human/apps/web run lint && tools/ci/human-web-image-build.sh'` exits 1 at the image build; the install and the strict lint both pass. Build log build/human-web-image/build-layerx-human-web.log: \"Module not found: Can't resolve './exchange.js'\" from the agent SDK modules the web application imports by relative path, which fails the same way in the repository build and is recorded as observation.1.7.1."
 
 [task.1.8]
 title = "Repair the documentation site build"

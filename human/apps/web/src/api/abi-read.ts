@@ -1,15 +1,8 @@
 import { PrecompileAbiError } from "./sdk.ts";
 
-export type AbiReadScalar =
-  | "address"
-  | "bool"
-  | "bytes"
-  | "bytes32"
-  | "string"
-  | "uint8"
-  | "uint32"
-  | "uint64"
-  | "uint256";
+export type AbiReadUint = "uint8" | "uint32" | "uint64" | "uint256";
+
+export type AbiReadScalar = "address" | "bool" | "bytes" | "bytes32" | "string" | AbiReadUint;
 
 export type AbiReadType =
   | AbiReadScalar
@@ -61,7 +54,7 @@ function offset(data: Uint8Array, position: number): number {
   return Number(value);
 }
 
-function scalarBits(type: AbiReadScalar): number {
+function scalarBits(type: AbiReadUint): number {
   switch (type) {
     case "uint8":
       return 8;
@@ -69,7 +62,7 @@ function scalarBits(type: AbiReadScalar): number {
       return 32;
     case "uint64":
       return 64;
-    default:
+    case "uint256":
       return 256;
   }
 }
@@ -120,7 +113,10 @@ function scalar(data: Uint8Array, position: number, type: AbiReadScalar): AbiRea
     case "string":
     case "bytes":
       throw new PrecompileAbiError("invalid_value", type);
-    default: {
+    case "uint8":
+    case "uint32":
+    case "uint64":
+    case "uint256": {
       const value = integer(bytes);
       if (value >= 1n << BigInt(scalarBits(type))) {
         throw new PrecompileAbiError("non_canonical_word", type);

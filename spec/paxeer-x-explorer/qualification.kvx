@@ -36,6 +36,29 @@ file = "spec/paxeer-x-explorer/spec.kvx"
 symbol = "task.1.5.touches"
 observed = "The Platform workspace step ran make beta-contract-check beta-ledger-check and exited 2: the contract check failed on the Surfaces and journeys table of platform/docs/content/beta.md, which listed none of the derived surfaces hosted-indexer, hosted-interop, interop-bridge-relayer and interop-mirror-signer, and the ledger check then failed on the resolution key of observation.8.1.1, 8.2.1, 8.3.1, 8.4.1, 8.4.2, 8.4.3, 8.5.1, 8.6.2 and 8.7.1 in spec/layerx-beta/qualification.kvx. After the repair the same command exits 0, but cg spec done 1.5 exits 1 on four graph checks: the symbols beta_contract_check and beta_ledger_check are shell functions the graph does not index, and touches names tools/ci/beta-contract-check.sh and tools/ci/beta-ledger-check.sh, which do_3 forbids changing."
 assumption = "Editing those symbols or touches entries would change the check's own input rather than satisfy it, and no change can satisfy them for a task whose instruction is to leave both scripts intact, so the conflict is recorded here for an owner ruling and the task is recorded done by hand from its passing verify_cmd rather than forced past the graph checks."
+
+[observation.1.7.1]
+task = "1.7"
+file = "agent/sdk/typescript/src/bridge.ts"
+symbol = "exchange.js"
+observed = "The human web build fails in the repository and in the image with \"Module not found: Can't resolve './exchange.js'\" from agent/sdk/typescript/src/bridge.ts and launchpad.ts: the agent SDK writes NodeNext .js specifiers for its own TypeScript modules, Turbopack does not remap them to the .ts files, and human/apps/web/src/api/sdk.ts pulls those modules into the Next build by relative path. `npm --prefix human/apps/web run build` reproduces it on a clean tree with no change from this task, exit code 1."
+assumption = "The repair belongs to whoever owns human/apps/web/src/api/sdk.ts and the way the web application consumes the agent SDK - a declared dependency on the built package rather than a relative import of its sources. Task 1.7 owns neither file, so the image build cannot pass until that is fixed; the Dockerfile in this task now reproduces the repository's own module resolution exactly, so the image builds as soon as the repository build does."
+severity = "blocker"
+
+[observation.1.7.2]
+task = "1.7"
+file = "human/apps/web/src/app/_markets/activity-feed.tsx"
+symbol = "human-check-ui"
+observed = "The component-library gate reports nine findings before the lint step is reached - direct @layerx/ui imports outside src/kit in _markets/activity-feed.tsx, bridge/page.tsx, launchpad/page.tsx and exchange/page.tsx, and raw select, button and input elements in _markets/select.tsx and bridge/page.tsx - so `make human-check-ui human-lint human-check` fails before `npm run lint` runs."
+assumption = "Those files belong to the fork-surface work, not to this task, and none of them is in the task's touches list; the task verify_cmd runs `npm --prefix human/apps/web run lint` directly, which now passes. Recorded once and not chased."
+severity = "suspect"
+
+[observation.1.7.3]
+task = "1.7"
+file = "human/apps/web/src/app/_markets/capability-action.ts"
+symbol = "readSurfaceCapability"
+observed = "The strict lint reports five errors, not the four the task records: the fifth is the same always-false comparison in the sibling server action readSurfaceCapability, whose declared parameter type claims a trust boundary is already narrow. The task verify_cmd cannot pass while it stands, and `make human-js-install` had to install the agent SDK workspace for the same verify_cmd to typecheck."
+assumption = "Both were repaired the same way as the four in the list - a real type guard at the boundary, and one line in the human-js-install target so the command the workflow and the verify_cmd share installs what the web application typechecks. Two files outside the task's touches list, recorded here as a scope note."
 severity = "note"
 
 [observation.2.1.1]
