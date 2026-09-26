@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 )
@@ -53,6 +54,14 @@ func (s msgServer) Unpause(goCtx context.Context, msg *types.MsgUnpause) (*types
 		return nil, err
 	}
 	return &types.MsgUnpauseResponse{}, nil
+}
+
+func (s msgServer) RegisterSidioraPair(goCtx context.Context, msg *types.MsgRegisterSidioraPair) (*types.MsgRegisterSidioraPairResponse, error) {
+	denom, err := s.keeper.RegisterSidioraPair(sdk.UnwrapSDKContext(goCtx), *msg)
+	if err != nil {
+		return nil, err
+	}
+	return &types.MsgRegisterSidioraPairResponse{Denom: denom}, nil
 }
 
 // RegisterChain adds or replaces a remote chain. Re-registering updates the
@@ -150,4 +159,26 @@ func (k Keeper) Unpause(ctx sdk.Context, msg types.MsgUnpause) error {
 	k.setPaused(ctx, false)
 	ctx.EventManager().EmitEvent(sdk.NewEvent(types.EventUnpaused))
 	return nil
+}
+
+// RegisterSidioraPair records Sidiora's remote asset on Solana, Sidiora's
+// foreign home, against the module's usid denom through EnsureSidioraDenom.
+// The chain must be registered first. Registering the pair again is a no-op
+// that succeeds; a pair a cap already recorded under another denom is refused.
+func (k Keeper) RegisterSidioraPair(ctx sdk.Context, msg types.MsgRegisterSidioraPair) (string, error) {
+	if err := msg.ValidateBasic(); err != nil {
+		return "", err
+	}
+	if err := k.requireAuthority(ctx, msg.Authority); err != nil {
+		return "", err
+	}
+	denom, err := k.EnsureSidioraDenom(ctx, msg.ChainID)
+	if err != nil {
+		return "", err
+	}
+	ctx.EventManager().EmitEvent(sdk.NewEvent(types.EventSidioraPair,
+		sdk.NewAttribute(types.AttributeChainID, fmt.Sprint(msg.ChainID)),
+		sdk.NewAttribute(types.AttributeAsset, types.Address20(common.HexToAddress(types.SidioraRemoteAddress)).Hex()),
+		sdk.NewAttribute(types.AttributeDenom, denom)))
+	return denom, nil
 }

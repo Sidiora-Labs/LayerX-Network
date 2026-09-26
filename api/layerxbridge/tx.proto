@@ -15,6 +15,7 @@ service Msg {
   rpc SetCap(MsgSetCap) returns (MsgSetCapResponse);
   rpc Pause(MsgPause) returns (MsgPauseResponse);
   rpc Unpause(MsgUnpause) returns (MsgUnpauseResponse);
+  rpc RegisterSidioraPair(MsgRegisterSidioraPair) returns (MsgRegisterSidioraPairResponse);
 }
 
 // Chain is one remote chain the bridge accepts events from. Its Go type is
@@ -117,3 +118,22 @@ message MsgUnpause {
 
 // MsgUnpauseResponse is the MsgUnpause response.
 message MsgUnpauseResponse {}
+
+// MsgRegisterSidioraPair records Sidiora's remote asset
+// 0x21f7b20a555199fa73A238B1a91FD0f549068fEe on a registered chain against the
+// module's usid denom, the pair EnsureSidioraDenom registers. It is accepted
+// only for Solana, Sidiora's foreign home, and must execute before any cap is
+// set for that asset, because a cap for an unrecorded pair records it under
+// the bridge's generic denom instead. Authority only.
+message MsgRegisterSidioraPair {
+  option (gogoproto.goproto_stringer) = false;
+
+  string authority = 1;
+  uint64 chain_id = 2 [(gogoproto.customname) = "ChainID"];
+}
+
+// MsgRegisterSidioraPairResponse is the MsgRegisterSidioraPair response: the
+// denom the pair is recorded against.
+message MsgRegisterSidioraPairResponse {
+  string denom = 1;
+}

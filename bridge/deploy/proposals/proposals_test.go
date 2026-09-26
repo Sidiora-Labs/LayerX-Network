@@ -134,6 +134,9 @@ func TestSolanaChainIDIsTheReservedIdentifier(t *testing.T) {
 	if SolanaChainID != 91600046870081 {
 		t.Fatalf("Solana chain id is %d, want 91600046870081", SolanaChainID)
 	}
+	if SolanaChainID != types.SidioraHomeChainID {
+		t.Fatalf("Solana chain id is %d, the module's Sidiora home is %d", SolanaChainID, types.SidioraHomeChainID)
+	}
 }
 
 func TestEthereumBodiesDecodeBackIntoTheModulesTypes(t *testing.T) {
@@ -421,6 +424,7 @@ func TestChainConfigurationRefusals(t *testing.T) {
 		{"native-listed-twice.json", "assets[1].address", "native coin is listed twice"},
 		{"duplicate-asset-id.json", "assets[1].asset_id", "already the asset id"},
 		{"solana-without-sidiora.json", fieldAssets, "Sidiora's asset id"},
+		{"evm-with-sidiora.json", "assets[1].asset_id", "only from Solana, Sidiora's foreign home"},
 	} {
 		t.Run(testCase.file, func(t *testing.T) {
 			path := filepath.Join("testdata", "refuse", testCase.file)
@@ -978,12 +982,74 @@ func TestSolanaProposalsSetSidiorasCapApart(t *testing.T) {
 		}
 	}
 	sidiora := decodeProposalStrict(t, files[1])
-	if len(sidiora) != 1 {
-		t.Fatalf("the Sidiora proposal carries %d messages, want its cap alone", len(sidiora))
+	if len(sidiora) != 2 {
+		t.Fatalf("the Sidiora proposal carries %d messages, want the pair's registration and then its cap", len(sidiora))
 	}
-	sameCarried(t, "Sidiora's cap", sidiora[0], &bundle.Caps[1])
+	if bundle.SidioraPair == nil {
+		t.Fatal("the Solana bundle carries no registration of the Sidiora pair")
+	}
+	want := types.MsgRegisterSidioraPair{Authority: governanceAuthority, ChainID: SolanaChainID}
+	sameMessage(t, "the bundle's Sidiora pair", &want, bundle.SidioraPair)
+	sameCarried(t, "the Sidiora pair", sidiora[0], &want)
+	sameCarried(t, "Sidiora's cap", sidiora[1], &bundle.Caps[1])
+	if err := sidiora[0].ValidateBasic(); err != nil {
+		t.Fatalf("the Sidiora pair does not validate: %v", err)
+	}
 	if !strings.Contains(string(files[1].Body), types.SidioraDenom()) {
-		t.Fatalf("the Sidiora proposal does not name the usid denom %s it waits for", types.SidioraDenom())
+		t.Fatalf("the Sidiora proposal does not name the usid denom %s it registers the pair against", types.SidioraDenom())
+	}
+	pairAt := bytes.Index(files[1].Body, []byte(`"@type": "/paxprotocol.paxchain.layerxbridge.MsgRegisterSidioraPair"`))
+	capAt := bytes.Index(files[1].Body, []byte(`"@type": "/paxprotocol.paxchain.layerxbridge.MsgSetCap"`))
+	if pairAt < 0 || capAt < 0 || pairAt > capAt {
+		t.Fatalf("the Sidiora proposal does not carry the pair's registration ahead of the cap\n%s", files[1].Body)
+	}
+	bodies, err := bundle.Files()
+	if err != nil {
+		t.Fatalf("marshalling the bodies: %v", err)
+	}
+	for _, body := range bodies {
+		if bytes.Contains(body.Body, []byte("MsgRegisterSidioraPair")) {
+			t.Fatalf("the body %s carries the pair's registration, which travels only in %s", body.Name, SidioraCapProposalFile)
+		}
+	}
+}
+
+func TestEthereumBundleCarriesNoSidioraPair(t *testing.T) {
+	if pair := generate(t, ethereumPath).SidioraPair; pair != nil {
+		t.Fatalf("the ethereum bundle registers the Sidiora pair on chain %d", pair.ChainID)
+	}
+}
+
+func TestSidioraPairIsRefusedForAnyChainButSolana(t *testing.T) {
+	cfg, err := LoadChainConfig(ethereumPath)
+	if err != nil {
+		t.Fatalf("loading %s: %v", ethereumPath, err)
+	}
+	_, err = RegisterSidioraPair(cfg)
+	refusal := fieldError(t, err)
+	if refusal.Field != fieldChainID || !strings.Contains(refusal.Msg, "Sidiora's foreign home") {
+		t.Fatalf("the refusal names %q: %q", refusal.Field, refusal.Msg)
+	}
+
+	solana := generate(t, solanaPath)
+	withoutPair := solana
+	withoutPair.SidioraPair = nil
+	if _, err := withoutPair.Proposals(); err == nil || !strings.Contains(err.Error(), "Sidiora's foreign home") {
+		t.Fatalf("a Sidiora cap without the pair's registration was proposed (%v)", err)
+	}
+	elsewhere := solana
+	elsewhere.SidioraPair = &types.MsgRegisterSidioraPair{Authority: governanceAuthority, ChainID: 1}
+	if _, err := elsewhere.Proposals(); err == nil {
+		t.Fatal("a Sidiora pair on chain 1 was proposed")
+	}
+
+	files := proposalFiles(t, solana)
+	onEthereum := bytes.Replace(files[1].Body, []byte(`"chain_id": "91600046870081"`), []byte(`"chain_id": "1"`), 1)
+	if bytes.Equal(onEthereum, files[1].Body) {
+		t.Fatalf("the Sidiora proposal carries no Solana chain id\n%s", files[1].Body)
+	}
+	if _, err := DecodeProposal(onEthereum); err == nil || !strings.Contains(err.Error(), "not Sidiora's foreign home") {
+		t.Fatalf("a Sidiora proposal for chain 1 was decoded (%v)", err)
 	}
 }
 

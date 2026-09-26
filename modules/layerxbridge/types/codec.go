@@ -22,6 +22,7 @@ func RegisterCodec(cdc *codec.LegacyAmino) {
 	cdc.RegisterConcrete(&MsgSetCap{}, "layerxbridge/MsgSetCap", nil)
 	cdc.RegisterConcrete(&MsgPause{}, "layerxbridge/MsgPause", nil)
 	cdc.RegisterConcrete(&MsgUnpause{}, "layerxbridge/MsgUnpause", nil)
+	cdc.RegisterConcrete(&MsgRegisterSidioraPair{}, "layerxbridge/MsgRegisterSidioraPair", nil)
 	cdc.RegisterConcrete(&BridgeProposal{}, "layerxbridge/BridgeProposal", nil)
 }
 
@@ -35,6 +36,7 @@ func RegisterInterfaces(registry cdctypes.InterfaceRegistry) {
 		&MsgSetCap{},
 		&MsgPause{},
 		&MsgUnpause{},
+		&MsgRegisterSidioraPair{},
 	)
 	registry.RegisterImplementations((*govtypes.Content)(nil), &BridgeProposal{})
 	msgservice.RegisterMsgServiceDesc(registry, &_Msg_serviceDesc)

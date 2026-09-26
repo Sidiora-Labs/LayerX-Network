@@ -18,6 +18,11 @@ const (
 	SidioraDecimals      = uint32(6)
 	SidioraRemoteAddress = "0x21f7b20a555199fa73A238B1a91FD0f549068fEe"
 
+	// SidioraHomeChainID is the chain id of Solana, Sidiora's foreign home and
+	// the only chain its pair is registered for: the ASCII bytes of SOLANA
+	// left-padded to eight bytes and read big-endian.
+	SidioraHomeChainID uint64 = 0x0000534f4c414e41
+
 	// BridgeAddress is the layerxBridge precompile address.
 	BridgeAddress = "0x0000000000000000000000000000000000001016"
 

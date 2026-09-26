@@ -27,8 +27,8 @@ const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 
 // BridgeProposal is the governance proposal content of the layerxbridge
 // module. It carries the module's governance messages from tx.proto -
-// MsgRegisterChain, MsgSetAttestors, MsgSetCap, MsgPause and MsgUnpause -
-// each packed under its type URL, and once the proposal passes the module's
+// MsgRegisterChain, MsgSetAttestors, MsgSetCap, MsgPause, MsgUnpause and
+// MsgRegisterSidioraPair - each packed under its type URL, and once the proposal passes the module's
 // proposal handler executes them in order through the Msg service. Every
 // message names the governance module account as its authority.
 type BridgeProposal struct {

@@ -1,6 +1,7 @@
 package keeper_test
 
 import (
+	"fmt"
 	"math/big"
 	"testing"
 	"time"
@@ -587,4 +588,146 @@ func TestProposalHandlerRefusesAMalformedProposal(t *testing.T) {
 	require.False(t, found, "a failed proposal left its first message applied")
 	require.Empty(t, s.events(types.EventChainRegistered))
 	require.Equal(t, *types.DefaultGenesis(), s.k.ExportGenesis(s.ctx), "a refused proposal changed the state")
+}
+
+// solanaChain is Solana as governance registers it: Sidiora's foreign home.
+var solanaChain = types.Chain{ChainID: types.SidioraHomeChainID, Vault: vault, FinalityDepth: 32, Enabled: true}
+
+func sidioraCap(from string) *types.MsgSetCap {
+	return &types.MsgSetCap{Authority: from, ChainID: types.SidioraHomeChainID, Asset: sidioraAsset(),
+		MaxInFlight: sdk.NewInt(1500), MaxPerTx: sdk.NewInt(1000)}
+}
+
+func TestSidioraHomeChainIDIsSolana(t *testing.T) {
+	label := make([]byte, 8)
+	copy(label[2:], "SOLANA")
+	require.Equal(t, new(big.Int).SetBytes(label).Uint64(), types.SidioraHomeChainID)
+	require.Equal(t, uint64(91600046870081), types.SidioraHomeChainID)
+}
+
+func TestMsgServiceRegistersTheSidioraPair(t *testing.T) {
+	s := newSuite(t, false)
+	router := s.router()
+	pair := &types.MsgRegisterSidioraPair{Authority: authority, ChainID: types.SidioraHomeChainID}
+	const typeURL = "/paxprotocol.paxchain.layerxbridge.MsgRegisterSidioraPair"
+	require.Equal(t, typeURL, sdk.MsgTypeURL(pair))
+	require.NotNil(t, s.app.MsgServiceRouter().Handler(pair), "the application routes no %s", typeURL)
+	authorityAccount, err := sdk.AccAddressFromBech32(authority)
+	require.NoError(t, err)
+	require.Equal(t, []sdk.AccAddress{authorityAccount}, pair.GetSigners())
+	require.Equal(t, types.RouterKey, pair.Route())
+	require.Equal(t, types.TypeMsgRegisterSidioraPair, pair.Type())
+	require.Contains(t, string(pair.GetSignBytes()), "layerxbridge/MsgRegisterSidioraPair")
+
+	require.ErrorIs(t, s.route(router, pair), types.ErrUnknownChain, "the pair needs its chain registered first")
+	require.NoError(t, s.route(router, &types.MsgRegisterChain{Authority: authority, Chain: solanaChain}))
+
+	stranger := sdk.AccAddress(make([]byte, 20)).String()
+	require.ErrorIs(t, s.route(router, &types.MsgRegisterSidioraPair{Authority: stranger, ChainID: types.SidioraHomeChainID}),
+		types.ErrUnauthorized)
+	malformed := &types.MsgRegisterSidioraPair{Authority: "not-a-bech32-account", ChainID: types.SidioraHomeChainID}
+	require.Empty(t, malformed.GetSigners())
+	require.ErrorIs(t, s.route(router, malformed), types.ErrUnauthorized)
+	require.NoError(t, s.route(router, &types.MsgRegisterChain{Authority: authority,
+		Chain: types.Chain{ChainID: chainID, Vault: vault, FinalityDepth: 64, Enabled: true}}))
+	for _, other := range []uint64{0, chainID, types.SidioraHomeChainID + 1} {
+		msg := &types.MsgRegisterSidioraPair{Authority: authority, ChainID: other}
+		require.ErrorIs(t, msg.ValidateBasic(), types.ErrInvalidRequest, "chain %d", other)
+		require.ErrorIs(t, s.route(router, msg), types.ErrInvalidRequest, "chain %d is not Sidiora's foreign home", other)
+	}
+	_, found := s.k.GetAssetByDenom(s.ctx, types.SidioraDenom())
+	require.False(t, found, "a refused registration recorded the pair")
+
+	require.NoError(t, s.route(router, pair))
+	record, found := s.k.GetAsset(s.ctx, types.SidioraHomeChainID, sidioraAsset())
+	require.True(t, found)
+	require.Equal(t, types.SidioraDenom(), record.Denom)
+	metadata, found := s.app.BankKeeper.GetDenomMetaData(s.ctx, types.SidioraDenom())
+	require.True(t, found)
+	require.Equal(t, types.SidioraSymbol, metadata.Symbol)
+
+	// Registering the pair again succeeds and changes nothing; the Msg service
+	// answers with the denom and the keeper emits the pair's event.
+	again := s.ctx.WithEventManager(sdk.NewEventManager())
+	response, err := keeper.NewMsgServerImpl(s.k).RegisterSidioraPair(sdk.WrapSDKContext(again), pair)
+	require.NoError(t, err, "registering the pair again")
+	require.Equal(t, types.SidioraDenom(), response.Denom)
+	var events []sdk.Event
+	for _, event := range again.EventManager().Events() {
+		if event.Type == types.EventSidioraPair {
+			events = append(events, event)
+		}
+	}
+	require.Len(t, events, 1)
+	require.Equal(t, fmt.Sprint(types.SidioraHomeChainID), attribute(events[0], types.AttributeChainID))
+	require.Equal(t, sidioraAsset().Hex(), attribute(events[0], types.AttributeAsset))
+	require.Equal(t, types.SidioraDenom(), attribute(events[0], types.AttributeDenom))
+	again2, found := s.k.GetAsset(s.ctx, types.SidioraHomeChainID, sidioraAsset())
+	require.True(t, found)
+	require.Equal(t, record, again2)
+
+	require.NoError(t, s.route(router, sidioraCap(authority)))
+	limit, found := s.k.GetCap(s.ctx, types.SidioraDenom())
+	require.True(t, found, "the cap after the pair is set on the usid denom")
+	require.True(t, limit.MaxInFlight.Equal(sdk.NewInt(1500)))
+	_, found = s.k.GetCap(s.ctx, types.Denom(types.SidioraHomeChainID, sidioraAsset()))
+	require.False(t, found, "the cap after the pair created the generic denom")
+}
+
+func TestSidioraPairIsRefusedOnceACapBoundItElsewhere(t *testing.T) {
+	s := newSuite(t, false)
+	router := s.router()
+	require.NoError(t, s.route(router, &types.MsgRegisterChain{Authority: authority, Chain: solanaChain}))
+	require.NoError(t, s.route(router, sidioraCap(authority)))
+	before := s.k.ExportGenesis(s.ctx)
+	require.ErrorIs(t, s.route(router, &types.MsgRegisterSidioraPair{Authority: authority, ChainID: types.SidioraHomeChainID}),
+		types.ErrInvalidRequest)
+	require.Equal(t, before, s.k.ExportGenesis(s.ctx))
+	require.Empty(t, s.events(types.EventSidioraPair))
+}
+
+func TestProposalHandlerRegistersTheSidioraPairAheadOfItsCap(t *testing.T) {
+	s := newSuite(t, false)
+	handler := layerxbridge.NewProposalHandler(s.k)
+	pair := &types.MsgRegisterSidioraPair{Authority: authority, ChainID: types.SidioraHomeChainID}
+
+	_, content := s.submitted(pair, sidioraCap(authority))
+	require.ErrorIs(t, handler(s.ctx, content), types.ErrUnknownChain, "the Sidiora proposal before the chain is open")
+
+	_, content = s.submitted(&types.MsgRegisterChain{Authority: authority, Chain: solanaChain},
+		&types.MsgSetAttestors{Authority: authority, Set: bridgetestutil.Set(s.attestors, 1_000_000, 2)})
+	require.NoError(t, handler(s.ctx, content))
+
+	// Capped first, the pair would bind to the generic denom and its
+	// registration would then fail: the proposal executes whole or not at all.
+	_, content = s.submitted(sidioraCap(authority), pair)
+	require.ErrorIs(t, handler(s.ctx, content), types.ErrInvalidRequest)
+	_, found := s.k.GetAsset(s.ctx, types.SidioraHomeChainID, sidioraAsset())
+	require.False(t, found, "a failed proposal left Sidiora's cap applied")
+
+	for _, from := range []string{sdk.AccAddress(make([]byte, 20)).String(), s.k.ModuleAddress().String()} {
+		submit, refused := s.submitted(&types.MsgRegisterSidioraPair{Authority: from, ChainID: types.SidioraHomeChainID}, sidioraCap(authority))
+		require.ErrorIs(t, submit.ValidateBasic(), types.ErrUnauthorized, from)
+		require.ErrorIs(t, handler(s.ctx, refused), types.ErrUnauthorized, from)
+	}
+	submit, refused := s.submitted(&types.MsgRegisterSidioraPair{Authority: authority, ChainID: chainID}, sidioraCap(authority))
+	require.ErrorIs(t, submit.ValidateBasic(), types.ErrInvalidRequest)
+	require.ErrorIs(t, handler(s.ctx, refused), types.ErrInvalidRequest)
+
+	submit, content = s.submitted(pair, sidioraCap(authority))
+	require.NoError(t, submit.ValidateBasic())
+	require.Contains(t, string(submit.GetSignBytes()), "layerxbridge/MsgRegisterSidioraPair")
+	proposal := content.(*types.BridgeProposal)
+	carried, err := proposal.GetMessages()
+	require.NoError(t, err)
+	require.Len(t, carried, 2)
+	require.Equal(t, pair.String(), carried[0].String())
+	require.NoError(t, handler(s.ctx, content))
+	record, found := s.k.GetAsset(s.ctx, types.SidioraHomeChainID, sidioraAsset())
+	require.True(t, found)
+	require.Equal(t, types.SidioraDenom(), record.Denom)
+	limit, found := s.k.GetCap(s.ctx, types.SidioraDenom())
+	require.True(t, found)
+	require.True(t, limit.MaxPerTx.Equal(sdk.NewInt(1000)))
+	require.Len(t, s.events(types.EventSidioraPair), 1)
 }

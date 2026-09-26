@@ -92,6 +92,7 @@ symbol = "EnsureSidioraDenom"
 observed = "No production path calls EnsureSidioraDenom at this revision, and MsgSetCap creates Denom(chain, asset) for an asset that is not registered yet, so submitting Solana's Sidiora cap before something registers (chain, 0x21f7b20a555199fa73A238B1a91FD0f549068fEe, usid) binds that cap to an lxb denom instead of the module's usid denom."
 assumption = "The Sidiora cap must be submitted after the asset is registered against usid; the chain is frozen, so the ordering belongs in the operator runbook and the checklist read-back rather than in a chain change."
 severity = "suspect"
+closed = "Task 2.18 added MsgRegisterSidioraPair, which governance executes through EnsureSidioraDenom for Solana only, and 05-proposal-sidiora-cap.json now carries it ahead of Sidiora's cap, so one proposal registers the pair against usid and then caps it; the verify_cmd passed at revision 17c19aababed98fc94cfb9cbff1a6dc3d84932c7."
 
 [observation.1.2.1]
 task = "1.2"

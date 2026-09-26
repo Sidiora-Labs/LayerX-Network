@@ -130,7 +130,7 @@ Given `-proposals`, it also writes the governance proposals into a second empty 
 | File | Proposal |
 | --- | --- |
 | `04-proposal-open-chain.json` | the proposal that opens the chain: `MsgRegisterChain`, `MsgSetAttestors` and every `MsgSetCap` except Sidiora's, in the order of the bodies, the native coin's cap first |
-| `05-proposal-sidiora-cap.json` | Solana only: Sidiora's `MsgSetCap` alone, in a proposal of its own |
+| `05-proposal-sidiora-cap.json` | Solana only: `MsgRegisterSidioraPair`, which records the Sidiora pair against `usid`, and then Sidiora's `MsgSetCap`, in that order, in a proposal of its own |
 
 Each file is the content of one governance proposal as a transaction carries it: a `BridgeProposal` under the type URL `/paxprotocol.paxchain.layerxbridge.BridgeProposal`, with its title, its description and every message packed under its own type URL. The proposals are written apart from the bodies because the checklist counts every JSON file in the bodies directory.
 
@@ -142,7 +142,7 @@ The proposal input is a JSON file in the generator's own schema, decoded with un
 
 ### 6. Submit the proposals
 
-The bodies reach the chain inside governance proposals. Submit `04-proposal-open-chain.json` as the content of one governance proposal; it carries `01-register-chain.json`, `02-set-attestors.json` and the `03-set-cap-*` bodies in their numbered order, Sidiora's excepted. For Solana, submit `05-proposal-sidiora-cap.json` as a second proposal only after the usid pair reads back as the Sidiora section below requires.
+The bodies reach the chain inside governance proposals. Submit `04-proposal-open-chain.json` as the content of one governance proposal; it carries `01-register-chain.json`, `02-set-attestors.json` and the `03-set-cap-*` bodies in their numbered order, Sidiora's excepted. For Solana, submit `05-proposal-sidiora-cap.json` as a second proposal once the first has passed: it carries `MsgRegisterSidioraPair` ahead of Sidiora's `MsgSetCap`, so the proposal itself registers the pair against `usid` before it caps it, as the Sidiora section below explains.
 
 When a proposal passes, the governance module account executes it through the application's `layerxbridge` proposal route: `NewProposalHandler` in `modules/layerxbridge/handler.go` runs every message it carries, in order, through the bridge module's message service and so through the keeper. It refuses a proposal carrying a message for any authority other than the governance module account, and if one message fails none of them changes the state.
 
@@ -192,15 +192,17 @@ Any disagreement, any placeholder still in place, an unregistered or uncapped na
 An inbound SID deposit from Solana resolves to the `usid` denom only if the Paxeer side records the pair (`91600046870081`, `0x21f7b20a555199fa73A238B1a91FD0f549068fEe`) against `usid` before any cap is set for it.
 
 - `MsgSetCap` for a pair the Paxeer side has not registered registers it itself, under the bridge's generic denom `factory/<bridge module account>/lxb<hex>`, not under `usid`. Submitting Sidiora's cap body first binds Solana's SID to the wrong denom, and `EnsureSidioraDenom` then refuses to rebind it.
-- No generated body registers the pair against `usid`. The chain does it: `EnsureSidioraDenom` in `modules/layerxbridge/keeper/sidiora.go` records it, and its production caller is the handler of the `v6.7` upgrade in `node/upgrades.go`, which calls it for the chain the `usid` denom is already recorded against and refuses to run when the denom is recorded against none. The bridge module's genesis state is the other place an asset record is written.
+- `MsgRegisterSidioraPair` registers the pair against `usid`. The keeper executes it through `EnsureSidioraDenom` in `modules/layerxbridge/keeper/sidiora.go`, for the governance authority only, and refuses it for any chain but `91600046870081`, Solana, Sidiora's foreign home. It needs the chain registered, and registering the pair again changes nothing.
 
-So, for Solana: submit `04-proposal-open-chain.json`, which registers the chain, installs the attestors and sets the wrapped SOL cap without Sidiora's. Before `05-proposal-sidiora-cap.json`, read the pair back:
+The ordering rule is carried by the proposal itself. `05-proposal-sidiora-cap.json` carries `MsgRegisterSidioraPair` first and Sidiora's `MsgSetCap` second, and a proposal executes whole or not at all, so the cap can only land on the pair the same proposal has just recorded against `usid`. The generator writes it for Solana only and refuses Sidiora's asset id on any other chain.
+
+So, for Solana: submit `04-proposal-open-chain.json`, which registers the chain, installs the attestors and sets the wrapped SOL cap without Sidiora's. Once it has passed, submit `05-proposal-sidiora-cap.json`; submitted earlier, it fails because the chain is not registered yet, and changes nothing. Once it has passed, read the pair back:
 
 ```sh
 cast call 0x0000000000000000000000000000000000001016 'getCap(uint64,address)(string,uint256,uint256,uint256)' 91600046870081 0x21f7b20a555199fa73A238B1a91FD0f549068fEe --rpc-url <Paxeer X Network EVM endpoint>
 ```
 
-Submit `05-proposal-sidiora-cap.json` only when the denom it returns is `factory/pax1dzfx9mk4fl9kl2mysjmtvk2xp75ljumk6nynhf/usid`, the `usid` denom of the bridge module account. An empty denom means the pair is not recorded yet; a denom ending in `lxb` followed by hex means a cap was set first and the pair is bound to the wrong denom.
+The denom it returns must be `factory/pax1dzfx9mk4fl9kl2mysjmtvk2xp75ljumk6nynhf/usid`, the `usid` denom of the bridge module account, with the caps of the proposal. A denom ending in `lxb` followed by hex means a cap for the pair was set by something other than this proposal before it, and the proposal's registration of the pair is then refused.
 
 ## The relayer
 
