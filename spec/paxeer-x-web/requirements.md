@@ -97,11 +97,11 @@ Every node of Paxeer X Network hosts a sidecar, x-websearch, that crawls a per-o
 
 ### Acceptance Criteria
 
-1. THE runtime SHALL add web_read(i32,i32,i32,i32)->i32 in a new layerx_v4 ABI group after layerx_v3, SHALL leave the v1 to v3 manifests and programs/abi-frozen.sha256 byte-identical, and SHALL validate the import like oracle_read.
+1. THE runtime SHALL allocate guest ABI 4 end to end in the shape of the v3 allocation, adding web_read(i32,i32,i32,i32)->i32 in a new layerx_v4 ABI group after layerx_v3, SHALL leave the v1 to v3 manifests, their frozen vectors and their checksum lines in programs/abi-frozen.sha256 byte-identical, SHALL append the v4 vector and its checksum line, and SHALL validate the import like oracle_read.
 2. web_read SHALL return the committed response, digest and full length for a request id owned by the calling program, SHALL return the absent code for a request with no committed observation, and SHALL refuse an output buffer too small or out of bounds.
 3. THE call bridge in src/modules/programs/call.c SHALL expose the committed observation to the runtime in the shape of the oracle view, and SHALL never perform network input or output.
 4. programs/sdk/rust SHALL expose a safe wrapper for web_read beside its oracle wrapper.
-5. TESTS in Rust and C SHALL cover a present read, an absent read, a read of another program's request, each buffer refusal and the unchanged frozen manifests.
+5. TESTS in Rust and C SHALL cover a present read, an absent read, a read of another program's request, each buffer refusal and the unchanged frozen v1 to v3 manifests.
 
 ## Requirement 9: Agent Clients and the MCP Tool
 
