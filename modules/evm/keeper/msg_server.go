@@ -17,7 +17,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/paxeer-network/paxlog"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
-	sdkerrors "github.com/sidiora-labs/paxeer-network/sdk/types/errors"
 	occtypes "github.com/sidiora-labs/paxeer-network/sdk/types/occ"
 	bankkeeper "github.com/sidiora-labs/paxeer-network/sdk/x/bank/keeper"
 	banktypes "github.com/sidiora-labs/paxeer-network/sdk/x/bank/types"
@@ -27,7 +26,6 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/artifacts/erc1155"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/artifacts/erc20"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/artifacts/erc721"
-	"github.com/sidiora-labs/paxeer-network/modules/evm/artifacts/native"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/state"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	"github.com/sidiora-labs/paxeer-network/precompiles/wasmd"
@@ -357,50 +355,4 @@ func (server msgServer) AssociateContractAddress(goCtx context.Context, msg *typ
 
 func (server msgServer) Associate(context.Context, *types.MsgAssociate) (*types.MsgAssociateResponse, error) {
 	return &types.MsgAssociateResponse{}, nil
-}
-
-// BindERCNativePointer binds the ERC20 contract already deployed at the
-// message's pointer address as the ERC20 pointer of its native denom, at the
-// message's pointer version, and deploys no pointer contract. It executes only
-// for the governance module account, only at or after the height of the
-// upgrade that brings native pointer bindings, and only when the address
-// carries code, the denom has no pointer yet, the address is no other token's
-// pointer and the denom is not itself a pointer.
-func (server msgServer) BindERCNativePointer(goCtx context.Context, msg *types.MsgBindERCNativePointer) (*types.MsgBindERCNativePointerResponse, error) {
-	ctx := sdk.UnwrapSDKContext(goCtx)
-	if err := msg.ValidateBasic(); err != nil {
-		return nil, err
-	}
-	if governance := types.GovernanceAuthority(); msg.Authority != governance {
-		return nil, sdkerrors.Wrapf(sdkerrors.ErrUnauthorized, "authority %s is not the governance module account %s", msg.Authority, governance)
-	}
-	upgradeHeight := server.upgradeKeeper.GetDoneHeight(ctx, types.BindERCNativePointerUpgrade)
-	if upgradeHeight == 0 || ctx.BlockHeight() < upgradeHeight {
-		return nil, sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "native pointer bindings execute only from the height of upgrade %s", types.BindERCNativePointerUpgrade)
-	}
-	if msg.Version > uint32(native.CurrentVersion) {
-		return nil, sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "pointer version %d is above the native pointer version %d the registry resolves", msg.Version, native.CurrentVersion)
-	}
-	version := uint16(msg.Version) //nolint:gosec // bounded by native.CurrentVersion above
-	pointer := common.HexToAddress(msg.Pointer)
-	if len(server.GetCode(ctx, pointer)) == 0 {
-		return nil, sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "no contract code at %s", pointer.Hex())
-	}
-	if existing, existingVersion, exists := server.GetERC20NativePointer(ctx, msg.Token); exists {
-		return nil, sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "denom %s already has pointer %s at version %d", msg.Token, existing.Hex(), existingVersion)
-	}
-	if server.evmAddressIsPointer(ctx, pointer) {
-		return nil, sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "%s is already a pointer of another token", pointer.Hex())
-	}
-	if server.cwAddressIsPointer(ctx, msg.Token) {
-		return nil, ErrorPointerToPointerNotAllowed
-	}
-	if err := server.SetERC20NativePointerWithVersion(ctx, msg.Token, pointer, version); err != nil {
-		return nil, err
-	}
-	ctx.EventManager().EmitEvent(sdk.NewEvent(
-		types.EventTypePointerRegistered, sdk.NewAttribute(types.AttributeKeyPointerType, "native"),
-		sdk.NewAttribute(types.AttributeKeyPointerAddress, pointer.Hex()), sdk.NewAttribute(types.AttributeKeyPointee, msg.Token),
-		sdk.NewAttribute(types.AttributeKeyPointerVersion, fmt.Sprintf("%d", version))))
-	return &types.MsgBindERCNativePointerResponse{}, nil
 }

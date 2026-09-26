@@ -39,7 +39,6 @@ func RegisterCodec(cdc *codec.LegacyAmino) {
 	cdc.RegisterConcrete(&MsgAssociateContractAddress{}, "evm/MsgAssociateContractAddress", nil)
 	cdc.RegisterConcrete(&MsgClaim{}, "evm/MsgClaim", nil)
 	cdc.RegisterConcrete(&MsgClaimSpecific{}, "evm/MsgClaimSpecific", nil)
-	cdc.RegisterConcrete(&MsgBindERCNativePointer{}, "evm/MsgBindERCNativePointer", nil)
 }
 
 func RegisterInterfaces(registry codectypes.InterfaceRegistry) {
@@ -52,7 +51,6 @@ func RegisterInterfaces(registry codectypes.InterfaceRegistry) {
 		&AddCWERC721PointerProposal{},
 		&AddCWERC1155PointerProposal{},
 		&AddERCNativePointerProposalV2{},
-		&PointerBindingProposal{},
 	)
 	registry.RegisterImplementations(
 		(*sdk.Msg)(nil),
@@ -63,7 +61,6 @@ func RegisterInterfaces(registry codectypes.InterfaceRegistry) {
 		&MsgClaim{},
 		&MsgClaimSpecific{},
 		&MsgAssociate{},
-		&MsgBindERCNativePointer{},
 	)
 	registry.RegisterInterface(
 		"paxprotocol.paxchain.evm.TxData",

@@ -15,7 +15,6 @@ service Msg {
   rpc RegisterPointer(MsgRegisterPointer) returns (MsgRegisterPointerResponse);
   rpc AssociateContractAddress(MsgAssociateContractAddress) returns (MsgAssociateContractAddressResponse);
   rpc Associate(MsgAssociate) returns (MsgAssociateResponse);
-  rpc BindERCNativePointer(MsgBindERCNativePointer) returns (MsgBindERCNativePointerResponse);
 }
 
 message MsgEVMTransaction {
@@ -103,16 +102,3 @@ message MsgClaimSpecific {
   string claimer = 2;
   repeated Asset assets = 3;
 }
-
-// MsgBindERCNativePointer binds an ERC20 contract that is already deployed as
-// the ERC20 pointer of a native denom, at the given pointer version, without
-// deploying a pointer contract. Only the governance module account may send
-// it, and it executes through the evm module's PointerBindingProposal.
-message MsgBindERCNativePointer {
-  string authority = 1;
-  string token = 2;
-  string pointer = 3;
-  uint32 version = 4;
-}
-
-message MsgBindERCNativePointerResponse {}

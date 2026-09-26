@@ -91,6 +91,7 @@ revision = "92d9139d9bdc4cae205b19744f48715e6ef6f56d"
 observed = "Review comment 4107298019 identifies missing account-signature rejection coverage after a chain ID change; the test checks only quoteDigest after that change."
 assumption = "Task 1.1 owns this test outside task 2.3 touches; its owner must add the regression coverage."
 severity = "note"
+closed = "testChainIdChangeInvalidatesBothSignatures signs a sponsored batch, switches the chain id and asserts executeSponsored reverts with InvalidAccountSignature and, after re-signing the account digest, InvalidRelayerSignature; the suite passes at exit 0 on ca6a81fa1a7b5657227f73b12469bc28fb4f519e."
 
 [observation.2.3.2]
 task = "2.3"; file = "spec/sidiora-fee-token/qualification.kvx"; symbol = "observation schema"
@@ -209,7 +210,6 @@ command = "cat modules/evm/gov.go"; exit_code = 0
 log_path = ".logs/scope-conflicts.log"
 observed = "The legacy native-pointer binding proposal is deprecated; V2 accepts metadata without pointer or version and deploys or overwrites pointer code, so no supported proposal safely binds the existing proxy."
 assumption = "The committed legacy binding fields are a non-executable artifact pending separately authorized governance support; no V2 deployment proposal is substituted."
-closed = "MsgBindERCNativePointer, carried by the evm PointerBindingProposal and executed through the Msg service for the governance authority from the fee-token upgrade on, binds the existing address without deploying code; contracts/test/sidiora_pointer_proposal.json is that proposal, and the task verify passes at exit 0 on ecebaa2f51cecadf1de6ca104b4609548e1c72a9."
 
 [observation.2.2.2]
 revision = "a9224a86520f442902062b3d8f71afb996646778"

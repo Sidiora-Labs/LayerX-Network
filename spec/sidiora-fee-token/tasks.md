@@ -221,7 +221,7 @@
     - Add modules/layerxbridge/types/genesis_test.go covering the Sidiora pair accepted with the usid denom, the derived denom still required for every other asset, and each cross-substitution refused; add modules/layerxbridge/keeper/genesis_test.go exporting a state in which RegisterSidioraPair ran and a cap was set for Sidiora, validating it and importing it into a fresh keeper with the asset, the cap and the in-flight amount unchanged.
     - Close observations 2.1.1 and 2.2.6 in spec/sidiora-fee-token/qualification.kvx naming the revision at which the verify_cmd passes.
     - _Requirements: 5.1, 5.4, 5.5_
-  - [x] 4.6 Bind the existing Sidiora address as the native pointer through a governance message
+  - [ ] 4.6 Bind the existing Sidiora address as the native pointer through a governance message
     - In api/evm/tx.proto add MsgBindERCNativePointer carrying the authority, the tokenfactory denom, the already deployed ERC20 address and the pointer version, with its response, to the Msg service, and in api/evm/gov.proto add a proposal content that carries governance messages packed under their type URL in the shape api/layerxbridge/proposal.proto declares BridgeProposal; regenerate tx.pb.go and gov.pb.go through scripts/protoc.sh, reverting every other file it rewrites, and hand-edit no generated file.
     - Add modules/evm/types/message_bind_erc_native_pointer.go with ValidateBasic refusing an empty or malformed denom, a zero or malformed address and a zero version, register the message and the proposal content in modules/evm/types/codec.go and modules/evm/types/gov.go, and route the content in modules/evm/handler.go through the Msg service inside one cache context the way modules/layerxbridge/handler.go executes BridgeProposal.
     - In modules/evm/keeper/msg_server.go execute the message only when its authority is the governance module account, only at or after the upgrade task 2.9 registered, and only when the address carries code, the denom has no pointer yet, the address is no other token's pointer and the denom is not itself a pointer; then bind it through SetERC20NativePointerWithVersion and deploy no pointer contract. The deprecated legacy proposal stays as it is; this message replaces it for binding an existing address.
@@ -235,7 +235,7 @@
     - Extend test/SidioraProxyGovernance.t.sol to assert that the scheduled operation's data equals upgradeToAndCall(implementation, initialize()) byte for byte, that no caller-supplied bytes can reach the schedule, and that executing the operation after the delay leaves the replacement initialized so a second initialize reverts.
     - Close observation 2.2.5 in spec/sidiora-fee-token/qualification.kvx naming the revision at which the verify_cmd passes.
     - _Requirements: 6.2, 7.3, 7.5_
-  - [ ] 4.8 Assert the account signature fails after a chain id change
+  - [x] 4.8 Assert the account signature fails after a chain id change
     - In contracts/test/BatchCallAndSponsorTest.t.sol extend testDigestsBindEveryQuoteFieldAndChain, or add a case beside it, signing a sponsored batch at one chain id, switching the chain id with vm.chainId, and asserting executeSponsored reverts with the account-signature error as well as the quote-signature error, leaving every existing assertion as written.
     - Change no production contract; this is a test-only task and the test ratio is satisfied by the test file alone.
     - Close observation 2.3.1 in spec/sidiora-fee-token/qualification.kvx naming the revision at which the verify_cmd passes.

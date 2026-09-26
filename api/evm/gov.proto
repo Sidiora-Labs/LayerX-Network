@@ -1,9 +1,7 @@
 syntax = "proto3";
 package paxprotocol.paxchain.evm;
 
-import "cosmos_proto/cosmos.proto";
 import "gogoproto/gogo.proto";
-import "google/protobuf/any.proto";
 
 option go_package = "github.com/sidiora-labs/paxeer-network/modules/evm/types";
 
@@ -102,20 +100,4 @@ message AddERCNativePointerProposalV2 {
   string name = 4 [(gogoproto.moretags) = "yaml:\"name\""];
   string symbol = 5 [(gogoproto.moretags) = "yaml:\"symbol\""];
   uint32 decimals = 6 [(gogoproto.moretags) = "yaml:\"decimals\""];
-}
-
-// PointerBindingProposal is a governance proposal content of the evm module.
-// It carries the module's governance messages from tx.proto -
-// MsgBindERCNativePointer - each packed under its type URL, and once the
-// proposal passes the module's proposal handler executes them in order through
-// the Msg service. Every message names the governance module account as its
-// authority.
-message PointerBindingProposal {
-  option (gogoproto.equal) = false;
-  option (gogoproto.goproto_getters) = false;
-  option (gogoproto.goproto_stringer) = false;
-
-  string title = 1;
-  string description = 2;
-  repeated google.protobuf.Any messages = 3 [(cosmos_proto.accepts_interface) = "sdk.Msg"];
 }
