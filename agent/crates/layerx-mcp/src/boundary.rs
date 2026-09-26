@@ -20,6 +20,12 @@ pub enum BoundaryRefusal {
     Unauthorized,
     Unavailable(String),
     Malformed(String),
+    /// A spend the approval boundary holds under `hold_id`; `awaiting` marks a hold an earlier
+    /// call opened that no approver has decided yet.
+    Held {
+        hold_id: [u8; 32],
+        awaiting: bool,
+    },
 }
 
 impl BoundaryRefusal {
@@ -34,6 +40,17 @@ impl BoundaryRefusal {
             Self::Unauthorized => "the daemon refused the bound agent credential".to_owned(),
             Self::Unavailable(reason) => format!("the daemon is unavailable: {reason}"),
             Self::Malformed(reason) => format!("the daemon response is unusable: {reason}"),
+            Self::Held {
+                hold_id,
+                awaiting: false,
+            } => format!("the spend is held for approval under hold {}", hex(hold_id)),
+            Self::Held {
+                hold_id,
+                awaiting: true,
+            } => format!(
+                "the spend is still awaiting approval under hold {}",
+                hex(hold_id)
+            ),
         }
     }
 
@@ -226,6 +243,16 @@ fn decode_response(bytes: &[u8]) -> Result<(u16, String), BoundaryRefusal> {
         BoundaryRefusal::Malformed("the daemon response body is not UTF-8".to_owned())
     })?;
     Ok((status, body.to_owned()))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        output.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        output.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    output
 }
 
 fn is_digest(value: &str) -> bool {

@@ -156,7 +156,7 @@
     - Handle SIGTERM and SIGINT in src/main.rs through the signal-hook crate pinned in interop/Cargo.toml and declared in interop/crates/x-websearch/Cargo.toml, with no unsafe code: stop accepting connections, finish the requests in flight, commit the index and exit 0; keep the default action for every other signal.
     - Extend tests/config.rs for the new field and its refusals, tests/crawl.rs for a cycle scheduled from the configured interval, and tests/binary.rs so the clean-shutdown test asserts exit 0 on SIGTERM, a freed port and a reopened index with every page searchable; update tests/fixtures/binary as the configuration requires.
     - _Requirements: 2.1, 3.1, 4.1_
-  - [ ] 2.9 Open daemon-bound sessions with the web route
+  - [ ] 2.9 Open daemon-bound sessions with the web route — **Implemented - qualification pending**
     - In agent/crates/layerx-mcp/src/binding.rs make open_session build the WebRoute task 1.16 added from the binding's sidecar configuration, approval registry, threshold and payer, so a daemon-bound session with write:web:* scopes serves the web tools instead of listing tools it refuses; refuse to open the session when the sidecar configuration is absent while a web scope is present, naming the field.
     - In agent/crates/layerx-agentd/src/tenant.rs add the write:web:* scopes to the scopes Operation::Submit authorises, so a web session no longer needs the class scope write; change no other operation's scopes.
     - In agent/crates/layerx-mcp/src/boundary.rs add a BoundaryRefusal variant for a held spend carrying the hold id, and report it in its own words instead of the malformed-response text.

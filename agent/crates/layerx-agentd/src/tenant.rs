@@ -195,6 +195,9 @@ impl OperationClass {
                 "write:token:transfer",
                 "write:grant:issue",
                 "write:grant:draw",
+                "write:web:search",
+                "write:web:fetch",
+                "write:web:content",
             ],
             Operation::Track => &["write", "write:track"],
             Operation::Wait => &["write", "write:activity:wait"],
@@ -501,6 +504,39 @@ mod lifecycle_scope_tests {
             assert!(!OperationClass::authorized_scopes(operation).contains(&"write:activity:wait"));
         }
         assert!(!OperationClass::authorized_scopes(Operation::Wait).contains(&"write:track"));
+    }
+
+    #[test]
+    fn web_aliases_authorize_submit_only() {
+        const WEB: [&str; 3] = ["write:web:search", "write:web:fetch", "write:web:content"];
+        assert_eq!(
+            OperationClass::authorized_scopes(Operation::Submit),
+            &[
+                "write",
+                "write:submit",
+                "write:wallet:send",
+                "write:token:create",
+                "write:token:mint",
+                "write:token:transfer",
+                "write:grant:issue",
+                "write:grant:draw",
+                "write:web:search",
+                "write:web:fetch",
+                "write:web:content",
+            ]
+        );
+        for operation in Operation::ALL.iter().copied() {
+            if operation == Operation::Submit {
+                continue;
+            }
+            for scope in WEB {
+                assert!(
+                    !OperationClass::authorized_scopes(operation).contains(&scope),
+                    "{} must not be authorized by {scope}",
+                    operation.name()
+                );
+            }
+        }
     }
 
     #[test]

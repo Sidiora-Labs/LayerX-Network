@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -19,11 +20,12 @@ use layerx_agentd::policy::approval::{
     ApprovalContext, ApprovalRegistry, ApprovalState, ApproverId,
 };
 use layerx_agentd::prepare::PreparationLifecycle;
-use layerx_agentd::session::{open, OpenRequest, SessionId, SessionRegistry};
+use layerx_agentd::session::{open, OpenRequest, SessionCredential, SessionId, SessionRegistry};
 use layerx_agentd::session_control::SessionControl;
 use layerx_agentd::store::{Store, TenantId};
 use layerx_mcp::approval::{approve, reject, ApprovalPolicy};
-use layerx_mcp::boundary::{AgentSurface, ProgramReads};
+use layerx_mcp::binding::{Binding, WebAuthority};
+use layerx_mcp::boundary::{AgentSurface, ProgramReads, ToolBoundary};
 use layerx_mcp::catalogue::{self, ArgumentError, WEB_TOOLS};
 use layerx_mcp::server::{Server, WebBoundary, WebRoute};
 use layerx_mcp::stdio::{Bound, Session};
@@ -1355,9 +1357,32 @@ fn agent_daemon() -> String {
     endpoint
 }
 
-/// A server bound to a daemon session whose agent is the recorded payer and
-/// whose scopes serve exactly the three web tools.
-fn bound_server(root: &Path) -> Server {
+/// A canonical, owner-only directory the protected binding secrets can live in.
+fn protected_directory(label: &str) -> PathBuf {
+    let base = std::env::temp_dir();
+    let canonical = std::fs::canonicalize(&base).unwrap_or(base);
+    let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+    let root = canonical.join(format!(
+        "layerx-mcp-web-{label}-{}-{sequence}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).unwrap_or_else(|error| panic!("root {label}: {error}"));
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+        .unwrap_or_else(|error| panic!("root mode {label}: {error}"));
+    root
+}
+
+fn secret(root: &Path, name: &str, value: &str) -> PathBuf {
+    let path = root.join(name);
+    std::fs::write(&path, value).unwrap_or_else(|error| panic!("secret {name}: {error}"));
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        .unwrap_or_else(|error| panic!("secret mode {name}: {error}"));
+    path
+}
+
+/// Persists the daemon records of one session whose agent is the recorded
+/// payer and whose scopes are exactly the three web scopes.
+fn enrol(root: &Path) -> (Store, SessionRegistry, SessionCredential, CapabilityId) {
     let tenant = TenantId::new("tenant-a").unwrap_or_else(|error| panic!("tenant: {error}"));
     let capability = Capability::new(
         CapabilityId([9; 32]),
@@ -1405,7 +1430,6 @@ fn bound_server(root: &Path) -> Server {
             authority: ProtocolAuthority::CapabilityGrant(capability.id.0),
             permitted_activity_types: BTreeSet::from([7]),
             scopes: BTreeSet::from([
-                "write".to_owned(),
                 "write:web:search".to_owned(),
                 "write:web:fetch".to_owned(),
                 "write:web:content".to_owned(),
@@ -1417,6 +1441,13 @@ fn bound_server(root: &Path) -> Server {
         OBSERVED_SEQUENCE,
     )
     .unwrap_or_else(|error| panic!("session: {error:?}"));
+    (store, sessions, token.credential(), capability.id)
+}
+
+/// A server bound to a daemon session whose agent is the recorded payer and
+/// whose scopes serve exactly the three web tools.
+fn bound_server(root: &Path) -> Server {
+    let (store, sessions, credential, capability) = enrol(root);
     let budgets = BudgetLimiter::new(vec![LimitConfig {
         id: LimitId([9; 16]),
         name: "mcp-limit".to_owned(),
@@ -1431,14 +1462,8 @@ fn bound_server(root: &Path) -> Server {
         Arc::new(PreparationLifecycle::default()),
         Arc::new(budgets),
     );
-    Server::bind(
-        control,
-        token.credential(),
-        capability.id,
-        OBSERVED_SEQUENCE,
-        root,
-    )
-    .unwrap_or_else(|error| panic!("bind: {error:?}"))
+    Server::bind(control, credential, capability, OBSERVED_SEQUENCE, root)
+        .unwrap_or_else(|error| panic!("bind: {error:?}"))
 }
 
 fn web_session(
@@ -1469,13 +1494,69 @@ fn web_session(
     Session::new(Bound::Full(Box::new(server)), boundary)
 }
 
-fn rpc(session: &mut Session<WebBoundary<ProgramReads>>, request: &Value) -> Value {
+/// Opens the web-scoped session through the operator binding, with the web
+/// section naming the replaying sidecar and the host attaching the payer.
+fn opened_session(
+    replay: &Replay,
+    approvals: &Arc<ApprovalRegistry>,
+    threshold: u128,
+    root: &Path,
+) -> Session<layerx_mcp::binding::DaemonBoundary> {
+    let (store, _, credential, _) = enrol(root);
+    drop(store);
+    let token = secret(root, "session-token", &hex(&credential.token_id()));
+    let bearer = secret(root, "agent-bearer", AGENT_BEARER);
+    let document = json!({
+        "mode": "full",
+        "tenant": "tenant-a",
+        "store": root.join("store").display().to_string(),
+        "audit_root": root.join("audit").display().to_string(),
+        "session_id": "07".repeat(32),
+        "session_token_file": token.display().to_string(),
+        "session_generation": credential.generation(),
+        "capability_id": "09".repeat(32),
+        "core_sequence": OBSERVED_SEQUENCE,
+        "deadline_ms": 5_000,
+        "agent": {
+            "endpoint": agent_daemon(),
+            "bearer_file": bearer.display().to_string(),
+            "probe_program": "55".repeat(32),
+        },
+        "limit": {
+            "id": "09".repeat(16),
+            "name": "mcp-limit",
+            "scope": "tenant",
+            "scope_id": "01".repeat(32),
+            "ceiling": "1000",
+            "consumed": "0",
+        },
+        "web": {
+            "endpoint": replay.endpoint(),
+            "network": NETWORK,
+            "sequencer_public_key": hex(&sequencer_key()),
+            "timeout_ms": 5_000,
+            "pending_attempts": 3,
+            "approval_threshold": threshold.to_string(),
+        },
+    });
+    let mut binding = Binding::parse(&document.to_string())
+        .unwrap_or_else(|error| panic!("binding: {}", error.detail()));
+    binding.attach_web(WebAuthority::new(
+        Arc::clone(approvals),
+        Box::new(RecordedPayer::new()),
+    ));
+    binding
+        .open_session()
+        .unwrap_or_else(|error| panic!("open session: {}", error.detail()))
+}
+
+fn rpc<B: ToolBoundary>(session: &mut Session<B>, request: &Value) -> Value {
     session
         .handle(&request.to_string())
         .unwrap_or_else(|| panic!("no answer to {request}"))
 }
 
-fn call(session: &mut Session<WebBoundary<ProgramReads>>, name: &str, arguments: &Value) -> Value {
+fn call<B: ToolBoundary>(session: &mut Session<B>, name: &str, arguments: &Value) -> Value {
     let answer = rpc(
         session,
         &json!({
@@ -1530,7 +1611,7 @@ fn refusal(result: &Value) -> String {
         .to_owned()
 }
 
-fn assert_web_listing(session: &mut Session<WebBoundary<ProgramReads>>) {
+fn assert_web_listing<B: ToolBoundary>(session: &mut Session<B>) {
     let listed = rpc(
         session,
         &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
@@ -1550,7 +1631,7 @@ fn assert_web_listing(session: &mut Session<WebBoundary<ProgramReads>>) {
     }
 }
 
-fn assert_unpaid_refusals(session: &mut Session<WebBoundary<ProgramReads>>, replay: &Replay) {
+fn assert_unpaid_refusals<B: ToolBoundary>(session: &mut Session<B>, replay: &Replay) {
     let unserved = rpc(
         session,
         &json!({
@@ -1576,27 +1657,34 @@ fn assert_unpaid_refusals(session: &mut Session<WebBoundary<ProgramReads>>, repl
     assert_eq!(replay.signatures(), 0);
 }
 
-#[test]
-fn a_bound_server_lists_and_pays_the_web_tools_through_tools_call() {
-    let (fetch, fetch_digest) = fetch_answer(ROUTED_FETCH_URL, false);
-    let (_, vector) = recorded_content();
-    let content_digest_hex = text(&vector, "/digest").to_owned();
-    let replay = Replay::start(Script {
+/// A replaying sidecar that also serves the routed fetch target.
+fn routed_replay() -> Replay {
+    let (fetch, _) = fetch_answer(ROUTED_FETCH_URL, false);
+    Replay::start(Script {
         served: vec![(
             "/fetch?url=https%3A%2F%2Fpaxeer.app%2Findex.html".to_owned(),
             fetch,
         )],
         ..Script::default()
-    });
-    let approvals = Arc::new(ApprovalRegistry::default());
-    let root = directory("routed");
-    let mut session = web_session(&replay, &approvals, u128::MAX, &root);
+    })
+}
 
-    assert_web_listing(&mut session);
-    assert_unpaid_refusals(&mut session, &replay);
+/// Lists the web tools, refuses unpaid shapes, then pays search and fetch
+/// and reads content by digest through tools/call.
+fn assert_routed_tools<B: ToolBoundary>(
+    session: &mut Session<B>,
+    replay: &Replay,
+    approvals: &ApprovalRegistry,
+) {
+    let (_, fetch_digest) = fetch_answer(ROUTED_FETCH_URL, false);
+    let (_, vector) = recorded_content();
+    let content_digest_hex = text(&vector, "/digest").to_owned();
+
+    assert_web_listing(session);
+    assert_unpaid_refusals(session, replay);
 
     let search = paid(
-        &call(&mut session, "web.search", &search_arguments()),
+        &call(session, "web.search", &search_arguments()),
         "web.search",
     );
     assert_eq!(search["settlement"]["receiptDigest"], SEARCH_RECEIPT_DIGEST);
@@ -1606,7 +1694,7 @@ fn a_bound_server_lists_and_pays_the_web_tools_through_tools_call() {
 
     let fetched = paid(
         &call(
-            &mut session,
+            session,
             "web.fetch",
             &json!({
                 "url": ROUTED_FETCH_URL,
@@ -1625,7 +1713,7 @@ fn a_bound_server_lists_and_pays_the_web_tools_through_tools_call() {
     assert_eq!(replay.signatures(), 2);
 
     let stored = call(
-        &mut session,
+        session,
         "web.content",
         &json!({
             "digest": content_digest_hex,
@@ -1655,18 +1743,39 @@ fn a_bound_server_lists_and_pays_the_web_tools_through_tools_call() {
             .is_none());
     }
     assert_eq!(session.bound().audit_entries(), 6);
+}
+
+#[test]
+fn a_bound_server_lists_and_pays_the_web_tools_through_tools_call() {
+    let replay = routed_replay();
+    let approvals = Arc::new(ApprovalRegistry::default());
+    let root = directory("routed");
+    let mut session = web_session(&replay, &approvals, u128::MAX, &root);
+    assert_routed_tools(&mut session, &replay, &approvals);
     let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
-fn a_held_web_spend_through_tools_call_is_never_paid_until_approved() {
-    let replay = Replay::start(Script::default());
+fn a_session_opened_from_its_binding_serves_the_web_tools_with_only_the_web_scopes() {
+    let replay = routed_replay();
     let approvals = Arc::new(ApprovalRegistry::default());
-    let root = directory("held");
-    let mut session = web_session(&replay, &approvals, 0, &root);
+    let root = protected_directory("opened");
+    let mut session = opened_session(&replay, &approvals, u128::MAX, &root);
+    assert_routed_tools(&mut session, &replay, &approvals);
+    let _ = std::fs::remove_dir_all(root);
+}
 
-    let held = call(&mut session, "web.search", &search_arguments());
+/// Holds a search above the threshold, reports the hold in its own words,
+/// and pays it only after an approver decides it.
+fn assert_held_until_approved<B: ToolBoundary>(
+    session: &mut Session<B>,
+    replay: &Replay,
+    approvals: &ApprovalRegistry,
+) {
+    let held = call(session, "web.search", &search_arguments());
     let detail = refusal(&held);
+    assert!(!detail.contains("unusable"), "{detail}");
+    assert!(detail.starts_with("the spend is held"), "{detail}");
     assert!(
         detail.contains(&format!(
             "held for approval under hold {}",
@@ -1685,13 +1794,22 @@ fn a_held_web_spend_through_tools_call_is_never_paid_until_approved() {
     assert_eq!(ticket.disclosure.amounts.values()[0].amount.0, 3114);
     assert_eq!(ticket.disclosure.actor.as_str(), payer_did());
 
-    let pending = call(&mut session, "web.search", &search_arguments());
-    assert!(refusal(&pending).contains("still awaiting approval"));
+    let pending = call(session, "web.search", &search_arguments());
+    let waiting = refusal(&pending);
+    assert!(
+        waiting.contains(&format!(
+            "still awaiting approval under hold {}",
+            hex(&metered_key())
+        )),
+        "{waiting}"
+    );
+    assert!(!waiting.contains("unusable"), "{waiting}");
+    assert_eq!(pending["structuredContent"]["state"], "refused");
     assert_eq!(replay.signatures(), 0);
 
     let approver = ApproverId::new("operator").unwrap_or_else(|error| panic!("{error:?}"));
     approve(
-        &approvals,
+        approvals,
         ticket.hold_id,
         approver,
         &ticket.disclosure,
@@ -1699,10 +1817,29 @@ fn a_held_web_spend_through_tools_call_is_never_paid_until_approved() {
     )
     .unwrap_or_else(|error| panic!("approve: {error:?}"));
     let released = paid(
-        &call(&mut session, "web.search", &search_arguments()),
+        &call(session, "web.search", &search_arguments()),
         "web.search",
     );
     assert_eq!(released["settlement"]["amount"], "3114");
     assert_eq!(replay.signatures(), 1);
+}
+
+#[test]
+fn a_held_web_spend_through_tools_call_is_never_paid_until_approved() {
+    let replay = Replay::start(Script::default());
+    let approvals = Arc::new(ApprovalRegistry::default());
+    let root = directory("held");
+    let mut session = web_session(&replay, &approvals, 0, &root);
+    assert_held_until_approved(&mut session, &replay, &approvals);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_held_spend_in_a_session_opened_from_its_binding_is_reported_as_held() {
+    let replay = Replay::start(Script::default());
+    let approvals = Arc::new(ApprovalRegistry::default());
+    let root = protected_directory("opened-held");
+    let mut session = opened_session(&replay, &approvals, 0, &root);
+    assert_held_until_approved(&mut session, &replay, &approvals);
     let _ = std::fs::remove_dir_all(root);
 }
