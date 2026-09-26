@@ -258,7 +258,7 @@
     - Extend modules/evm/keeper/params_test.go under the FeeTokenParams prefix with an update beyond the bound upward and downward refused, an update exactly at the bound accepted and a first rate accepted; extend modules/evm/gov_test.go under the FeeTokenRateBound prefix with the handler refusing a beyond-bound proposal and leaving the stored rate unchanged, and node/app_feetoken_test.go under the FeeTokenRateBound prefix asserting the application routes parameter changes through it.
     - Close observation 2.6.1 in spec/sidiora-fee-token/qualification.kvx naming the revision at which the verify_cmd passes.
     - _Requirements: 8.6, 10.2_
-  - [ ] 4.12 Regenerate the evm parameters with the pinned protobuf pipeline
+  - [ ] 4.12 Regenerate the evm parameters with the pinned protobuf pipeline — **Implemented - qualification pending**
     - Run scripts/protoc.sh, which pins buf v1.58.0, keep its output for modules/evm/types/params.pb.go and revert every other file it rewrites; stage the regenerated file so the verify_cmd's second generation is compared against it.
     - Hand-edit no generated file. If buf or the gocosmos plugin cannot be built or run on the machine, append one observation to spec/sidiora-fee-token/qualification.kvx with the revision, command, exit code, log path, what was observed and what is assumed, and leave the task implemented-not-qualified rather than editing the file.
     - Change no test and no production file: the generated file carries no behaviour of its own, and modules/evm/types tests read it through the hand-written parameter code.

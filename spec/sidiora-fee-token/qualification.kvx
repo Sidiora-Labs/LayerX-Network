@@ -565,3 +565,10 @@ environment = "linux/amd64, forge 1.7.1, the third leg of the task 3.1 verify_cm
 outcome = "pass"
 evidence = "build/sidiora-gates/foundry.log"
 note = "Exit code 0: 8 test suites ran, 106 tests passed, 0 failed, 0 skipped; the whole verify_cmd exited 0 with its combined output in .logs/verify.log."
+
+[observation.4.12.1]
+task = "4.12"; file = "modules/evm/types/params_test.go"; symbol = "AllowedFeeDenom"; severity = "blocker"
+revision = "23444184e79cc0f145cb482c50b0527a2d707f3a"
+command = "timeout 20m sh -c 'bash scripts/protoc.sh && git diff --exit-code -- modules/evm/types/params.pb.go && go test -count=1 ./modules/evm/types/...'"; exit_code = 1; log_path = ".logs/verify.log"
+observed = "The pinned pipeline reproduces params.pb.go byte for byte but emits no GetRate getter for the customtype rate field, so params_test.go lines 368 and 381, which call GetRate, no longer compile."
+assumption = "The earlier hand-edited getter must move into hand-written code or the test must change, both outside task 4.12 touches and forbidden by its do_3, so observation 2.8.1 stays open."

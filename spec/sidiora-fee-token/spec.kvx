@@ -875,7 +875,11 @@ reqs = ["8.6","10.2"]
 
 [task.4.12]
 title = "Regenerate the evm parameters with the pinned protobuf pipeline"
-status = "pending"
+status = "implemented"
+implemented_revision = "23444184e79cc0f145cb482c50b0527a2d707f3a"
+implemented_command = "timeout 20m sh -c 'bash scripts/protoc.sh && git diff --exit-code -- modules/evm/types/params.pb.go && go test -count=1 ./modules/evm/types/...'"
+implemented_exit_code = 1
+implemented_log_path = ".logs/verify.log"
 wave = 4
 requires = []
 do_1 = "Run scripts/protoc.sh, which pins buf v1.58.0, keep its output for modules/evm/types/params.pb.go and revert every other file it rewrites; stage the regenerated file so the verify_cmd's second generation is compared against it."
