@@ -705,7 +705,11 @@ reqs = ["7.1","8.1"]
 
 [task.2.18]
 title = "Register the Solana Sidiora pair through governance"
-status = "pending"
+status = "done"
+revision = "17c19aababed98fc94cfb9cbff1a6dc3d84932c7"
+command = "timeout 20m sh -c 'go test -count=1 ./modules/layerxbridge/... ./bridge/deploy/proposals/... && go test -count=1 -run Bridge ./node/ && bash bridge/deploy/tests/docs-check.sh && bash bridge/deploy/tests/solana-dry-run-check.sh'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.14","2.16"]
 do_1 = "Add a message to api/layerxbridge/tx.proto that registers the Sidiora pair for a chain by calling the keeper's EnsureSidioraDenom under the governance authority, generate it with the toolchain task 2.9 used, serve it in keeper/msg_server.go, carry it in the BridgeProposal content and validate it like the others, so the bridge no longer depends on another upgrade handler to register the pair (observation 1.5.2)."

@@ -56,6 +56,8 @@ func execute(ctx sdk.Context, msgServer types.MsgServer, msg sdk.Msg) error {
 		_, err = msgServer.Pause(goCtx, m)
 	case *types.MsgUnpause:
 		_, err = msgServer.Unpause(goCtx, m)
+	case *types.MsgRegisterSidioraPair:
+		_, err = msgServer.RegisterSidioraPair(goCtx, m)
 	default:
 		err = sdkerrors.Wrapf(govtypes.ErrInvalidProposalContent, "%T is not a %s governance message", msg, types.ModuleName)
 	}

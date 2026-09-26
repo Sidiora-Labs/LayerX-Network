@@ -257,3 +257,38 @@ func TestBridgeProposalRESTHandlerRefusesWhatTheCommandRefuses(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, partial.Code)
 	require.Contains(t, partial.Body.String(), "the field title is missing")
 }
+
+func TestSubmitBridgeProposalCommandCarriesTheSidioraPairAheadOfItsCap(t *testing.T) {
+	cdc, txConfig := testCodec()
+	_, files := generatedProposals(t, "solana")
+	require.Len(t, files, 2)
+	sidiora := files[1]
+	require.Equal(t, proposals.SidioraCapProposalFile, sidiora.Name)
+
+	printed, err := runSubmit(t, writeProposal(t, sidiora.Name, sidiora.Body), "--"+govcli.FlagDeposit, testDeposit)
+	require.NoError(t, err, printed)
+	decoded, err := txConfig.TxJSONDecoder()([]byte(strings.TrimSpace(printed)))
+	require.NoError(t, err)
+	submit, ok := decoded.GetMsgs()[0].(*govtypes.MsgSubmitProposal)
+	require.True(t, ok)
+	content, ok := submit.GetContent().(*types.BridgeProposal)
+	require.True(t, ok, "the proposal content is a %T", submit.GetContent())
+	carried, err := content.GetMessages()
+	require.NoError(t, err)
+	require.Len(t, carried, 2)
+	pair, ok := carried[0].(*types.MsgRegisterSidioraPair)
+	require.True(t, ok, "the Sidiora proposal carries a %T first, want the pair's registration", carried[0])
+	require.Equal(t, types.SidioraHomeChainID, pair.ChainID)
+	require.Equal(t, types.DefaultAuthority(), pair.Authority)
+	capMsg, ok := carried[1].(*types.MsgSetCap)
+	require.True(t, ok, "the Sidiora proposal carries a %T second, want Sidiora's cap", carried[1])
+	require.Equal(t, proposals.SidioraAssetID(), capMsg.Asset)
+	require.Equal(t, pair.ChainID, capMsg.ChainID)
+
+	pairOnAnotherChain := alter(t, sidiora.Body, func(d map[string]any) { firstMessage(d)["chain_id"] = "1" })
+	_, err = NewSubmitBridgeProposalMsg(cdc, pairOnAnotherChain, testDeposit, testProposer)
+	require.ErrorContains(t, err, "not Sidiora's foreign home")
+	pairWithoutChain := alter(t, sidiora.Body, func(d map[string]any) { delete(firstMessage(d), "chain_id") })
+	_, err = NewSubmitBridgeProposalMsg(cdc, pairWithoutChain, testDeposit, testProposer)
+	require.ErrorContains(t, err, "the field messages[0].chain_id is missing")
+}

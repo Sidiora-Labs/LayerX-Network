@@ -62,9 +62,9 @@ const (
 	// registration, the attestor set and every cap but Sidiora's.
 	OpenChainProposalFile = "04-proposal-open-chain.json"
 
-	// SidioraCapProposalFile is the proposal that carries Sidiora's cap alone,
-	// submitted only once the Paxeer side reads the Sidiora pair back against
-	// the usid denom.
+	// SidioraCapProposalFile is Solana's second proposal: it registers the
+	// Sidiora pair against the usid denom and then sets Sidiora's cap, in that
+	// order, once the opening proposal has registered the chain.
 	SidioraCapProposalFile = "05-proposal-sidiora-cap.json"
 
 	addressHexLength = 2 + 2*len(types.Address20{})
@@ -229,12 +229,15 @@ type File struct {
 
 // Bundle is the complete set of bodies for one chain, in the order they are
 // submitted: the chain, then the attestor set, then one cap per asset with the
-// native coin's cap first.
+// native coin's cap first. On Solana, Sidiora's foreign home, it also carries
+// the registration of the Sidiora pair, which the Sidiora proposal executes
+// ahead of Sidiora's cap.
 type Bundle struct {
-	Chain     string
-	Register  types.MsgRegisterChain
-	Attestors types.MsgSetAttestors
-	Caps      []types.MsgSetCap
+	Chain       string
+	Register    types.MsgRegisterChain
+	Attestors   types.MsgSetAttestors
+	Caps        []types.MsgSetCap
+	SidioraPair *types.MsgRegisterSidioraPair
 }
 
 // Generate builds every body for one chain against the attestor-set manifest.
@@ -263,7 +266,34 @@ func Generate(cfg ChainConfig, manifest AttestorManifest) (Bundle, error) {
 	if err != nil {
 		return Bundle{}, err
 	}
-	return Bundle{Chain: cfg.Name, Register: register, Attestors: attestors, Caps: caps}, nil
+	bundle := Bundle{Chain: cfg.Name, Register: register, Attestors: attestors, Caps: caps}
+	if cfg.ChainID == SolanaChainID {
+		pair, err := RegisterSidioraPair(cfg)
+		if err != nil {
+			return Bundle{}, err
+		}
+		bundle.SidioraPair = &pair
+	}
+	return bundle, nil
+}
+
+// RegisterSidioraPair builds the MsgRegisterSidioraPair that records Sidiora's
+// asset id on Solana against the module's usid denom. It refuses every chain
+// but Solana, Sidiora's foreign home.
+func RegisterSidioraPair(cfg ChainConfig) (types.MsgRegisterSidioraPair, error) {
+	authority, err := liveAuthority(cfg.file(), fieldAuthority, cfg.Authority)
+	if err != nil {
+		return types.MsgRegisterSidioraPair{}, err
+	}
+	if cfg.ChainID != SolanaChainID {
+		return types.MsgRegisterSidioraPair{}, refuse(cfg.file(), fieldChainID,
+			"chain %d is not Solana, chain %d, Sidiora's foreign home", cfg.ChainID, SolanaChainID)
+	}
+	msg := types.MsgRegisterSidioraPair{Authority: authority, ChainID: cfg.ChainID}
+	if err := msg.ValidateBasic(); err != nil {
+		return types.MsgRegisterSidioraPair{}, refuse(cfg.file(), fieldChainID, "%v", err)
+	}
+	return msg, nil
 }
 
 // RegisterChain builds the MsgRegisterChain that opens the chain: its id, the
@@ -367,6 +397,10 @@ func SetCaps(cfg ChainConfig) ([]types.MsgSetCap, error) {
 		}
 		seen[id] = i
 		if id == sidioraAssetID {
+			if cfg.ChainID != SolanaChainID {
+				return nil, refuse(cfg.file(), prefix+"asset_id",
+					"Sidiora's asset id %s is bridged only from Solana, Sidiora's foreign home", id.Hex())
+			}
 			carriesSidiora = true
 		}
 		perTx, err := liveCap(cfg.file(), prefix+"max_per_tx", asset.MaxPerTx)
@@ -455,7 +489,9 @@ type Proposal struct {
 // configuration order, the native coin's first. Sidiora's cap is never part of
 // it. A cap for a pair the Paxeer side has not recorded registers the pair
 // under the bridge's generic denom, so Sidiora's cap travels in a second
-// proposal of its own, submitted once the pair reads back against usid.
+// proposal that first registers the pair against usid and then caps it; it
+// needs the chain the first proposal registers, and it is built only for
+// Solana, Sidiora's foreign home.
 func (b Bundle) Proposals() ([]Proposal, error) {
 	open := []sdk.Msg{&b.Register, &b.Attestors}
 	var sidiora *types.MsgSetCap
@@ -482,12 +518,18 @@ func (b Bundle) Proposals() ([]Proposal, error) {
 	if sidiora == nil {
 		return proposals, nil
 	}
+	pair := b.SidioraPair
+	if pair == nil || pair.ChainID != SolanaChainID || sidiora.ChainID != pair.ChainID {
+		return nil, fmt.Errorf("%s: Sidiora's cap on chain %d travels only with the registration of its pair on Solana, chain %d, Sidiora's foreign home",
+			b.Chain, sidiora.ChainID, SolanaChainID)
+	}
 	content, err = types.NewBridgeProposal(
-		fmt.Sprintf("Set Sidiora's %s bridge cap", b.Chain),
-		fmt.Sprintf("Sets the cap of Sidiora, asset id %s on chain %d, to %s per transaction and %s in flight. "+
-			"Submitted only once the Paxeer side reads this pair back against the usid denom %s.",
-			sidiora.Asset.Hex(), sidiora.ChainID, sidiora.MaxPerTx.String(), sidiora.MaxInFlight.String(), types.SidioraDenom()),
-		sidiora)
+		fmt.Sprintf("Register and cap Sidiora on the %s bridge", b.Chain),
+		fmt.Sprintf("Registers the Sidiora pair, asset id %s on chain %d, against the usid denom %s, and then sets its cap "+
+			"to %s per transaction and %s in flight. Submitted once the proposal that opens chain %d has passed.",
+			sidiora.Asset.Hex(), sidiora.ChainID, types.SidioraDenom(), sidiora.MaxPerTx.String(), sidiora.MaxInFlight.String(),
+			sidiora.ChainID),
+		pair, sidiora)
 	if err != nil {
 		return nil, err
 	}
@@ -579,8 +621,8 @@ func writeFiles(dir string, files []File) ([]string, error) {
 // deployed chain and the Paxeer side must read back once the bodies execute.
 //
 // Given -proposals, it also writes the bundle's governance proposals into that
-// directory: the proposal that opens the chain and, where the chain carries
-// Sidiora, the proposal that sets Sidiora's cap alone. Each is the content a
+// directory: the proposal that opens the chain and, on Solana, the proposal
+// that registers the Sidiora pair against usid and then sets Sidiora's cap. Each is the content a
 // submit-proposal transaction carries as it stands.
 func Run(args []string, report io.Writer) error {
 	flags := flag.NewFlagSet(CommandName, flag.ContinueOnError)
@@ -821,7 +863,7 @@ type AssetReadback struct {
 // configuration and the bundle generated from it. Every cap comes from the
 // bundle's own bodies, in their order, so what the checklist compares against
 // is what governance submits. Sidiora on Solana reads back as the module's
-// usid denom, the pair only the chain's upgrade handler registers; every other
+// usid denom, the pair the Sidiora proposal registers ahead of its cap; every other
 // asset reads back as the tokenfactory denom of its (chain, asset) pair.
 func ReadbackOf(cfg *chainconfig.ChainConfig, bundle Bundle) (Readback, error) {
 	if cfg == nil {

@@ -14,6 +14,8 @@ const (
 	TypeMsgSetCap        = "set_cap"
 	TypeMsgPause         = "pause"
 	TypeMsgUnpause       = "unpause"
+
+	TypeMsgRegisterSidioraPair = "register_sidiora_pair"
 )
 
 var (
@@ -22,6 +24,7 @@ var (
 	_ sdk.Msg = &MsgSetCap{}
 	_ sdk.Msg = &MsgPause{}
 	_ sdk.Msg = &MsgUnpause{}
+	_ sdk.Msg = &MsgRegisterSidioraPair{}
 )
 
 // authoritySigner is the one signer of every governance message. An authority
@@ -67,6 +70,12 @@ func (m MsgUnpause) GetSigners() []sdk.AccAddress { return authoritySigner(m.Aut
 func (m MsgUnpause) GetSignBytes() []byte         { return signBytes(&m) }
 func (m MsgUnpause) String() string               { return jsonString(m) }
 
+func (m MsgRegisterSidioraPair) Route() string                { return RouterKey }
+func (m MsgRegisterSidioraPair) Type() string                 { return TypeMsgRegisterSidioraPair }
+func (m MsgRegisterSidioraPair) GetSigners() []sdk.AccAddress { return authoritySigner(m.Authority) }
+func (m MsgRegisterSidioraPair) GetSignBytes() []byte         { return signBytes(&m) }
+func (m MsgRegisterSidioraPair) String() string               { return jsonString(m) }
+
 func validateAuthority(authority string) error {
 	if _, err := sdk.AccAddressFromBech32(authority); err != nil {
 		return ErrUnauthorized.Wrapf("authority: %v", err)
@@ -101,3 +110,16 @@ func (m MsgSetCap) ValidateBasic() error {
 func (m MsgPause) ValidateBasic() error { return validateAuthority(m.Authority) }
 
 func (m MsgUnpause) ValidateBasic() error { return validateAuthority(m.Authority) }
+
+// ValidateBasic refuses the pair for any chain but Solana, Sidiora's foreign
+// home: Sidiora exists on Paxeer X and Solana only, and the chain maps one
+// denom per (chain, asset) pair, so the usid denom has one remote pair.
+func (m MsgRegisterSidioraPair) ValidateBasic() error {
+	if err := validateAuthority(m.Authority); err != nil {
+		return err
+	}
+	if m.ChainID != SidioraHomeChainID {
+		return ErrInvalidRequest.Wrapf("chain %d is not Sidiora's foreign home, chain %d", m.ChainID, SidioraHomeChainID)
+	}
+	return nil
+}

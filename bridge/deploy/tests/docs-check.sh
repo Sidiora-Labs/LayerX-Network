@@ -11,7 +11,11 @@
 # proposals and the node's submit command with the bridge subcommand, whose Use
 # line it reads from modules/layerxbridge/client/cli/tx.go, and each proposal
 # file as its argument, and must not claim the bodies have no path to the chain
-# or that no command submits the proposals. The check then mutates a copy of the
+# or that no command submits the proposals. Section 6 and the Sidiora section
+# must read the Sidiora ordering from the proposal itself - 05-proposal-sidiora-cap.json
+# registers the pair with MsgRegisterSidioraPair ahead of Sidiora's cap - and
+# must not send the operator to an upgrade handler or to a read-back before that
+# proposal. The check then mutates a copy of the
 # pages one way at a time and requires each mutation to be refused, so every
 # assertion is known to bite.
 # No network is involved.
@@ -61,6 +65,18 @@ RUNBOOK = "bridge/README.md"
 PROPOSAL_FILES = ("04-proposal-open-chain.json", "05-proposal-sidiora-cap.json")
 SUBMIT_COMMAND = "paxd tx gov submit-proposal"
 PROPOSAL_CLI = "modules/layerxbridge/client/cli/tx.go"
+SIDIORA_PAIR_MSG = "MsgRegisterSidioraPair"
+SIDIORA_ORDERING_RULE = "The ordering rule is carried by the proposal itself."
+STALE_SIDIORA_CLAIMS = [
+    ("that no generated body or proposal registers the Sidiora pair", re.compile(
+        r"no\s+generated\s+(?:body|proposal|message)\s+registers\s+the\s+pair", re.I)),
+    ("that an upgrade handler registers the Sidiora pair for the bridge", re.compile(
+        r"production\s+caller\s+is\s+the\s+handler\s+of\s+the\s+`?v\d+\.\d+`?\s+upgrade", re.I)),
+    ("that the Sidiora proposal waits for a read-back of the pair", re.compile(
+        r"only\s+after\s+the\s+usid\s+pair\s+reads\s+back"
+        r"|Submit\s+`?05-proposal-sidiora-cap\.json`?\s+only\s+when"
+        r"|Before\s+`?05-proposal-sidiora-cap\.json`?,\s+read\s+the\s+pair\s+back", re.I)),
+]
 STALE_SUBMISSION_CLAIMS = [
     ("that the module registers no message service", re.compile(r"registers\s+no\s+(?:message|Msg)\s+service", re.I)),
     ("that no command carries the bodies", re.compile(
@@ -309,7 +325,16 @@ if RUNBOOK in texts:
     else:
         section = runbook[sidiora:]
         for needle in ("getCap(uint64,address)", "91600046870081 " + SIDIORA_ASSET_ID, "/usid"):
-            require(RUNBOOK, section, needle, "the Sidiora section says what to read back before the cap body")
+            require(RUNBOOK, section, needle, "the Sidiora section says what to read back once the Sidiora proposal has passed")
+        require(RUNBOOK, section, "`%s` registers the pair against `usid`" % SIDIORA_PAIR_MSG,
+                "the Sidiora section names the message that registers the pair")
+        require(RUNBOOK, section, SIDIORA_ORDERING_RULE, "the Sidiora section reads the ordering rule from the proposal itself")
+        require(RUNBOOK, section, "`%s` first and Sidiora's `MsgSetCap` second" % SIDIORA_PAIR_MSG,
+                "the Sidiora section says the proposal registers the pair ahead of the cap")
+    for label, regex in STALE_SIDIORA_CLAIMS:
+        for match in regex.finditer(runbook):
+            problem(RUNBOOK, line_of(runbook, match.start()),
+                    "still claims %s; 05-proposal-sidiora-cap.json registers the pair ahead of its cap" % label)
     submit = runbook.find("### 6. Submit the proposals")
     readback = runbook.find("### 7. Read the deployment back")
     if submit >= 0 and readback > submit:
@@ -317,6 +342,8 @@ if RUNBOOK in texts:
         for name in PROPOSAL_FILES:
             require(RUNBOOK, section, "`%s`" % name, "section 6 names every proposal the generator writes through -proposals")
         require(RUNBOOK, section, "`%s`" % SUBMIT_COMMAND, "section 6 names the node's governance submit command")
+        require(RUNBOOK, section, "carries `%s` ahead of Sidiora's `MsgSetCap`" % SIDIORA_PAIR_MSG,
+                "section 6 says the Sidiora proposal registers the pair ahead of the cap")
         use_line = proposal_use_line()
         if use_line is None:
             problem(RUNBOOK, 1, "%s carries no ProposalCommandName and Use line for the bridge subcommand" % PROPOSAL_CLI)
@@ -429,5 +456,11 @@ remove_line 'the -proposals output' bridge/README.md '-proposals <proposals dire
 mutate 'the claim that the module registers no message service' bridge/README.md 'The bridge module registers no message service.'
 mutate 'the claim that no command carries the bodies' bridge/README.md 'This repository carries no command that broadcasts them.'
 mutate 'the claim that no command the node exposes submits the proposals' bridge/README.md 'No command the node exposes today submits 04-proposal-open-chain.json as its content.'
+remove_line 'the ordering rule read from the proposal' bridge/README.md 'The ordering rule is carried by the proposal itself.'
+remove_line 'the Sidiora pair message in section 6' bridge/README.md "carries \`MsgRegisterSidioraPair\` ahead of Sidiora's \`MsgSetCap\`"
+remove_line 'the Sidiora pair message in the Sidiora section' bridge/README.md "- \`MsgRegisterSidioraPair\` registers the pair against"
+mutate 'the claim that no generated body registers the Sidiora pair' bridge/README.md 'No generated body registers the pair against usid.'
+mutate 'the claim that an upgrade handler registers the Sidiora pair' bridge/README.md "Its production caller is the handler of the \`v6.7\` upgrade in node/upgrades.go."
+mutate 'the claim that the Sidiora proposal waits for a read-back' bridge/README.md "Submit \`05-proposal-sidiora-cap.json\` only when the denom it returns is the usid denom."
 
 printf 'docs-check: the bridge documentation passes and every mutation is refused\n'

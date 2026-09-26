@@ -28,6 +28,7 @@ func init() {
 	govtypes.RegisterProposalTypeCodec(&MsgSetCap{}, "layerxbridge/MsgSetCap")
 	govtypes.RegisterProposalTypeCodec(&MsgPause{}, "layerxbridge/MsgPause")
 	govtypes.RegisterProposalTypeCodec(&MsgUnpause{}, "layerxbridge/MsgUnpause")
+	govtypes.RegisterProposalTypeCodec(&MsgRegisterSidioraPair{}, "layerxbridge/MsgRegisterSidioraPair")
 }
 
 // NewBridgeProposal packs the governance messages under their type URLs into
@@ -150,6 +151,8 @@ func governanceMessage(msg sdk.Msg) (string, error) {
 	case *MsgPause:
 		return m.Authority, nil
 	case *MsgUnpause:
+		return m.Authority, nil
+	case *MsgRegisterSidioraPair:
 		return m.Authority, nil
 	default:
 		return "", sdkerrors.Wrapf(govtypes.ErrInvalidProposalContent,

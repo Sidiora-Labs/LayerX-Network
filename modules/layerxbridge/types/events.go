@@ -6,6 +6,7 @@ const (
 	EventCapSet          = "layerx_bridge_cap_set"
 	EventPaused          = "layerx_bridge_paused"
 	EventUnpaused        = "layerx_bridge_unpaused"
+	EventSidioraPair     = "layerx_bridge_sidiora_pair_registered"
 	EventBridgeIn        = "layerx_bridge_in"
 	EventBridgeOut       = "layerx_bridge_out"
 
