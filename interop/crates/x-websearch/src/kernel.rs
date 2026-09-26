@@ -2,13 +2,17 @@
 //! `PAXEERX_WEB_REQUEST_V1` topic in the same call that pays the web fee
 //! account. `KernelWatcher` follows those records through the gateway,
 //! `KernelAttestor` fetches or searches each payload independently and signs
-//! the origin-2 digest, and `KernelRelay` exchanges signatures with the peer
-//! attestors and posts the observation activity with `lx_sendActivity` once
+//! the origin-2 digest, `ProgramExchange` trades those signatures with the
+//! peer attestors under the program id and request id together, and
+//! `KernelRelay` posts the observation activity with `lx_sendActivity` once
 //! the registered threshold agrees.
 
-use std::io;
+use std::collections::BTreeMap;
+use std::io::{self, Write as _};
+use std::net::{SocketAddr, ToSocketAddrs as _};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use ed25519_dalek::{Signer as _, SigningKey as SubmitterKey};
 use k256::ecdsa::SigningKey;
@@ -20,19 +24,31 @@ use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
 use crate::attest::{
-    network_word, sign_digest, signer_address, stored_response, Answer, AttestError, Attestation,
-    AttestorSet, Level, Ready, SignatureExchange, MAX_RESPONSE_BYTES, ORIGIN_PROGRAM,
-    SIGNATURE_LENGTH,
+    network_word, recover_signer, sign_digest, signer_address, stored_response, Answer,
+    AttestError, Attestation, AttestorSet, Discard, Level, Ready, MAX_RECORD_BYTES,
+    MAX_RESPONSE_BYTES, ORIGIN_PROGRAM, SIGNATURE_LENGTH,
 };
-use crate::content::ContentStore;
-use crate::fetch::Fetcher;
+use crate::content::{ContentStore, PEER_HEADER};
+use crate::fetch::{Fetcher, HttpClient, Url};
 use crate::index::WebIndex;
 use crate::payment::{hex, unhex, GatewayRpc, RpcAnswer, COMMITMENT};
 use crate::search;
-use crate::watch::keccak;
+use crate::server::{Response, RouteError, RouteTable};
+use crate::watch::{hex0x, keccak, unhex0x};
+
+pub use crate::server::PROGRAM_ATTESTATION_PATH;
 
 /// The topic every program web request record is emitted under.
 pub const REQUEST_TOPIC: &[u8] = b"PAXEERX_WEB_REQUEST_V1";
+
+/// The topics whose records the watcher decodes as program web requests.
+pub const REQUEST_TOPICS: [&[u8]; 1] = [REQUEST_TOPIC];
+
+/// Whether `topic` is one whose records the watcher decodes.
+#[must_use]
+pub fn request_topic(topic: &[u8]) -> bool {
+    REQUEST_TOPICS.contains(&topic)
+}
 
 /// The gateway method that lists committed program events by topic.
 pub const EVENTS_METHOD: &str = "lx_getProgramEvents";
@@ -62,6 +78,9 @@ const MAX_DID_BYTES: usize = 255;
 const MAX_ACTIVITY_PAYLOAD_BYTES: usize = 524_288;
 const MAX_ACTIVITY_SIGNATURE_BYTES: usize = 128;
 const CURSOR_FILE: &str = "kernel-cursor";
+const PEER_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const PEER_TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
+const DISCARD_LOG: &str = "program-discarded.jsonl";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KernelError {
@@ -182,7 +201,12 @@ fn fixed<const N: usize>(value: Option<&Value>) -> Option<[u8; N]> {
     unhex(value?.as_str()?)?.try_into().ok()
 }
 
-fn decode_event(event: &Value, from: u64, next: u64) -> Result<ProgramRequest, KernelError> {
+fn decode_event(
+    event: &Value,
+    topic: &[u8],
+    from: u64,
+    next: u64,
+) -> Result<ProgramRequest, KernelError> {
     let object = event.as_object().ok_or(KernelError::Malformed)?;
     let sequence = object
         .get("sequence")
@@ -190,12 +214,12 @@ fn decode_event(event: &Value, from: u64, next: u64) -> Result<ProgramRequest, K
         .filter(|sequence| (from..next).contains(sequence))
         .ok_or(KernelError::Malformed)?;
     let program_id = fixed::<32>(object.get("program_id")).ok_or(KernelError::Malformed)?;
-    let topic = object
+    let emitted = object
         .get("topic")
         .and_then(Value::as_str)
         .and_then(unhex)
         .ok_or(KernelError::Malformed)?;
-    if topic != REQUEST_TOPIC {
+    if emitted != topic {
         return Err(KernelError::Malformed);
     }
     let data = object
@@ -213,11 +237,12 @@ pub struct KernelWatcher {
     rpc: GatewayRpc,
     cursor_path: PathBuf,
     next_sequence: u64,
+    topics: Vec<Vec<u8>>,
 }
 
 impl KernelWatcher {
-    /// Opens the watcher. A cursor file already under `state_dir` wins over
-    /// `start`.
+    /// Opens the watcher over [`REQUEST_TOPIC`]. A cursor file already under
+    /// `state_dir` wins over `start`.
     ///
     /// # Errors
     /// Refuses an endpoint that is not an http or https URL, and returns the
@@ -239,7 +264,36 @@ impl KernelWatcher {
             rpc,
             cursor_path,
             next_sequence: stored.unwrap_or(start),
+            topics: vec![REQUEST_TOPIC.to_vec()],
         })
+    }
+
+    /// Watches `topics` instead of [`REQUEST_TOPIC`] alone.
+    ///
+    /// # Errors
+    /// Refuses an empty list, a repeated topic and a topic whose records are
+    /// not program web requests.
+    pub fn with_topics(mut self, topics: &[&[u8]]) -> io::Result<Self> {
+        let refused = topics.is_empty()
+            || topics.iter().any(|topic| !request_topic(topic))
+            || topics
+                .iter()
+                .enumerate()
+                .any(|(index, topic)| topics[..index].contains(topic));
+        if refused {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "kernel watch topics refused",
+            ));
+        }
+        self.topics = topics.iter().map(|topic| topic.to_vec()).collect();
+        Ok(self)
+    }
+
+    /// The topics the watcher reads, in the order it asks for them.
+    #[must_use]
+    pub fn topics(&self) -> &[Vec<u8>] {
+        &self.topics
     }
 
     /// The next global sequence the watcher reads.
@@ -256,20 +310,12 @@ impl KernelWatcher {
             .map_err(|_| KernelError::Cursor)
     }
 
-    /// Reads the request records committed at or after the cursor, at most
-    /// [`EVENTS_PER_POLL`] of them, in sequence order. The cursor moves only
-    /// after every record decoded.
-    ///
-    /// # Errors
-    /// Returns the gateway's error, a malformed answer or record and a
-    /// cursor that could not be written.
-    pub fn poll(&mut self) -> Result<Vec<ProgramRequest>, KernelError> {
-        let from = self.next_sequence;
+    fn poll_topic(&self, topic: &[u8], from: u64) -> Result<(u64, Vec<Value>), KernelError> {
         let answer = call(
             &self.rpc,
             EVENTS_METHOD,
             &json!([{
-                "topic": hex(REQUEST_TOPIC),
+                "topic": hex(topic),
                 "from_sequence": from,
                 "limit": EVENTS_PER_POLL,
             }]),
@@ -284,13 +330,49 @@ impl KernelWatcher {
             .and_then(Value::as_array)
             .filter(|events| u64::try_from(events.len()).is_ok_and(|n| n <= EVENTS_PER_POLL))
             .ok_or(KernelError::Malformed)?;
-        let requests = events
+        Ok((next, events.clone()))
+    }
+
+    /// Reads the request records committed at or after the cursor under
+    /// every watched topic, at most [`EVENTS_PER_POLL`] per topic, in
+    /// sequence order. The cursor moves to the lowest next sequence the
+    /// topics report, so a record past it is read again by the next poll and
+    /// never skipped, and only after every record decoded.
+    ///
+    /// # Errors
+    /// Returns the gateway's error, a malformed answer or record and a
+    /// cursor that could not be written.
+    pub fn poll(&mut self) -> Result<Vec<ProgramRequest>, KernelError> {
+        let from = self.next_sequence;
+        let mut answers = Vec::with_capacity(self.topics.len());
+        for topic in &self.topics {
+            let (next, events) = self.poll_topic(topic, from)?;
+            answers.push((topic, next, events));
+        }
+        let next = answers
             .iter()
-            .map(|event| decode_event(event, from, next))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|(_, next, _)| *next)
+            .min()
+            .ok_or(KernelError::Malformed)?;
+        let mut requests = Vec::new();
+        for (topic, reported, events) in &answers {
+            let mut decoded = events
+                .iter()
+                .map(|event| decode_event(event, topic, from, *reported))
+                .collect::<Result<Vec<_>, _>>()?;
+            if decoded
+                .windows(2)
+                .any(|pair| pair[0].sequence >= pair[1].sequence)
+            {
+                return Err(KernelError::Malformed);
+            }
+            decoded.retain(|request| request.sequence < next);
+            requests.extend(decoded);
+        }
+        requests.sort_by_key(|request| request.sequence);
         if requests
             .windows(2)
-            .any(|pair| pair[0].sequence >= pair[1].sequence)
+            .any(|pair| pair[0].sequence == pair[1].sequence)
         {
             return Err(KernelError::Malformed);
         }
@@ -593,6 +675,362 @@ impl ObservationSubmitter {
     }
 }
 
+/// The key every program answer is held under: the program id and the
+/// request id together, so two programs' request ids never share a slot.
+pub type ProgramKey = ([u8; 32], u64);
+
+/// One peer signature for a program request that was discarded, as recorded.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProgramDiscarded {
+    pub peer: String,
+    pub program_id: [u8; 32],
+    pub request_id: u64,
+    pub reason: Discard,
+    pub claimed_digest: Option<[u8; 32]>,
+    pub claimed_signer: Option<[u8; 20]>,
+}
+
+impl ProgramDiscarded {
+    fn line(&self) -> String {
+        json!({
+            "peer": self.peer,
+            "program_id": hex0x(&self.program_id),
+            "request_id": self.request_id,
+            "reason": self.reason.code(),
+            "claimed_digest": self.claimed_digest.map(|digest| hex0x(&digest)),
+            "claimed_signer": self.claimed_signer.map(|signer| hex0x(&signer)),
+        })
+        .to_string()
+    }
+}
+
+/// The record the program signature-exchange route serves for an answer:
+/// the fields of [`Answer::record`] with the program id beside the request
+/// id.
+#[must_use]
+pub fn program_record(answer: &Answer) -> Value {
+    let mut record = answer.record();
+    if let Some(object) = record.as_object_mut() {
+        object.insert(
+            "program_id".to_owned(),
+            Value::String(hex0x(&answer.attestation.requester)),
+        );
+    }
+    record
+}
+
+struct ProgramRecord {
+    program_id: [u8; 32],
+    request_id: u64,
+    digest: [u8; 32],
+    signer: [u8; 20],
+    signature: [u8; SIGNATURE_LENGTH],
+}
+
+fn fixed0x<const N: usize>(value: Option<&Value>) -> Option<[u8; N]> {
+    unhex0x(value?.as_str()?)?.try_into().ok()
+}
+
+fn parse_program_record(record: &Value) -> Option<ProgramRecord> {
+    let object = record.as_object()?;
+    let known = [
+        "program_id",
+        "request_id",
+        "digest",
+        "content_digest",
+        "response_hash",
+        "full_length",
+        "signer",
+        "signature",
+    ];
+    if object.keys().any(|key| !known.contains(&key.as_str())) {
+        return None;
+    }
+    fixed0x::<32>(object.get("content_digest"))?;
+    fixed0x::<32>(object.get("response_hash"))?;
+    u32::try_from(object.get("full_length")?.as_u64()?).ok()?;
+    Some(ProgramRecord {
+        program_id: fixed0x(object.get("program_id"))?,
+        request_id: object.get("request_id")?.as_u64()?,
+        digest: fixed0x(object.get("digest"))?,
+        signer: fixed0x(object.get("signer"))?,
+        signature: fixed0x(object.get("signature"))?,
+    })
+}
+
+struct Held {
+    answer: Answer,
+    signatures: BTreeMap<[u8; 20], [u8; SIGNATURE_LENGTH]>,
+}
+
+/// Exchanges attestor signatures for program requests with the configured
+/// peer sidecars, holding every answer under its [`ProgramKey`].
+///
+/// Each sidecar serves its own signed record for a program request at
+/// `GET /program-attestations/<program id>/<request id>`. A record is taken
+/// only when it names the same program and request, its signature recovers
+/// over this sidecar's own digest to the signer it claims, and that signer is
+/// a registered attestor. Every refusal is recorded, never accepted.
+pub struct ProgramExchange {
+    peers: Vec<(String, Url)>,
+    client: HttpClient,
+    answers: Mutex<BTreeMap<ProgramKey, Held>>,
+    discarded: Mutex<Vec<ProgramDiscarded>>,
+    log_path: PathBuf,
+}
+
+impl ProgramExchange {
+    /// Opens the exchange with its discard log under `state_dir`.
+    ///
+    /// # Errors
+    /// Refuses a peer that is not an http or https URL with no query and
+    /// returns the error creating the directory.
+    pub fn open(state_dir: &Path, peers: &[String]) -> io::Result<Self> {
+        let peers = peers
+            .iter()
+            .map(|peer| {
+                Url::parse(peer)
+                    .ok()
+                    .filter(|url| !url.target.contains('?'))
+                    .map(|url| (peer.clone(), url))
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid peer url"))
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        std::fs::create_dir_all(state_dir)?;
+        let client = HttpClient::new(PEER_CONNECT_TIMEOUT)
+            .map_err(|error| io::Error::other(error.code()))?;
+        Ok(Self {
+            peers,
+            client,
+            answers: Mutex::new(BTreeMap::new()),
+            discarded: Mutex::new(Vec::new()),
+            log_path: state_dir.join(DISCARD_LOG),
+        })
+    }
+
+    /// The file every discarded signature is appended to.
+    #[must_use]
+    pub fn log_path(&self) -> &Path {
+        &self.log_path
+    }
+
+    fn answers(&self) -> std::sync::MutexGuard<'_, BTreeMap<ProgramKey, Held>> {
+        self.answers.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Keeps this sidecar's own answer and its own signature under the
+    /// answer's program and request. An answer already held there is kept
+    /// as it is.
+    pub fn record(&self, answer: Answer) {
+        self.answers()
+            .entry((answer.attestation.requester, answer.request_id()))
+            .or_insert_with(|| Held {
+                signatures: BTreeMap::from([(answer.signer, answer.signature)]),
+                answer,
+            });
+    }
+
+    /// This sidecar's answer to a program's request.
+    #[must_use]
+    pub fn answer(&self, key: ProgramKey) -> Option<Answer> {
+        self.answers().get(&key).map(|held| held.answer.clone())
+    }
+
+    /// The program requests this sidecar holds an answer for, ascending.
+    #[must_use]
+    pub fn pending(&self) -> Vec<ProgramKey> {
+        self.answers().keys().copied().collect()
+    }
+
+    /// Drops the answer and signatures for a program's request.
+    pub fn forget(&self, key: ProgramKey) {
+        self.answers().remove(&key);
+    }
+
+    /// Every signature discarded so far, in the order it was discarded.
+    #[must_use]
+    pub fn discarded(&self) -> Vec<ProgramDiscarded> {
+        self.discarded
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn discard(&self, entry: ProgramDiscarded) {
+        let line = entry.line();
+        eprintln!("x-websearch discarded a peer program signature: {line}");
+        let appended = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log_path)
+            .and_then(|mut file| {
+                file.write_all(line.as_bytes())?;
+                file.write_all(b"\n")?;
+                file.sync_all()
+            });
+        if let Err(error) = appended {
+            eprintln!("x-websearch could not append to the discard log: {error}");
+        }
+        self.discarded
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(entry);
+    }
+
+    /// The `GET /program-attestations/<program id>/<request id>` resource:
+    /// this sidecar's own signed record, or 404.
+    #[must_use]
+    pub fn handle(&self, key: ProgramKey) -> Response {
+        match self.answer(key) {
+            Some(answer) => Response::json(200, program_record(&answer).to_string().into_bytes()),
+            None => Response::error(404, "attestation_not_found"),
+        }
+    }
+
+    /// Checks one peer record for a program request against this sidecar's
+    /// own answer and the registered set, and keeps its signature. Every
+    /// refusal is recorded.
+    ///
+    /// # Errors
+    /// Returns why the signature was discarded. A request this sidecar holds
+    /// no answer for is not an error and takes nothing.
+    pub fn accept(
+        &self,
+        peer: &str,
+        key: ProgramKey,
+        record: &Value,
+        set: &AttestorSet,
+    ) -> Result<Option<[u8; 20]>, Discard> {
+        let Some(local) = self.answer(key) else {
+            return Ok(None);
+        };
+        let parsed = parse_program_record(record);
+        let verdict = match &parsed {
+            None => Err(Discard::Malformed),
+            Some(record) if (record.program_id, record.request_id) != key => {
+                Err(Discard::WrongRequest)
+            }
+            Some(record) if record.digest != local.digest => Err(Discard::DifferentDigest),
+            Some(record) => match recover_signer(&local.digest, &record.signature) {
+                Ok(signer) if signer != record.signer => Err(Discard::BadSignature),
+                Err(_) => Err(Discard::BadSignature),
+                Ok(signer) if !set.contains(&signer) => Err(Discard::UnknownSigner),
+                Ok(signer) => Ok(signer),
+            },
+        };
+        match verdict {
+            Ok(signer) => {
+                if let (Some(held), Some(record)) = (self.answers().get_mut(&key), parsed) {
+                    held.signatures.insert(signer, record.signature);
+                }
+                Ok(Some(signer))
+            }
+            Err(reason) => {
+                self.discard(ProgramDiscarded {
+                    peer: peer.to_owned(),
+                    program_id: key.0,
+                    request_id: key.1,
+                    reason,
+                    claimed_digest: parsed.as_ref().map(|record| record.digest),
+                    claimed_signer: parsed.as_ref().map(|record| record.signer),
+                });
+                Err(reason)
+            }
+        }
+    }
+
+    fn ask(&self, peer: &Url, key: ProgramKey) -> Option<Value> {
+        let url = Url {
+            target: format!(
+                "{}{PROGRAM_ATTESTATION_PATH}{}/{}",
+                peer.target.trim_end_matches('/'),
+                hex(&key.0),
+                key.1
+            ),
+            ..peer.clone()
+        };
+        let address: SocketAddr = (url.bare_host(), url.port).to_socket_addrs().ok()?.next()?;
+        let response = self
+            .client
+            .get(
+                &url,
+                address,
+                Instant::now() + PEER_TOTAL_TIMEOUT,
+                MAX_RECORD_BYTES,
+                &[("Accept", "application/json"), (PEER_HEADER, "1")],
+            )
+            .ok()?;
+        (response.status == 200)
+            .then(|| serde_json::from_slice(&response.body).ok())
+            .flatten()
+    }
+
+    /// Asks every peer for its record of a program request and keeps each
+    /// signature that checks out. An unreachable peer or one with no record
+    /// is skipped. Returns the number of signatures held for the request.
+    #[must_use]
+    pub fn collect(&self, key: ProgramKey, set: &AttestorSet) -> usize {
+        if self.answer(key).is_none() {
+            return 0;
+        }
+        for (name, peer) in &self.peers {
+            let Some(record) = self.ask(peer, key) else {
+                continue;
+            };
+            let _ = self.accept(name, key, &record, set);
+        }
+        self.answers()
+            .get(&key)
+            .map_or(0, |held| held.signatures.len())
+    }
+
+    /// The signatures for the observation once at least the threshold of
+    /// registered signers agree with this sidecar's answer, ascending by
+    /// signer.
+    #[must_use]
+    pub fn ready(&self, key: ProgramKey, set: &AttestorSet) -> Option<Ready> {
+        let answers = self.answers();
+        let held = answers.get(&key)?;
+        let answer = &held.answer;
+        let registered: Vec<([u8; 20], [u8; SIGNATURE_LENGTH])> = held
+            .signatures
+            .iter()
+            .filter(|(signer, _)| set.contains(signer))
+            .map(|(signer, signature)| (*signer, *signature))
+            .collect();
+        let enough = set.threshold != 0
+            && u32::try_from(registered.len()).is_ok_and(|count| count >= set.threshold);
+        if !enough {
+            return None;
+        }
+        Some(Ready {
+            request_id: key.1,
+            response: answer.response.clone(),
+            content_digest: answer.attestation.content_digest,
+            full_length: answer.attestation.full_length,
+            callback_gas: answer.callback_gas,
+            digest: answer.digest,
+            signers: registered.iter().map(|(signer, _)| *signer).collect(),
+            signatures: registered.iter().map(|(_, signature)| *signature).collect(),
+        })
+    }
+}
+
+/// Registers the program signature-exchange route
+/// `GET /program-attestations/<program id>/<request id>`.
+///
+/// # Errors
+/// Refuses a table that already has a program exchange handler.
+pub fn register(
+    routes: &mut RouteTable,
+    exchange: &Arc<ProgramExchange>,
+) -> Result<(), RouteError> {
+    let exchange = Arc::clone(exchange);
+    routes.set_program_attestations(move |program_id, request_id| {
+        exchange.handle((program_id, request_id))
+    })
+}
+
 /// What one relay step did for one request.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
@@ -610,12 +1048,12 @@ pub enum Step {
     },
 }
 
-/// Ties the watcher, the attestor, the signature exchange and the
+/// Ties the watcher, the attestor, the program signature exchange and the
 /// submitter together. Requests stay queued until their observation posts.
 pub struct KernelRelay {
     pub watcher: KernelWatcher,
     pub attestor: KernelAttestor,
-    pub exchange: SignatureExchange,
+    pub exchange: Arc<ProgramExchange>,
     pub set: AttestorSet,
     pub submitter: ObservationSubmitter,
     network_id: u32,
@@ -627,7 +1065,7 @@ impl KernelRelay {
     pub fn new(
         watcher: KernelWatcher,
         attestor: KernelAttestor,
-        exchange: SignatureExchange,
+        exchange: Arc<ProgramExchange>,
         set: AttestorSet,
         submitter: ObservationSubmitter,
     ) -> Self {
@@ -651,9 +1089,8 @@ impl KernelRelay {
 
     /// Polls the watcher once, answers every queued request this sidecar
     /// has not answered yet, collects the peers' signatures and posts each
-    /// observation whose signatures reach the threshold. A request whose id
-    /// the exchange already holds for a different program waits until that
-    /// answer is gone.
+    /// observation whose signatures reach the threshold. Every request is
+    /// held under its program id and request id together.
     ///
     /// # Errors
     /// Returns the watcher's error. A refused post keeps the request queued.
@@ -663,13 +1100,9 @@ impl KernelRelay {
         let mut steps = Vec::new();
         let mut kept = Vec::new();
         for request in std::mem::take(&mut self.queue) {
-            match self.exchange.answer(request.request_id) {
-                Some(answer) if answer.attestation.requester != request.program_id => {
-                    kept.push(request);
-                    continue;
-                }
-                Some(_) => {}
-                None => match self.attestor.attest(&request) {
+            let key = (request.program_id, request.request_id);
+            if self.exchange.answer(key).is_none() {
+                match self.attestor.attest(&request) {
                     Ok(answer) => self.exchange.record(answer),
                     Err(reason) => {
                         steps.push(Step::Refused {
@@ -679,10 +1112,10 @@ impl KernelRelay {
                         });
                         continue;
                     }
-                },
+                }
             }
-            let _ = self.exchange.collect(request.request_id, &self.set);
-            let Some(ready) = self.exchange.ready(request.request_id, &self.set) else {
+            let _ = self.exchange.collect(key, &self.set);
+            let Some(ready) = self.exchange.ready(key, &self.set) else {
                 kept.push(request);
                 continue;
             };
@@ -690,7 +1123,7 @@ impl KernelRelay {
                 .and_then(|observation| self.submitter.submit(&observation, now_ms));
             match posted {
                 Ok(result) => {
-                    self.exchange.forget(request.request_id);
+                    self.exchange.forget(key);
                     steps.push(Step::Posted {
                         program_id: request.program_id,
                         request_id: request.request_id,

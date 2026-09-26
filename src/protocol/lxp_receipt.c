@@ -3,6 +3,7 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_merkle.h"
 #include "layerx/lxp_module.h"
+#include "layerx/programs.h"
 
 #include <openssl/evp.h>
 #include <string.h>
@@ -13,7 +14,9 @@ enum {
     LXP_PROGRAM_OUTCOME_TAG_V1 = 0x50524731,
     LXP_PROGRAM_OUTCOME_TAG_V2 = 0x50524732,
     LXP_PROGRAM_OUTCOME_TAG_V3 = 0x50524733,
-    LXP_PROGRAM_OUTCOME_TAG_V4 = 0x50524734
+    LXP_PROGRAM_OUTCOME_TAG_V4 = 0x50524734,
+    LXP_PROGRAM_CALL_OUTCOME_BODY_V1_BYTES = 251,
+    LXP_PROGRAM_CALL_OUTCOME_BODY_BYTES = 255
 };
 
 static bool valid_program_terminal(uint8_t terminal)
@@ -35,24 +38,65 @@ lxp_result lxp_program_empty_call_graph_root(uint8_t root[32])
                           sizeof(graph_domain), root);
 }
 
+/* The call outcome event is the only committed byte that binds the call's
+ * event list: its last 32 bytes are the list's SHA-256 digest. */
+static lxp_result receipt_event_envelope_digest(const lxp_receipt *receipt,
+                                                const uint8_t **digest)
+{
+    size_t index;
+    *digest = NULL;
+    for (index = 0U; index < receipt->effects.count; ++index) {
+        const lxp_effect *effect = &receipt->effects.effects[index];
+        if (effect->module_id != LXP_MODULE_PROGRAMS ||
+            effect->kind != LXP_EFFECT_EVENT ||
+            effect->event_type != LX_PROGRAMS_EVENT_CALL_OUTCOME)
+            continue;
+        if (*digest != NULL ||
+            (effect->body_length != LXP_PROGRAM_CALL_OUTCOME_BODY_BYTES &&
+             effect->body_length != LXP_PROGRAM_CALL_OUTCOME_BODY_V1_BYTES))
+            return LXP_ERR_NON_CANONICAL;
+        *digest = effect->body + effect->body_length - 32U;
+    }
+    return *digest == NULL ? LXP_ERR_NON_CANONICAL : LXP_OK;
+}
+
 lxp_result lxp_receipt_bind_program_artifacts(
     lxp_receipt *receipt, lxp_byte_span terminal_payload,
-    lxp_byte_span call_graph_payload)
+    lxp_byte_span call_graph_payload, lxp_byte_span event_envelope_payload)
 {
     lxp_program_outcome outcome;
     lxp_result status;
     if (receipt == NULL ||
         terminal_payload.length > LXP_MAX_ACTIVITY_BYTES ||
         call_graph_payload.length > LXP_MAX_ACTIVITY_BYTES ||
+        event_envelope_payload.length > LXP_PROGRAM_EVENT_LIST_MAX_BYTES ||
+        (event_envelope_payload.bytes == NULL &&
+         event_envelope_payload.length != 0U) ||
         (terminal_payload.length == 0U) != (call_graph_payload.length == 0U))
         return LXP_ERR_NON_CANONICAL;
     if (!receipt->program_outcome.present)
-        return terminal_payload.length == 0U ? LXP_OK : LXP_ERR_NON_CANONICAL;
+        return terminal_payload.length == 0U &&
+                       event_envelope_payload.length == 0U ?
+                   LXP_OK : LXP_ERR_NON_CANONICAL;
     if (receipt->module_id != LXP_MODULE_PROGRAMS) return LXP_ERR_NON_CANONICAL;
     outcome = receipt->program_outcome;
     if (outcome.terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS &&
         terminal_payload.length == 0U)
         return LXP_ERR_NON_CANONICAL;
+    if (event_envelope_payload.length != 0U) {
+        const uint8_t *digest;
+        uint8_t event_root[32];
+        if (outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS)
+            return LXP_ERR_NON_CANONICAL;
+        status = receipt_event_envelope_digest(receipt, &digest);
+        if (status == LXP_OK)
+            status = lxp_hash_sha256(event_envelope_payload.bytes,
+                                     event_envelope_payload.length,
+                                     event_root);
+        if (status != LXP_OK) return status;
+        if (lxp_ct_memcmp(event_root, digest, 32U) != 0)
+            return LXP_ERR_NON_CANONICAL;
+    }
     if (terminal_payload.length == 0U) {
         uint8_t empty_graph[32];
         if (outcome.terminal_kind != LXP_PROGRAM_TERMINAL_FAILURE ||
@@ -63,6 +107,7 @@ lxp_result lxp_receipt_bind_program_artifacts(
     }
     outcome.terminal_payload = terminal_payload;
     outcome.call_graph_payload = call_graph_payload;
+    outcome.event_envelope_payload = event_envelope_payload;
     status = lxp_program_outcome_validate_for_protocol(
         &outcome, receipt->protocol_version);
     if (status == LXP_OK) receipt->program_outcome = outcome;

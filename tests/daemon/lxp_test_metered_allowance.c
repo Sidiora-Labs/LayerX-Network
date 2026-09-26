@@ -79,7 +79,7 @@ static int metered_artifacts(lxp_receipt *receipt)
     REQUIRE(graph_length == length - terminal_length - 8U);
     REQUIRE(lxp_receipt_bind_program_artifacts(receipt,
         (lxp_byte_span){artifacts + 4U, terminal_length},
-        (lxp_byte_span){artifacts + 8U + terminal_length, graph_length}) == LXP_OK);
+        (lxp_byte_span){artifacts + 8U + terminal_length, graph_length}, (lxp_byte_span){NULL, 0U}) == LXP_OK);
     REQUIRE(metered_transfer(receipt, receipt->result_code) == 0);
     receipt->program_outcome.terminal_payload = (lxp_byte_span){NULL, 0U};
     receipt->program_outcome.call_graph_payload = (lxp_byte_span){NULL, 0U};
@@ -501,7 +501,7 @@ static int metered_simulate(int descriptor, const signer *delegate, metered_run 
     cursor += 4U;
     REQUIRE(graph_length == response.payload_length - cursor);
     lxp_byte_span graph = {response.payload + cursor, graph_length};
-    REQUIRE(lxp_receipt_bind_program_artifacts(&receipt, terminal, graph) == LXP_OK);
+    REQUIRE(lxp_receipt_bind_program_artifacts(&receipt, terminal, graph, (lxp_byte_span){NULL, 0U}) == LXP_OK);
     if (expected == LXP_OK) {
         REQUIRE(receipt.result_code == LXP_OK && receipt.program_outcome.present &&
                 receipt.program_outcome.terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS);

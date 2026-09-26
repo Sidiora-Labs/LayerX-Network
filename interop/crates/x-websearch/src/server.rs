@@ -203,10 +203,16 @@ impl Response {
 
 type Handler = Box<dyn Fn(&Request) -> Response + Send + Sync>;
 type AttestationHandler = Box<dyn Fn(u64) -> Response + Send + Sync>;
+type ProgramAttestationHandler = Box<dyn Fn([u8; 32], u64) -> Response + Send + Sync>;
 
 /// The path prefix of the signature-exchange route
 /// `GET /attestations/<request id>`.
 pub const ATTESTATION_PATH: &str = "/attestations/";
+
+/// The path prefix of the program signature-exchange route
+/// `GET /program-attestations/<program id>/<request id>`, the program id as
+/// 64 lower-case hexadecimal digits and the request id in decimal.
+pub const PROGRAM_ATTESTATION_PATH: &str = "/program-attestations/";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RouteError {
@@ -226,12 +232,13 @@ impl std::fmt::Display for RouteError {
 impl std::error::Error for RouteError {}
 
 /// The handlers for the paid routes. The health route is built in; a paid
-/// route with no handler answers 503. The signature-exchange route answers
-/// 404 until an attestor sets its handler.
+/// route with no handler answers 503. The signature-exchange routes answer
+/// 404 until an attestor sets their handlers.
 #[derive(Default)]
 pub struct RouteTable {
     handlers: BTreeMap<Route, Handler>,
     attestations: Option<AttestationHandler>,
+    program_attestations: Option<ProgramAttestationHandler>,
 }
 
 impl RouteTable {
@@ -270,6 +277,30 @@ impl RouteTable {
         }
         self.attestations = Some(Box::new(handler));
         Ok(())
+    }
+
+    /// Sets the handler of
+    /// `GET /program-attestations/<program id>/<request id>`.
+    ///
+    /// # Errors
+    /// Refuses a table whose program exchange route already has a handler.
+    pub fn set_program_attestations(
+        &mut self,
+        handler: impl Fn([u8; 32], u64) -> Response + Send + Sync + 'static,
+    ) -> Result<(), RouteError> {
+        if self.program_attestations.is_some() {
+            return Err(RouteError::AlreadySet);
+        }
+        self.program_attestations = Some(Box::new(handler));
+        Ok(())
+    }
+
+    fn dispatch_program_attestation(&self, program_id: [u8; 32], request_id: u64) -> Response {
+        let Some(handler) = &self.program_attestations else {
+            return Response::error(404, "not_found");
+        };
+        catch_unwind(AssertUnwindSafe(|| handler(program_id, request_id)))
+            .unwrap_or_else(|_| Response::error(500, "internal_error"))
     }
 
     fn dispatch_attestation(&self, request_id: u64) -> Response {
@@ -505,6 +536,11 @@ fn serve(mut stream: TcpStream, limits: &Limits, routes: &RouteTable) {
             Ok(Parsed::Attestation { method, request_id }) if method == "GET" => {
                 routes.dispatch_attestation(request_id)
             }
+            Ok(Parsed::ProgramAttestation {
+                method,
+                program_id,
+                request_id,
+            }) if method == "GET" => routes.dispatch_program_attestation(program_id, request_id),
             Ok(_) => Response::error(405, "method_not_allowed").with_header("Allow", "GET"),
             Err(response) => response,
         },
@@ -622,24 +658,45 @@ fn route_of(path: &str) -> Result<(Route, Option<[u8; 32]>), Response> {
     }
 }
 
-/// A parsed request: one for a routed resource, or one for the
-/// signature-exchange route with its decimal request id.
+/// A parsed request: one for a routed resource, one for the
+/// signature-exchange route with its decimal request id, or one for the
+/// program signature-exchange route with its program id and request id.
 enum Parsed {
     Routed(Request),
-    Attestation { method: String, request_id: u64 },
+    Attestation {
+        method: String,
+        request_id: u64,
+    },
+    ProgramAttestation {
+        method: String,
+        program_id: [u8; 32],
+        request_id: u64,
+    },
+}
+
+/// A canonical decimal request id: digits only, no leading zero.
+fn decimal_id(id: &str) -> Option<u64> {
+    let canonical = !id.is_empty()
+        && id.bytes().all(|byte| byte.is_ascii_digit())
+        && (id == "0" || !id.starts_with('0'));
+    canonical.then(|| id.parse().ok()).flatten()
 }
 
 fn attestation_id(path: &str) -> Option<Result<u64, Response>> {
     let id = path.strip_prefix(ATTESTATION_PATH)?;
-    let canonical = !id.is_empty()
-        && id.bytes().all(|byte| byte.is_ascii_digit())
-        && (id == "0" || !id.starts_with('0'));
-    Some(
-        canonical
-            .then(|| id.parse().ok())
-            .flatten()
-            .ok_or_else(|| Response::error(400, "malformed_request_id")),
-    )
+    Some(decimal_id(id).ok_or_else(|| Response::error(400, "malformed_request_id")))
+}
+
+fn program_attestation_key(path: &str) -> Option<Result<([u8; 32], u64), Response>> {
+    let rest = path.strip_prefix(PROGRAM_ATTESTATION_PATH)?;
+    let key = rest.split_once('/').and_then(|(program, id)| {
+        let lower = program
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+        let program_id = crate::config::parse_hex32(program).filter(|_| lower)?;
+        Some((program_id, decimal_id(id)?))
+    });
+    Some(key.ok_or_else(|| Response::error(400, "malformed_program_request")))
 }
 
 fn parse_request(head: &[u8], peer: SocketAddr, limits: &Limits) -> Result<Parsed, Response> {
@@ -700,6 +757,14 @@ fn parse_request(head: &[u8], peer: SocketAddr, limits: &Limits) -> Result<Parse
         Some((path, query)) => (path, Some(query.to_owned())),
         None => (target, None),
     };
+    if let Some(key) = program_attestation_key(path) {
+        let (program_id, request_id) = key?;
+        return Ok(Parsed::ProgramAttestation {
+            method: method.to_owned(),
+            program_id,
+            request_id,
+        });
+    }
     if let Some(request_id) = attestation_id(path) {
         return Ok(Parsed::Attestation {
             method: method.to_owned(),

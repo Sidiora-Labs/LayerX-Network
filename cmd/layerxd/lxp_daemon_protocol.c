@@ -514,7 +514,7 @@ static lxp_result pending_artifacts_route(
             status = LXP_ERR_CONTEXT_MISMATCH;
         if (status == LXP_OK)
             status = lxp_receipt_bind_program_artifacts(
-                &receipt, pending->terminal_payload, pending->call_graph);
+                &receipt, pending->terminal_payload, pending->call_graph, (lxp_byte_span){NULL, 0U});
         if (status == LXP_OK)
             status = put_program_artifacts(
                 activity_id, receipt_digest, pending->terminal_payload,
@@ -549,7 +549,7 @@ static lxp_result artifacts_route(lxp_daemon_protocol_owner *owner,
         status = LXP_ERR_CONTEXT_MISMATCH;
     if (status == LXP_OK)
         status = lxp_receipt_bind_program_artifacts(
-            &receipt, evidence.terminal_payload, evidence.call_graph);
+            &receipt, evidence.terminal_payload, evidence.call_graph, (lxp_byte_span){NULL, 0U});
     if (status != LXP_OK) return status;
     return put_program_artifacts(
         activity_id, receipt_digest, evidence.terminal_payload,

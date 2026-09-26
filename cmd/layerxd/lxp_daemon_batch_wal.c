@@ -276,7 +276,7 @@ static lxp_result validate_canonical_items(
         if (status == LXP_OK && in->terminal_payloads != NULL &&
             in->call_graphs != NULL)
             status = lxp_receipt_bind_program_artifacts(
-                &receipt, in->terminal_payloads[i], in->call_graphs[i]);
+                &receipt, in->terminal_payloads[i], in->call_graphs[i], (lxp_byte_span){NULL, 0U});
         if(status==LXP_OK)status=lxp_arena_init(&arena,scratch,WAL_MAX_BYTES);
         if(status==LXP_OK)status=lxp_activity_encode(&activity,&arena,&reencoded);
         if(status==LXP_OK &&

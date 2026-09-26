@@ -341,6 +341,7 @@ symbol = "KernelRelay"
 observed = "KernelRelay is not wired into main.rs or server.rs, which are outside the touches, and SignatureExchange keys requests by the u64 request id alone, so ids from different programs share a slot."
 assumption = "The binary wiring and a program-scoped exchange key are a follow-up owned by the sidecar."
 severity = "suspect"
+closed = "Task 2.20 on a43f796c08960b6ed5aff6a9988c57094cff082f starts KernelRelay from main.rs when the kernel settings are present, serves its program exchange route from server.rs and holds every program answer under the program id and request id together."
 
 [observation.2.2.6]
 task = "2.2"
@@ -417,3 +418,19 @@ exit_code = 2
 log_path = ".logs/verify.log"
 observed = "test-module-ctx stops in its unchanged opening block, where lxp_ctx_emit_transfer_set returns LXP_FATAL_INVARIANT (-1001) against the test's apply_transfer fixture exactly as the unmodified test does, so the new prepare staging checks after it never run, while test-kernel and test-web-program-path, including the run whose first paying call creates the web fee account, pass (.logs/verify-rest.log, exit 0)."
 assumption = "The module-ctx fixture's owner restores that transfer emit check without weakening it, after which this verify_cmd runs unchanged."
+
+[observation.2.25.1]
+task = "2.25"
+file = "interop/crates/x-websearch/tests/attest.rs"
+symbol = "the_preimage_matches_every_pinned_vector"
+observed = "At a43f796c08960b6ed5aff6a9988c57094cff082f clippy is clean and all eleven api tests pass with the corrected vector, but the attest test pins two preimage vectors where modules/xweb/types/testdata/preimage-vectors.json now holds three (evm-api-single, added by task 2.13), so it fails (.logs/verify.log, exit 101) and the canonical and content tests did not run."
+assumption = "Both files lie outside this task; the attest test's owner extends it to the third vector without relaxing it, after which the verify_cmd runs unchanged."
+severity = "blocker"
+
+[observation.2.26.1]
+revision = "a43f796c08960b6ed5aff6a9988c57094cff082f"
+command = "timeout 20m sh -c 'make test-receipts && make test-web-program-path'"
+exit_code = 2
+log_path = ".logs/verify.log"
+observed = "test-receipts passes, but after the reference program's request call the event list bound to the receipt does not hash to the call outcome event's event_envelope_digest (tests/test_web_program_path.c line 207)."
+assumption = "Something between the SHA-256 in terminal_publish and the receipt the kernel returns changes the list bytes or the digest source, and a follow-up diagnosis within these touches closes it."

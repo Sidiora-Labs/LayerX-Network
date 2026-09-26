@@ -915,7 +915,11 @@ reqs = ["11.4"]
 
 [task.2.20]
 title = "Wire the kernel relay into the sidecar binary and scope the signature exchange by program"
-status = "pending"
+status = "done"
+revision = "a43f796c08960b6ed5aff6a9988c57094cff082f"
+command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test kernel --test binary --test config'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.19"]
 do_1 = "In interop/crates/x-websearch/src/config.rs add the kernel relay settings, the gateway endpoint, the poll interval and the program topics to watch, validated the way the existing fields are; in src/main.rs start KernelRelay beside the attest loop when they are set and stop it on the same shutdown signal; in src/server.rs expose the relay's peer signature exchange beside the existing peer endpoint."
@@ -994,7 +998,11 @@ reqs = ["17.3","17.6"]
 
 [task.2.25]
 title = "Correct the select vector's number digits and qualify the api request path"
-status = "pending"
+status = "implemented"
+implemented_revision = "a43f796c08960b6ed5aff6a9988c57094cff082f"
+implemented_command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test api --test attest --test canonical --test content'"
+implemented_exit_code = 101
+implemented_log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.19","2.24"]
 do_1 = "The literal 123456789012345678901234 parses to the correctly rounded double 0x44ba249b1f10a06d, whose shortest round-trip digits are 1.2345678901234569e+23 in ECMAScript, Go and Python alike, so the answer in interop/crates/x-websearch/tests/fixtures/api/select-vectors.json that expects 1.2345678901234568e+23 is wrong; correct that vector to 1.2345678901234569e+23 and change nothing else in it."
@@ -1007,7 +1015,11 @@ reqs = ["17.3","17.6"]
 
 [task.2.26]
 title = "Keep a call's full program event list beside the receipt's artifacts, bound to the outcome's event envelope digest"
-status = "pending"
+status = "implemented"
+implemented_revision = "a43f796c08960b6ed5aff6a9988c57094cff082f"
+implemented_command = "timeout 20m sh -c 'make test-receipts && make test-web-program-path'"
+implemented_exit_code = 2
+implemented_log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.2"]
 do_1 = "The kernel receives a call's full raw event list as the terminal events section, hashes it into the call outcome event's event_envelope_digest in terminal_publish in src/modules/programs/call.c and then frees it, so no store holds a program's web request bytes; add an event envelope payload span to lxp_program_outcome in include/layerx/lxp_receipt.h, fill it from the terminal event list in terminal_publish before the buffer is freed, and copy it with the other artifacts in outcome_copy_artifacts in src/protocol/lxp_module_ctx.c; the committed receipt and every consensus-visible byte stay exactly as they are."

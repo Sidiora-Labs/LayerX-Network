@@ -9,21 +9,23 @@ use ed25519_dalek::SigningKey as SubmitterKey;
 use k256::ecdsa::SigningKey;
 use serde_json::{json, Value};
 use x_websearch::attest::{
-    network_word, recover_signer, sign_digest, signer_address, stored_response, AttestorSet, Ready,
-    SignatureExchange, ORIGIN_PROGRAM,
+    network_word, recover_signer, sign_digest, signer_address, stored_response, Answer,
+    AttestorSet, Discard, Level, Ready, ORIGIN_PROGRAM,
 };
 use x_websearch::config::FetchLimits;
 use x_websearch::content::ContentStore;
 use x_websearch::fetch::Fetcher;
 use x_websearch::index::WebIndex;
 use x_websearch::kernel::{
-    decode_request_record, encode_activity, observation_bytes, ActivityOptions, KernelAttestor,
-    KernelError, KernelRelay, KernelWatcher, ObservationSubmitter, ProgramRequest, Step,
-    EVENTS_METHOD, OBSERVATION_HEADER_BYTES, REQUEST_TOPIC,
+    decode_request_record, encode_activity, observation_bytes, program_record, register,
+    request_topic, ActivityOptions, KernelAttestor, KernelError, KernelRelay, KernelWatcher,
+    ObservationSubmitter, ProgramExchange, ProgramRequest, Step, EVENTS_METHOD,
+    OBSERVATION_HEADER_BYTES, PROGRAM_ATTESTATION_PATH, REQUEST_TOPIC,
 };
 use x_websearch::payment::{hex, unhex};
 use x_websearch::search;
 use x_websearch::watch::{keccak, unhex0x};
+use x_websearch::{Limits, RouteTable, RunningServer, Server};
 
 type Checked<T = ()> = Result<T, Box<dyn Error>>;
 
@@ -535,6 +537,177 @@ fn the_watcher_follows_request_records_through_the_recorded_gateway() -> Checked
     Ok(())
 }
 
+#[test]
+fn the_watcher_reads_only_request_topics() -> Checked {
+    let scratch = Scratch::new("topics")?;
+    let open = |name: &str| KernelWatcher::open("http://127.0.0.1:1/", &scratch.0.join(name), 0);
+    assert_eq!(open("default")?.topics(), [REQUEST_TOPIC.to_vec()]);
+    let listed = open("listed")?.with_topics(&[REQUEST_TOPIC])?;
+    assert_eq!(listed.topics(), [REQUEST_TOPIC.to_vec()]);
+    assert!(request_topic(REQUEST_TOPIC));
+    let other = b"PAXEERX_WEB_ANSWER_V1".as_slice();
+    assert!(!request_topic(other));
+    assert!(open("empty")?.with_topics(&[]).is_err());
+    assert!(open("repeated")?
+        .with_topics(&[REQUEST_TOPIC, REQUEST_TOPIC])
+        .is_err());
+    assert!(open("other")?.with_topics(&[REQUEST_TOPIC, other]).is_err());
+    Ok(())
+}
+
+/// The signed answer of attestor `key` to `request`: the adapter response
+/// under the adapter content digest.
+fn signed_answer(key: &SigningKey, request: &ProgramRequest) -> Checked<Answer> {
+    let response = b"Paxeer X Network".to_vec();
+    let attestation = request.attestation(NETWORK, fixed::<32>(CONTENT_DIGEST)?, &response, 16);
+    let digest = attestation.digest();
+    Ok(Answer {
+        attestation,
+        level: Level::Majority,
+        response,
+        callback_gas: 0,
+        timeout_height: u64::MAX,
+        digest,
+        signer: signer_address(key),
+        signature: sign_digest(key, &digest)?,
+    })
+}
+
+/// A real sidecar server with only the program exchange route registered.
+fn serve_exchange(exchange: &Arc<ProgramExchange>) -> Checked<RunningServer> {
+    let mut routes = RouteTable::new();
+    register(&mut routes, exchange)?;
+    Ok(Server::bind("127.0.0.1:0".parse()?, Limits::default(), routes)?.spawn()?)
+}
+
+/// Program request 5 of the program starting at `first`.
+fn request_five(first: u8) -> ProgramRequest {
+    ProgramRequest {
+        program_id: program(first),
+        request_id: 5,
+        kind: 1,
+        payload: b"https://paxeer.app/".to_vec(),
+        sequence: 41,
+    }
+}
+
+fn http_get(address: SocketAddr, target: &str) -> Checked<(u16, Value)> {
+    let mut stream = TcpStream::connect(address)?;
+    stream.write_all(format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").as_bytes())?;
+    let mut bytes = Vec::new();
+    stream.read_to_end(&mut bytes)?;
+    let text = String::from_utf8(bytes)?;
+    let (head, body) = text
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| fail("no header terminator"))?;
+    let status = head
+        .split(' ')
+        .nth(1)
+        .ok_or_else(|| fail("no status"))?
+        .parse()?;
+    Ok((status, serde_json::from_str(body)?))
+}
+
+#[test]
+fn the_program_exchange_route_serves_records_by_program_and_request() -> Checked {
+    let scratch = Scratch::new("route")?;
+    let key = attestor_key(2)?;
+    let exchange = Arc::new(ProgramExchange::open(&scratch.0, &[])?);
+    let held = signed_answer(&key, &request_five(0xa0))?;
+    exchange.record(held.clone());
+    let server = serve_exchange(&exchange)?;
+    let address = server.local_addr();
+    let path = |program_id: &str, request_id: &str| {
+        format!("{PROGRAM_ATTESTATION_PATH}{program_id}/{request_id}")
+    };
+    let (status, body) = http_get(address, &path(&hex(&program(0xa0)), "5"))?;
+    assert_eq!(status, 200);
+    assert_eq!(body, program_record(&held));
+    assert_eq!(
+        body["program_id"],
+        json!(format!("0x{}", hex(&program(0xa0))))
+    );
+    assert_eq!(body["request_id"], json!(5));
+    let (status, body) = http_get(address, &path(&hex(&program(0xb0)), "5"))?;
+    assert_eq!(
+        (status, body),
+        (404, json!({ "error": "attestation_not_found" }))
+    );
+    for (program_id, request_id) in [
+        (hex(&program(0xa0)).to_ascii_uppercase(), "5".to_owned()),
+        (format!("0x{}", hex(&program(0xa0))), "5".to_owned()),
+        (hex(&program(0xa0))[2..].to_owned(), "5".to_owned()),
+        (hex(&program(0xa0)), "05".to_owned()),
+        (hex(&program(0xa0)), String::new()),
+    ] {
+        let (status, body) = http_get(address, &path(&program_id, &request_id))?;
+        assert_eq!(
+            (status, body),
+            (400, json!({ "error": "malformed_program_request" })),
+            "{program_id}/{request_id}"
+        );
+    }
+    server.shutdown()?;
+    Ok(())
+}
+
+#[test]
+fn two_programs_with_the_same_request_id_are_both_answered_through_the_exchange() -> Checked {
+    let scratch = Scratch::new("exchange")?;
+    let (one_key, two_key) = (attestor_key(1)?, attestor_key(2)?);
+    let mut signers = vec![signer_address(&one_key), signer_address(&two_key)];
+    signers.sort_unstable();
+    let set = AttestorSet {
+        signers: signers.clone(),
+        threshold: 2,
+    };
+    let two = Arc::new(ProgramExchange::open(&scratch.0.join("two"), &[])?);
+    let server = serve_exchange(&two)?;
+    let one = ProgramExchange::open(
+        &scratch.0.join("one"),
+        &[format!("http://{}", server.local_addr())],
+    )?;
+    let requests = [request_five(0xa0), request_five(0xb0)];
+    for request in &requests {
+        one.record(signed_answer(&one_key, request)?);
+        two.record(signed_answer(&two_key, request)?);
+    }
+    assert_eq!(one.pending(), vec![(program(0xa0), 5), (program(0xb0), 5)]);
+    let mut digests = Vec::new();
+    for request in &requests {
+        let key = (request.program_id, request.request_id);
+        assert_eq!(one.collect(key, &set), 2);
+        let ready = one.ready(key, &set).ok_or_else(|| fail("not ready"))?;
+        assert_eq!(ready.digest, signed_answer(&one_key, request)?.digest);
+        assert_eq!(ready.signers, signers);
+        for (signer, signature) in ready.signers.iter().zip(&ready.signatures) {
+            assert_eq!(recover_signer(&ready.digest, signature)?, *signer);
+        }
+        let observation = observation_bytes(NETWORK, request, &ready)?;
+        assert_eq!(&observation[33..65], &request.program_id);
+        digests.push(ready.digest);
+    }
+    assert_ne!(digests[0], digests[1]);
+    assert!(one.discarded().is_empty());
+
+    let other = program_record(&signed_answer(&two_key, &requests[1])?);
+    assert_eq!(
+        one.accept("two", (program(0xa0), 5), &other, &set),
+        Err(Discard::WrongRequest)
+    );
+    let discarded = one.discarded();
+    assert_eq!(discarded.len(), 1);
+    assert_eq!(discarded[0].program_id, program(0xa0));
+    assert_eq!(discarded[0].reason, Discard::WrongRequest);
+    assert!(std::fs::read_to_string(one.log_path())?.contains("wrong_request"));
+
+    one.forget((program(0xa0), 5));
+    assert_eq!(one.pending(), vec![(program(0xb0), 5)]);
+    assert_eq!(one.collect((program(0xa0), 5), &set), 0);
+    server.shutdown()?;
+    Ok(())
+}
+
 fn relay_index(data: &Path) -> Checked<Arc<WebIndex>> {
     let index = Arc::new(WebIndex::open(data)?);
     index.put(
@@ -576,7 +749,7 @@ fn relay_for(
     Ok(KernelRelay::new(
         KernelWatcher::open(&gateway.endpoint(), &scratch.0.join("state"), 0)?,
         attestor,
-        SignatureExchange::open(&scratch.0.join("exchange"), &[])?,
+        Arc::new(ProgramExchange::open(&scratch.0.join("exchange"), &[])?),
         set,
         ObservationSubmitter::new(
             &gateway.endpoint(),

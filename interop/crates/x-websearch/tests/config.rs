@@ -3,8 +3,9 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use x_websearch::config::{
-    AssetSymbol, Config, ConfigError, PaymentConfig, Refusal, DEFAULT_CRAWL_INTERVAL_SECONDS,
-    DEFAULT_DRAW_FEE_LIMIT, MAX_CONFIG_BYTES, MAX_CRAWL_INTERVAL_SECONDS,
+    AssetSymbol, Config, ConfigError, KernelConfig, PaymentConfig, Refusal,
+    DEFAULT_CRAWL_INTERVAL_SECONDS, DEFAULT_DRAW_FEE_LIMIT, MAX_CONFIG_BYTES,
+    MAX_CRAWL_INTERVAL_SECONDS, MAX_KERNEL_POLL_INTERVAL_MS,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -667,5 +668,182 @@ fn a_crawl_interval_of_zero_above_one_day_or_not_a_whole_number_is_refused_namin
             Some("configuration refused: crawl_interval_seconds is invalid".to_owned())
         );
     }
+    Ok(())
+}
+
+fn kernel_settings() -> Value {
+    serde_json::json!({
+        "endpoint": "https://paxeer.app/gateway",
+        "poll_interval_ms": 2000,
+        "topics": ["PAXEERX_WEB_REQUEST_V1"],
+        "submitter_did": "did:layerx:web-attestor",
+        "fee_limit": "100",
+    })
+}
+
+#[test]
+fn an_absent_kernel_object_leaves_the_relay_off() -> Result<(), Box<dyn std::error::Error>> {
+    let valid = valid_json()?;
+    assert!(valid.get("kernel").is_none());
+    assert_eq!(Config::parse(&valid.to_string())?.kernel, None);
+    Ok(())
+}
+
+#[test]
+fn kernel_relay_settings_are_read_from_the_kernel_object() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut value = valid_json()?;
+    value["kernel"] = kernel_settings();
+    let kernel = Config::parse(&value.to_string())?
+        .kernel
+        .ok_or("no kernel settings")?;
+    assert_eq!(
+        kernel,
+        KernelConfig {
+            endpoint: "https://paxeer.app/gateway".to_owned(),
+            poll_interval_ms: 2000,
+            topics: vec!["PAXEERX_WEB_REQUEST_V1".to_owned()],
+            submitter_did: "did:layerx:web-attestor".to_owned(),
+            fee_limit: 100,
+        }
+    );
+    assert_eq!(kernel.poll_interval(), Duration::from_millis(2000));
+    assert_eq!(MAX_KERNEL_POLL_INTERVAL_MS, 60_000);
+    let mut value = valid_json()?;
+    value["kernel"] = kernel_settings();
+    value["kernel"]["endpoint"] = serde_json::json!("http://127.0.0.1:8547/rpc");
+    value["kernel"]["poll_interval_ms"] = serde_json::json!(60_000);
+    value["kernel"]["fee_limit"] = serde_json::json!("340282366920938463463374607431768211455");
+    let kernel = Config::parse(&value.to_string())?
+        .kernel
+        .ok_or("no kernel settings")?;
+    assert_eq!(kernel.endpoint, "http://127.0.0.1:8547/rpc");
+    assert_eq!(kernel.poll_interval_ms, 60_000);
+    assert_eq!(kernel.fee_limit, u128::MAX);
+    Ok(())
+}
+
+/// Each malformed `kernel` setting, the field its refusal names and the
+/// refusal.
+fn malformed_kernel_settings() -> Vec<(&'static str, Value, Refusal)> {
+    use serde_json::json;
+    vec![
+        ("kernel", json!("gateway"), Refusal::Invalid),
+        ("kernel", json!(null), Refusal::Invalid),
+        ("kernel", json!([]), Refusal::Invalid),
+        ("kernel.endpoint", json!(null), Refusal::Missing),
+        (
+            "kernel.endpoint",
+            json!("ftp://paxeer.app/"),
+            Refusal::Invalid,
+        ),
+        (
+            "kernel.endpoint",
+            json!("http://paxeer.app/"),
+            Refusal::Invalid,
+        ),
+        (
+            "kernel.endpoint",
+            json!("https://paxeer.app/?a=1"),
+            Refusal::Invalid,
+        ),
+        (
+            "kernel.endpoint",
+            json!("https://gateway.example.com/"),
+            Refusal::Placeholder,
+        ),
+        ("kernel.poll_interval_ms", json!(0), Refusal::Placeholder),
+        ("kernel.poll_interval_ms", json!(60_001), Refusal::Invalid),
+        ("kernel.poll_interval_ms", json!("2000"), Refusal::Invalid),
+        ("kernel.poll_interval_ms", json!(-1), Refusal::Invalid),
+        ("kernel.topics", json!([]), Refusal::Missing),
+        (
+            "kernel.topics",
+            json!("PAXEERX_WEB_REQUEST_V1"),
+            Refusal::Invalid,
+        ),
+        ("kernel.topics", json!([7]), Refusal::Invalid),
+        (
+            "kernel.topics",
+            json!(["PAXEERX_WEB_ANSWER_V1"]),
+            Refusal::Invalid,
+        ),
+        (
+            "kernel.topics",
+            json!(["PAXEERX_WEB_REQUEST_V1", "PAXEERX_WEB_REQUEST_V1"]),
+            Refusal::Invalid,
+        ),
+        ("kernel.topics", json!(["<topic>"]), Refusal::Placeholder),
+        ("kernel.submitter_did", json!(7), Refusal::Invalid),
+        ("kernel.submitter_did", json!("did:Upper"), Refusal::Invalid),
+        (
+            "kernel.submitter_did",
+            json!("layerx:attestor"),
+            Refusal::Invalid,
+        ),
+        (
+            "kernel.submitter_did",
+            json!("your_did"),
+            Refusal::Placeholder,
+        ),
+        ("kernel.fee_limit", json!(100), Refusal::Invalid),
+        ("kernel.fee_limit", json!("0"), Refusal::Invalid),
+        ("kernel.fee_limit", json!("0100"), Refusal::Invalid),
+        (
+            "kernel.fee_limit",
+            json!("340282366920938463463374607431768211456"),
+            Refusal::Invalid,
+        ),
+        (
+            "kernel.fee_limit",
+            json!("replace_me"),
+            Refusal::Placeholder,
+        ),
+    ]
+}
+
+#[test]
+fn malformed_kernel_relay_settings_are_refused_naming_the_field(
+) -> Result<(), Box<dyn std::error::Error>> {
+    for (field, setting, expected) in malformed_kernel_settings() {
+        let mut value = valid_json()?;
+        if let Some(name) = field.strip_prefix("kernel.") {
+            value["kernel"] = kernel_settings();
+            value["kernel"][name] = setting.clone();
+        } else {
+            value["kernel"] = setting.clone();
+        }
+        assert_eq!(
+            Config::parse(&value.to_string()).err(),
+            Some(refusal(field, expected)),
+            "{field} = {setting}"
+        );
+    }
+    for name in [
+        "endpoint",
+        "poll_interval_ms",
+        "topics",
+        "submitter_did",
+        "fee_limit",
+    ] {
+        let mut value = valid_json()?;
+        value["kernel"] = kernel_settings();
+        value["kernel"]
+            .as_object_mut()
+            .ok_or("kernel object")?
+            .remove(name);
+        assert_eq!(
+            Config::parse(&value.to_string()).err(),
+            Some(refusal(&format!("kernel.{name}"), Refusal::Missing)),
+            "without {name}"
+        );
+    }
+    let mut value = valid_json()?;
+    value["kernel"] = kernel_settings();
+    value["kernel"]["start"] = serde_json::json!(0);
+    assert_eq!(
+        Config::parse(&value.to_string()).err(),
+        Some(refusal("kernel.start", Refusal::Unknown))
+    );
     Ok(())
 }
