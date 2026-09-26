@@ -891,15 +891,17 @@ touches = ["include/layerx/lxp_module.h","src/protocol/lxp_genesis.c","src/proto
 reqs = ["11.1","11.3"]
 
 [task.2.19]
-title = "Align the kernel test's attestor keys with the intake fixture's signers and qualify the program request path"
+title = "Re-sign the observation activity fixture with keys the tests hold and qualify the program request path"
 status = "pending"
 wave = 2
-requires = ["2.2"]
-do_1 = "Make the three attestor keys interop/crates/x-websearch/tests/kernel.rs derives the keys that signed tests/fixtures/web/observation-activity.hex, deriving them from the same seeds tests/test_web_program_path.c uses for its attestors; the registered-signer assertion stays exactly as written and the C test and the fixture are not changed."
-do_2 = "Run task 2.2's verify_cmd once on the result; on exit 0 record task 2.2 done with that revision, command, exit code and log, and close observation 2.2.1 naming the revision."
-verify_cmd = "timeout 20m sh -c 'make test-web-program-path && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test kernel'"
+requires = ["2.2","2.24"]
+do_1 = "The three signatures in tests/fixtures/web/observation-activity.hex come from keys no test holds, so no sidecar test can reproduce its bytes; re-record the fixture through a recorder in interop/crates/x-websearch/tests/kernel.rs, enabled by an environment variable in the shape of X_WEBSEARCH_RECORD_EXCHANGE, that signs the same origin-2 digest with the attestor keys derived from the scalars 1, 2 and 3 that tests/test_web_program_path.c holds, in ascending signer order, and writes the fixture; the recorder is a test path, never a production one."
+do_2 = "Pin the new signer addresses and signatures in the shared attestation vectors of tests/modules/test_web_intake.c and wherever tests/network/test_web_adapter.c names a signer, keeping every existing assertion, the unregistered signer and the ascending-order and threshold cases exactly as strong as they are; the digest they sign does not change."
+do_3 = "Make the kernel test derive its registered attestors from the same three scalars, so the_observation_activity_equals_the_kernel_adapter_fixture compares the sidecar's bytes with a fixture signed by keys the test holds; the assertion stays exactly as written."
+do_4 = "Run task 2.2's verify_cmd once on the result; on exit 0 record task 2.2 done with that revision, command, exit code and log, and close observations 2.2.1 and 2.19.1 naming the revision."
+verify_cmd = "timeout 20m sh -c 'make test-web-intake test-web-adapter && make test-web-program-path && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test kernel'"
 symbols = ["the_observation_activity_equals_the_kernel_adapter_fixture"]
-touches = ["interop/crates/x-websearch/tests/kernel.rs","interop/crates/x-websearch/tests/fixtures/kernel"]
+touches = ["tests/fixtures/web","tests/modules/test_web_intake.c","tests/network/test_web_adapter.c","interop/crates/x-websearch/tests/kernel.rs","interop/crates/x-websearch/tests/fixtures/kernel"]
 reqs = ["11.4"]
 
 [task.2.20]
