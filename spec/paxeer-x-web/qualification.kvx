@@ -1,0 +1,31 @@
+# qualification.kvx - Paxeer X web search and xweb executed-evidence ledger.
+#
+# Two record shapes live here. Both are append-only. No record is edited or
+# removed once written; a rerun appends a new record beside the old one.
+#
+# [observation.<task>.<n>]  - the shape every feature uses (workflow.kvx
+#   [qualification_log]): an assumption, an unrelated or pre-existing failure,
+#   a cross-task contradiction, a missing external interface, or a repair that
+#   would require weakening a check. Written once, never re-investigated and
+#   never re-run. Keys: task, file, symbol, observed, assumption, severity
+#   (blocker | suspect | assumption | note). At most six lines per entry.
+#
+# [gate.<task>.<n>]  - an EXECUTED gate. Written only after running the named
+#   command, from that run's own output; never written for a command that did
+#   not run and never written to record an expectation. Keys:
+#     task        = "3.1"                       task that ran the gate
+#     reqs        = ["16.3","16.4"]             acceptance criteria it qualifies
+#     revision    = "<40-hex commit>"           commit the command ran against
+#     command     = "go test -count=1 ./modules/xweb/..."
+#     environment = "<os/arch/toolchain identity>"
+#     started_at  = "<UTC timestamp>"
+#     outcome     = "pass"                      pass | fail | blocked
+#     evidence    = "<log path the gate printed>"
+#     note        = "free text; for blocked, the owner action required"
+#
+# Task-level verify_cmd runs are NOT recorded here: a task records its result
+# through cg spec done. This ledger carries the legs of the wave 3 gate and
+# the observations any task makes along the way.
+#
+# No record carries a hostname, an IP address, an internal URL, a credential or
+# the name of an agent or a working branch.
