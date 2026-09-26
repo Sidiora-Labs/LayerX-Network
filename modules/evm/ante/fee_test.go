@@ -11,11 +11,14 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/ante"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/keeper"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/state"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
+	node "github.com/sidiora-labs/paxeer-network/node"
 	"github.com/sidiora-labs/paxeer-network/node/antedecorators"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	sdkerrors "github.com/sidiora-labs/paxeer-network/sdk/types/errors"
 	testkeeper "github.com/sidiora-labs/paxeer-network/testutil/keeper"
 	"github.com/stretchr/testify/require"
 )
@@ -265,4 +268,108 @@ func newDynamicFeeTxWithoutValidation(tx *ethtypes.Transaction) *ethtx.DynamicFe
 
 	txData.SetSignatureValues(tx.ChainId(), v, r, s)
 	return txData
+}
+
+func TestFeeTokenAnte(t *testing.T) {
+	app := node.Setup(t, false, true, false)
+	k := &app.EvmKeeper
+	var priorities []int64
+	for _, tc := range []struct {
+		name                   string
+		preference             string
+		enabled                bool
+		tokenBalance           int64
+		nativeBalance          int64
+		missing, stale, future bool
+		value                  int64
+		wantError              error
+	}{
+		{name: "Sidiora", preference: "usid", enabled: true, tokenBalance: 1_000_000},
+		{name: "insufficient Sidiora", preference: "usid", enabled: true, tokenBalance: 1, wantError: sdkerrors.ErrInsufficientFunds},
+		{name: "missing rate", preference: "usid", enabled: true, tokenBalance: 1_000_000, missing: true, wantError: keeper.ErrFeeTokenRateUnavailable},
+		{name: "stale rate", preference: "usid", enabled: true, tokenBalance: 1_000_000, stale: true, wantError: keeper.ErrFeeTokenRateStale},
+		{name: "future rate", preference: "usid", enabled: true, tokenBalance: 1_000_000, future: true, wantError: keeper.ErrFeeTokenRateInvalid},
+		{name: "disallowed denom", preference: "uother", enabled: true, tokenBalance: 1_000_000, wantError: keeper.ErrFeeTokenDenomNotAllowed},
+		{name: "switch off", preference: "usid", nativeBalance: 1_000_000, tokenBalance: 1_000_000},
+		{name: "no preference", enabled: true, nativeBalance: 1_000_000, tokenBalance: 1_000_000},
+		{name: "network preference", preference: "uhpx", enabled: true, nativeBalance: 1_000_000, tokenBalance: 1_000_000},
+		{name: "value requires network coin", preference: "usid", enabled: true, tokenBalance: 1_000_000, value: 1, wantError: sdkerrors.ErrInsufficientFunds},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, _ := app.GetContextForDeliverTx(nil).WithBlockHeight(100).CacheContext()
+			params := types.DefaultParams()
+			params.FeeTokenEnabled = tc.enabled
+			height := int64(100)
+			if tc.stale {
+				height = 0
+				params.MaxFeeTokenRateAge = 10
+			}
+			if tc.future {
+				height = 101
+			}
+			params.AllowedFeeDenoms = []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.NewDec(types.InitialSidioraBaseUnitsPerPax), RateUpdateHeight: height}}
+			if tc.missing {
+				params.AllowedFeeDenoms = nil
+			}
+			k.SetParams(ctx, params)
+			key, err := crypto.GenerateKey()
+			require.NoError(t, err)
+			to := common.HexToAddress("0x4567")
+			signer := ethtypes.LatestSignerForChainID(k.ChainID(ctx))
+			tx, err := ethtypes.SignTx(ethtypes.NewTx(&ethtypes.LegacyTx{Gas: 100_000, GasPrice: big.NewInt(1_000_000_000_000), To: &to, Value: big.NewInt(tc.value)}), signer, key)
+			require.NoError(t, err)
+			data, err := ethtx.NewLegacyTx(tx)
+			require.NoError(t, err)
+			msg, err := types.NewMsgEVMTransaction(data)
+			require.NoError(t, err)
+			require.NoError(t, ante.Preprocess(ctx, msg, k.ChainID(ctx), false))
+			payer := k.GetPaxAddressOrDefault(ctx, msg.Derived.SenderEVMAddr)
+			if tc.preference != "" {
+				ctx.KVStore(app.GetKey(types.StoreKey)).Set(types.AccountFeeDenomKey(msg.Derived.SenderEVMAddr), []byte(tc.preference))
+			}
+			coins := sdk.NewCoins(sdk.NewInt64Coin("usid", tc.tokenBalance), sdk.NewInt64Coin("uhpx", tc.nativeBalance))
+			require.NoError(t, k.BankKeeper().MintCoins(ctx, types.ModuleName, coins))
+			require.NoError(t, k.BankKeeper().SendCoinsFromModuleToAccount(ctx, types.ModuleName, payer, coins))
+			nativeBefore := k.GetBalance(ctx, payer)
+			builder := app.GetTxConfig().NewTxBuilder()
+			require.NoError(t, builder.SetMsgs(msg))
+			result, err := ante.NewEVMFeeCheckDecorator(k, &app.UpgradeKeeper).AnteHandle(ctx, builder.GetTx(), false, func(ctx sdk.Context, _ sdk.Tx, _ bool) (sdk.Context, error) { return ctx, nil })
+			if tc.wantError != nil {
+				require.ErrorIs(t, err, tc.wantError)
+				if tc.name == "insufficient Sidiora" || tc.name == "disallowed denom" {
+					require.Contains(t, err.Error(), tc.preference)
+				}
+				require.Equal(t, sdk.NewInt(tc.tokenBalance), k.BankKeeper().GetBalance(ctx, payer, "usid").Amount)
+				return
+			}
+			require.NoError(t, err)
+			priorities = append(priorities, result.Priority())
+			charge, err := k.GetAnteFeeTokenCharge(ctx, tx.Hash())
+			require.NoError(t, err)
+			if tc.preference == "usid" && tc.enabled {
+				require.Equal(t, sdk.NewInt(688_600), k.BankKeeper().GetBalance(ctx, payer, "usid").Amount)
+				require.Equal(t, nativeBefore, k.GetBalance(ctx, payer))
+				require.NotNil(t, charge)
+				require.Equal(t, "usid", charge.Denom)
+				surplus, err := k.GetAnteSurplusSum(ctx)
+				require.NoError(t, err)
+				require.True(t, surplus.IsZero())
+				k.Paramstore.Set(ctx, types.KeyAllowedFeeDenoms, []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.NewDec(6_228_000), RateUpdateHeight: 100}})
+				response, err := keeper.NewMsgServerImpl(k).EVMTransaction(sdk.WrapSDKContext(ctx), msg)
+				require.NoError(t, err)
+				require.Empty(t, response.VmError)
+				require.Equal(t, uint64(21_000), response.GasUsed)
+				require.Equal(t, sdk.NewInt(934_606), k.BankKeeper().GetBalance(ctx, payer, "usid").Amount)
+				require.Equal(t, nativeBefore, k.GetBalance(ctx, payer))
+			} else {
+				require.Nil(t, charge)
+				require.Equal(t, sdk.NewInt(tc.tokenBalance), k.BankKeeper().GetBalance(ctx, payer, "usid").Amount)
+				require.Equal(t, new(big.Int).Sub(nativeBefore, big.NewInt(100_000_000_000_000_000)), k.GetBalance(ctx, payer))
+			}
+		})
+	}
+	require.Len(t, priorities, 4)
+	for _, priority := range priorities {
+		require.Equal(t, priorities[0], priority)
+	}
 }

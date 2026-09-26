@@ -11,6 +11,8 @@ import (
 )
 
 type EVMKeeper interface {
+	ConvertFeeToDenom(sdk.Int, sdk.Dec, bool) (sdk.Int, error)
+	ConvertFeeFromDenom(sdk.Int, sdk.Dec, bool) (sdk.Int, error)
 	PrefixStore(sdk.Context, []byte) sdk.KVStore
 	PurgePrefix(sdk.Context, []byte)
 	GetPaxAddress(sdk.Context, common.Address) (sdk.AccAddress, bool)

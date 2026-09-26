@@ -71,6 +71,11 @@ func (fc EVMFeeCheckDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate b
 		}
 	}
 
+	charge, err := fc.evmKeeper.GetFeeTokenCharge(ctx, msg.Derived.SenderEVMAddr)
+	if err != nil {
+		return ctx, err
+	}
+
 	// check if the sender has enough balance to cover fees
 	etx, _ := msg.AsTransaction()
 	emsg := fc.evmKeeper.GetEVMMessage(ctx, etx, msg.Derived.SenderEVMAddr)
@@ -79,6 +84,27 @@ func (fc EVMFeeCheckDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate b
 	blockCtx, err := fc.evmKeeper.GetVMBlockContext(ctx, gp)
 	if err != nil {
 		return ctx, err
+	}
+	if charge != nil {
+		fee := new(big.Int).Mul(new(big.Int).SetUint64(emsg.GasLimit), emsg.GasPrice)
+		if len(emsg.BlobHashes) > 0 && ethCfg.IsCancun(blockCtx.BlockNumber, blockCtx.Time) {
+			fee.Add(fee, new(big.Int).Mul(new(big.Int).SetUint64(etx.BlobGas()), blockCtx.BlobBaseFee))
+		}
+		if fee.Sign() < 0 || fee.BitLen() > 256 {
+			return ctx, evmkeeper.ErrFeeTokenOverflow
+		}
+		converted, err := evmkeeper.ConvertFeeToDenom(sdk.NewIntFromBigInt(fee), charge.Rate, true)
+		if err != nil {
+			return ctx, err
+		}
+		payer := fc.evmKeeper.GetPaxAddressOrDefault(ctx, charge.Payer)
+		if fc.evmKeeper.BankKeeper().SpendableCoins(ctx, payer).AmountOf(charge.Denom).LT(converted) {
+			return ctx, sdkerrors.Wrapf(sdkerrors.ErrInsufficientFunds, "insufficient %s for gas", charge.Denom)
+		}
+		if fc.evmKeeper.GetBalance(ctx, payer).Cmp(emsg.Value) < 0 {
+			return ctx, sdkerrors.Wrap(sdkerrors.ErrInsufficientFunds, "insufficient network coin for value")
+		}
+		stateDB.SetFeeTokenCharge(charge, false)
 	}
 	txCtx := core.NewEVMTxContext(emsg)
 	evmInstance := vm.NewEVM(*blockCtx, stateDB, ethCfg, vm.Config{}, fc.evmKeeper.CustomPrecompiles(ctx))
@@ -93,7 +119,13 @@ func (fc EVMFeeCheckDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate b
 		}
 	}
 	if err := st.BuyGas(); err != nil {
+		if charge != nil && stateDB.Error() != nil {
+			return ctx, stateDB.Error()
+		}
 		return ctx, sdkerrors.Wrap(sdkerrors.ErrInsufficientFunds, err.Error())
+	}
+	if charge != nil && stateDB.Error() != nil {
+		return ctx, stateDB.Error()
 	}
 	if !ctx.IsCheckTx() && !ctx.IsReCheckTx() {
 		surplus, err := stateDB.Finalize()
@@ -101,6 +133,12 @@ func (fc EVMFeeCheckDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate b
 			return ctx, err
 		}
 		if err := fc.evmKeeper.AddAnteSurplus(ctx, etx.Hash(), surplus); err != nil {
+			return ctx, err
+		}
+	}
+
+	if charge != nil {
+		if err := fc.evmKeeper.SetAnteFeeTokenCharge(ctx, etx.Hash(), charge); err != nil {
 			return ctx, err
 		}
 	}

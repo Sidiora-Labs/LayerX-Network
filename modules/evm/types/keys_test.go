@@ -107,3 +107,10 @@ func TestAccountFeeDenomKey(t *testing.T) {
 	key[0] = 0
 	require.Equal(t, byte(0x23), types.AccountFeeDenomKey(account)[0])
 }
+
+func TestAnteFeeTokenChargePrefix(t *testing.T) {
+	require.Equal(t, []byte{0x24}, types.AnteFeeTokenChargePrefix)
+	for _, prefix := range [][]byte{types.AnteSurplusPrefix, types.DeferredInfoPrefix, types.NonceBumpPrefix, types.ReceiptKeyPrefix, types.AccountFeeDenomKeyPrefix} {
+		require.NotEqual(t, prefix, types.AnteFeeTokenChargePrefix)
+	}
+}

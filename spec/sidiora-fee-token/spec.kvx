@@ -61,7 +61,7 @@ story = "As someone who holds Sidiora and no Paxeer coin, I want to sign a batch
 ac_1 = "THE sponsored batch contract SHALL execute a batch only when it carries both the account's authorisation over the batch and a relayer quote signed by the relayer named in that quote, and SHALL revert when either signature is absent, recovers to a different address, or covers different bytes."
 ac_2 = "THE quote SHALL carry the sponsor address, the Sidiora token address, the maximum Sidiora amount the account will pay, the quoted amount, a deadline and a quote nonce, and the contract SHALL revert when the block timestamp is past the deadline, when the quoted amount exceeds the maximum, or when the quote nonce has already been consumed."
 ac_3 = "THE contract SHALL transfer the quoted Sidiora amount from the account to the sponsor inside the same batch execution, before or after the batch calls as the ordering the contract documents requires, and SHALL revert the whole batch when that transfer fails, so a batch that executes and a sponsor that is repaid are the same event."
-ac_4 = "THE quoted amount SHALL be checked against the Sidiora price the oracle precompile reports, and a quote whose implied rate lies outside the contract's declared spread from that rate SHALL be rejected; a rate the oracle does not report SHALL reject the quote rather than skip the check."
+ac_4 = "THE quoted amount SHALL be checked against the paymaster's owner-set Sidiora rate and the staleness bound that rate carries, and a quote whose implied rate lies outside the contract's declared spread from that rate SHALL be rejected; a rate the paymaster has held longer than its staleness bound allows SHALL reject the quote rather than skip the check."
 ac_5 = "THE batch nonce SHALL keep protecting the account's authorisation against replay exactly as it does now, and the quote nonce SHALL protect the relayer's quote against replay independently, so replaying either half alone reverts."
 ac_6 = "THE direct execution path, which the account itself calls with no signature, SHALL keep working and SHALL require no quote, and the contract SHALL keep receiving the network coin."
 ac_7 = "A Foundry test SHALL cover a successful sponsored batch with the sponsor repaid, a missing and a wrong account signature, a missing and a wrong relayer signature, an expired deadline, a quoted amount above the maximum, a replayed quote nonce, a replayed batch nonce, a failing Sidiora transfer reverting the whole batch, a quote outside the oracle spread, an oracle that reports no rate, and the direct execution path."
@@ -440,7 +440,11 @@ reqs = ["9.1","9.2","9.3","9.4","9.5"]
 
 [task.2.6]
 title = "Debit and refund gas in the account's fee denom at a governed rate"
-status = "pending"
+status = "done"
+revision = "13c4235ee99a48c95d71c74aa88a6434893d645b"
+command = "timeout 20m sh -c 'go test -count=1 ./modules/evm/ante/...'"
+exit_code = 0
+log_path = "/root/lx-lanes/sid-t2-6b/.logs/verify-review.log"
 wave = 2
 requires = ["2.4","2.5","2.12"]
 do_1 = "In modules/evm/ante/fee.go, inside EVMFeeCheckDecorator.AnteHandle and after the existing fee cap, minimum fee, tip cap and blob fee cap checks have run unchanged, read the sender's fee denom through the x/evm keeper; when the fee-token path is on and that denom is an allowed fee denom, convert the transaction's maximum fee from Paxeer terms into that denom through GetFeeTokenRate before geth's BuyGas runs, and debit that denom."
@@ -451,14 +455,14 @@ do_5 = "Leave the path byte for byte as it is today when the fee-token switch is
 do_6 = "Extend modules/evm/ante/fee_test.go with a Sidiora-paid transaction debiting Sidiora, an insufficient Sidiora balance refusing, a missing rate refusing, a rate outside the spread refusing, the refund returning Sidiora at the debit rate, two payers in different denoms at the same real price receiving the same priority, and every existing case continuing to pass unchanged."
 verify_cmd = "timeout 20m sh -c 'go test -count=1 ./modules/evm/ante/...'"
 symbols = ["EVMFeeCheckDecorator","AnteHandle","CalculatePriority","ConvertFeeToDenom"]
-touches = ["modules/evm/ante/fee.go","modules/evm/ante/fee_test.go","modules/evm/ante/gas.go","modules/evm/ante/gas_test.go","modules/evm/keeper/feetoken.go"]
+touches = ["modules/evm/ante/fee.go","modules/evm/ante/fee_test.go","modules/evm/keeper/feetoken.go","modules/evm/keeper/feetoken_test.go","modules/evm/keeper/msg_server.go","modules/evm/keeper/msg_server_test.go","modules/evm/state/balance.go","modules/evm/state/balance_test.go","modules/evm/state/statedb.go","modules/evm/state/statedb_test.go","modules/evm/state/expected_keepers.go","modules/evm/state/expected_keepers_test.go","modules/evm/types/keys.go","modules/evm/types/keys_test.go"]
 reqs = ["10.1","10.2","10.3","10.4","10.5","10.6"]
 
 [task.2.7]
 title = "Accept the same fee denoms on the Cosmos path"
 status = "pending"
 wave = 2
-requires = ["2.4","2.12"]
+requires = ["2.4","2.6","2.12"]
 do_1 = "Add a fee-denom conversion to the Cosmos fee path so a fee offered in a denom the x/evm fee-token parameters allow is converted to Paxeer terms through GetFeeTokenRate and the same spread bound the EVM path uses, and a denom the parameters do not allow is refused; propagate the named refusal error for a missing, invalid, future or stale rate without falling back to the network coin, a zero charge or an unbounded stale rate."
 do_2 = "Make the minimum-fee check run against the converted Paxeer-terms amount, so a Sidiora fee and a Paxeer fee of the same real value are accepted or refused together, and leave the priority assignment computed from that same converted amount."
 do_3 = "Keep node/ante.go's decorator ordering exactly as it is - the gasless decorator wrapping the deduct-fee decorator, the oracle spamming and vote-alone decorators, and the priority decorator after fee deduction - and change no decorator's construction beyond passing what the conversion needs."

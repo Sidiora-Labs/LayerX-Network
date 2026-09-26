@@ -1,6 +1,7 @@
 package state
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -13,6 +14,10 @@ import (
 var ZeroInt = uint256.NewInt(0)
 
 func (s *DBImpl) SubBalance(evmAddr common.Address, amtUint256 *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
+	if s.feeTokenCharge != nil && evmAddr == s.feeTokenCharge.Payer && reason == tracing.BalanceDecreaseGasBuy {
+		s.gasBought = true
+		return s.moveFeeToken(evmAddr, amtUint256, true, true)
+	}
 	s.k.PrepareReplayedAddr(s.ctx, evmAddr)
 	amt := amtUint256.ToBig()
 	if amt.Sign() == 0 {
@@ -62,6 +67,15 @@ func (s *DBImpl) SubBalance(evmAddr common.Address, amtUint256 *uint256.Int, rea
 }
 
 func (s *DBImpl) AddBalance(evmAddr common.Address, amtUint256 *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
+	if s.feeTokenCharge != nil {
+		if evmAddr == s.feeTokenCharge.Payer && reason == tracing.BalanceIncreaseGasReturn {
+			return s.moveFeeToken(evmAddr, amtUint256, false, true)
+		}
+		if evmAddr == s.coinbaseEvmAddress && reason == tracing.BalanceIncreaseRewardTransactionFee {
+			// The coinbase credit floors so the refund and the reward together never exceed the ceilinged debit.
+			return s.moveFeeToken(evmAddr, amtUint256, false, false)
+		}
+	}
 	s.k.PrepareReplayedAddr(s.ctx, evmAddr)
 	amt := amtUint256.ToBig()
 	if amt.Sign() == 0 {
@@ -111,7 +125,22 @@ func (s *DBImpl) GetBalance(evmAddr common.Address) *uint256.Int {
 	// Hook for mock balances (no-op in production builds)
 	s.ensureMinimumBalance(evmAddr)
 	paxAddr := s.getPaxAddress(evmAddr)
-	res, overflow := uint256.FromBig(s.k.GetBalance(s.ctx, paxAddr))
+	balance := s.k.GetBalance(s.ctx, paxAddr)
+	// Fee-token buying power augments the payer only before BuyGas; execution sees the real network-coin balance.
+	if s.feeTokenCharge != nil && !s.gasBought && evmAddr == s.feeTokenCharge.Payer {
+		amount := s.k.BankKeeper().SpendableCoins(s.ctx, paxAddr).AmountOf(s.feeTokenCharge.Denom)
+		wei, err := s.k.ConvertFeeFromDenom(amount, s.feeTokenCharge.Rate, false)
+		if err != nil {
+			s.err = err
+			return uint256.NewInt(0)
+		}
+		balance = new(big.Int).Add(balance, wei.BigInt())
+		if balance.BitLen() > 256 {
+			s.err = fmt.Errorf("fee-token buying power exceeds 256 bits")
+			return uint256.NewInt(0)
+		}
+	}
+	res, overflow := uint256.FromBig(balance)
 	if overflow {
 		panic("balance overflow")
 	}
@@ -157,4 +186,44 @@ func (s *DBImpl) send(from sdk.AccAddress, to sdk.AccAddress, amt *big.Int) {
 	if err != nil {
 		s.err = err
 	}
+}
+
+type FeeTokenCharge struct {
+	Payer common.Address
+	Denom string
+	Rate  sdk.Dec
+}
+
+func (s *DBImpl) SetFeeTokenCharge(charge *FeeTokenCharge, gasBought bool) {
+	s.feeTokenCharge = nil
+	if charge != nil {
+		copied := *charge
+		s.feeTokenCharge = &copied
+	}
+	s.gasBought = gasBought
+}
+
+func (s *DBImpl) moveFeeToken(evmAddr common.Address, amount *uint256.Int, debit bool, roundUp bool) uint256.Int {
+	converted, err := s.k.ConvertFeeToDenom(sdk.NewIntFromBigInt(amount.ToBig()), s.feeTokenCharge.Rate, roundUp)
+	if err != nil {
+		s.err = err
+		return *ZeroInt
+	}
+	if converted.IsZero() {
+		return *ZeroInt
+	}
+	ctx := s.ctx
+	if s.eventsSuppressed {
+		ctx = ctx.WithEventManager(sdk.NewEventManager())
+	}
+	coins := sdk.NewCoins(sdk.NewCoin(s.feeTokenCharge.Denom, converted))
+	if debit {
+		err = s.k.BankKeeper().SubUnlockedCoins(ctx, s.getPaxAddress(evmAddr), coins, true)
+	} else {
+		err = s.k.BankKeeper().AddCoins(ctx, s.getPaxAddress(evmAddr), coins, true)
+	}
+	if err != nil {
+		s.err = err
+	}
+	return *ZeroInt
 }
