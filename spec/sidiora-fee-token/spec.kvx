@@ -839,7 +839,7 @@ reqs = ["12.1","12.2","12.3","12.5"]
 
 [task.4.10]
 title = "Charge a withdrawn preference as no preference"
-status = "pending"
+status = "done"
 wave = 4
 requires = []
 do_1 = "In modules/evm/keeper/feetoken.go make GetFeeTokenCharge return no charge, so the network coin is charged, when the payer's stored preference names a denom the parameters no longer allow, as requirement 9 acceptance criterion 6 and requirement 10 acceptance criterion 7 state; keep every refusal for a denom that is still allowed - a missing, invalid, future or stale governed rate - exactly as it is."
@@ -850,6 +850,10 @@ verify_cmd = "timeout 20m sh -c 'go test -count=1 ./modules/evm/ante/... ./preco
 symbols = ["GetFeeTokenCharge","IsAllowedFeeDenom","ClearAccountFeeDenom"]
 touches = ["modules/evm/keeper/feetoken.go","modules/evm/keeper/feetoken_test.go","modules/evm/ante/fee_test.go","precompiles/feetoken/feetoken_test.go"]
 reqs = ["9.2","9.6","10.2","10.5","10.7"]
+revision = "ecebaa2f51cecadf1de6ca104b4609548e1c72a9"
+command = "timeout 20m sh -c 'go test -count=1 ./modules/evm/ante/... ./precompiles/feetoken/... && go test -count=1 -run FeeToken ./modules/evm/keeper/...'"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.4.11]
 title = "Bound every governed rate update by the maximum spread"
