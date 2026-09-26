@@ -10,13 +10,19 @@
 # deployment record is refused with a message that names the field or the
 # variable at fault.
 #
-# No endpoint, explorer or cluster is reached: every run here stops at
-# --preflight, the endpoint variables carry the reserved .invalid domain, and the
-# keys and identities are generated into a private temporary directory and thrown
-# away with it. The Solana run is driven as far as the pinned toolchain, which
-# this check deliberately points at an empty directory: that refusal is the proof
-# that every configuration and environment check before it passed. A deployment
-# against a real cluster is the Solana dry run's job, not this check's.
+# No endpoint, explorer or cluster is reached: the endpoint variables carry the
+# reserved .invalid domain, and the keys and identities are generated into a
+# private temporary directory and thrown away with it. The Solana run is driven
+# as far as the pinned toolchain, which this check points at an empty directory:
+# that refusal is the proof that every configuration and environment check before
+# it passed. The Solana first deployment is then driven past --preflight against
+# the cluster recorded in fixtures/solana-deploy, whose toolchain answers only the
+# invocations the script makes and only for a .invalid endpoint: the vault
+# authority the script records must be the PDA of the seed the program declares
+# as VAULT_SEED, pinned by the bridge/vectors Solana vector, a script that names
+# any other seed is caught, and a placeholder solana.program_id stops the run
+# before the initialise step. A deployment against a real cluster is the Solana
+# dry run's job, not this check's.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -31,17 +37,30 @@ EVM_CHAIN_NAMES=(ethereum base arbitrum optimism bnb polygon avalanche hyperevm)
 ENDPOINT=https://endpoint.invalid
 ZERO_ADDRESS=0x0000000000000000000000000000000000000000
 SID_MINT=5w3wVdJaESaJKyLmStM6Hv9UyUkmZ1b9DLQquAqqpump
+SOLANA_FIXTURES="$SCRIPT_DIR/fixtures/solana-deploy"
+REPLAY_TOOLCHAIN="$SOLANA_FIXTURES/toolchain"
+SOLANA_KEYS="$SOLANA_FIXTURES/solana_keys.py"
+VAULT_FIXTURE="$SOLANA_FIXTURES/vault-authority.json"
+PROGRAM_STATE="$REPO_ROOT/bridge/solana/src/state.rs"
+SOLANA_VECTORS="$REPO_ROOT/bridge/vectors/solana.go"
 
 fail() {
     printf 'deploy-scripts-check: error: %s\n' "$*" >&2
     exit 1
 }
 
-for tool in jq cast openssl python3; do
+for tool in jq cast openssl python3 sha256sum; do
     command -v "$tool" > /dev/null 2>&1 || fail "$tool is required and is not on the PATH"
 done
 for script in "$DEPLOY_EVM" "$VERIFY_EVM" "$DEPLOY_SOLANA"; do
     [ -r "$script" ] || fail "$script is missing"
+done
+for fixture in "$SOLANA_KEYS" "$VAULT_FIXTURE" "$SOLANA_FIXTURES/cluster.json" \
+    "$PROGRAM_STATE" "$SOLANA_VECTORS"; do
+    [ -r "$fixture" ] || fail "$fixture is missing"
+done
+for tool in solana solana-keygen cargo-build-sbf; do
+    [ -x "$REPLAY_TOOLCHAIN/$tool" ] || fail "$REPLAY_TOOLCHAIN/$tool is missing or not executable"
 done
 
 # Nothing an operator happens to have exported may reach the scripts under check:
@@ -502,5 +521,153 @@ refuses 'must hold the pinned Solana toolchain' \
     env "PAXEER_BRIDGE_SOLANA_CHAINS_ROOT=$SOLANA_ROOT" "${SOLANA_ENVIRONMENT[@]}" \
     bash "$DEPLOY_SOLANA" --preflight
 
-printf 'deploy-scripts-check: the %d committed chain configurations are refused while they carry their placeholders, a filled one is ready to deploy, and every argument, placeholder, missing variable and inconsistent record is refused\n' \
-    $((${#EVM_CHAIN_NAMES[@]} + 1)) >&2
+# deploy-solana-program.sh: the vault authority is the PDA of the program's own
+# seed. The program declares it as VAULT_SEED, the recorded fixture pins the PDA
+# and handle of the bridge/vectors program id under it, and the arithmetic that
+# derives it here is checked against that record before it judges the script.
+PROGRAM_SEED=$(sed -n 's/^pub const VAULT_SEED: &\[u8\] = b"\([^"]*\)";$/\1/p' "$PROGRAM_STATE")
+[ -n "$PROGRAM_SEED" ] || fail "$PROGRAM_STATE declares no VAULT_SEED"
+VAULT_PROGRAM=$(jq -r .program_id "$VAULT_FIXTURE")
+VAULT_AUTHORITY=$(jq -r .vault_authority "$VAULT_FIXTURE")
+VAULT_HANDLE=$(jq -r .vault_handle "$VAULT_FIXTURE")
+[ "$(jq -r .seed "$VAULT_FIXTURE")" = "$PROGRAM_SEED" ] \
+    || fail "$VAULT_FIXTURE records the seed $(jq -r .seed "$VAULT_FIXTURE"), and the program declares $PROGRAM_SEED"
+for pinned in "VectorProgramID = mustKeyHex(\"$(jq -r .program_id_hex "$VAULT_FIXTURE")\")" \
+    "VectorVaultAuthority = mustKeyHex(\"$(jq -r .vault_authority_hex "$VAULT_FIXTURE")\")" \
+    "VectorVaultHandle = mustAddress(\"${VAULT_HANDLE#0x}\")" \
+    "VectorVaultAuthorityBump uint8 = $(jq -r .bump "$VAULT_FIXTURE")"; do
+    grep -qF -- "$pinned" "$SOLANA_VECTORS" || fail "$SOLANA_VECTORS does not pin $pinned"
+done
+[ "$(python3 "$SOLANA_KEYS" hex "$VAULT_PROGRAM")" = "$(jq -r .program_id_hex "$VAULT_FIXTURE")" ] \
+    || fail "$VAULT_FIXTURE: program_id is not program_id_hex"
+[ "$(python3 "$SOLANA_KEYS" hex "$VAULT_AUTHORITY")" = "$(jq -r .vault_authority_hex "$VAULT_FIXTURE")" ] \
+    || fail "$VAULT_FIXTURE: vault_authority is not vault_authority_hex"
+DERIVED=$(python3 "$SOLANA_KEYS" pda "$VAULT_PROGRAM" "string:$PROGRAM_SEED")
+[ "$DERIVED" = "$VAULT_AUTHORITY $(jq -r .bump "$VAULT_FIXTURE")" ] \
+    || fail "the seed $PROGRAM_SEED derives $DERIVED under $VAULT_PROGRAM, and the fixture records $VAULT_AUTHORITY"
+DIGEST=$(cast keccak "0x$(python3 "$SOLANA_KEYS" hex "$VAULT_AUTHORITY")")
+[ "0x${DIGEST: -40}" = "$VAULT_HANDLE" ] \
+    || fail "the handle of $VAULT_AUTHORITY is 0x${DIGEST: -40}, and the fixture records $VAULT_HANDLE"
+[ "$(jq -r .program_id "$SOLANA_FIXTURES/cluster.json")" = "$VAULT_PROGRAM" ] \
+    || fail "the recorded cluster deploys another program than the vault fixture's"
+
+# A deployment script names the program's seed when its VAULT_AUTHORITY_SEED is
+# that seed and every PDA it derives is derived from VAULT_AUTHORITY_SEED.
+names_program_seed() {
+    local script=$1 seed derivations
+    seed=$(sed -n 's/^VAULT_AUTHORITY_SEED=//p' "$script")
+    if [ "$seed" != "$PROGRAM_SEED" ]; then
+        printf 'VAULT_AUTHORITY_SEED is %s, and the program derives its vault authority from %s\n' \
+            "${seed:-nothing}" "$PROGRAM_SEED"
+        return 1
+    fi
+    derivations=$(grep -c 'find-program-derived-address' "$script" || true)
+    # shellcheck disable=SC2016 # the literal text the script derives its PDA from
+    if [ "$derivations" -ne 1 ] \
+        || [ "$(grep -o 'string:[^"[:space:]]*' "$script" | sort -u)" != 'string:$VAULT_AUTHORITY_SEED' ]; then
+        printf 'the script derives an address from a seed other than VAULT_AUTHORITY_SEED\n'
+        return 1
+    fi
+}
+
+# A deployment record carries the vault when its program, vault authority and
+# handle are the recorded fixture's.
+records_program_vault() {
+    local record=$1 field expected found
+    for field in program_id vault_authority vault_handle; do
+        expected=$(jq -r --arg field "$field" '.[$field]' "$VAULT_FIXTURE")
+        found=$(jq -r --arg field "$field" '.[$field] // "nothing"' "$record")
+        if [ "$found" != "$expected" ]; then
+            printf '%s records %s as %s, and the program derives %s\n' "$record" "$field" "$found" "$expected"
+            return 1
+        fi
+    done
+}
+
+REASON=$(names_program_seed "$DEPLOY_SOLANA") || fail "$DEPLOY_SOLANA: $REASON"
+
+# deploy-solana-program.sh: a first deployment against the recorded cluster. The
+# committed solana.program_id placeholder is kept, so the run deploys, records
+# the program and its vault, and stops before the initialise step naming the
+# field. The admin client stand-in fails any instruction it is handed, so a run
+# that went on to initialise would be refused for that instead.
+first_deployment() {
+    local script=$1 name=$2 root state
+    root=$(solana_configuration "$name")
+    state="$WORK/replay-$name"
+    mkdir -p "$state"
+    attempt env "PAXEER_BRIDGE_SOLANA_CHAINS_ROOT=$root" \
+        "PAXEER_BRIDGE_SOLANA_RPC_URL=$ENDPOINT" \
+        "PAXEER_BRIDGE_SOLANA_KEYPAIR_FILE=$WORK/publisher.json" \
+        "PAXEER_BRIDGE_SOLANA_TOOLCHAIN_BIN=$REPLAY_TOOLCHAIN" \
+        "PAXEER_BRIDGE_DEPLOYMENT_RECORD=$WORK/records/$name.json" \
+        "PAXEER_BRIDGE_SOLANA_ADMIN_CLI=$ADMIN" \
+        "DEPLOY_CHECK_REPLAY_STATE=$state" \
+        bash "$script"
+}
+
+accepts 'is ready to deploy' 'a first Solana deployment against the recorded cluster, at --preflight' \
+    env "PAXEER_BRIDGE_SOLANA_CHAINS_ROOT=$SOLANA_ROOT" "PAXEER_BRIDGE_SOLANA_RPC_URL=$ENDPOINT" \
+    "PAXEER_BRIDGE_SOLANA_KEYPAIR_FILE=$WORK/publisher.json" \
+    "PAXEER_BRIDGE_SOLANA_TOOLCHAIN_BIN=$REPLAY_TOOLCHAIN" \
+    "PAXEER_BRIDGE_DEPLOYMENT_RECORD=$WORK/records/solana.json" \
+    "PAXEER_BRIDGE_SOLANA_ADMIN_CLI=$ADMIN" \
+    bash "$DEPLOY_SOLANA" --preflight
+
+first_deployment "$DEPLOY_SOLANA" solana-first-deployment
+FIRST_RECORD="$WORK/records/solana-first-deployment.json"
+[ "$STATUS" -ne 0 ] || {
+    quote
+    fail 'a first Solana deployment with a placeholder solana.program_id went on to the initialise step'
+}
+for needle in "solana.program_id: PLACEHOLDER:program-id is still a placeholder" \
+    'stops before the initialise step' "set solana.program_id to $VAULT_PROGRAM"; do
+    grep -qF -- "$needle" "$WORK/last.log" || {
+        quote
+        fail "a first Solana deployment was refused without naming: $needle"
+    }
+done
+if grep -qF 'could not initialise' "$WORK/last.log"; then
+    quote
+    fail 'a first Solana deployment reached the admin client before refusing its placeholder'
+fi
+[ -r "$FIRST_RECORD" ] || {
+    quote
+    fail 'a first Solana deployment wrote no deployment record'
+}
+REASON=$(records_program_vault "$FIRST_RECORD") || fail "a first Solana deployment: $REASON"
+for field in owner attestors threshold assets; do
+    [ "$(jq --arg field "$field" 'has($field)' "$FIRST_RECORD")" = false ] \
+        || fail "a first Solana deployment records $field, which only an initialised program has"
+done
+[ "$(jq -r .program_data_account "$FIRST_RECORD")" = "$(python3 "$SOLANA_KEYS" pda \
+    BPFLoaderUpgradeab1e11111111111111111111111 "pubkey:$VAULT_PROGRAM" | cut -d ' ' -f 1)" ] \
+    || fail 'a first Solana deployment records a program data account the loader does not derive'
+
+# A deployment script that names any other seed is caught twice: by its source,
+# and by the vault its first deployment records. The seed the program declared
+# before it settled on its own is the first such seed tried.
+mkdir -p "$WORK/other-seed/bridge/deploy"
+ln -s "$REPO_ROOT/bridge/solana" "$WORK/other-seed/bridge/solana"
+OTHER_SEED_SCRIPT="$WORK/other-seed/bridge/deploy/deploy-solana-program.sh"
+# shellcheck disable=SC2016 # sed expressions matching the script's literal text
+for mutation in 's/^VAULT_AUTHORITY_SEED=.*/VAULT_AUTHORITY_SEED=vault/' \
+    's/"string:\$VAULT_AUTHORITY_SEED"/"string:vault"/'; do
+    sed -e "$mutation" "$DEPLOY_SOLANA" > "$OTHER_SEED_SCRIPT"
+    ! cmp -s "$DEPLOY_SOLANA" "$OTHER_SEED_SCRIPT" || fail "the mutation $mutation changed nothing in $DEPLOY_SOLANA"
+    if names_program_seed "$OTHER_SEED_SCRIPT" > /dev/null; then
+        fail "a deployment script changed by $mutation was taken to name the program's seed"
+    fi
+    rm -f "$WORK/records/solana-other-seed.json"
+    first_deployment "$OTHER_SEED_SCRIPT" solana-other-seed
+    [ -r "$WORK/records/solana-other-seed.json" ] || {
+        quote
+        fail "a deployment script changed by $mutation wrote no record to compare"
+    }
+    if records_program_vault "$WORK/records/solana-other-seed.json" > /dev/null; then
+        fail "a deployment script changed by $mutation recorded the program's own vault"
+    fi
+done
+
+printf 'deploy-scripts-check: the %d committed chain configurations are refused while they carry their placeholders, a filled one is ready to deploy, every argument, placeholder, missing variable and inconsistent record is refused, and a first Solana deployment records the vault the program derives from %s and stops before the initialise step\n' \
+    $((${#EVM_CHAIN_NAMES[@]} + 1)) "$PROGRAM_SEED" >&2

@@ -114,6 +114,7 @@ symbol = "VAULT_AUTHORITY_SEED"
 observed = "The deploy script derives the vault-authority address and the vault_handle it records from the seed 'vault', while bridge/solana/src/state.rs VAULT_SEED and bridge/ATTESTATION-SOLANA.md use 'vault-authority', so the recorded handle is not the program's custody PDA."
 assumption = "Out of scope for a documentation task; the Solana page tells the operator to derive the handle from the program's seed, and the script needs its seed corrected by the task that owns it."
 severity = "blocker"
+closed = "Task 2.10 derives the vault authority and its handle from the program's seed vault-authority and stops a first deployment before the initialise step while solana.program_id is a placeholder, naming the field; the verify_cmd passed at revision 308683b4e5bb4abde8df42993137d91fee7e6b42."
 
 [observation.2.5.2]
 task = "2.5"
@@ -177,6 +178,7 @@ symbol = "VAULT_AUTHORITY_SEED"
 observed = "The script derives the vault-authority PDA from the seed vault while the program and the admin client derive it from vault-authority, so the deployment record's vault authority and handle are not the program's; and the client refuses the placeholder solana.program_id the script's first-deployment path still carries."
 assumption = "The script belongs to task 1.4 and is left as written; the client prints the program's own vault authority and handle, and the operator fills solana.program_id from the program keypair before the initialise step."
 severity = "blocker"
+closed = "Task 2.10 derives the vault authority and its handle from the program's seed vault-authority and stops a first deployment before the initialise step while solana.program_id is a placeholder, naming the field; the verify_cmd passed at revision 308683b4e5bb4abde8df42993137d91fee7e6b42."
 
 [observation.2.8.2]
 task = "2.8"
@@ -184,4 +186,12 @@ file = "bridge/solana/admin/src/main.rs"
 symbol = "OWNER_KEY_VARIABLE"
 observed = "The chain configuration names only the deploy key variable, while set-attestors, register-asset, set-cap and pause need the owner's signature, so the client reads the owner keypair file through the fixed PAXEER_BRIDGE_SOLANA_OWNER_KEYPAIR_FILE and refuses a key that is not the configured owner."
 assumption = "An owner-key variable in the configuration schema would belong to bridge/deploy/chainconfig and the committed configuration, which this task does not own; this resolves observation 1.4.2 for the admin client itself."
+severity = "note"
+
+[observation.2.10.1]
+task = "2.10"
+file = "bridge/deploy/deploy-solana-program.sh"
+symbol = "PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE"
+observed = "A first deployment with no PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE deploys under the program keypair the build leaves in the run's temporary directory, which is removed on exit, while the rerun with a filled solana.program_id requires that keypair."
+assumption = "Out of this task's scope; the operator supplies a program keypair on the first deployment, and keeping or requiring it belongs to the script's owner."
 severity = "note"

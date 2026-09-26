@@ -122,7 +122,7 @@
     - Make bridge/deploy/proposals/proposals.go emit each body as a governance proposal message with its real type URL, so the bundle submits through the chain's governance transaction as it stands, and keep its marshalling of the real generated types with no copy of them.
     - Extend modules/layerxbridge/keeper/keeper_test.go and bridge/deploy/proposals/proposals_test.go: every message routes through the message service router to the keeper, a wrong authority is refused, and a decoded proposal body equals the generated message field for field.
     - _Requirements: 9.1, 9.2_
-  - [ ] 2.10 Derive the Solana vault handle from the program's own seed
+  - [x] 2.10 Derive the Solana vault handle from the program's own seed
     - In bridge/deploy/deploy-solana-program.sh derive the vault authority and the vault handle from the seed the program declares as VAULT_SEED in bridge/solana/src/state.rs, vault-authority, instead of vault (observations 2.5.1 and 2.8.1), and make the first-deployment path write the deployed program id into the deployment record and refuse to continue to the initialise step while solana.program_id is still a placeholder, naming the field.
     - Extend bridge/deploy/tests/deploy-scripts-check.sh so it derives the vault authority from the program's seed against the recorded fixture, fails when the script names any other seed, and covers the placeholder refusal.
     - _Requirements: 3.1, 3.2_

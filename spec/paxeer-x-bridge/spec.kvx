@@ -550,7 +550,11 @@ reqs = ["9.1","9.2"]
 
 [task.2.10]
 title = "Derive the Solana vault handle from the program's own seed"
-status = "pending"
+status = "done"
+revision = "308683b4e5bb4abde8df42993137d91fee7e6b42"
+command = "timeout 20m sh -c 'bash bridge/deploy/tests/deploy-scripts-check.sh'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["1.4"]
 do_1 = "In bridge/deploy/deploy-solana-program.sh derive the vault authority and the vault handle from the seed the program declares as VAULT_SEED in bridge/solana/src/state.rs, vault-authority, instead of vault (observations 2.5.1 and 2.8.1), and make the first-deployment path write the deployed program id into the deployment record and refuse to continue to the initialise step while solana.program_id is still a placeholder, naming the field."
