@@ -76,6 +76,10 @@ on:
       - '!scripts/qualify-mirror-verification-live.sh'
       - '.github/workflows/paxeer-pr-to-slack-codex.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   codex_review:
     # Run only for trusted contributors
