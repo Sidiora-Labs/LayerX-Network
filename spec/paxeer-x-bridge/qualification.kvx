@@ -129,6 +129,21 @@ file = "interop/crates/layerx-bridge-relayer/src/abi.rs"
 symbol = "cargo clippy -D warnings"
 observed = "cargo clippy --locked --manifest-path interop/Cargo.toml -p layerx-bridge-relayer --all-targets -- -D warnings exits 101 on five lints in code this task did not change (abi.rs:313 type_complexity, attestation.rs:1 doc_markdown, relayer.rs scan_inbound and scan_outbound single_match_else, rpc.rs:132 map_unwrap_or); the build passes and log .logs/build.log names them."
 assumption = "Pre-existing under the clippy 0.1.91 toolchain rather than introduced here, so they are left for the wave gate instead of being edited from this task."
+
+[observation.2.1.1]
+task = "2.1"
+file = "bridge/solana/Cargo.toml"
+symbol = "libsecp256k1"
+observed = "The release tests must produce real secp256k1 signatures, and the crate's only reachable signer is solana_sdk::secp256k1_instruction, which is deprecated and would need an allow(deprecated) to pass clippy -D warnings, so bridge/solana/tests/release.rs signs with libsecp256k1 =0.6.0, already in Cargo.lock, which Cargo.toml does not yet list as a dev-dependency."
+assumption = "Cargo.toml and Cargo.lock belong to task 2.8 in this wave, so the dev-dependency libsecp256k1 = { version = \"=0.6.0\", default-features = false, features = [\"std\", \"static-context\", \"hmac\"] } is added by that file's owner before task 2.1 is qualified."
+severity = "blocker"
+
+[observation.2.1.2]
+task = "2.1"
+file = "bridge/solana/src/identity.rs"
+symbol = "register_recipient"
+observed = "Task 1.2 already delivered the permissionless register-recipient instruction in src/identity.rs, dispatched from src/lib.rs and tested in tests/core.rs, so moving it into src/recipient.rs as task 2.1 do_6 describes would edit two files outside task 2.1's touches."
+assumption = "The instruction stays in src/identity.rs; src/recipient.rs carries the release's recipient binding, and tests/release.rs covers the registration, its read-back and each refusal against the instruction as it stands."
 severity = "note"
 
 [wave.1]

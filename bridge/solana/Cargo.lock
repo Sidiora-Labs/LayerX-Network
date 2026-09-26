@@ -2875,6 +2875,7 @@ dependencies = [
 name = "paxeer-x-bridge-solana-program"
 version = "0.1.0"
 dependencies = [
+ "libsecp256k1",
  "solana-loader-v3-interface",
  "solana-program",
  "solana-program-test",

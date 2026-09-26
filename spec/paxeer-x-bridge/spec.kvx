@@ -388,7 +388,7 @@ status = "pending"
 
 [task.2.1]
 title = "Verify Solana releases through the native secp256k1 program"
-status = "pending"
+status = "done"
 wave = 2
 requires = ["1.2","1.3"]
 do_1 = "Write bridge/solana/src/attestation.rs rebuilding the 185-byte outbound preimage from the Solana chain id, the vault handle, the paxeerTxHash, the paxeerNonce, the handle of the 32-byte recipient the instruction names, the asset id from the registry and the amount, byte for byte as modules/layerxbridge/ATTESTATION.md specifies, and asserting the vector bridge/ATTESTATION-SOLANA.md pins in its own test module."
@@ -398,6 +398,10 @@ do_4 = "Refuse a release while paused, with a zero amount, above the per-transac
 do_5 = "Write bridge/solana/tests/release.rs under solana-program-test covering a successful release paying the recipient and creating the nullifier, the digest equalling the pinned vector, a replayed release, and every refusal above, with the signatures produced by real secp256k1 keys over the real preimage through the libsecp256k1 crate declared as a dev-dependency in bridge/solana/Cargo.toml at the version bridge/solana/Cargo.lock already carries, never through the deprecated signing helpers in solana-sdk, and verified by the real native program."
 do_6 = "Keep the permissionless register-recipient instruction where src/identity.rs already holds it: a Solana account signs to register its own 32-byte pubkey under its 20-byte handle in a recipient PDA seeded by that handle, the program verifies the last 20 bytes of keccak256 of the pubkey equal the handle, and refuses a mismatched handle, an unsigned pubkey and an existing PDA. Write bridge/solana/src/recipient.rs with the release's recipient checks: derive the 20-byte handle of the recipient the instruction names and require the token account being paid to belong to that recipient. Cover the registration, the read-back, each registration refusal and a release paid to the registered key in bridge/solana/tests/release.rs under solana-program-test."
 verify_cmd = "timeout 20m sh -c 'cargo test --locked --manifest-path bridge/solana/Cargo.toml --test release'"
+revision = "93405f5a87f056c6ce185d03d42a33bd541e4d43"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path bridge/solana/Cargo.toml --test release'"
+exit_code = 0
+log_path = ".logs/verify.log"
 symbols = ["outbound_preimage","verify_attestation","release","nullifier"]
 touches = ["bridge/solana/Cargo.toml","bridge/solana/Cargo.lock","bridge/solana/src/attestation.rs","bridge/solana/src/release.rs","bridge/solana/src/recipient.rs","bridge/solana/src/lib.rs","bridge/solana/src/state.rs","bridge/solana/tests/release.rs"]
 reqs = ["6.1","6.2","6.3","6.4","6.5","6.6"]

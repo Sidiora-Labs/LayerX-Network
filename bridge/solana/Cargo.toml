@@ -21,6 +21,7 @@ solana-sdk-ids = "=2.2.1"
 spl-token = { version = "=7.0.0", default-features = false, features = ["no-entrypoint"] }
 
 [dev-dependencies]
+libsecp256k1 = { version = "=0.6.0", default-features = false, features = ["std", "static-context", "hmac"] }
 solana-loader-v3-interface = { version = "=5.0.0", features = ["serde"] }
 solana-program-test = "=2.3.13"
 solana-sdk = "=2.3.1"

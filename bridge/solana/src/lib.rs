@@ -5,7 +5,9 @@
 //! attestation, and a release pays them out again against the outbound
 //! attestation every other destination of this bridge verifies. This crate
 //! carries the custody core - ownership, the attestor set, the asset registry,
-//! the caps, the pause, and the deposit with its receipt.
+//! the caps, the pause, and the deposit with its receipt - and the release,
+//! which has the native secp256k1 program verify the attestors' signatures and
+//! consumes a nullifier per Paxeer burn.
 
 use solana_program::account_info::AccountInfo;
 use solana_program::entrypoint;
@@ -19,8 +21,11 @@ use solana_sdk_ids::system_program;
 use solana_system_interface::instruction as system_instruction;
 
 pub mod admin;
+pub mod attestation;
 pub mod deposit;
 pub mod identity;
+pub mod recipient;
+pub mod release;
 pub mod state;
 
 entrypoint!(process_instruction);
@@ -41,6 +46,7 @@ pub const OP_SET_CAP: u8 = 6;
 pub const OP_SET_PAUSE: u8 = 7;
 pub const OP_DEPOSIT: u8 = 8;
 pub const OP_REGISTER_RECIPIENT: u8 = 9;
+pub const OP_RELEASE: u8 = 10;
 
 /// The refusals this program can make. Every value is stable: a client reads
 /// `ProgramError::Custom(code)` and knows which rule refused it.
@@ -66,17 +72,37 @@ pub enum BridgeError {
     Attestors = 8,
     /// The mint is unregistered, disabled, or not the one the record names.
     Asset = 9,
-    /// The amount exceeds the per-transaction cap, the total cap, or the
-    /// outstanding balance.
+    /// The amount exceeds the per-transaction cap or the total cap.
     Cap = 10,
     /// The Paxeer recipient is not a 20-byte address left-padded to 32 bytes,
-    /// or a Solana recipient names a handle its own key does not hash to.
+    /// a Solana recipient names a handle its own key does not hash to, or a
+    /// release names a token account its recipient does not own.
     Recipient = 11,
     /// A token account, mint, or program account is not the one required.
     Account = 12,
     /// A registration would pair Sidiora's fixed asset id with another mint,
     /// or Sidiora's mint with another asset id.
     Binding = 13,
+    /// The release's nullifier already exists: this Paxeer burn was paid out.
+    Replayed = 14,
+    /// A release asks for more than this program holds in custody for the mint.
+    Outstanding = 15,
+    /// The instruction before the release is not the native secp256k1
+    /// program's.
+    AttestationMissing = 16,
+    /// The secp256k1 instruction is short, carries an offset that does not
+    /// resolve inside its own data, or carries a recovery id other than 0 or 1.
+    AttestationMalformed = 17,
+    /// A signature entry covers bytes other than the release's outbound
+    /// preimage.
+    AttestationMessage = 18,
+    /// Fewer signature entries than the attestor threshold, or no attestor set.
+    AttestationThreshold = 19,
+    /// A signer is not a current attestor, or the signers are not in strictly
+    /// ascending order.
+    AttestationSigner = 20,
+    /// A signature carries an s above half the secp256k1 order.
+    AttestationMalleable = 21,
 }
 
 impl From<BridgeError> for ProgramError {
@@ -105,6 +131,7 @@ pub fn process_instruction(
         OP_SET_PAUSE => admin::set_pause(program_id, accounts, &mut reader),
         OP_DEPOSIT => deposit::deposit(program_id, accounts, &mut reader),
         OP_REGISTER_RECIPIENT => identity::register_recipient(program_id, accounts, &mut reader),
+        OP_RELEASE => release::release(program_id, accounts, &mut reader),
         _ => Err(BridgeError::Instruction.into()),
     }
 }
