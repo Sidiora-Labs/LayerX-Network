@@ -152,6 +152,9 @@ on:
       - '!scripts/qualify-mirror-verification-live.sh'
       - '.github/workflows/paxeer-golangci.yml'
   merge_group:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
   # Optional: allow read access to pull request. Use with `only-new-issues` option.

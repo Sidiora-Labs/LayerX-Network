@@ -11,6 +11,10 @@ on:
       - 'buf.yaml'
       - '.github/workflows/paxeer-proto-registry.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   push:
     runs-on: ubuntu-latest
