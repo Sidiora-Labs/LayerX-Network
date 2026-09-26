@@ -146,7 +146,14 @@ The bodies reach the chain inside governance proposals. Submit `04-proposal-open
 
 When a proposal passes, the governance module account executes it through the application's `layerxbridge` proposal route: `NewProposalHandler` in `modules/layerxbridge/handler.go` runs every message it carries, in order, through the bridge module's message service and so through the keeper. It refuses a proposal carrying a message for any authority other than the governance module account, and if one message fails none of them changes the state.
 
-The node's governance submit command, `paxd tx gov submit-proposal`, builds only a `Text` proposal from its flags or from its `--proposal` file, and none of the proposal subcommands the node mounts under it carries the bridge proposal, so no command the node exposes today submits `04-proposal-open-chain.json` or `05-proposal-sidiora-cap.json` as its content.
+Submit each proposal with the node's governance submit command, `paxd tx gov submit-proposal`, through its bridge subcommand, `layerxbridge-proposal [proposal-file]`, with the generated file as its argument, the initial deposit in `--deposit` and the proposer as the signer `--from` names:
+
+```
+paxd tx gov submit-proposal layerxbridge-proposal <proposals directory>/04-proposal-open-chain.json --deposit <coins> --from <key> --chain-id <chain id>
+paxd tx gov submit-proposal layerxbridge-proposal <proposals directory>/05-proposal-sidiora-cap.json --deposit <coins> --from <key> --chain-id <chain id>
+```
+
+The subcommand, `BridgeProposalHandler` in `modules/layerxbridge/client/cli/tx.go`, reads the file exactly as the generator writes it and refuses a file with an unknown or a missing field, a proposal the route above would refuse, and a missing deposit.
 
 ### 7. Read the deployment back
 

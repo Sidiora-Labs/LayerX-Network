@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/sidiora-labs/paxeer-network/bridge/deploy/proposals"
+	layerxbridgecli "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/client/cli"
 	layerxbridgetypes "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
+	"github.com/sidiora-labs/paxeer-network/sdk/client"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	govtypes "github.com/sidiora-labs/paxeer-network/sdk/x/gov/types"
 	"github.com/stretchr/testify/require"
@@ -120,4 +122,61 @@ func TestBridgeGovernanceRouteRefusesAProposalForAnotherAuthority(t *testing.T) 
 	require.ErrorIs(t, handler(ctx, content), layerxbridgetypes.ErrUnauthorized)
 	_, found := testApp.LayerXBridgeKeeper.GetChain(ctx, bundle.Register.Chain.ChainID)
 	require.False(t, found, "a refused proposal registered the chain")
+}
+
+func TestBridgeProposalHandlerIsMountedOnSubmitProposal(t *testing.T) {
+	var mounted []string
+	for _, handler := range getGovProposalHandlers() {
+		cmd := handler.CLIHandler()
+		mounted = append(mounted, cmd.Name())
+		if cmd.Name() != layerxbridgecli.ProposalCommandName {
+			continue
+		}
+		require.Equal(t, "layerxbridge-proposal [proposal-file]", cmd.Use)
+		require.Equal(t, layerxbridgecli.ProposalRESTSubRoute, handler.RESTHandler(client.Context{}).SubRoute)
+		return
+	}
+	t.Fatalf("no governance proposal handler mounts %s; mounted: %v", layerxbridgecli.ProposalCommandName, mounted)
+}
+
+func TestBridgeSubmitProposalMessageExecutesThroughTheStoredRoute(t *testing.T) {
+	testApp := Setup(t, false, false, false)
+	ctx := testApp.GetContextForDeliverTx([]byte{}).WithBlockHeight(8).WithBlockTime(time.Unix(1_800_000_000, 0))
+	bundle, body := generatedBridgeProposal(t)
+	proposer := sdk.AccAddress(bytes.Repeat([]byte{0x0b}, 20))
+
+	// The message the mounted command builds from the generated file, decoded
+	// through the application's own codec.
+	msg, err := layerxbridgecli.NewSubmitBridgeProposalMsg(testApp.AppCodec(), body, "10000000"+sdk.DefaultBondDenom, proposer)
+	require.NoError(t, err)
+	require.Equal(t, proposer.String(), msg.Proposer)
+	encoded, err := testApp.AppCodec().MarshalInterface(msg)
+	require.NoError(t, err)
+	var decoded sdk.Msg
+	require.NoError(t, testApp.AppCodec().UnmarshalInterface(encoded, &decoded))
+	carried, ok := decoded.(*govtypes.MsgSubmitProposal)
+	require.True(t, ok, "decoded a %T", decoded)
+
+	submitted, err := testApp.GovKeeper.SubmitProposal(ctx, carried.GetContent())
+	require.NoError(t, err)
+	proposal, found := testApp.GovKeeper.GetProposal(ctx, submitted.ProposalId)
+	require.True(t, found)
+	require.Equal(t, layerxbridgetypes.RouterKey, proposal.ProposalRoute())
+	bridge := testApp.LayerXBridgeKeeper
+	_, found = bridge.GetChain(ctx, bundle.Register.Chain.ChainID)
+	require.False(t, found, "submitting the proposal changed the bridge before it passed")
+
+	require.NoError(t, testApp.GovKeeper.Router().GetRoute(proposal.ProposalRoute())(ctx, proposal.GetContent()))
+
+	chain, found := bridge.GetChain(ctx, bundle.Register.Chain.ChainID)
+	require.True(t, found)
+	require.Equal(t, bundle.Register.Chain, chain)
+	require.Equal(t, bundle.Attestors.Set.Threshold, bridge.GetAttestorSet(ctx).Threshold)
+	for _, capMsg := range bundle.Caps {
+		record, found := bridge.GetAsset(ctx, capMsg.ChainID, capMsg.Asset)
+		require.True(t, found, "asset %s is not registered", capMsg.Asset.Hex())
+		limit, found := bridge.GetCap(ctx, record.Denom)
+		require.True(t, found)
+		require.True(t, capMsg.MaxPerTx.Equal(limit.MaxPerTx))
+	}
 }

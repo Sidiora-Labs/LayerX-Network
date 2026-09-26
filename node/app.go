@@ -157,6 +157,7 @@ import (
 	layerxanchorkeeper "github.com/sidiora-labs/paxeer-network/modules/layerxanchor/keeper"
 	layerxanchortypes "github.com/sidiora-labs/paxeer-network/modules/layerxanchor/types"
 	layerxbridgemodule "github.com/sidiora-labs/paxeer-network/modules/layerxbridge"
+	layerxbridgeclient "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/client/cli"
 	layerxbridgekeeper "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/keeper"
 	layerxbridgetypes "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
 	layerxcustodymodule "github.com/sidiora-labs/paxeer-network/modules/layerxcustody"
@@ -208,6 +209,7 @@ func getGovProposalHandlers() []govclient.ProposalHandler {
 		ibcclientclient.UpdateClientProposalHandler,
 		ibcclientclient.UpgradeProposalHandler,
 		mintclient.UpdateMinterHandler,
+		layerxbridgeclient.BridgeProposalHandler,
 		// this line is used by starport scaffolding # stargate/app/govProposalHandler
 	)
 

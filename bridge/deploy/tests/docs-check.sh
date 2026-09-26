@@ -8,9 +8,12 @@
 # name their pair, chain id and environment variables as the chain configuration
 # declares them, and the hyperevm and Solana pages must carry what only those
 # chains need; the runbook's submission section must name both governance
-# proposals and the node's submit command and must not claim the bodies have no
-# path to the chain. The check then mutates a copy of the pages one way at a time and
-# requires each mutation to be refused, so every assertion is known to bite.
+# proposals and the node's submit command with the bridge subcommand, whose Use
+# line it reads from modules/layerxbridge/client/cli/tx.go, and each proposal
+# file as its argument, and must not claim the bodies have no path to the chain
+# or that no command submits the proposals. The check then mutates a copy of the
+# pages one way at a time and requires each mutation to be refused, so every
+# assertion is known to bite.
 # No network is involved.
 set -euo pipefail
 
@@ -57,11 +60,15 @@ SIDIORA_ASSET_ID = "0x21f7b20a555199fa73A238B1a91FD0f549068fEe"
 RUNBOOK = "bridge/README.md"
 PROPOSAL_FILES = ("04-proposal-open-chain.json", "05-proposal-sidiora-cap.json")
 SUBMIT_COMMAND = "paxd tx gov submit-proposal"
+PROPOSAL_CLI = "modules/layerxbridge/client/cli/tx.go"
 STALE_SUBMISSION_CLAIMS = [
     ("that the module registers no message service", re.compile(r"registers\s+no\s+(?:message|Msg)\s+service", re.I)),
     ("that no command carries the bodies", re.compile(
         r"no\s+(?:transaction\s+)?command\s+(?:that\s+)?(?:broadcasts|carries|submits)\s+(?:them|the\s+(?:message\s+)?bodies)\b"
         r"|carries\s+no\s+command\s+that\s+broadcasts", re.I)),
+    ("that no command the node exposes submits the proposals", re.compile(
+        r"no\s+command\s+the\s+node\s+exposes(?:\s+today)?\s+submits"
+        r"|builds\s+only\s+a\s+`?Text`?\s+proposal", re.I)),
 ]
 
 ALLOWED_LINK = re.compile(
@@ -216,6 +223,19 @@ def load_config(relative):
         return json.load(handle)
 
 
+def proposal_use_line():
+    try:
+        with open(os.path.join(repo_root, PROPOSAL_CLI), encoding="utf-8") as handle:
+            source = handle.read()
+    except OSError:
+        return None
+    name = re.search(r'ProposalCommandName\s*=\s*"([a-z0-9-]+)"', source)
+    use = re.search(r'Use:\s*ProposalCommandName\s*\+\s*"( [^"]*)"', source)
+    if not name or not use:
+        return None
+    return name.group(1) + use.group(1)
+
+
 def check_product_page(page, text):
     require(page, text, "Paxeer X Network", "every page names the product Paxeer X Network")
     for match in re.finditer(r"\bLayerX\b(?!Bridge|\w)", text):
@@ -297,6 +317,15 @@ if RUNBOOK in texts:
         for name in PROPOSAL_FILES:
             require(RUNBOOK, section, "`%s`" % name, "section 6 names every proposal the generator writes through -proposals")
         require(RUNBOOK, section, "`%s`" % SUBMIT_COMMAND, "section 6 names the node's governance submit command")
+        use_line = proposal_use_line()
+        if use_line is None:
+            problem(RUNBOOK, 1, "%s carries no ProposalCommandName and Use line for the bridge subcommand" % PROPOSAL_CLI)
+        else:
+            name = use_line.split(" ")[0]
+            require(RUNBOOK, section, "`%s`" % use_line, "section 6 names the bridge subcommand exactly as its Use line reads")
+            for file_name in PROPOSAL_FILES:
+                require(RUNBOOK, section, "%s %s <proposals directory>/%s --deposit <coins> --from <key>" % (SUBMIT_COMMAND, name, file_name),
+                        "section 6 shows the submit command with the generated file as its argument")
     require(RUNBOOK, runbook, "-proposals <proposals directory>", "section 5 runs the generator with its -proposals output")
     for label, regex in STALE_SUBMISSION_CLAIMS:
         for match in regex.finditer(runbook):
@@ -393,8 +422,12 @@ remove_line 'the checklist step' bridge/README.md '### 7. Read the deployment ba
 remove_line 'the open-chain proposal' bridge/README.md '04-proposal-open-chain.json'
 remove_line "the Sidiora cap proposal" bridge/README.md '05-proposal-sidiora-cap.json'
 remove_line 'the governance submit command' bridge/README.md 'paxd tx gov submit-proposal'
+remove_line 'the bridge subcommand' bridge/README.md 'through its bridge subcommand'
+remove_line 'the open-chain submit command' bridge/README.md 'layerxbridge-proposal <proposals directory>/04-proposal-open-chain.json'
+remove_line 'the Sidiora cap submit command' bridge/README.md 'layerxbridge-proposal <proposals directory>/05-proposal-sidiora-cap.json'
 remove_line 'the -proposals output' bridge/README.md '-proposals <proposals directory>'
 mutate 'the claim that the module registers no message service' bridge/README.md 'The bridge module registers no message service.'
 mutate 'the claim that no command carries the bodies' bridge/README.md 'This repository carries no command that broadcasts them.'
+mutate 'the claim that no command the node exposes submits the proposals' bridge/README.md 'No command the node exposes today submits 04-proposal-open-chain.json as its content.'
 
 printf 'docs-check: the bridge documentation passes and every mutation is refused\n'

@@ -636,7 +636,11 @@ reqs = ["12.1","12.5","9.1"]
 
 [task.2.14]
 title = "Mount the bridge proposal on the node's governance submit command"
-status = "pending"
+status = "done"
+revision = "3a9dda2bcae645e1f9a070cc21495dd834395036"
+command = "timeout 20m sh -c 'go test -count=1 ./modules/layerxbridge/... && go test -count=1 -run Bridge ./node/ && bash bridge/deploy/tests/docs-check.sh'"
+exit_code = 0
+log_path = ".logs/verify-2.log"
 wave = 2
 requires = ["2.11","2.13"]
 do_1 = "Add modules/layerxbridge/client/cli with a governance proposal handler in the shape modules/mint/client/cli/tx.go mounts as UpdateMinterHandler: a subcommand of paxd tx gov submit-proposal that reads one generated proposal file, 04-proposal-open-chain.json or 05-proposal-sidiora-cap.json, exactly as bridge/deploy/proposals writes it, decodes it into the BridgeProposal content with the application's codec, refuses a file with unknown or missing fields, takes the deposit and the signer from the standard flags and builds MsgSubmitProposal with that content (observation 2.13.1)."
