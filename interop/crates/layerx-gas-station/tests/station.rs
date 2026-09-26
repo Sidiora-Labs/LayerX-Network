@@ -16,7 +16,9 @@ use layerx_gas_station::signer::{LocalSigner, QuoteSigner, SignerError};
 use layerx_gas_station::station::{
     GasStation, Progress, QuoteOutcome, StationError, SubmitRequest,
 };
-use layerx_gas_station::tx::{authorization_digest, batch_digest, Authorization, Call, Fees};
+use layerx_gas_station::tx::{
+    authorization_digest, batch_digest, Authorization, Call, Fees, CANCELLATION_GAS,
+};
 use layerx_gas_station::{QuoteError, QuoteRequest};
 use serde_json::{json, Value};
 
@@ -75,16 +77,27 @@ impl Exchange for ReplayExchange {
                 .map(serde_json::from_str::<Entry>)
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|_| RpcFault::Malformed)?;
-            assert!(entries.iter().any(|entry| matches!(entry, Entry::Prepared { submission, .. } if submission.raw == raw && submission.hash == hash)));
+            assert!(entries.iter().any(|entry| match entry {
+                Entry::Prepared { submission, .. } =>
+                    submission.raw == raw && submission.hash == hash,
+                Entry::Replaced { replacement, .. } =>
+                    replacement.raw == raw && replacement.hash == hash,
+                _ => false,
+            }));
             assert!(journal.ends_with('\n'));
+            let (raw_name, hash_name) = if raw.first() == Some(&2) {
+                ("$replacement_raw", "$replacement_hash")
+            } else {
+                ("$raw", "$hash")
+            };
             self.0
                 .bindings
                 .borrow_mut()
-                .insert("$raw".into(), json!(hex(&raw)));
+                .insert(raw_name.into(), json!(hex(&raw)));
             self.0
                 .bindings
                 .borrow_mut()
-                .insert("$hash".into(), json!(hex(&hash)));
+                .insert(hash_name.into(), json!(hex(&hash)));
             self.0.sent.borrow_mut().push(raw);
         }
         for phase in [self.0.phase.borrow().as_str(), "*"] {
@@ -157,6 +170,7 @@ fn recording(
         ("$batch_nonce_call", hex(&keccak(b"nonce()")[..4])),
         ("$consumed_call", hex(&consumed)),
         ("$block", hex(&[0x10; 32])),
+        ("$cancel_block", hex(&[0x11; 32])),
         ("$finalized", hex(&[0x12; 32])),
         ("$account_word", hex(&address_word(account))),
         ("$sponsor_word", hex(&address_word(sponsor))),
@@ -295,7 +309,7 @@ fn open_station(
         Journal::open(path)?,
     )
 }
-fn full_cycle(initial_phase: &str) -> TestResult {
+fn full_cycle() -> TestResult {
     let config = config();
     let inner = install_ephemeral_signer(&config)?;
     let account_signer = install_ephemeral_signer(&config)?;
@@ -311,7 +325,6 @@ fn full_cycle(initial_phase: &str) -> TestResult {
         std::fs::remove_file(&path)?;
     }
     let recorded = recording(path.clone(), account, sponsor)?;
-    *recorded.phase.borrow_mut() = initial_phase.into();
     let start = || open_station(&config, &signer, &recorded, &path);
     let mut station = start()?;
     let mut submit =
@@ -322,30 +335,21 @@ fn full_cycle(initial_phase: &str) -> TestResult {
     assert_eq!(count.get(), 1);
     assert!(recorded.sent.borrow().is_empty());
     submit.account_signature[0] ^= 1;
-    if initial_phase == "refused" {
-        assert!(matches!(
-            station.submit(&submit, 1000),
-            Err(StationError::Rpc(RpcFault::Rejected { code: -32000 }))
-        ));
-        assert!(station.journal().state().items[&key].submission.is_some());
-        assert!(station.journal().state().items[&key].completion.is_none());
-    } else {
-        assert_eq!(station.submit(&submit, 1000)?, Progress::Pending);
-    }
+    assert_eq!(station.submit(&submit, 1000)?, Progress::Pending);
     assert_eq!(count.get(), 2);
     assert_eq!(recorded.sent.borrow().len(), 1);
     assert_envelope(&recorded.sent.borrow()[0], sponsor, account)?;
     drop(station);
     *recorded.phase.borrow_mut() = "restart".into();
     let mut station = start()?;
-    assert_eq!(station.resume(key)?, Progress::Pending);
+    assert_eq!(station.resume(key, 1000)?, Progress::Pending);
     assert_eq!(count.get(), 2);
     assert_eq!(recorded.sent.borrow()[0], recorded.sent.borrow()[1]);
     drop(station);
     for phase in ["already_known", "nonce_too_low"] {
         *recorded.phase.borrow_mut() = phase.into();
         let mut station = start()?;
-        assert_eq!(station.resume(key)?, Progress::Pending);
+        assert_eq!(station.resume(key, 1000)?, Progress::Pending);
         assert!(station.journal().state().items[&key].completion.is_none());
         assert_eq!(count.get(), 2);
         assert!(recorded
@@ -362,8 +366,8 @@ fn full_cycle(initial_phase: &str) -> TestResult {
         sid_collected: word(AMOUNT),
         pax_spent: word(500_000_000_000_000_000),
     };
-    assert_eq!(station.resume(key)?, Progress::Completed(expected));
-    assert_eq!(station.resume(key)?, Progress::Completed(expected));
+    assert_eq!(station.resume(key, 1000)?, Progress::Completed(expected));
+    assert_eq!(station.resume(key, 1000)?, Progress::Completed(expected));
     assert_eq!(count.get(), 2);
     assert_eq!(recorded.sent.borrow().len(), 4);
     assert_balances(&config, &recorded, sponsor)?;
@@ -399,8 +403,221 @@ impl QuoteSigner for SharedSigner {
 }
 #[test]
 fn quote_submit_collect_restart_and_consumed_nonce() -> TestResult {
-    full_cycle("submit")?;
-    full_cycle("refused")
+    full_cycle()
+}
+
+struct Lane {
+    config: StationConfig,
+    account_signer: LocalSigner,
+    signer: Rc<CountedSigner>,
+    count: Rc<Cell<usize>>,
+    recorded: Rc<Recording>,
+    path: PathBuf,
+}
+impl Lane {
+    fn new(name: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut config = config();
+        config.relayer_key_env = format!("PAXEER_STATION_{name}_KEY");
+        let inner = install_ephemeral_signer(&config)?;
+        let account_signer = install_ephemeral_signer(&config)?;
+        let count = Rc::new(Cell::new(0));
+        let path = std::env::temp_dir().join(format!(
+            "paxeer-{}-{}.jsonl",
+            name.to_ascii_lowercase(),
+            std::process::id()
+        ));
+        if path.exists() {
+            std::fs::remove_file(&path)?;
+        }
+        let recorded = recording(path.clone(), account_signer.address(), inner.address())?;
+        Ok(Self {
+            config,
+            account_signer,
+            signer: Rc::new(CountedSigner {
+                inner,
+                count: Rc::clone(&count),
+            }),
+            count,
+            recorded,
+            path,
+        })
+    }
+    fn phase(&self, phase: &str) {
+        *self.recorded.phase.borrow_mut() = phase.into();
+    }
+    fn start(&self) -> Result<TestStation, StationError> {
+        open_station(&self.config, &self.signer, &self.recorded, &self.path)
+    }
+    fn submitted(&self) -> Result<(TestStation, SubmitRequest), Box<dyn std::error::Error>> {
+        let mut station = self.start()?;
+        let submit = prepare_submission(
+            &mut station,
+            &self.config,
+            &self.account_signer,
+            &self.signer,
+            &self.recorded,
+        )?;
+        Ok((station, submit))
+    }
+    fn entries(&self) -> Result<Vec<Entry>, Box<dyn std::error::Error>> {
+        Ok(std::fs::read_to_string(&self.path)?
+            .lines()
+            .map(serde_json::from_str::<Entry>)
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+    fn prepared_nonces(&self) -> Result<Vec<u64>, Box<dyn std::error::Error>> {
+        Ok(self
+            .entries()?
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Prepared { submission, .. } => Some(submission.nonce),
+                _ => None,
+            })
+            .collect())
+    }
+    fn sent_originals(&self) -> usize {
+        self.recorded
+            .sent
+            .borrow()
+            .iter()
+            .filter(|raw| raw.first() == Some(&4))
+            .count()
+    }
+    fn finish(self) -> TestResult {
+        std::fs::remove_file(&self.path)?;
+        Ok(())
+    }
+}
+
+/// Replacement lifecycle shared by the dropped and expired submissions: the
+/// replacement is journalled with the bumped fee before broadcast, a restart
+/// rebroadcasts its durable bytes without signing, and its finalized receipt
+/// cancels the quote.
+fn replacement_resumes_and_cancels(lane: &Lane, key: Key, now: u64) -> TestResult {
+    let replacements: Vec<_> = lane
+        .entries()?
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Entry::Replaced {
+                key: k,
+                replacement,
+            } if k == key => Some(replacement),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(replacements.len(), 1);
+    let replacement = &replacements[0];
+    assert_eq!(replacement.nonce, 5);
+    assert_eq!(
+        replacement.fees,
+        Fees {
+            gas_limit: CANCELLATION_GAS,
+            max_fee_per_gas: 5_500_000_000_000,
+            max_priority_fee_per_gas: 1_100_000_000,
+        }
+    );
+    assert_eq!(lane.count.get(), 3);
+    assert_eq!(lane.recorded.sent.borrow().last(), Some(&replacement.raw));
+    let originals = lane.sent_originals();
+    lane.phase("replacement_pending");
+    let mut station = lane.start()?;
+    assert_eq!(station.resume(key, now)?, Progress::Pending);
+    assert_eq!(lane.count.get(), 3);
+    assert_eq!(lane.sent_originals(), originals);
+    assert_eq!(lane.recorded.sent.borrow().last(), Some(&replacement.raw));
+    drop(station);
+    lane.phase("cancelled");
+    let mut station = lane.start()?;
+    let cancelled = Completion::Cancelled {
+        hash: replacement.hash,
+        block_number: 17,
+    };
+    assert_eq!(station.resume(key, now)?, Progress::Completed(cancelled));
+    drop(station);
+    let mut station = lane.start()?;
+    assert_eq!(station.resume(key, now)?, Progress::Completed(cancelled));
+    assert_eq!(
+        station.journal().state().items[&key].completion,
+        Some(cancelled)
+    );
+    assert_eq!(lane.count.get(), 3);
+    assert_eq!(lane.sent_originals(), originals);
+    Ok(())
+}
+
+#[test]
+fn refused_submission_releases_its_nonce_for_the_next_submission() -> TestResult {
+    let lane = Lane::new("REFUSED")?;
+    let (mut station, submit) = lane.submitted()?;
+    let key = submit.key;
+    lane.phase("refused");
+    assert!(matches!(
+        station.submit(&submit, 1000),
+        Err(StationError::Rpc(RpcFault::Rejected { code: -32000 }))
+    ));
+    assert_eq!(lane.count.get(), 2);
+    assert!(station.journal().state().items[&key].submission.is_none());
+    assert!(station.journal().state().items[&key].completion.is_none());
+    assert!(lane.entries()?.contains(&Entry::Released { key, nonce: 5 }));
+    drop(station);
+    let mut station = lane.start()?;
+    assert!(station.journal().state().items[&key].submission.is_none());
+    assert_eq!(station.resume(key, 1000)?, Progress::Pending);
+    assert_eq!(lane.recorded.sent.borrow().len(), 1);
+    lane.phase("submit");
+    assert_eq!(station.submit(&submit, 1000)?, Progress::Pending);
+    assert_eq!(lane.count.get(), 3);
+    assert_eq!(lane.prepared_nonces()?, vec![5, 5]);
+    assert_eq!(
+        station.journal().state().items[&key]
+            .submission
+            .as_ref()
+            .map(|s| s.nonce),
+        Some(5)
+    );
+    drop(station);
+    lane.finish()
+}
+
+#[test]
+fn dropped_submission_is_replaced_at_its_nonce() -> TestResult {
+    let lane = Lane::new("DROPPED")?;
+    let (mut station, submit) = lane.submitted()?;
+    let key = submit.key;
+    assert_eq!(station.submit(&submit, 1000)?, Progress::Pending);
+    drop(station);
+    lane.phase("dropped");
+    let mut station = lane.start()?;
+    assert_eq!(station.resume(key, 1000)?, Progress::Pending);
+    assert_eq!(lane.sent_originals(), 2);
+    assert_eq!(
+        station.journal().state().items[&key]
+            .replacement
+            .as_ref()
+            .map(|r| r.nonce),
+        Some(5)
+    );
+    drop(station);
+    replacement_resumes_and_cancels(&lane, key, 1000)?;
+    lane.finish()
+}
+
+#[test]
+fn expired_quote_is_never_rebroadcast_and_its_nonce_is_cancelled() -> TestResult {
+    let lane = Lane::new("EXPIRED")?;
+    let (mut station, submit) = lane.submitted()?;
+    let key = submit.key;
+    assert_eq!(station.submit(&submit, 1000)?, Progress::Pending);
+    assert_eq!(lane.sent_originals(), 1);
+    drop(station);
+    lane.phase("expired");
+    let mut station = lane.start()?;
+    assert_eq!(station.submit(&submit, 1020)?, Progress::Pending);
+    assert_eq!(lane.sent_originals(), 1);
+    assert!(station.journal().state().items[&key].replacement.is_some());
+    drop(station);
+    replacement_resumes_and_cancels(&lane, key, 1020)?;
+    lane.finish()
 }
 
 #[test]
