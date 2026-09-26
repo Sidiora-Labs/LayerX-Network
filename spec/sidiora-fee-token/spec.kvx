@@ -716,7 +716,7 @@ log_path = ".logs/verify.log"
 
 [task.4.2]
 title = "Release a refused sponsor nonce and journal replacement and cancellation"
-status = "pending"
+status = "done"
 wave = 4
 requires = ["4.1"]
 do_1 = "In interop/crates/layerx-gas-station/src/station.rs release the sponsor nonce a prepared transaction reserved when the node refuses it deterministically or drops it, so the next submission reuses that nonce, and never rebroadcast a journalled transaction whose quote deadline has passed."
@@ -728,6 +728,10 @@ verify_cmd = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Car
 symbols = ["GasStation","submit","resume","Journal","Entry"]
 touches = ["interop/crates/layerx-gas-station/src/station.rs","interop/crates/layerx-gas-station/src/journal.rs","interop/crates/layerx-gas-station/src/tx.rs","interop/crates/layerx-gas-station/tests/station.rs","interop/crates/layerx-gas-station/tests/fixtures"]
 reqs = ["2.4","2.5","2.6"]
+revision = "2954102ca01c51d999daa2f64923e2e9c4d19e78"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p layerx-gas-station --lib --test station'"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.4.3]
 title = "Serve the quote and sponsored submission endpoints from the station binary"

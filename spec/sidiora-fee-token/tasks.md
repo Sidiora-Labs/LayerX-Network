@@ -195,7 +195,7 @@
     - Rewrite the #[cfg(test)] modules of price.rs and config.rs and tests/station.rs so the pricing refusals, the stale and missing rate refusals and the full quote, submit and collect cycle run against the governed rate, recording the currentRate and rateUpdatedAt responses in tests/fixtures; add no oracle fixture and no fake transport.
     - Close observation 1.3.1 in spec/sidiora-fee-token/qualification.kvx naming the revision at which the verify_cmd passes.
     - _Requirements: 2.2, 2.6_
-  - [ ] 4.2 Release a refused sponsor nonce and journal replacement and cancellation
+  - [x] 4.2 Release a refused sponsor nonce and journal replacement and cancellation
     - In interop/crates/layerx-gas-station/src/station.rs release the sponsor nonce a prepared transaction reserved when the node refuses it deterministically or drops it, so the next submission reuses that nonce, and never rebroadcast a journalled transaction whose quote deadline has passed.
     - For a submission that is dropped or whose quote has expired while its sponsor nonce is still unused on chain, fill the nonce with a replacement: a zero-value self-transfer at a replacement fee above the original by the minimum bump the node accepts, built in src/tx.rs and signed with the station key, so the nonce is never left open.
     - In src/journal.rs add append-only entries for a released nonce, a replacement with its fee and signed bytes, and a cancellation, written before the replacement is broadcast, so a restart resumes each lifecycle from the journal rather than re-signing; keep the duplicate-sponsor-nonce refusal for any entry that is not one of these.

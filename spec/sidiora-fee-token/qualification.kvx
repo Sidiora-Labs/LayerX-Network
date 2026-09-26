@@ -397,6 +397,7 @@ task = "1.3"; file = "interop/crates/layerx-gas-station/src/station.rs"; symbol 
 observed = "A refused or dropped prepared transaction can reserve a sponsor nonce indefinitely; an expired quote can still be rebroadcast and revert."
 assumption = "Recovery needs a separately specified replacement fee policy, cancellation transaction and durable replacement lifecycle; excluding completed entries alone is unsafe because Consumed proves quote use rather than sponsor nonce use, and the journal rejects duplicate sponsor nonces."
 severity = "blocker"
+closed = "At 2954102ca01c51d999daa2f64923e2e9c4d19e78 the station releases a refused sponsor nonce for reuse, never rebroadcasts an expired quote, and fills a dropped or expired nonce with a journalled zero-value self-transfer at the bumped fee whose inclusion records the cancellation."
 
 [observation.2.6.1]
 task = "2.6"; file = "modules/evm/keeper/params.go"
