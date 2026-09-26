@@ -87,6 +87,14 @@ pub struct Submission {
     pub hash: Word,
     pub raw: Vec<u8>,
 }
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Replacement {
+    pub nonce: u64,
+    pub fees: Fees,
+    pub hash: Word,
+    pub raw: Vec<u8>,
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(tag = "outcome", rename_all = "snake_case", deny_unknown_fields)]
@@ -100,6 +108,10 @@ pub enum Completion {
     },
     Reverted {
         hash: Word,
+    },
+    Cancelled {
+        hash: Word,
+        block_number: u64,
     },
 }
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -117,12 +129,26 @@ pub enum Entry {
         account: Address,
         completion: Completion,
     },
+    Released {
+        key: Key,
+        nonce: u64,
+    },
+    Replaced {
+        key: Key,
+        replacement: Replacement,
+    },
+    Cancelled {
+        key: Key,
+        hash: Word,
+        block_number: u64,
+    },
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Item {
     pub account: Address,
     pub quote: Option<QuoteRecord>,
     pub submission: Option<Submission>,
+    pub replacement: Option<Replacement>,
     pub completion: Option<Completion>,
 }
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -130,6 +156,15 @@ pub struct State {
     pub items: BTreeMap<Key, Item>,
 }
 impl State {
+    /// Whether a live submission or replacement of `sponsor` holds `nonce`.
+    #[must_use]
+    pub fn holds(&self, sponsor: Address, nonce: u64) -> bool {
+        self.items.iter().any(|(key, item)| {
+            key.sponsor == sponsor
+                && (item.submission.as_ref().is_some_and(|s| s.nonce == nonce)
+                    || item.replacement.as_ref().is_some_and(|r| r.nonce == nonce))
+        })
+    }
     fn apply(&mut self, entry: &Entry) -> Result<(), JournalError> {
         match entry {
             Entry::Quoted { quote } => {
@@ -143,6 +178,7 @@ impl State {
                         account: quote.account,
                         quote: Some(*quote.clone()),
                         submission: None,
+                        replacement: None,
                         completion: None,
                     },
                 );
@@ -152,13 +188,7 @@ impl State {
                 {
                     return Err(JournalError::Corrupt);
                 }
-                if self.items.iter().any(|(other, item)| {
-                    other.sponsor == key.sponsor
-                        && item
-                            .submission
-                            .as_ref()
-                            .is_some_and(|s| s.nonce == submission.nonce)
-                }) {
+                if self.holds(key.sponsor, submission.nonce) {
                     return Err(JournalError::Conflict);
                 }
                 let item = self.items.get_mut(key).ok_or(JournalError::Conflict)?;
@@ -176,6 +206,7 @@ impl State {
                     account: *account,
                     quote: None,
                     submission: None,
+                    replacement: None,
                     completion: None,
                 });
                 if item.account != *account || item.completion.is_some() {
@@ -202,8 +233,61 @@ impl State {
                             return Err(JournalError::Conflict);
                         }
                     }
+                    Completion::Cancelled { .. } => return Err(JournalError::Conflict),
                 }
                 item.completion = Some(*completion);
+            }
+            Entry::Released { key, nonce } => {
+                let item = self.items.get_mut(key).ok_or(JournalError::Conflict)?;
+                if item.completion.is_some()
+                    || item.replacement.is_some()
+                    || item.submission.as_ref().is_none_or(|s| s.nonce != *nonce)
+                {
+                    return Err(JournalError::Conflict);
+                }
+                item.submission = None;
+            }
+            Entry::Replaced { key, replacement } => {
+                if replacement.raw.first() != Some(&2)
+                    || keccak(&replacement.raw) != replacement.hash
+                {
+                    return Err(JournalError::Corrupt);
+                }
+                let item = self.items.get_mut(key).ok_or(JournalError::Conflict)?;
+                if item.completion.is_some()
+                    || item.replacement.is_some()
+                    || item
+                        .submission
+                        .as_ref()
+                        .is_none_or(|s| s.nonce != replacement.nonce)
+                {
+                    return Err(JournalError::Conflict);
+                }
+                let original = item.quote.as_ref().ok_or(JournalError::Conflict)?.fees;
+                if !replacement
+                    .fees
+                    .replaces(original)
+                    .map_err(|_| JournalError::Corrupt)?
+                {
+                    return Err(JournalError::Corrupt);
+                }
+                item.replacement = Some(replacement.clone());
+            }
+            Entry::Cancelled {
+                key,
+                hash,
+                block_number,
+            } => {
+                let item = self.items.get_mut(key).ok_or(JournalError::Conflict)?;
+                if item.completion.is_some()
+                    || item.replacement.as_ref().is_none_or(|r| r.hash != *hash)
+                {
+                    return Err(JournalError::Conflict);
+                }
+                item.completion = Some(Completion::Cancelled {
+                    hash: *hash,
+                    block_number: *block_number,
+                });
             }
         }
         Ok(())
@@ -287,6 +371,7 @@ impl Journal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::signer::QuoteSigner;
     #[test]
     fn append_replay_lock_conflict_and_corruption() -> Result<(), Box<dyn std::error::Error>> {
         let path =
@@ -317,6 +402,178 @@ mod tests {
         assert!(matches!(Journal::open(&path), Err(JournalError::Corrupt)));
         std::fs::write(&path, b"bad\n")?;
         assert!(matches!(Journal::open(&path), Err(JournalError::Corrupt)));
+        std::fs::remove_file(path)?;
+        Ok(())
+    }
+    fn quoted(
+        signer: &impl QuoteSigner,
+        quote_nonce: u128,
+    ) -> Result<Entry, Box<dyn std::error::Error>> {
+        let fees = Fees {
+            gas_limit: 200_000,
+            max_fee_per_gas: 5_000_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+        };
+        let mut record = QuoteRecord {
+            key: Key {
+                sponsor: signer.address(),
+                quote_nonce: word(quote_nonce),
+            },
+            chain_id: 1325,
+            paymaster: [0x44; 20],
+            account: [0x11; 20],
+            token: [0x22; 20],
+            maximum: word(3_200_000),
+            amount: word(3_145_140),
+            deadline: 1019,
+            gas_cost: word(fees.gas_cost()?),
+            issued_at: 1000,
+            signature: vec![],
+            fees,
+        };
+        let quote = Quote {
+            sponsor: record.key.sponsor,
+            token: record.token,
+            max_token_amount: record.maximum,
+            token_amount: record.amount,
+            deadline: word(1019),
+            nonce: record.key.quote_nonce,
+            gas_cost: record.gas_cost,
+        };
+        record.signature = signer
+            .sign_digest(quote_digest(word(1325), record.account, &quote))?
+            .to_vec();
+        Ok(Entry::Quoted {
+            quote: Box::new(record),
+        })
+    }
+    fn prepared(key: Key, nonce: u64, marker: u8) -> Entry {
+        let raw = vec![4, marker];
+        Entry::Prepared {
+            key,
+            submission: Submission {
+                nonce,
+                hash: keccak(&raw),
+                raw,
+            },
+        }
+    }
+    #[test]
+    fn release_replacement_and_cancellation_replay_and_refuse_conflicts(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let signer = crate::signer::tests::signer()?;
+        let path = std::env::temp_dir().join(format!(
+            "paxeer-journal-lifecycle-{}.jsonl",
+            std::process::id()
+        ));
+        if path.exists() {
+            std::fs::remove_file(&path)?;
+        }
+        let key = |n: u128| Key {
+            sponsor: signer.address(),
+            quote_nonce: word(n),
+        };
+        let mut journal = Journal::open(&path)?;
+        for n in [1, 2, 3] {
+            journal.append(&quoted(&signer, n)?)?;
+        }
+        journal.append(&prepared(key(1), 5, 1))?;
+        assert_eq!(
+            journal.append(&prepared(key(2), 5, 2)),
+            Err(JournalError::Conflict)
+        );
+        for refused in [
+            Entry::Released {
+                key: key(1),
+                nonce: 6,
+            },
+            Entry::Released {
+                key: key(2),
+                nonce: 5,
+            },
+        ] {
+            assert_eq!(journal.append(&refused), Err(JournalError::Conflict));
+        }
+        let release = Entry::Released {
+            key: key(1),
+            nonce: 5,
+        };
+        journal.append(&release)?;
+        assert!(!journal.state().holds(signer.address(), 5));
+        assert_eq!(journal.append(&release), Err(JournalError::Conflict));
+        journal.append(&prepared(key(2), 5, 2))?;
+        let Entry::Quoted { quote } = quoted(&signer, 2)? else {
+            return Err("expected a quote".into());
+        };
+        let fees = quote.fees.replacement()?;
+        let cancellation = crate::tx::sign_cancellation(1325, 5, fees, &signer)?;
+        let replaced = |nonce: u64, fees: Fees| Entry::Replaced {
+            key: key(2),
+            replacement: Replacement {
+                nonce,
+                fees,
+                hash: cancellation.hash,
+                raw: cancellation.raw.clone(),
+            },
+        };
+        let mut underpriced = fees;
+        underpriced.max_fee_per_gas -= 1;
+        assert_eq!(
+            journal.append(&replaced(5, underpriced)),
+            Err(JournalError::Corrupt)
+        );
+        assert_eq!(
+            journal.append(&replaced(6, fees)),
+            Err(JournalError::Conflict)
+        );
+        journal.append(&replaced(5, fees))?;
+        assert_eq!(
+            journal.append(&replaced(5, fees)),
+            Err(JournalError::Conflict)
+        );
+        assert_eq!(
+            journal.append(&Entry::Released {
+                key: key(2),
+                nonce: 5
+            }),
+            Err(JournalError::Conflict)
+        );
+        assert_eq!(
+            journal.append(&prepared(key(3), 5, 3)),
+            Err(JournalError::Conflict)
+        );
+        let cancelled = Completion::Cancelled {
+            hash: cancellation.hash,
+            block_number: 17,
+        };
+        assert_eq!(
+            journal.append(&Entry::Completed {
+                key: key(2),
+                account: [0x11; 20],
+                completion: cancelled,
+            }),
+            Err(JournalError::Conflict)
+        );
+        assert_eq!(
+            journal.append(&Entry::Cancelled {
+                key: key(2),
+                hash: word(9),
+                block_number: 17,
+            }),
+            Err(JournalError::Conflict)
+        );
+        journal.append(&Entry::Cancelled {
+            key: key(2),
+            hash: cancellation.hash,
+            block_number: 17,
+        })?;
+        let state = journal.state().clone();
+        drop(journal);
+        let journal = Journal::open(&path)?;
+        assert_eq!(journal.state(), &state);
+        assert_eq!(journal.state().items[&key(1)].submission, None);
+        assert_eq!(journal.state().items[&key(2)].completion, Some(cancelled));
+        drop(journal);
         std::fs::remove_file(path)?;
         Ok(())
     }

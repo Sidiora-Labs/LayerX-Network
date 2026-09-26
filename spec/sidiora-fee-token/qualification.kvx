@@ -210,6 +210,7 @@ command = "cat modules/evm/gov.go"; exit_code = 0
 log_path = ".logs/scope-conflicts.log"
 observed = "The legacy native-pointer binding proposal is deprecated; V2 accepts metadata without pointer or version and deploys or overwrites pointer code, so no supported proposal safely binds the existing proxy."
 assumption = "The committed legacy binding fields are a non-executable artifact pending separately authorized governance support; no V2 deployment proposal is substituted."
+closed = "MsgBindERCNativePointer, carried by the evm PointerBindingProposal and executed through the Msg service for the governance authority from the fee-token upgrade on, binds the existing address without deploying code; contracts/test/sidiora_pointer_proposal.json is that proposal, and the task verify passes at exit 0 on ecebaa2f51cecadf1de6ca104b4609548e1c72a9."
 
 [observation.2.2.2]
 revision = "a9224a86520f442902062b3d8f71afb996646778"
@@ -239,6 +240,7 @@ symbol = "SidioraProxyGovernance"
 observed = "Review comment 4107758202 requires the governance upgrade to initialize atomically; task 2.2 documents this requirement and tests upgradeAndCall, but the governance upgrade tooling belongs to task 2.3."
 assumption = "Task 2.3 must encode initialize in the same upgrade operation; task 2.2 leaves the initializer and its one-time guard unchanged."
 severity = "blocker"
+closed = "Task 4.7 at ecebaa2f51cecadf1de6ca104b4609548e1c72a9: scheduleUpgrade takes no caller bytes and schedules upgradeToAndCall(implementation, initialize()), executed and initialized once in test/SidioraProxyGovernance.t.sol."
 
 [observation.2.2.6]
 task = "2.2"; file = "modules/layerxbridge/types/genesis.go"
@@ -395,12 +397,14 @@ task = "1.3"; file = "interop/crates/layerx-gas-station/src/station.rs"; symbol 
 observed = "A refused or dropped prepared transaction can reserve a sponsor nonce indefinitely; an expired quote can still be rebroadcast and revert."
 assumption = "Recovery needs a separately specified replacement fee policy, cancellation transaction and durable replacement lifecycle; excluding completed entries alone is unsafe because Consumed proves quote use rather than sponsor nonce use, and the journal rejects duplicate sponsor nonces."
 severity = "blocker"
+closed = "At 2954102ca01c51d999daa2f64923e2e9c4d19e78 the station releases a refused sponsor nonce for reuse, never rebroadcasts an expired quote, and fills a dropped or expired nonce with a journalled zero-value self-transfer at the bumped fee whose inclusion records the cancellation."
 
 [observation.2.6.1]
 task = "2.6"; file = "modules/evm/keeper/params.go"
 observed = "Requirement 10.2 demands a spread comparison, but the governed parameter rate is the only price source."
 assumption = "Missing, invalid, stale and overflowing rates are refused; no second price source is invented and the spread parameter remains unchanged."
 severity = "suspect"
+closed = "ValidateFeeTokenRateUpdate bounds each governed rate update by max_fee_token_spread of the rate it replaces, the x/evm param-change handler enforces it on the params proposal route, and the FeeTokenParams and FeeTokenRateBound tests pass at exit 0 on 3da2964a7c55a39d0c0d30327312af3e77b7d9c7."
 
 [observation.2.6.2]
 task = "2.6"; file = "modules/evm/keeper/abci.go"

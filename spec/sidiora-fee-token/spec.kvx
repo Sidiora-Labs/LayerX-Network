@@ -716,7 +716,7 @@ log_path = ".logs/verify.log"
 
 [task.4.2]
 title = "Release a refused sponsor nonce and journal replacement and cancellation"
-status = "pending"
+status = "done"
 wave = 4
 requires = ["4.1"]
 do_1 = "In interop/crates/layerx-gas-station/src/station.rs release the sponsor nonce a prepared transaction reserved when the node refuses it deterministically or drops it, so the next submission reuses that nonce, and never rebroadcast a journalled transaction whose quote deadline has passed."
@@ -728,6 +728,10 @@ verify_cmd = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Car
 symbols = ["GasStation","submit","resume","Journal","Entry"]
 touches = ["interop/crates/layerx-gas-station/src/station.rs","interop/crates/layerx-gas-station/src/journal.rs","interop/crates/layerx-gas-station/src/tx.rs","interop/crates/layerx-gas-station/tests/station.rs","interop/crates/layerx-gas-station/tests/fixtures"]
 reqs = ["2.4","2.5","2.6"]
+revision = "2954102ca01c51d999daa2f64923e2e9c4d19e78"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p layerx-gas-station --lib --test station'"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.4.3]
 title = "Serve the quote and sponsored submission endpoints from the station binary"
@@ -782,7 +786,11 @@ reqs = ["5.1","5.4","5.5"]
 
 [task.4.6]
 title = "Bind the existing Sidiora address as the native pointer through a governance message"
-status = "pending"
+status = "done"
+revision = "ecebaa2f51cecadf1de6ca104b4609548e1c72a9"
+command = "timeout 20m sh -c 'go test -count=1 ./modules/evm/ ./modules/evm/types/... ./modules/evm/client/... && go test -count=1 -run BindNativePointer ./modules/evm/keeper/...'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 4
 requires = []
 do_1 = "In api/evm/tx.proto add MsgBindERCNativePointer carrying the authority, the tokenfactory denom, the already deployed ERC20 address and the pointer version, with its response, to the Msg service, and in api/evm/gov.proto add a proposal content that carries governance messages packed under their type URL in the shape api/layerxbridge/proposal.proto declares BridgeProposal; regenerate tx.pb.go and gov.pb.go through scripts/protoc.sh, reverting every other file it rewrites, and hand-edit no generated file."
@@ -798,7 +806,7 @@ reqs = ["6.3","6.4","13.1","13.6"]
 
 [task.4.7]
 title = "Encode the implementation's initialize call in the scheduled proxy upgrade"
-status = "pending"
+status = "done"
 wave = 4
 requires = []
 do_1 = "In scripts/SidioraProxyGovernance.s.sol make scheduleUpgrade take no caller-supplied initialization bytes and encode upgradeToAndCall with abi.encodeCall of the implementation's initialize(), declared through an interface in the script because the kernel Foundry project does not compile contracts/src; initialize() takes no argument and writes the usid denom derived from the bridge module account, the only minter, so the encoded call carries exactly that initialization."
@@ -809,6 +817,10 @@ verify_cmd = "timeout 20m sh -c 'forge test --root . --match-path test/SidioraPr
 symbols = ["SidioraProxyGovernance","scheduleUpgrade","upgradeToAndCall","initialize"]
 touches = ["scripts/SidioraProxyGovernance.s.sol","test/SidioraProxyGovernance.t.sol"]
 reqs = ["6.2","7.3","7.5"]
+revision = "ecebaa2f51cecadf1de6ca104b4609548e1c72a9"
+command = "timeout 20m sh -c 'forge test --root . --match-path test/SidioraProxyGovernance.t.sol -vvv'"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.4.8]
 title = "Assert the account signature fails after a chain id change"
@@ -865,7 +877,7 @@ log_path = ".logs/verify.log"
 
 [task.4.11]
 title = "Bound every governed rate update by the maximum spread"
-status = "pending"
+status = "done"
 wave = 4
 requires = []
 do_1 = "In modules/evm/keeper/params.go add ValidateFeeTokenRateUpdate comparing each allowed denom's new rate with the rate stored for it and refusing, with a named error carrying the denom, both rates and the bound, a relative change whose absolute value exceeds GetMaxFeeTokenSpread; a denom with no stored rate is a first rate and is bounded by the validators alone."
@@ -876,6 +888,10 @@ verify_cmd = "timeout 20m sh -c 'go test -count=1 -run \"FeeTokenParams|FeeToken
 symbols = ["ValidateFeeTokenRateUpdate","GetMaxFeeTokenSpread","NewParamChangeProposalHandler"]
 touches = ["modules/evm/keeper/params.go","modules/evm/keeper/params_test.go","modules/evm/gov.go","modules/evm/gov_test.go","node/app.go","node/app_feetoken_test.go"]
 reqs = ["8.6","10.2"]
+revision = "3da2964a7c55a39d0c0d30327312af3e77b7d9c7"
+command = "timeout 20m sh -c 'go test -count=1 -run \"FeeTokenParams|FeeTokenRateBound\" ./modules/evm/keeper/... ./modules/evm/ && go test -count=1 -run FeeTokenRateBound ./node/'"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.4.12]
 title = "Regenerate the evm parameters with the pinned protobuf pipeline"

@@ -27,6 +27,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/artifacts/erc1155"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/artifacts/erc20"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/artifacts/erc721"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/artifacts/native"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/keeper"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/state"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
@@ -976,4 +977,128 @@ func TestFeeTokenRefundUsesAnteRate(t *testing.T) {
 	surplus, err := k.GetAnteSurplusSum(ctx)
 	require.NoError(t, err)
 	require.True(t, surplus.IsZero())
+}
+
+const bindNativePointerDenom = "factory/pax1dzfx9mk4fl9kl2mysjmtvk2xp75ljumk6nynhf/usid"
+
+// bindNativePointerSetup returns a keeper whose chain passed the native
+// pointer binding upgrade below the context's height, and a contract address
+// carrying the native pointer contract's code.
+func bindNativePointerSetup(t *testing.T) (*keeper.Keeper, sdk.Context, common.Address) {
+	t.Helper()
+	k, ctx := testkeeper.MockEVMKeeper(t)
+	k.UpgradeKeeper().SetDone(ctx.WithBlockHeight(ctx.BlockHeight()-1), types.BindERCNativePointerUpgrade)
+	pointer := common.HexToAddress("0x21f7b20a555199fa73A238B1a91FD0f549068fEe")
+	k.SetCode(ctx, pointer, native.GetBin())
+	return k, ctx, pointer
+}
+
+func bindNativePointer(k *keeper.Keeper, ctx sdk.Context, msg *types.MsgBindERCNativePointer) error {
+	_, err := keeper.NewMsgServerImpl(k).BindERCNativePointer(sdk.WrapSDKContext(ctx), msg)
+	return err
+}
+
+func TestBindNativePointerFromGovernanceResolvesBothRegistries(t *testing.T) {
+	k, ctx, pointer := bindNativePointerSetup(t)
+	codeBefore := k.GetCode(ctx, pointer)
+
+	ctx = ctx.WithEventManager(sdk.NewEventManager())
+	require.NoError(t, bindNativePointer(k, ctx, types.NewMsgBindERCNativePointer(types.GovernanceAuthority(), bindNativePointerDenom, pointer, 1)))
+
+	bound, version, exists := k.GetERC20NativePointer(ctx, bindNativePointerDenom)
+	require.True(t, exists)
+	require.Equal(t, pointer, bound)
+	require.Equal(t, uint16(1), version)
+
+	pointee, reverseVersion, exists := k.GetAnyPointerInfo(ctx, types.PointerReverseRegistryKey(pointer))
+	require.True(t, exists)
+	require.Equal(t, bindNativePointerDenom, string(pointee))
+	require.Equal(t, uint16(1), reverseVersion)
+
+	// The binding deploys nothing: the address keeps exactly the code it had.
+	require.Equal(t, codeBefore, k.GetCode(ctx, pointer))
+
+	events := ctx.EventManager().Events()
+	require.Len(t, events, 1)
+	require.Equal(t, types.EventTypePointerRegistered, events[0].Type)
+}
+
+func TestBindNativePointerRefusesAnotherAuthority(t *testing.T) {
+	k, ctx, pointer := bindNativePointerSetup(t)
+	other := sdk.AccAddress(pointer.Bytes()).String()
+	err := bindNativePointer(k, ctx, types.NewMsgBindERCNativePointer(other, bindNativePointerDenom, pointer, 1))
+	require.ErrorIs(t, err, sdkerrors.ErrUnauthorized)
+	_, _, exists := k.GetERC20NativePointer(ctx, bindNativePointerDenom)
+	require.False(t, exists)
+}
+
+func TestBindNativePointerRefusesAHeightBelowTheUpgrade(t *testing.T) {
+	k, ctx := testkeeper.MockEVMKeeper(t)
+	pointer := common.HexToAddress("0x21f7b20a555199fa73A238B1a91FD0f549068fEe")
+	k.SetCode(ctx, pointer, native.GetBin())
+	msg := types.NewMsgBindERCNativePointer(types.GovernanceAuthority(), bindNativePointerDenom, pointer, 1)
+
+	// Before the upgrade is done at all.
+	require.ErrorContains(t, bindNativePointer(k, ctx, msg), types.BindERCNativePointerUpgrade)
+
+	// Done at a height above the context's.
+	k.UpgradeKeeper().SetDone(ctx.WithBlockHeight(ctx.BlockHeight()+1), types.BindERCNativePointerUpgrade)
+	require.ErrorContains(t, bindNativePointer(k, ctx, msg), types.BindERCNativePointerUpgrade)
+	_, _, exists := k.GetERC20NativePointer(ctx, bindNativePointerDenom)
+	require.False(t, exists)
+
+	// At the upgrade height itself the binding executes.
+	require.NoError(t, bindNativePointer(k, ctx.WithBlockHeight(ctx.BlockHeight()+1), msg))
+}
+
+func TestBindNativePointerRefusesAnAddressWithoutCode(t *testing.T) {
+	k, ctx, _ := bindNativePointerSetup(t)
+	empty := common.HexToAddress("0x00000000000000000000000000000000000b1d01")
+	err := bindNativePointer(k, ctx, types.NewMsgBindERCNativePointer(types.GovernanceAuthority(), bindNativePointerDenom, empty, 1))
+	require.ErrorContains(t, err, "no contract code")
+	_, _, exists := k.GetERC20NativePointer(ctx, bindNativePointerDenom)
+	require.False(t, exists)
+}
+
+func TestBindNativePointerRefusesADenomAlreadyBound(t *testing.T) {
+	k, ctx, pointer := bindNativePointerSetup(t)
+	existing := common.HexToAddress("0x00000000000000000000000000000000000b1d02")
+	require.NoError(t, k.SetERC20NativePointer(ctx, bindNativePointerDenom, existing))
+
+	err := bindNativePointer(k, ctx, types.NewMsgBindERCNativePointer(types.GovernanceAuthority(), bindNativePointerDenom, pointer, 1))
+	require.ErrorContains(t, err, "already has pointer")
+	bound, _, exists := k.GetERC20NativePointer(ctx, bindNativePointerDenom)
+	require.True(t, exists)
+	require.Equal(t, existing, bound)
+}
+
+func TestBindNativePointerRefusesAnAddressAlreadyAPointer(t *testing.T) {
+	k, ctx, pointer := bindNativePointerSetup(t)
+	require.NoError(t, k.SetERC20NativePointer(ctx, "uother", pointer))
+
+	err := bindNativePointer(k, ctx, types.NewMsgBindERCNativePointer(types.GovernanceAuthority(), bindNativePointerDenom, pointer, 1))
+	require.ErrorContains(t, err, "already a pointer of another token")
+	_, _, exists := k.GetERC20NativePointer(ctx, bindNativePointerDenom)
+	require.False(t, exists)
+}
+
+func TestBindNativePointerRefusesAPointerToAPointer(t *testing.T) {
+	k, ctx, pointer := bindNativePointerSetup(t)
+	// The denom is itself registered as a pointer: the reverse registry holds
+	// the address its bytes name.
+	const denom = "pointer.denom.bound.as.a.pointer"
+	require.NoError(t, k.SetERC20NativePointer(ctx, "uother", common.BytesToAddress([]byte(denom))))
+
+	err := bindNativePointer(k, ctx, types.NewMsgBindERCNativePointer(types.GovernanceAuthority(), denom, pointer, 1))
+	require.ErrorIs(t, err, keeper.ErrorPointerToPointerNotAllowed)
+	_, _, exists := k.GetERC20NativePointer(ctx, denom)
+	require.False(t, exists)
+}
+
+func TestBindNativePointerRefusesAVersionTheRegistryDoesNotResolve(t *testing.T) {
+	k, ctx, pointer := bindNativePointerSetup(t)
+	err := bindNativePointer(k, ctx, types.NewMsgBindERCNativePointer(types.GovernanceAuthority(), bindNativePointerDenom, pointer, native.CurrentVersion+1))
+	require.ErrorContains(t, err, "above the native pointer version")
+	_, _, exists := k.GetERC20NativePointer(ctx, bindNativePointerDenom)
+	require.False(t, exists)
 }

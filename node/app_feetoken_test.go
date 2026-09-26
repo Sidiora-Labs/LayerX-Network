@@ -9,6 +9,7 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	abci "github.com/sidiora-labs/paxeer-network/consensus/abci/types"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/config"
+	evmkeeper "github.com/sidiora-labs/paxeer-network/modules/evm/keeper"
 	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
 	bridgetypes "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
@@ -16,6 +17,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/occ_tests/utils"
 	"github.com/sidiora-labs/paxeer-network/sdk/baseapp"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	paramproposal "github.com/sidiora-labs/paxeer-network/sdk/x/params/types/proposal"
 	"github.com/stretchr/testify/require"
 
 	gigaevmstate "github.com/sidiora-labs/paxeer-network/engine/deps/xevm/state"
@@ -215,4 +217,18 @@ func TestFeeTokenGigaBlockSwitchOffChargesNetworkCoin(t *testing.T) {
 	charge, err := b.wrapper.App.EvmKeeper.GetAnteFeeTokenCharge(b.ctx, tx.Hash())
 	require.NoError(t, err)
 	require.Nil(t, charge)
+}
+
+func TestFeeTokenRateBoundAppRoutesParamChanges(t *testing.T) {
+	b := newFeeTokenBlock(t, 1, feeTokenFunded)
+	stored := b.wrapper.App.EvmKeeper.GetAllowedFeeDenoms(b.ctx)
+	beyond := []evmtypes.AllowedFeeDenom{{Denom: b.denom, Rate: stored[0].Rate.Mul(sdk.NewDecWithPrec(11, 1)), RateUpdateHeight: 2}}
+	value, err := b.wrapper.App.LegacyAmino().MarshalAsJSON(beyond)
+	require.NoError(t, err)
+	content := paramproposal.NewParameterChangeProposal("rate", "rate", []paramproposal.ParamChange{
+		paramproposal.NewParamChange(evmtypes.ModuleName, string(evmtypes.KeyAllowedFeeDenoms), string(value)),
+	}, false)
+	route := b.wrapper.App.GovKeeper.Router().GetRoute(paramproposal.RouterKey)
+	require.ErrorIs(t, route(b.ctx, content), evmkeeper.ErrFeeTokenRateSpread)
+	require.Equal(t, stored, b.wrapper.App.EvmKeeper.GetAllowedFeeDenoms(b.ctx))
 }

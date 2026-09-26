@@ -16,6 +16,7 @@ var (
 	ErrFeeTokenRateStale       = errors.New("fee-token rate is stale")
 	ErrFeeTokenRateUnavailable = errors.New("fee-token rate is unavailable")
 	ErrFeeTokenRateInvalid     = errors.New("fee-token rate is invalid")
+	ErrFeeTokenRateSpread      = errors.New("fee-token rate update exceeds max_fee_token_spread")
 )
 
 const BaseDenom = "uhpx"
@@ -336,4 +337,28 @@ func (k *Keeper) GetFeeTokenRate(ctx sdk.Context, denom string) (sdk.Dec, error)
 		return entry.Rate, nil
 	}
 	return sdk.Dec{}, fmt.Errorf("%w: denom %q", ErrFeeTokenRateUnavailable, denom)
+}
+
+// ValidateFeeTokenRateUpdate refuses an allowed fee denom whose new rate differs
+// from the rate stored for it by more than max_fee_token_spread of the stored rate.
+// A denom with no stored rate is a first rate and is bounded by the validators alone.
+func (k *Keeper) ValidateFeeTokenRateUpdate(ctx sdk.Context, updated []types.AllowedFeeDenom) error {
+	stored := make(map[string]sdk.Dec)
+	for _, entry := range k.GetAllowedFeeDenoms(ctx) {
+		stored[entry.Denom] = entry.Rate
+	}
+	spread := k.GetMaxFeeTokenSpread(ctx)
+	for _, entry := range updated {
+		previous, ok := stored[entry.Denom]
+		if !ok || previous.IsNil() || !previous.IsPositive() {
+			continue
+		}
+		if entry.Rate.IsNil() || !entry.Rate.IsPositive() {
+			return fmt.Errorf("%w: rate %v for denom %q", ErrFeeTokenRateInvalid, entry.Rate, entry.Denom)
+		}
+		if entry.Rate.Sub(previous).Abs().GT(previous.Mul(spread)) {
+			return fmt.Errorf("%w: denom %q rate %s to %s exceeds max_fee_token_spread %s", ErrFeeTokenRateSpread, entry.Denom, previous, entry.Rate, spread)
+		}
+	}
+	return nil
 }
