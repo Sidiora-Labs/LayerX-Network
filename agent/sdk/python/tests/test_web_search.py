@@ -11,9 +11,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 from layerx_sdk import (
     AuthorizedReceiptBatch,
+    ReceiptFailureCode,
+    ReceiptVerificationError,
     WebSearchAssetTerms,
     WebSearchClient,
     WebSearchError,
@@ -27,6 +30,7 @@ from layerx_sdk import (
     encode_grant,
     web_content_bytes,
 )
+from layerx_sdk.x402 import receipt_protocol_version
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _FIXTURES = _REPO_ROOT / "interop" / "crates" / "x-websearch" / "tests" / "fixtures"
@@ -215,11 +219,26 @@ def _exact_usdc() -> _Payer:
     return _exact_in("USDC")
 
 
+def _terms() -> dict[str, WebSearchAssetTerms]:
+    return {currency: WebSearchAssetTerms(ASSETS[currency]["asset_id"], int(ASSETS[currency]["price"])) for currency in CURRENCIES}
+
+
 def _client(endpoint: str, payer: _Payer, key: str = TRUSTED_KEY, assets: dict[str, WebSearchAssetTerms] | None = None) -> WebSearchClient:
-    terms = assets if assets is not None else {currency: WebSearchAssetTerms(ASSETS[currency]["asset_id"], int(ASSETS[currency]["price"])) for currency in CURRENCIES}
-    return WebSearchClient(endpoint, "layerx:1", ASSETS["PAX"]["asset_id"], terms, payer,
+    return WebSearchClient(endpoint, "layerx:1", ASSETS["PAX"]["asset_id"], assets if assets is not None else _terms(), payer,
                            lambda receipt, _: _batch_facts(receipt, key), LayerXSignatureVerifier(),
                            protocol_version=3, now=lambda: 1_000_000_000)
+
+
+def _unbounded_client(endpoint: str, payer: _Payer) -> WebSearchClient:
+    return WebSearchClient(endpoint, "layerx:1", ASSETS["PAX"]["asset_id"], _terms(), payer,
+                           lambda receipt, _: _batch_facts(receipt, TRUSTED_KEY), LayerXSignatureVerifier(),
+                           now=lambda: 1_000_000_000)
+
+
+def _bounded_client(endpoint: str, payer: _Payer, protocol_version: Any) -> WebSearchClient:
+    return WebSearchClient(endpoint, "layerx:1", ASSETS["PAX"]["asset_id"], _terms(), payer,
+                           lambda receipt, _: _batch_facts(receipt, TRUSTED_KEY), LayerXSignatureVerifier(),
+                           protocol_version=protocol_version, now=lambda: 1_000_000_000)
 
 
 class WebSearchClientTest(unittest.TestCase):
@@ -311,6 +330,52 @@ class WebSearchClientTest(unittest.TestCase):
         del steps[USDC_PAID]["response"]["headers"]["PAYMENT-RESPONSE"]
         with _Replay(steps) as sidecar:
             self._refused(lambda: _client(sidecar.endpoint, _exact_usdc()).fetch(_fetch_url("USDC")), "missing-payment-response")
+
+    def test_recorded_receipts_carry_protocol_version_three(self) -> None:
+        receipts = [base64.b64decode(EXCHANGE[_fetch_index(currency)]["request"]["headers"]["PAYMENT-SIGNATURE"]["payload"]["receipt"])
+                    for currency in CURRENCIES]
+        receipts.append(base64.b64decode(SEARCH_PAID["response"]["headers"]["PAYMENT-RESPONSE"]["extensions"]["layerx"]["receipt"]))
+        for receipt in receipts:
+            self.assertEqual((receipt[0:2], receipt[4:6]), (b"\x00\x03", b"\x00\x03"))
+
+    def test_unconfigured_client_verifies_by_the_carried_version(self) -> None:
+        for position, currency in enumerate(CURRENCIES):
+            paid = _fetch_index(currency)
+            with _Replay(copy.deepcopy(EXCHANGE)) as sidecar:
+                fetched = _unbounded_client(sidecar.endpoint, _exact_in(currency)).fetch(VECTORS[position]["payload"])
+                self.assertEqual(sidecar.served, [paid - 1, paid])
+            assert fetched.settlement is not None
+            self.assertEqual(fetched.digest, VECTORS[position]["digest"])
+            self.assertEqual(fetched.settlement.transaction, EXCHANGE[paid]["response"]["headers"]["PAYMENT-RESPONSE"]["transaction"])
+        with _Replay(copy.deepcopy(EXCHANGE)) as sidecar:
+            found = _unbounded_client(sidecar.endpoint, _metered_sid()).search("paxeer")
+            self.assertEqual(sidecar.served, [0, 1])
+        assert found.settlement is not None
+        self.assertEqual((found.settlement.scheme, found.settlement.transaction),
+                         ("metered", SEARCH_PAID["response"]["headers"]["PAYMENT-RESPONSE"]["transaction"]))
+        with _Replay(copy.deepcopy(EXCHANGE)) as sidecar:
+            self._refused(lambda: WebSearchClient(sidecar.endpoint, "layerx:1", ASSETS["PAX"]["asset_id"], _terms(), _exact_usdc(),
+                                                  lambda receipt, _: _batch_facts(receipt, UNTRUSTED_KEY), LayerXSignatureVerifier(),
+                                                  now=lambda: 1_000_000_000).fetch(_fetch_url("USDC")), "receipt-unverified")
+            self.assertEqual(sidecar.served, [USDC_PAID - 1])
+
+    def test_configured_version_two_refuses_version_three_receipts(self) -> None:
+        with _Replay(copy.deepcopy(EXCHANGE)) as sidecar:
+            self._refused(lambda: _bounded_client(sidecar.endpoint, _exact_usdc(), 2).fetch(_fetch_url("USDC")), "receipt-protocol-version")
+            self.assertEqual(sidecar.served, [USDC_PAID - 1])
+        with _Replay(copy.deepcopy(EXCHANGE)) as sidecar:
+            self._refused(lambda: _bounded_client(sidecar.endpoint, _metered_sid(), 2).search("paxeer"), "receipt-protocol-version")
+            self.assertEqual(sidecar.served, [0, 1])
+        recorded = base64.b64decode(EXCHANGE[USDC_PAID]["response"]["headers"]["PAYMENT-RESPONSE"]["extensions"]["layerx"]["receipt"])
+        self.assertEqual(receipt_protocol_version(recorded), 3)
+        with self.assertRaises(ReceiptVerificationError) as raised:
+            receipt_protocol_version(recorded[:5])
+        self.assertIs(raised.exception.check, ReceiptFailureCode.DECODE)
+        with self.assertRaises(ReceiptVerificationError) as raised:
+            receipt_protocol_version(b"\x00\x04" + recorded[2:4] + b"\x00\x04" + recorded[6:])
+        self.assertIs(raised.exception.check, ReceiptFailureCode.PROTOCOL_VERSION)
+        for version in (1, 4, True, "3"):
+            self._refused(lambda: _bounded_client("http://127.0.0.1:1", _exact_usdc(), version), "invalid-protocol-version")
 
     def test_untrusted_sequencer_receipt_is_never_sent(self) -> None:
         with _Replay(copy.deepcopy(EXCHANGE)) as sidecar:

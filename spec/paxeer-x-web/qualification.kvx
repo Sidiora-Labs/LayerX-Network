@@ -180,6 +180,7 @@ symbol = "verify_payment_receipt"
 observed = "verify_payment_receipt verifies only protocol version 2 and the recorded receipts are version 3, and the Python SDK configures no type checker."
 assumption = "web_search.py calls verify_receipt with the configured protocol_version, and the Python build check is py_compile."
 severity = "note"
+closed = "Resolved at c024a5c510cad7d257b353c59ce65e631f38cda3 by task 2.12: verify_payment_receipt and the web search client read the protocol version from the receipt envelope, verify versions 2 and 3 with it and refuse any other version by name."
 
 [observation.1.10.1]
 task = "1.10"

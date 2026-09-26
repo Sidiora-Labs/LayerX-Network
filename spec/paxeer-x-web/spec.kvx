@@ -732,7 +732,11 @@ reqs = ["9.1"]
 
 [task.2.12]
 title = "Verify a receipt by the protocol version it carries in the Python client"
-status = "pending"
+status = "done"
+revision = "c024a5c510cad7d257b353c59ce65e631f38cda3"
+command = "timeout 20m sh -c 'cd agent/sdk/python && python3 -m pytest -q tests/test_web_search.py tests/test_x402.py'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["1.9","1.15"]
 do_1 = "In agent/sdk/python/layerx_sdk/x402.py make verify_payment_receipt verify the receipt with the protocol version the receipt itself carries, refusing by name a version the module does not support, and in layerx_sdk/web_search.py make the client verify the same way when no protocol_version was configured, keeping a configured version as an explicit bound that refuses a receipt of another version (observation 1.9.3)."
