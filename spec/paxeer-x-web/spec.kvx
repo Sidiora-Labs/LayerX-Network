@@ -809,7 +809,11 @@ reqs = ["17.1","17.2","17.4","17.5","17.6"]
 
 [task.2.14]
 title = "Perform api requests in the sidecar with envelopes, selectors and the single level"
-status = "pending"
+status = "implemented"
+implemented_revision = "ccf8fa472d567a842a86a404324a761341609817"
+implemented_command = "cargo build --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets && cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings"
+implemented_exit_code = 101
+implemented_log_path = ".logs/build.log"
 wave = 2
 requires = ["2.1","2.13"]
 do_1 = "Write interop/crates/x-websearch/src/api.rs: decode the api payload exactly as modules/xweb/types does, pick the envelope addressed to this sidecar's attestor address and decrypt it in memory with the attestor key against modules/xweb/types/testdata/envelope-vectors.json, perform the call with the public and the credential headers under the fetch limits and destination refusals of the fetch path, apply the JSON pointers, canonicalise in RFC 8785 form, bound the answer and zeroise the plaintext; the credential never reaches a log line, the index, the content store, a fixture or any file, and a request with no envelope for this attestor is refused, never called without it."

@@ -7,6 +7,7 @@
 //! `server::Server` serves `GET /health` free, `GET /search` and `GET /fetch`
 //! behind `payment::PaymentGate`, and `GET /content/<digest>` unpaid.
 
+pub mod api;
 pub mod assets;
 pub mod attest;
 pub mod canonical;

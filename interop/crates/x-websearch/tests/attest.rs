@@ -11,7 +11,7 @@ use k256::ecdsa::SigningKey;
 use serde_json::{json, Value};
 use x_websearch::attest::{
     self, evm_requester, network_word, recover_signer, sign_digest, signer_address,
-    stored_response, Answer, Attestation, Attestor, AttestorSet, Discard, SignatureExchange,
+    stored_response, Answer, Attestation, Attestor, AttestorSet, Discard, Level, SignatureExchange,
     DOMAIN, MAX_RESPONSE_BYTES, ORIGIN_EVM, PREIMAGE_LENGTH,
 };
 use x_websearch::config::FetchLimits;
@@ -569,6 +569,7 @@ fn an_attestor_fetches_and_searches_independently_and_signs_the_digest() -> Outc
     assert_eq!(answer.digest, answer.attestation.digest());
     assert_eq!(answer.callback_gas, 50_000);
     assert_eq!(answer.timeout_height, 900);
+    assert_eq!(answer.level, Level::Majority);
     assert_eq!(
         recover_signer(&answer.digest, &answer.signature)?,
         signer_address(&key)
@@ -593,6 +594,7 @@ fn an_attestor_fetches_and_searches_independently_and_signs_the_digest() -> Outc
         .map_err(|error| fail(error.to_string()))?;
     assert_eq!(answer.attestation.content_digest, digest);
     assert_eq!(answer.response, search::search_text(&results)?.into_bytes());
+    assert_eq!(answer.level, Level::Majority);
 
     let unknown = WebRequest {
         kind: 9,
@@ -636,6 +638,7 @@ fn vector_answer(index: u8, response: &[u8]) -> Outcome<Answer> {
     let digest = attestation.digest();
     Ok(Answer {
         attestation,
+        level: Level::Majority,
         response: response.to_vec(),
         callback_gas: 200_000,
         timeout_height: 528,

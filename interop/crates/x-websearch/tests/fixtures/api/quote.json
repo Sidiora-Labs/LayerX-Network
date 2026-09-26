@@ -1,0 +1,9 @@
+{
+  "quote": {
+    "amount": "3.114",
+    "asset": "SID",
+    "pair": "SID/PAX"
+  },
+  "decimals": 3,
+  "source": "loopback"
+}
