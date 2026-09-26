@@ -1104,7 +1104,7 @@ func decode[M any](t *testing.T, path string) M {
 	if err != nil {
 		t.Fatalf("%s: %v", path, err)
 	}
-	typed, ok := msg.(*M)
+	typed, ok := any(msg).(*M)
 	if !ok {
 		t.Fatalf("%s decoded into %T, want %T", path, msg, (*M)(nil))
 	}

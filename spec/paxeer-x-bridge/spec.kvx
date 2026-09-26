@@ -505,11 +505,11 @@ reqs = ["13.1","13.3","13.4","13.5"]
 
 [task.2.7]
 title = "Dry-run the Solana deployment against solana-test-validator and record it"
-status = "implemented"
-implemented_revision = "a06746caca16443ac405a5538aff3c0514947727"
-implemented_command = "timeout 20m bash bridge/deploy/tests/solana-dry-run-check.sh --record"
-implemented_exit_code = 1
-implemented_log = ".logs/record-2.7.log"
+status = "done"
+revision = "c165961b77317cc89a9c5b3025fddb6d8ada372a"
+command = "timeout 20m sh -c 'bash bridge/deploy/tests/solana-dry-run-check.sh'"
+exit_code = 0
+log_path = ".logs/verify-2.7.log"
 wave = 2
 requires = ["1.2","1.4","2.1","2.4","2.8"]
 do_1 = "Write bridge/deploy/tests/solana-dry-run-check.sh starting solana-test-validator, writing a run-local configuration whose placeholder owner and attestors are replaced by that run's own generated local values, and deploying and initialising the program with bridge/deploy/deploy-solana-program.sh against it."
@@ -670,7 +670,11 @@ reqs = ["13.1","13.5"]
 
 [task.2.16]
 title = "Make the deploy scripts wait for an executable program, keep its keypair and run from any directory"
-status = "pending"
+status = "done"
+revision = "c165961b77317cc89a9c5b3025fddb6d8ada372a"
+command = "timeout 20m sh -c 'bash bridge/deploy/tests/deploy-scripts-check.sh'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.10","2.12"]
 do_1 = "In bridge/deploy/deploy-solana-program.sh, after the deploy transaction is rooted, poll the program account at the configured commitment until it reports executable, with a bounded wait that fails by naming the program id, before the initialise step (observation 2.7.2)."

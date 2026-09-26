@@ -201,6 +201,7 @@ symbol = "PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE"
 observed = "A first deployment with no PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE deploys under the program keypair the build leaves in the run's temporary directory, which is removed on exit, while the rerun with a filled solana.program_id requires that keypair."
 assumption = "Out of this task's scope; the operator supplies a program keypair on the first deployment, and keeping or requiring it belongs to the script's owner."
 severity = "note"
+closed = "Task 2.16 made a first deployment with no PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE generate the program keypair beside the deployment record, name it in the record, print its path and refuse to overwrite an existing one, and deploy-scripts-check.sh covers the repeated run with it; the verify_cmd passed at revision c165961b77317cc89a9c5b3025fddb6d8ada372a."
 
 [observation.2.9.1]
 task = "2.9"
@@ -218,6 +219,7 @@ symbol = "forge script"
 observed = "The deploy script hands forge script the relative path script/DeployPaxeerXVault.s.sol beside --root, and the pinned forge resolves it against the working directory, so the script deploys only when run from bridge/evm and otherwise stops with 'No such file or directory'."
 assumption = "The script belongs to task 1.4 and is left as written; the dry run invokes it from bridge/evm, and an operator must do the same until the path is made absolute."
 severity = "note"
+closed = "Task 2.16 made deploy-evm-chain.sh hand forge script the Foundry script path under its own EVM_ROOT, and deploy-scripts-check.sh drives a deployment from a directory other than bridge/evm; the verify_cmd passed at revision c165961b77317cc89a9c5b3025fddb6d8ada372a."
 
 [observation.2.6.2]
 task = "2.6"
@@ -268,6 +270,7 @@ symbol = "initialise"
 observed = "With platform tools v1.56 the program builds and deploys on solana-test-validator 3.0.10, and one run initialised and registered both assets, but a later run had the admin client's initialise refused with 'Unsupported program id' right after the deploy was rooted, so no fixture was recorded."
 assumption = "The program is not yet usable by the slot the initialise lands in, which is intermittent; waiting for the deployed program to become executable before the initialise step belongs to the deploy script and was not changed within this run's repair cycles."
 severity = "blocker"
+closed = "Task 2.16 made deploy-solana-program.sh wait until the program account is executable, owned by the upgradeable loader and read past its deploy slot at the configured commitment before the initialise step; the Solana dry run then deployed, initialised and registered both assets, its --record and verify_cmd both passed at revision c165961b77317cc89a9c5b3025fddb6d8ada372a."
 
 [observation.2.7.3]
 task = "2.6"

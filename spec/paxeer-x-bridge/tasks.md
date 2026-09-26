@@ -102,7 +102,7 @@
     - Record the RPC exchange as a fixture under bridge/deploy/tests/fixtures in the format the relayer's fixtures use, carrying no key material, no endpoint but the local one the run started, and no date or hostname, and make the fixture replayable so a later run can assert the same exchange without a node.
     - Stop the run with a message naming the missing tool when anvil or forge is absent, and skip nothing: a missing tool is a failure, not an omitted step.
     - _Requirements: 13.1, 13.3, 13.4, 13.5_
-  - [ ] 2.7 Dry-run the Solana deployment against solana-test-validator and record it — **Implemented - qualification pending**
+  - [x] 2.7 Dry-run the Solana deployment against solana-test-validator and record it
     - Write bridge/deploy/tests/solana-dry-run-check.sh starting solana-test-validator, writing a run-local configuration whose placeholder owner and attestors are replaced by that run's own generated local values, and deploying and initialising the program with bridge/deploy/deploy-solana-program.sh against it.
     - Register the wrapped SOL asset and a run-local six-decimal mint standing for Sidiora with the asset id 0x21f7b20a555199fa73A238B1a91FD0f549068fEe, make a deposit, and release against real attestor signatures verified by the real native secp256k1 program, asserting the recipient's balance, the receipt PDA and the nullifier PDA.
     - Run bridge/deploy/checklist.sh against the local deployment and assert every check passes, with the wrapped SOL asset checked first, and assert the deployment record names the program id, the program data account, the ELF hash and the vault-authority PDA with the handle bridge/vectors derives.
@@ -154,7 +154,7 @@
     - Make the Paxeer side of bridge/deploy/tests/evm-dry-run-check.sh read every generated body through bridge/deploy/proposals DecodeBody, as the Solana dry run does, so bodies written under their type URL apply to the real keeper (observation 2.7.3), and assert one body with a wrong type URL and one with an unknown field are refused by name.
     - Re-record bridge/deploy/tests/fixtures/evm_dry_run.json once through --record on this revision and keep the replay passing without a node.
     - _Requirements: 13.1, 13.5_
-  - [ ] 2.16 Make the deploy scripts wait for an executable program, keep its keypair and run from any directory
+  - [x] 2.16 Make the deploy scripts wait for an executable program, keep its keypair and run from any directory
     - In bridge/deploy/deploy-solana-program.sh, after the deploy transaction is rooted, poll the program account at the configured commitment until it reports executable, with a bounded wait that fails by naming the program id, before the initialise step (observation 2.7.2).
     - On a first deployment with no PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE, write the generated program keypair to the path the deployment record names beside it and print that path, so the rerun with a filled solana.program_id finds it (observation 2.10.1); refuse to overwrite an existing keypair file.
     - In bridge/deploy/deploy-evm-chain.sh resolve the Foundry script path from the script's own location so it deploys from any working directory (observation 2.6.1).

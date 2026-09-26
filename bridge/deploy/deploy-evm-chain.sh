@@ -213,6 +213,9 @@ joined() {
 # silently addressed foundry's default endpoint instead of this chain would be a
 # worse outcome than the argument. Everything read back above and below reaches
 # the chain through ETH_RPC_URL.
+# The Foundry script is named by its path under the script's own EVM_ROOT, because
+# forge resolves a relative script path against the working directory and not
+# against --root, so the deployment runs from any directory.
 PAXEER_BRIDGE_VAULT_OWNER=$owner \
     PAXEER_BRIDGE_VAULT_ATTESTORS=$(joined "${attestors[@]}") \
     PAXEER_BRIDGE_VAULT_THRESHOLD=$threshold \
@@ -220,7 +223,7 @@ PAXEER_BRIDGE_VAULT_OWNER=$owner \
     PAXEER_BRIDGE_VAULT_PER_TX_CAPS=$(joined "${asset_per_tx[@]}") \
     PAXEER_BRIDGE_VAULT_TOTAL_CAPS=$(joined "${asset_total[@]}") \
     FOUNDRY_BROADCAST="$work/broadcast" \
-    forge script --root "$EVM_ROOT" script/DeployPaxeerXVault.s.sol:DeployPaxeerXVault \
+    forge script --root "$EVM_ROOT" "$EVM_ROOT/script/DeployPaxeerXVault.s.sol:DeployPaxeerXVault" \
     --rpc-url "$rpc" --private-key "$deploy_key" --broadcast --slow > "$work/deploy.log" 2>&1 \
     || {
         cat "$work/deploy.log" >&2
