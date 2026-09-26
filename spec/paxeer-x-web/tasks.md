@@ -118,7 +118,7 @@
     - Write src/submit.rs posting fulfil through the precompile once the threshold is reached with signatures in ascending signer order, signing the EIP-1559 transaction with the submitter key in the shape interop/crates/layerx-gas-station/src/tx.rs uses, journalling the signed bytes before broadcast so a restart rebroadcasts, and recording an already-fulfilled request as completed; add the module lines to src/lib.rs and wire the loops into src/main.rs.
     - Write tests/attest.rs and tests/submit.rs against recorded exchanges under tests/fixtures/evm covering the watch, the preimage vector, the signature exchange and its refusal, the ascending order, the journal before broadcast, a restart rebroadcast and an already-fulfilled request, with real keys, a real journal on disk and a real loopback server.
     - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5_
-  - [ ] 2.2 Close the program request path from record to web_read
+  - [ ] 2.2 Close the program request path from record to web_read — **Implemented - qualification pending**
     - In src/modules/programs/call.c record a pending program web request only when the call emits the web request record through event_emit and its transfer_402 to the web fee account succeeds in the same call, and in src/modules/web/lx_web_intake.c split the fee equally to the signing attestors' kernel accounts at intake with the remainder to the lowest signer; route the web observation and attestor-set activity ids through kernel dispatch beside the oracle's and bind the web root into the batch header beside oracle_root, closing observation 1.7.1.
     - Write programs/sdk/rust/examples/web-reader, a reference program in the shape of programs/sdk/rust/examples/escrow with its build.sh, that emits a request, pays with transfer_402 and reads the committed answer with web_read, and add a programs-reference-web-reader make target in the shape of programs-reference-escrow.
     - Write interop/crates/x-websearch/src/kernel.rs watching program web request records through the gateway, fetching independently, signing the origin-2 digest, exchanging signatures and posting the web observation activity with lx_sendActivity once the threshold is reached; add the module line to src/lib.rs.
@@ -199,6 +199,12 @@
     - For every test that fails outside this feature's crates, fix its real cause in code or fixtures, starting with the native terminal evidence test in agent/crates/layerx-agentd/src/protocol_evidence_native_tests.rs, which fails to decode tests/fixtures/custody/daemon-credit-receipt with Decode(MalformedPayload): determine which side drifted from the receipt format the platform writes and correct that side, regenerating the fixture through the tool that produced it when the fixture is stale; never ignore, delete, relax or skip a test.
     - Close observation 2.9.1 naming the revision at which make agent-test passes.
     - _Requirements: 9.1_
+  - [ ] 2.17 Qualify the sidecar api request path and serve api answers from the content store
+    - In interop/crates/x-websearch/tests/api.rs clear the clippy findings recorded in observation 2.14.1 without an allow attribute: split the envelope vector test into one test per vector group over a shared helper, pass a single root through std::slice::from_ref, and keep every assertion as written.
+    - Make the loopback API server in tests/api.rs answer 401 to a call carrying no credential header or an unknown credential and 200 only to the known credential, so the no-envelope refusal test observes the status it asserts.
+    - In interop/crates/x-websearch/src/canonical.rs add ContentKind::Api with byte 3, accepted by from_byte and the canonical header, and store an api answer's canonical bytes in the content store at the point the fetch path stores its own, so GET /content/<digest> serves an api answer and a consumer can read the full answer behind the on-chain digest; extend tests/canonical.rs and tests/content.rs for the new kind and tests/api.rs with a request whose answer is read back through GET /content/<digest> and scanned for the credential.
+    - Run task 2.14's build command and its verify_cmd once on the result; on exit 0 record task 2.14 done with that revision, command, exit code and log, and close observations 2.14.1 and 2.14.2 naming the revision.
+    - _Requirements: 17.2, 17.3, 17.6_
 
 ## Wave 3 - One Run, Recorded
 
@@ -216,7 +222,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17", "1.18"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }

@@ -1,0 +1,105 @@
+{
+  "endpoints": {
+    "gateway": {
+      "*": [
+        {
+          "method": "lx_getProgramEvents",
+          "params": [
+            {
+              "topic": "504158454552585f5745425f524551554553545f5631",
+              "from_sequence": 40,
+              "limit": 256
+            }
+          ],
+          "result": {
+            "events": [
+              {
+                "sequence": 41,
+                "program_id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+                "topic": "504158454552585f5745425f524551554553545f5631",
+                "data": "0102030405060708020000000e706178656572206e6574776f726b"
+              },
+              {
+                "sequence": 43,
+                "program_id": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+                "topic": "504158454552585f5745425f524551554553545f5631",
+                "data": "0000000000000005010000001368747470733a2f2f7061786565722e6170702f"
+              }
+            ],
+            "next_sequence": 44
+          }
+        },
+        {
+          "method": "lx_getProgramEvents",
+          "params": [
+            {
+              "topic": "504158454552585f5745425f524551554553545f5631",
+              "from_sequence": 44,
+              "limit": 256
+            }
+          ],
+          "result": {
+            "events": [],
+            "next_sequence": 44
+          }
+        },
+        {
+          "method": "lx_getProgramEvents",
+          "params": [
+            {
+              "topic": "504158454552585f5745425f524551554553545f5631",
+              "from_sequence": 60,
+              "limit": 256
+            }
+          ],
+          "result": {
+            "events": [
+              {
+                "sequence": 61,
+                "program_id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+                "topic": "504158454552585f4f544845525f544f5049435f5631",
+                "data": "0102030405060708020000000e706178656572206e6574776f726b"
+              }
+            ],
+            "next_sequence": 62
+          }
+        },
+        {
+          "method": "lx_getProgramEvents",
+          "params": [
+            {
+              "topic": "504158454552585f5745425f524551554553545f5631",
+              "from_sequence": 70,
+              "limit": 256
+            }
+          ],
+          "result": {
+            "events": [
+              {
+                "sequence": 71,
+                "program_id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+                "topic": "504158454552585f5745425f524551554553545f5631",
+                "data": "0102030405060708030000000e706178656572206e6574776f726b"
+              }
+            ],
+            "next_sequence": 72
+          }
+        },
+        {
+          "method": "lx_getProgramEvents",
+          "params": [
+            {
+              "topic": "504158454552585f5745425f524551554553545f5631",
+              "from_sequence": 80,
+              "limit": 256
+            }
+          ],
+          "error": {
+            "code": -32601,
+            "message": "method not found"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -2,6 +2,7 @@
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_kernel.h"
+#include "layerx/programs.h"
 
 #include <string.h>
 
@@ -366,15 +367,158 @@ lxp_result lx_web_committed_read(lxp_module_ctx *ctx,
     return LXP_OK;
 }
 
+enum {
+    PENDING_PREFIX_BYTES = 11,
+    PENDING_KEY_BYTES = PENDING_PREFIX_BYTES + 32 + 8,
+    PENDING_RECORD_VERSION = 1,
+    PENDING_RECORD_BYTES = 123
+};
+
+/* The pending record a paid program request call staged: kind, payload hash,
+ * the fee asset, account and amount, the recording sequence and the
+ * fulfilled flag. */
+typedef struct pending_record {
+    bool present;
+    uint8_t bytes[PENDING_RECORD_BYTES];
+} pending_record;
+
+static void pending_key(uint8_t key[PENDING_KEY_BYTES],
+                        const uint8_t program_id[32], uint64_t request_id)
+{
+    static const uint8_t prefix[PENDING_PREFIX_BYTES] = {
+        'w', 'e', 'b', '/', 'p', 'e', 'n', 'd', 'i', 'n', 'g'
+    };
+    (void)memcpy(key, prefix, sizeof(prefix));
+    (void)memcpy(key + PENDING_PREFIX_BYTES, program_id, 32U);
+    put_u64(key + PENDING_PREFIX_BYTES + 32U, request_id);
+}
+
+static lxp_result pending_record_load(lxp_module_ctx *ctx,
+                                      const uint8_t program_id[32],
+                                      uint64_t request_id,
+                                      pending_record *record)
+{
+    uint8_t key[PENDING_KEY_BYTES];
+    const uint8_t *bytes;
+    size_t length;
+    lxp_result status;
+    (void)memset(record, 0, sizeof(*record));
+    pending_key(key, program_id, request_id);
+    status = lxp_ctx_kv_get(ctx, key, sizeof(key), &bytes, &length);
+    if (status == LXP_ERR_UNKNOWN_FIELD) return LXP_OK;
+    if (status != LXP_OK) return status;
+    if (length != PENDING_RECORD_BYTES ||
+        bytes[0] != PENDING_RECORD_VERSION || !kind_known(bytes[1]) ||
+        bytes[122] > 1U)
+        return LXP_ERR_NON_CANONICAL;
+    (void)memcpy(record->bytes, bytes, PENDING_RECORD_BYTES);
+    record->present = true;
+    return LXP_OK;
+}
+
+/* Pays the request fee out of the web fee account to the kernel payout
+ * accounts of the attestors whose signatures the answer carries, in equal
+ * shares; the remainder of the division goes to the lowest signer, which is
+ * the first in the ascending signer order. */
+static lxp_result fee_split(lxp_module_ctx *ctx,
+                            const lx_web_attestor_set *attestors,
+                            const pending_record *record,
+                            uint8_t signers[LX_WEB_MAX_ATTESTORS]
+                                           [LX_WEB_SIGNER_BYTES],
+                            size_t signer_count)
+{
+    lx_programs_transfer_runtime *runtime;
+    lxp_transfer_set set;
+    lxp_transfer_source_authority authority;
+    lxp_receipt receipt;
+    lx_account *source;
+    lxp_u128 amount;
+    lxp_u128 share;
+    lxp_u128 remainder;
+    size_t i;
+    lxp_result status;
+    if (signer_count == 0U || signer_count > LX_WEB_MAX_ATTESTORS ||
+        signer_count > LXP_MAX_TRANSFER_SET_LEGS)
+        return LXP_ERR_NON_CANONICAL;
+    runtime = (lx_programs_transfer_runtime *)lxp_ctx_module_runtime(ctx);
+    if (runtime == NULL || runtime->assets == NULL)
+        return LXP_ERR_MODULE_DISABLED;
+    status = lxp_u128_from_be(record->bytes + 98U, &amount);
+    if (status != LXP_OK) return status;
+    if (lxp_u128_is_zero(amount)) return LXP_OK;
+    status = lxp_u128_mul_div_floor(amount, (lxp_u128){0U, 1U},
+                                    (lxp_u128){0U, signer_count}, &share,
+                                    &remainder);
+    if (status != LXP_OK) return status;
+    status = lxp_ctx_account_find(ctx, record->bytes + 66U, &source);
+    if (status != LXP_OK) return status;
+    (void)memset(&set, 0, sizeof(set));
+    (void)memset(&authority, 0, sizeof(authority));
+    (void)memset(&receipt, 0, sizeof(receipt));
+    for (i = 0U; i < signer_count; ++i) {
+        const lx_web_attestor *attestor;
+        lxp_transfer_leg *leg = &set.legs[set.leg_count];
+        lxp_u128 leg_amount = share;
+        if (i == 0U) {
+            status = lxp_u128_add(share, remainder, &leg_amount);
+            if (status != LXP_OK) return status;
+        }
+        if (lxp_u128_is_zero(leg_amount)) continue;
+        status = lx_web_attestor_lookup(attestors, signers[i], &attestor);
+        if (status == LXP_OK)
+            status = lxp_ctx_account_find(ctx, attestor->payout_account,
+                                          &leg->to);
+        if (status != LXP_OK) return status;
+        leg->from = source;
+        (void)memcpy(leg->asset_id, record->bytes + 34U, 32U);
+        leg->amount = leg_amount;
+        leg->reason = LXP_REASON_PAYMENT;
+        leg->supply_mode = LXP_TRANSFER_CONSERVED;
+        ++set.leg_count;
+    }
+    (void)memcpy(authority.authorized_from, source->id, 32U);
+    authority.debit_authority_kind = LXP_AUTH_PROTOCOL_MODULE;
+    authority.protocol_system_capability = true;
+    set.context.assets = runtime->assets;
+    set.context.asset_count = runtime->asset_count;
+    (void)memcpy(set.context.authorized_from, source->id, 32U);
+    set.context.protocol_system_capability = true;
+    set.context.debit_authority_kind = LXP_AUTH_PROTOCOL_MODULE;
+    set.context.source_authorities = &authority;
+    set.context.source_authority_count = 1U;
+    set.context.batch_timestamp = lxp_ctx_batch_timestamp_ms(ctx);
+    return lxp_ctx_emit_transfer_set(ctx, &set, &receipt);
+}
+
+static lxp_result pending_record_fulfil(lxp_module_ctx *ctx,
+                                        const uint8_t program_id[32],
+                                        uint64_t request_id,
+                                        pending_record *record)
+{
+    uint8_t key[PENDING_KEY_BYTES];
+    pending_key(key, program_id, request_id);
+    record->bytes[122] = 1U;
+    return lxp_ctx_kv_put(ctx, key, sizeof(key), record->bytes,
+                          PENDING_RECORD_BYTES);
+}
+
+/* Admits an observation for a request the store tracks or one a program call
+ * recorded and paid for in the Programs module storage this context reads:
+ * the recorded request supplies the kind and payload hash the observation
+ * must match, the answer is committed beside it for web_read, and the fee is
+ * split among the signers. */
 lxp_result lx_web_intake(lxp_module_ctx *ctx,
                          const lx_web_intake_request *request,
                          lx_web_committed *committed)
 {
     lx_web_observation observation;
+    lx_web_pending_request admitted;
     lx_web_pending_request *pending;
     lx_web_committed *entry;
+    pending_record record;
     uint8_t digest[32];
     uint8_t signers[LX_WEB_MAX_ATTESTORS][LX_WEB_SIGNER_BYTES];
+    bool tracked;
     lxp_result status;
     if (ctx == NULL || request == NULL || request->store == NULL ||
         request->attestors == NULL || committed == NULL ||
@@ -387,12 +531,33 @@ lxp_result lx_web_intake(lxp_module_ctx *ctx,
     if (status != LXP_OK) return status;
     if (observation.network_id != request->store->network_id)
         return LXP_ERR_WRONG_NETWORK;
+    status = pending_record_load(ctx, observation.program_id,
+                                 observation.request_id, &record);
+    if (status != LXP_OK) return status;
     status = pending_find(request->store, observation.program_id,
                           observation.request_id, &pending);
-    if (status != LXP_OK) return status;
-    if (pending->fulfilled) return LXP_ERR_SEQUENCE_REUSED;
+    tracked = status == LXP_OK;
+    if (!tracked && status != LXP_ERR_UNKNOWN_FIELD) return status;
+    if (!tracked && !record.present) return LXP_ERR_UNKNOWN_FIELD;
+    if ((tracked && pending->fulfilled) ||
+        (record.present && record.bytes[122] != 0U))
+        return LXP_ERR_SEQUENCE_REUSED;
+    if (!tracked) {
+        if (request->store->pending_count == LX_WEB_PENDING_CAPACITY)
+            return LXP_ERR_ARENA_EXHAUSTED;
+        (void)memset(&admitted, 0, sizeof(admitted));
+        (void)memcpy(admitted.program_id, observation.program_id, 32U);
+        admitted.request_id = observation.request_id;
+        admitted.kind = record.bytes[1];
+        (void)memcpy(admitted.payload_hash, record.bytes + 2U, 32U);
+        admitted.recorded_sequence = get_u64(record.bytes + 114U);
+        pending = &admitted;
+    }
     if (pending->kind != observation.kind ||
-        memcmp(pending->payload_hash, observation.payload_hash, 32U) != 0)
+        memcmp(pending->payload_hash, observation.payload_hash, 32U) != 0 ||
+        (record.present &&
+         (record.bytes[1] != observation.kind ||
+          memcmp(record.bytes + 2U, observation.payload_hash, 32U) != 0)))
         return LXP_ERR_CONTEXT_MISMATCH;
     if (lx_web_attestor_set_validate(request->attestors) != LXP_OK)
         return LXP_ERR_ATTESTATION_THRESHOLD;
@@ -404,7 +569,19 @@ lxp_result lx_web_intake(lxp_module_ctx *ctx,
     if (request->store->committed_count == LX_WEB_STORE_CAPACITY)
         return LXP_ERR_ARENA_EXHAUSTED;
     status = lx_web_committed_put(ctx, &observation);
+    if (status == LXP_OK && record.present)
+        status = fee_split(ctx, request->attestors, &record, signers,
+                           observation.signature_count);
+    if (status == LXP_OK && record.present)
+        status = pending_record_fulfil(ctx, observation.program_id,
+                                       observation.request_id, &record);
     if (status != LXP_OK) return status;
+    if (!tracked) {
+        admitted.fulfilled = true;
+        request->store->pending[request->store->pending_count++] = admitted;
+    } else {
+        pending->fulfilled = true;
+    }
     entry = &request->store->committed[request->store->committed_count++];
     (void)memset(entry, 0, sizeof(*entry));
     entry->observation = observation;
@@ -413,7 +590,6 @@ lxp_result lx_web_intake(lxp_module_ctx *ctx,
                  observation.signature_count * LX_WEB_SIGNER_BYTES);
     entry->signer_count = observation.signature_count;
     entry->global_sequence = lxp_ctx_global_sequence(ctx);
-    pending->fulfilled = true;
     *committed = *entry;
     return LXP_OK;
 }

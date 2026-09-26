@@ -1,3 +1,4 @@
+#include "layerx/lx_batch.h"
 #include "layerx/lx_web.h"
 
 #include "layerx/lxp_crypto.h"
@@ -119,4 +120,16 @@ lxp_result lx_web_root(const lx_web_store *store, lxp_arena *arena,
     lxp_result status = lx_web_availability_bundle_build(store, &bundle);
     if (status != LXP_OK) return status;
     return lx_web_root_from_availability(&bundle, arena, root);
+}
+
+lxp_result lx_batch_header_set_web_root(lx_batch_header *header,
+                                        const lx_web_store *store,
+                                        lxp_arena *arena)
+{
+    uint8_t root[32];
+    lxp_result status;
+    if (header == NULL) return LXP_ERR_NON_CANONICAL;
+    status = lx_web_root(store, arena, root);
+    if (status == LXP_OK) (void)memcpy(header->web_root, root, 32U);
+    return status;
 }

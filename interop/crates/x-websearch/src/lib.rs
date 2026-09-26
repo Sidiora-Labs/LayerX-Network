@@ -17,6 +17,7 @@ pub mod crawl;
 pub mod extract;
 pub mod fetch;
 pub mod index;
+pub mod kernel;
 pub mod keys;
 pub mod payment;
 pub mod robots;

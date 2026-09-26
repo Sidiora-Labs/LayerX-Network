@@ -1,3 +1,4 @@
+#include "layerx/lx_batch.h"
 #include "layerx/lx_web.h"
 #include "layerx/lx_service.h"
 #include "layerx/lxp_crypto.h"
@@ -150,6 +151,7 @@ static lx_web_store reordered_store;
 static lx_web_availability_bundle bundle;
 static lx_web_observation observation;
 static lx_web_committed committed;
+static lx_batch_header header;
 static uint8_t encoded[LX_WEB_OBSERVATION_MAX_BYTES];
 static uint8_t arena_bytes[16384];
 static lxp_state_store state;
@@ -242,6 +244,15 @@ static lxp_result root_of(const lx_web_store *store, uint8_t root[32])
     return lx_web_root(store, &arena, root);
 }
 
+static lxp_result header_bind(const lx_web_store *store)
+{
+    lxp_arena arena;
+    lxp_result status = lxp_arena_init(&arena, arena_bytes,
+                                       sizeof(arena_bytes));
+    if (status != LXP_OK) return status;
+    return lx_batch_header_set_web_root(&header, store, &arena);
+}
+
 static lxp_result bundle_root(uint8_t root[32])
 {
     lxp_arena arena;
@@ -317,6 +328,25 @@ int main(void)
                memcmp(bundle.leaves[1], web_first_digest, 32U) == 0);
     ROOT_CHECK(bundle_root(recomputed) == LXP_OK);
     ROOT_CHECK(memcmp(root, recomputed, 32U) == 0);
+
+    /* The header carries the web root beside the oracle root, and a store
+     * the root refuses leaves the bound root untouched. */
+    (void)memset(&header, 0, sizeof(header));
+    (void)memset(header.oracle_root, 0x0f, 32U);
+    ROOT_CHECK(header_bind(&first_store) == LXP_OK);
+    ROOT_CHECK(memcmp(header.web_root, root, 32U) == 0);
+    for (length = 0U; length < 32U; ++length)
+        ROOT_CHECK(header.oracle_root[length] == 0x0fU);
+    ROOT_CHECK(lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) ==
+               LXP_OK);
+    ROOT_CHECK(lx_batch_header_set_web_root(NULL, &first_store, &arena) ==
+               LXP_ERR_NON_CANONICAL);
+    replay_store.committed_count = LX_WEB_STORE_CAPACITY + 1U;
+    ROOT_CHECK(header_bind(&replay_store) == LXP_ERR_NON_CANONICAL);
+    ROOT_CHECK(memcmp(header.web_root, root, 32U) == 0);
+    replay_store.committed_count = 0U;
+    ROOT_CHECK(header_bind(&replay_store) == LXP_OK);
+    ROOT_CHECK(memcmp(header.web_root, empty_root, 32U) == 0);
 
     ROOT_CHECK(store_prepare(&replay_store) == LXP_OK);
     ROOT_CHECK(observe(&replay_store, &first, 101U) == LXP_OK);
