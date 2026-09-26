@@ -82,6 +82,20 @@
     - Let Fetcher::fetch return the raw body beside the canonical text so the crawler reads a page's links from the body it already fetched and fetches each page exactly once; keep every fetch limit and refusal as it is.
     - Write tests/binary.rs starting the real x-websearch executable through CARGO_BIN_EXE_x-websearch with a committed configuration under tests/fixtures/binary and key files the test generates into a temporary directory, covering /health, a /search and a /fetch without payment answering 402 with a PAYMENT-REQUIRED offer that names all four assets, GET /content for a digest nobody holds answering 404, one crawl cycle over a loopback site the test serves landing a searchable document, and a clean shutdown; extend tests/crawl.rs with the single-fetch assertion.
     - _Requirements: 2.1, 3.1, 4.1_
+  - [ ] 1.14 Track guest ABI 4 in the registration probe and the SDK lint
+    - In tests/programs/test_registration.c keep every existing transition probe and move the unsupported-version probe from LX_PROGRAMS_SANDBOX_ABI_VERSION + 1U to LX_PROGRAMS_GUEST_ABI_V4_VERSION + 1U, the version one past the highest guest ABI src/modules/programs/deploy.c admits since task 1.8; add probes asserting that 0 to LX_PROGRAMS_GUEST_ABI_V4_VERSION and LX_PROGRAMS_SANDBOX_ABI_VERSION to LX_PROGRAMS_GUEST_ABI_V4_VERSION validate LXP_OK and that LX_PROGRAMS_GUEST_ABI_V4_VERSION to LX_PROGRAMS_SANDBOX_ABI_VERSION is unsupported; change nothing in deploy.c.
+    - In programs/sdk/rust/src/naming.rs write the three-byte LXN prefix comparison as a byte-string literal so clippy's byte_char_slices lint passes under -D warnings with identical behaviour (observation 1.8.3); change nothing else in the SDK.
+    - _Requirements: 8.1_
+  - [ ] 1.15 Pay PAX to the main account and record a paid success for every asset
+    - In interop/crates/x-websearch/src/payment.rs make the payee and the payer account for the kernel's native coin PAX the main account agent:<did>:main, the form agent/sdk/typescript/src/rpc.ts walletAccount and the Python _wallet_account derive for the native asset, and keep the per-asset form agent:<did>:asset:<id> for SID, USDC and USDL (observation 1.9.1); adapt neither SDK derivation.
+    - In interop/crates/layerx-x402/src/seller.rs make the Seller repeat purposeHash in extensions.layerx of PAYMENT-RESPONSE for a grant settlement exactly as spec/402lxp/protocol.md requires (observation 1.4.2), with a test in interop/crates/layerx-x402/tests/seller.rs asserting it byte for byte.
+    - Re-record interop/crates/x-websearch/tests/fixtures/gateway and tests/fixtures/client-exchange.json through the crate's own recorder (X_WEBSEARCH_RECORD_EXCHANGE) against the real gateway and seller code so the recording holds a paid success for each of SID, PAX, USDC and USDL in exact mode and for SID in metered mode, with route-shaped resource bodies taken from tests/fixtures/content-vectors.json and a recorded GET /content/<digest> exchange (observation 1.10.3); carry no key material, no date and no hostname; then update the conformance suite digest task 1.13 pinned in src/lib.rs, which tests/binary.rs recomputes.
+    - Extend interop/crates/x-websearch/tests/payment.rs, agent/sdk/typescript/test/web-search.test.ts, agent/sdk/python/tests/test_web_search.py and agent/crates/layerx-mcp/tests/web.rs, which replays the same recording, so every asset's paid success replays end to end through the real clients, a PAX offer is accepted by both clients, and the metered SID settlement verifies its purposeHash; change agent/sdk/typescript/src/web-search.ts and agent/sdk/python/layerx_sdk/web_search.py only where the re-recorded exchange proves a defect in them.
+    - _Requirements: 4.1, 4.2, 9.4_
+  - [ ] 1.16 Route the web tools through the MCP server
+    - In agent/crates/layerx-mcp/src/server.rs list catalogue::WEB_TOOLS in tools/list and route their tools/call through tools/web.rs behind the same approval boundary the other paid tools use, carrying the layerx/output untrusted marker on every result (observation 1.10.2); change no other tool's routing.
+    - Extend agent/crates/layerx-mcp/tests/web.rs to drive a bound server through tools/list and tools/call for search, fetch and content over the recorded exchange, asserting the listing, a paid call, a held spend and the untrusted marker.
+    - _Requirements: 9.1, 9.2_
 
 ## Wave 2 - Integration
 
@@ -97,6 +111,7 @@
     - Write programs/sdk/rust/examples/web-reader, a reference program in the shape of programs/sdk/rust/examples/escrow with its build.sh, that emits a request, pays with transfer_402 and reads the committed answer with web_read, and add a programs-reference-web-reader make target in the shape of programs-reference-escrow.
     - Write interop/crates/x-websearch/src/kernel.rs watching program web request records through the gateway, fetching independently, signing the origin-2 digest, exchanging signatures and posting the web observation activity with lx_sendActivity once the threshold is reached; add the module line to src/lib.rs.
     - Write tests/test_web_program_path.c with the make target test-web-program-path running the reference program through request, payment, observation intake and web_read, and interop/crates/x-websearch/tests/kernel.rs asserting the sidecar's activity bytes equal tests/fixtures/web/observation-activity.hex and covering the watch against a recorded gateway exchange.
+    - Route web observation intake through the programs module context so the committed answers live in the storage lx_web_committed_read reads (observation 1.8.2), and cover it in tests/test_web_program_path.c by reading an answer committed at intake back through web_read.
     - _Requirements: 11.1, 11.2, 11.3, 11.4_
   - [ ] 2.3 Package the sidecar and add it to the node image
     - Write interop/deploy/x-websearch/Dockerfile building x-websearch from the interop workspace on pinned base images in the shape of interop/deploy/mirror/Dockerfile, running as a non-root user, and interop/deploy/x-websearch/x-websearch.service with a dedicated user, the three key-file environment variables and a hardened sandbox.
@@ -107,8 +122,8 @@
   - [ ] 2.4 Write the v6.8 upgrade plan that wires xweb into the application
     - Append v6.8 to node/tags in the order the file's parser requires and register its handler in node/upgrades.go beside the v6.7 handler, adding the xweb store key through the upgrade's store loader and initialising the parameters to their documented defaults with an empty attestor set and the module paused.
     - Wire the xweb keeper, module and store key into node/app.go in the shape the layerxbridge keeper uses, implement the XWebK accessor in node/precompiles.go, and regenerate precompiles/xweb/setup.go with go generate so it names v6.8, asserting the regeneration produces no diff.
-    - Make every xweb state change reachable only at or after the upgrade height, so a node replaying blocks below it produces exactly the state it produces without this feature; apply nothing to a running chain.
-    - Add node/upgrades_xweb_test.go asserting the handler is registered under the name in node/tags, the store is added, the defaults are set, the module is paused and the precompile answers only after the upgrade.
+    - Make every xweb state change reachable only at or after the upgrade height, so a node replaying blocks below it produces exactly the state it produces without this feature; apply nothing to a running chain; this includes the precompile's presence in precompiles/setup.go GetCustomPrecompiles, which task 1.6 registered for every binary (observation 1.6.3), so a binary below the upgrade height carries no 0x0000000000000000000000000000000000001019 entry.
+    - Add node/upgrades_xweb_test.go asserting the handler is registered under the name in node/tags, the store is added, the defaults are set, the module is paused, the custom precompile set below the upgrade height holds no xweb entry, and the precompile answers only after the upgrade.
     - _Requirements: 13.1, 13.2, 13.3, 13.4_
   - [ ] 2.5 Write the xweb documentation page
     - Write docs/site/docs/protocol/xweb.md in the shape of docs/site/docs/protocol/sidiora.md: what x-websearch is, the four assets and the price rule, the three paid routes and GET /content/<digest>, the canonical content digest, the contract path with the address 0x0000000000000000000000000000000000001019, request, fulfil, refund and the callback, the attestor majority, the kernel path with web_read, and that the chain change reaches a running chain through the v6.8 upgrade and a governance proposal.
@@ -119,6 +134,15 @@
     - Fetch the same page through the three sidecars, assert the digests are identical and the signatures are valid and ascending over the origin-1 preimage, assert the submitter's fulfil calldata decodes against precompiles/xweb/abi.json, and deliver the consumer's callback on anvil from the impersonated precompile address with the attested response and the bounded gas, asserting the consumer's stored result.
     - Record the exchange as interop/deploy/x-websearch/tests/fixtures/dry-run.json, replayable without the nodes, carrying no key material, no endpoint but the loopback ones the run started and no date or hostname; stop with a message naming a missing tool rather than skipping a step.
     - _Requirements: 15.1, 15.2, 15.3_
+  - [ ] 2.7 Widen the xweb workflow's path filters to every tree its legs exercise
+    - Extend the path filters in .github/workflows/xweb-test.yml with every tree observation 1.11.1 names and every path tasks 1.12 to 1.15 and 2.1 to 2.6 touch that one of the workflow's legs exercises, so a change to any of them runs the legs; add no leg and change no command.
+    - Extend tools/ci/xweb-workflow-check.sh to assert the widened list, keeping the rule that every filter names a path that exists or a path a task of this feature adds.
+    - _Requirements: 16.1, 16.2_
+  - [ ] 2.8 Configure the crawl interval and stop the sidecar cleanly
+    - Add crawl_interval_seconds to the configuration in interop/crates/x-websearch/src/config.rs with a documented default of 900 when absent, refusing zero and any value above 86400 by naming the field, and make the crawler in src/crawl.rs and the binary in src/main.rs schedule cycles from it instead of the constant (observation 1.13.1).
+    - Handle SIGTERM and SIGINT in src/main.rs through the signal-hook crate pinned in interop/Cargo.toml and declared in interop/crates/x-websearch/Cargo.toml, with no unsafe code: stop accepting connections, finish the requests in flight, commit the index and exit 0; keep the default action for every other signal.
+    - Extend tests/config.rs for the new field and its refusals, tests/crawl.rs for a cycle scheduled from the configured interval, and tests/binary.rs so the clean-shutdown test asserts exit 0 on SIGTERM, a freed port and a reopened index with every page searchable; update tests/fixtures/binary as the configuration requires.
+    - _Requirements: 2.1, 3.1, 4.1_
 
 ## Wave 3 - One Run, Recorded
 
@@ -135,8 +159,8 @@
 ```json
 {
   "waves": [
-    { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6"] },
+    { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }

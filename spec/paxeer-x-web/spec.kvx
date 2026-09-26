@@ -507,6 +507,7 @@ do_1 = "In src/modules/programs/call.c record a pending program web request only
 do_2 = "Write programs/sdk/rust/examples/web-reader, a reference program in the shape of programs/sdk/rust/examples/escrow with its build.sh, that emits a request, pays with transfer_402 and reads the committed answer with web_read, and add a programs-reference-web-reader make target in the shape of programs-reference-escrow."
 do_3 = "Write interop/crates/x-websearch/src/kernel.rs watching program web request records through the gateway, fetching independently, signing the origin-2 digest, exchanging signatures and posting the web observation activity with lx_sendActivity once the threshold is reached; add the module line to src/lib.rs."
 do_4 = "Write tests/test_web_program_path.c with the make target test-web-program-path running the reference program through request, payment, observation intake and web_read, and interop/crates/x-websearch/tests/kernel.rs asserting the sidecar's activity bytes equal tests/fixtures/web/observation-activity.hex and covering the watch against a recorded gateway exchange."
+do_5 = "Route web observation intake through the programs module context so the committed answers live in the storage lx_web_committed_read reads (observation 1.8.2), and cover it in tests/test_web_program_path.c by reading an answer committed at intake back through web_read."
 verify_cmd = "timeout 20m sh -c 'make test-web-program-path && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test kernel'"
 symbols = ["web_request_record","KernelWatcher","web-reader"]
 touches = ["include/layerx/lx_batch.h","src/sequencer/lx_web_root.c","tests/sequencer/test_web_root.c","src/modules/programs/call.c","src/modules/web/lx_web_intake.c","programs/sdk/rust/examples/web-reader","interop/crates/x-websearch/src/lib.rs","interop/crates/x-websearch/src/kernel.rs","interop/crates/x-websearch/tests/kernel.rs","interop/crates/x-websearch/tests/fixtures/kernel","tests/test_web_program_path.c","Makefile"]
@@ -535,11 +536,11 @@ wave = 2
 requires = ["1.5","1.6"]
 do_1 = "Append v6.8 to node/tags in the order the file's parser requires and register its handler in node/upgrades.go beside the v6.7 handler, adding the xweb store key through the upgrade's store loader and initialising the parameters to their documented defaults with an empty attestor set and the module paused."
 do_2 = "Wire the xweb keeper, module and store key into node/app.go in the shape the layerxbridge keeper uses, implement the XWebK accessor in node/precompiles.go, and regenerate precompiles/xweb/setup.go with go generate so it names v6.8, asserting the regeneration produces no diff."
-do_3 = "Make every xweb state change reachable only at or after the upgrade height, so a node replaying blocks below it produces exactly the state it produces without this feature; apply nothing to a running chain."
-do_4 = "Add node/upgrades_xweb_test.go asserting the handler is registered under the name in node/tags, the store is added, the defaults are set, the module is paused and the precompile answers only after the upgrade."
+do_3 = "Make every xweb state change reachable only at or after the upgrade height, so a node replaying blocks below it produces exactly the state it produces without this feature; apply nothing to a running chain; this includes the precompile's presence in precompiles/setup.go GetCustomPrecompiles, which task 1.6 registered for every binary (observation 1.6.3), so a binary below the upgrade height carries no 0x0000000000000000000000000000000000001019 entry."
+do_4 = "Add node/upgrades_xweb_test.go asserting the handler is registered under the name in node/tags, the store is added, the defaults are set, the module is paused, the custom precompile set below the upgrade height holds no xweb entry, and the precompile answers only after the upgrade."
 verify_cmd = "timeout 20m sh -c 'go test -count=1 -run Upgrade ./node/ && go test -count=1 ./precompiles/xweb/...'"
 symbols = ["xwebUpgrade","RegisterUpgradeHandlers","XWebKeeper","XWebK"]
-touches = ["node/tags","node/upgrades.go","node/app.go","node/precompiles.go","node/upgrades_xweb_test.go","precompiles/xweb/setup.go","precompiles/xweb/versions"]
+touches = ["node/tags","node/upgrades.go","node/app.go","node/precompiles.go","node/upgrades_xweb_test.go","precompiles/setup.go","precompiles/xweb/setup.go","precompiles/xweb/versions"]
 tests = ["node/upgrades_xweb_test.go","precompiles/xweb/xweb_test.go"]
 reqs = ["13.1","13.2","13.3","13.4"]
 
@@ -575,11 +576,74 @@ section = "Wave 3 - One Run, Recorded"
 title = "Run the workflow's command set once on the merged revision and write down what ran"
 status = "pending"
 
+[task.1.14]
+title = "Track guest ABI 4 in the registration probe and the SDK lint"
+status = "pending"
+wave = 1
+requires = ["1.8"]
+do_1 = "In tests/programs/test_registration.c keep every existing transition probe and move the unsupported-version probe from LX_PROGRAMS_SANDBOX_ABI_VERSION + 1U to LX_PROGRAMS_GUEST_ABI_V4_VERSION + 1U, the version one past the highest guest ABI src/modules/programs/deploy.c admits since task 1.8; add probes asserting that 0 to LX_PROGRAMS_GUEST_ABI_V4_VERSION and LX_PROGRAMS_SANDBOX_ABI_VERSION to LX_PROGRAMS_GUEST_ABI_V4_VERSION validate LXP_OK and that LX_PROGRAMS_GUEST_ABI_V4_VERSION to LX_PROGRAMS_SANDBOX_ABI_VERSION is unsupported; change nothing in deploy.c."
+do_2 = "In programs/sdk/rust/src/naming.rs write the three-byte LXN prefix comparison as a byte-string literal so clippy's byte_char_slices lint passes under -D warnings with identical behaviour (observation 1.8.3); change nothing else in the SDK."
+verify_cmd = "timeout 20m sh -c 'make build/tests/programs_registration && build/tests/programs_registration && cd programs && cargo clippy --locked -p layerx-program-sdk --all-targets -- -D warnings'"
+symbols = ["lxp_programs_abi_transition_validate"]
+touches = ["tests/programs/test_registration.c","programs/sdk/rust/src/naming.rs"]
+reqs = ["8.1"]
+
+[task.1.15]
+title = "Pay PAX to the main account and record a paid success for every asset"
+status = "pending"
+wave = 1
+requires = ["1.4","1.9","1.13","1.16"]
+do_1 = "In interop/crates/x-websearch/src/payment.rs make the payee and the payer account for the kernel's native coin PAX the main account agent:<did>:main, the form agent/sdk/typescript/src/rpc.ts walletAccount and the Python _wallet_account derive for the native asset, and keep the per-asset form agent:<did>:asset:<id> for SID, USDC and USDL (observation 1.9.1); adapt neither SDK derivation."
+do_2 = "In interop/crates/layerx-x402/src/seller.rs make the Seller repeat purposeHash in extensions.layerx of PAYMENT-RESPONSE for a grant settlement exactly as spec/402lxp/protocol.md requires (observation 1.4.2), with a test in interop/crates/layerx-x402/tests/seller.rs asserting it byte for byte."
+do_3 = "Re-record interop/crates/x-websearch/tests/fixtures/gateway and tests/fixtures/client-exchange.json through the crate's own recorder (X_WEBSEARCH_RECORD_EXCHANGE) against the real gateway and seller code so the recording holds a paid success for each of SID, PAX, USDC and USDL in exact mode and for SID in metered mode, with route-shaped resource bodies taken from tests/fixtures/content-vectors.json and a recorded GET /content/<digest> exchange (observation 1.10.3); carry no key material, no date and no hostname; then update the conformance suite digest task 1.13 pinned in src/lib.rs, which tests/binary.rs recomputes."
+do_4 = "Extend interop/crates/x-websearch/tests/payment.rs, agent/sdk/typescript/test/web-search.test.ts, agent/sdk/python/tests/test_web_search.py and agent/crates/layerx-mcp/tests/web.rs, which replays the same recording, so every asset's paid success replays end to end through the real clients, a PAX offer is accepted by both clients, and the metered SID settlement verifies its purposeHash; change agent/sdk/typescript/src/web-search.ts and agent/sdk/python/layerx_sdk/web_search.py only where the re-recorded exchange proves a defect in them."
+verify_cmd = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p layerx-x402 --test seller && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test payment --test binary && cd agent/sdk/typescript && npm ci && npm run build && node dist/test/web-search.test.js && cd ../python && python3 -m pytest -q tests/test_web_search.py && cd ../../.. && cargo test --locked --manifest-path agent/Cargo.toml -p layerx-mcp --test web'"
+symbols = ["PaymentGate::payee","Seller::settle"]
+touches = ["interop/crates/x-websearch/src/payment.rs","interop/crates/x-websearch/src/lib.rs","interop/crates/x-websearch/tests/payment.rs","interop/crates/x-websearch/tests/binary.rs","interop/crates/x-websearch/tests/fixtures/gateway","interop/crates/x-websearch/tests/fixtures/client-exchange.json","interop/crates/layerx-x402/src/seller.rs","interop/crates/layerx-x402/tests/seller.rs","agent/sdk/typescript/src/web-search.ts","agent/sdk/typescript/test/web-search.test.ts","agent/sdk/python/layerx_sdk/web_search.py","agent/sdk/python/tests/test_web_search.py","agent/crates/layerx-mcp/tests/web.rs"]
+reqs = ["4.1","4.2","9.4"]
+
+[task.1.16]
+title = "Route the web tools through the MCP server"
+status = "pending"
+wave = 1
+requires = ["1.10"]
+do_1 = "In agent/crates/layerx-mcp/src/server.rs list catalogue::WEB_TOOLS in tools/list and route their tools/call through tools/web.rs behind the same approval boundary the other paid tools use, carrying the layerx/output untrusted marker on every result (observation 1.10.2); change no other tool's routing."
+do_2 = "Extend agent/crates/layerx-mcp/tests/web.rs to drive a bound server through tools/list and tools/call for search, fetch and content over the recorded exchange, asserting the listing, a paid call, a held spend and the untrusted marker."
+verify_cmd = "timeout 20m sh -c 'cargo test --locked --manifest-path agent/Cargo.toml -p layerx-mcp --test web'"
+symbols = ["WEB_TOOLS","web_surface"]
+touches = ["agent/crates/layerx-mcp/src/server.rs","agent/crates/layerx-mcp/tests/web.rs"]
+reqs = ["9.1","9.2"]
+
+[task.2.7]
+title = "Widen the xweb workflow's path filters to every tree its legs exercise"
+status = "pending"
+wave = 2
+requires = ["1.11","1.13","1.14","1.15","1.16"]
+do_1 = "Extend the path filters in .github/workflows/xweb-test.yml with every tree observation 1.11.1 names and every path tasks 1.12 to 1.15 and 2.1 to 2.6 touch that one of the workflow's legs exercises, so a change to any of them runs the legs; add no leg and change no command."
+do_2 = "Extend tools/ci/xweb-workflow-check.sh to assert the widened list, keeping the rule that every filter names a path that exists or a path a task of this feature adds."
+verify_cmd = "timeout 20m sh -c 'bash tools/ci/xweb-workflow-check.sh'"
+symbols = []
+touches = [".github/workflows/xweb-test.yml","tools/ci/xweb-workflow-check.sh"]
+reqs = ["16.1","16.2"]
+
+[task.2.8]
+title = "Configure the crawl interval and stop the sidecar cleanly"
+status = "pending"
+wave = 2
+requires = ["1.13","2.1"]
+do_1 = "Add crawl_interval_seconds to the configuration in interop/crates/x-websearch/src/config.rs with a documented default of 900 when absent, refusing zero and any value above 86400 by naming the field, and make the crawler in src/crawl.rs and the binary in src/main.rs schedule cycles from it instead of the constant (observation 1.13.1)."
+do_2 = "Handle SIGTERM and SIGINT in src/main.rs through the signal-hook crate pinned in interop/Cargo.toml and declared in interop/crates/x-websearch/Cargo.toml, with no unsafe code: stop accepting connections, finish the requests in flight, commit the index and exit 0; keep the default action for every other signal."
+do_3 = "Extend tests/config.rs for the new field and its refusals, tests/crawl.rs for a cycle scheduled from the configured interval, and tests/binary.rs so the clean-shutdown test asserts exit 0 on SIGTERM, a freed port and a reopened index with every page searchable; update tests/fixtures/binary as the configuration requires."
+verify_cmd = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test config --test binary --test crawl'"
+symbols = ["Config::crawl_interval_seconds"]
+touches = ["interop/Cargo.toml","interop/Cargo.lock","interop/crates/x-websearch/Cargo.toml","interop/crates/x-websearch/src/config.rs","interop/crates/x-websearch/src/crawl.rs","interop/crates/x-websearch/src/main.rs","interop/crates/x-websearch/src/server.rs","interop/crates/x-websearch/tests/config.rs","interop/crates/x-websearch/tests/crawl.rs","interop/crates/x-websearch/tests/binary.rs","interop/crates/x-websearch/tests/fixtures/binary"]
+reqs = ["2.1","3.1","4.1"]
+
 [task.3.1]
 title = "Run the xweb workflow's legs once on the merged revision and record the evidence"
 status = "pending"
 wave = 3
-requires = ["1.1","1.2","1.3","1.4","1.5","1.6","1.7","1.8","1.9","1.10","1.11","2.1","2.2","2.3","2.4","2.5","2.6"]
+requires = ["1.1","1.2","1.3","1.4","1.5","1.6","1.7","1.8","1.9","1.10","1.11","1.12","1.13","1.14","1.15","1.16","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8"]
 do_1 = "On the revision that merges waves 1 and 2, run the workflow's legs once, in order - the x-websearch crate, modules/xweb with precompiles/xweb, the Foundry consumer tests, the kernel web make targets with the runtime web_read test, and the SDK and MCP tests - writing each leg's output to its own log under build/xweb-gates/."
 do_2 = "Append one gate record per leg to spec/paxeer-x-web/qualification.kvx carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code and the log path, written only from a command that actually ran."
 do_3 = "Append one observation per failure the run exposes that belongs to no task in this feature; do not investigate it further and do not rerun it. Rerun nothing that already passed at this revision and write no gate record for a command that did not run."
