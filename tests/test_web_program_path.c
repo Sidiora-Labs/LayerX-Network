@@ -290,7 +290,7 @@ static int path_call(path_chain *chain, const uint8_t program_id[32],
     return 0;
 }
 
-static int web_program_path(const char *wasm_path)
+static int web_program_path(const char *wasm_path, bool genesis_fee_account)
 {
     static const uint8_t actor_name[] =
         "agent:did:lxp:web-program-path:main";
@@ -342,6 +342,8 @@ static int web_program_path(const char *wasm_path)
     lxp_receipt receipt;
     lxp_u128 actor_before;
     uint64_t parameters = 1U;
+    uint64_t paid_sequence;
+    size_t accounts_before;
     size_t wasm_length;
     size_t length;
     size_t index;
@@ -389,8 +391,9 @@ static int web_program_path(const char *wasm_path)
                        &signers[index].account) == LXP_OK);
     }
     /* The web fee account is a programs module value account holding the fee
-     * asset, provisioned at genesis beside the payout accounts. */
-    {
+     * asset. One run provisions it at genesis beside the payout accounts; the
+     * other leaves it to the first paying call to create. */
+    if (genesis_fee_account) {
         static const uint8_t programs_name[] = "programs";
         lx_account_registration fee_registration;
         bool fee_created = false;
@@ -552,6 +555,10 @@ static int web_program_path(const char *wasm_path)
     actor = path_account(&chain.accounts, actor_id);
     PATH_CHECK(actor != NULL);
     actor_before = actor->balance;
+    PATH_CHECK((path_account(&chain.accounts, fee_account_id) != NULL) ==
+               genesis_fee_account);
+    accounts_before = chain.accounts.count;
+    paid_sequence = chain.state.next_sequence;
     length = path_capabilities(capabilities, fee_asset, fee_account_id);
     PATH_CHECK(path_call(&chain, program_id, capabilities, length, calldata,
                          path_request_calldata(calldata, path_request,
@@ -561,8 +568,16 @@ static int web_program_path(const char *wasm_path)
     fee_account = path_account(&chain.accounts, fee_account_id);
     PATH_CHECK(fee_account != NULL &&
                fee_account->kind == LX_ACCOUNT_MODULE_VALUE &&
+               fee_account->has_asset &&
+               memcmp(fee_account->asset_id, fee_asset, 32U) == 0 &&
                fee_account->balance.hi == 0U &&
                fee_account->balance.lo == PATH_FEE);
+    if (genesis_fee_account) {
+        PATH_CHECK(chain.accounts.count == accounts_before);
+    } else {
+        PATH_CHECK(chain.accounts.count == accounts_before + 1U &&
+                   fee_account->created_at_sequence == paid_sequence);
+    }
     actor = path_account(&chain.accounts, actor_id);
     PATH_CHECK(actor != NULL && actor->balance.lo < actor_before.lo);
     path_pending_key(program_id, path_request, pending_key);
@@ -776,5 +791,6 @@ int main(int argc, char **argv)
         (void)fprintf(stderr, "usage: %s web-reader.wasm\n", argv[0]);
         return 2;
     }
-    return web_program_path(argv[1]);
+    if (web_program_path(argv[1], true) != 0) return 1;
+    return web_program_path(argv[1], false);
 }

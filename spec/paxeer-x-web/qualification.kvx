@@ -409,3 +409,11 @@ symbol = "lxp_programs_emit_guest_event"
 observed = "The kernel commits a guest event only as an envelope carrying the topic and data digests and the data length, and neither the node nor the core service keeps the raw topic or data, so no upstream read can answer lx_getProgramEvents with data and none was added to the core service; the gateway proxies GET /v1/programs/events/<topic>/<from_sequence>/<limit>, validates the page and answers -32001 while the core returns not_found, and the local events.rs run is not extended because it could only fail."
 assumption = "A kernel and node change persisting committed guest event topic and data by global sequence, served by the core service at that path, is owned by a follow-up task outside these touches."
 severity = "blocker"
+
+[observation.2.23.1]
+revision = "a01484182da45a4e43ec13541b3b70a9466f9323"
+command = "timeout 20m sh -c 'make test-module-ctx test-kernel && make test-web-program-path'"
+exit_code = 2
+log_path = ".logs/verify.log"
+observed = "test-module-ctx stops in its unchanged opening block, where lxp_ctx_emit_transfer_set returns LXP_FATAL_INVARIANT (-1001) against the test's apply_transfer fixture exactly as the unmodified test does, so the new prepare staging checks after it never run, while test-kernel and test-web-program-path, including the run whose first paying call creates the web fee account, pass (.logs/verify-rest.log, exit 0)."
+assumption = "The module-ctx fixture's owner restores that transfer emit check without weakening it, after which this verify_cmd runs unchanged."

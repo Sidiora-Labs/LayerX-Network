@@ -3245,6 +3245,16 @@ lxp_result lxp_kernel_prepare_activity(
     status = lxp_effect_buffer_init(&effects);
     module_result = fee_policy.result_code;
     if (status == LXP_OK && fee_policy.apply_module_effects) {
+        if (execution->global_sequence < work->kernel.state->next_sequence) {
+            status = LXP_ERR_SEQUENCE_GAP;
+        } else {
+            work->kernel.state->next_sequence = execution->global_sequence;
+            status = lxp_state_journal_open(work->kernel.state,
+                                            execution->global_sequence,
+                                            work->kernel.journal);
+        }
+    }
+    if (status == LXP_OK && fee_policy.apply_module_effects) {
         status = lxp_module_ctx_init(
             &module_ctx, &work->kernel, registration->module_id,
             execution->batch_timestamp_ms, execution->epoch,
@@ -3344,6 +3354,8 @@ lxp_result lxp_kernel_prepare_activity(
     }
 done:
     if (module_ctx_initialized) lxp_module_ctx_rollback(&module_ctx);
+    if (work->kernel.journal->open)
+        (void)lxp_state_journal_rollback(work->kernel.journal);
     lxp_prepared_transition_destroy(prepared);
     lxp_kernel_batch_snapshot_destroy(work);
     return status;
