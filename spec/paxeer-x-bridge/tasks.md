@@ -126,6 +126,12 @@
     - In bridge/deploy/deploy-solana-program.sh derive the vault authority and the vault handle from the seed the program declares as VAULT_SEED in bridge/solana/src/state.rs, vault-authority, instead of vault (observations 2.5.1 and 2.8.1), and make the first-deployment path write the deployed program id into the deployment record and refuse to continue to the initialise step while solana.program_id is still a placeholder, naming the field.
     - Extend bridge/deploy/tests/deploy-scripts-check.sh so it derives the vault authority from the program's seed against the recorded fixture, fails when the script names any other seed, and covers the placeholder refusal.
     - _Requirements: 3.1, 3.2_
+  - [ ] 2.11 Route bridge governance proposals through the application
+    - Give the bridge module a governance proposal content type the way modules/evm and modules/tokenfactory do: define it beside the messages in api/layerxbridge (a proposal carrying the RegisterChain, SetAttestors, SetCap, Pause and Unpause messages task 2.9 generated), generate it into modules/layerxbridge/types, register it as governance content in codec.go, and write modules/layerxbridge/handler.go with NewProposalHandler executing each carried message through the keeper with the governance authority (observation 2.9.1).
+    - Add the module's route to govRouter in node/app.go beside the tokenfactory and evm routes, changing nothing else in the application.
+    - Make bridge/deploy/proposals/proposals.go emit each bundle as that proposal content, so the chain's submit-proposal transaction carries it as it stands, keeping DecodeBody and the type URLs task 2.9 added.
+    - Extend modules/layerxbridge/keeper/keeper_test.go for the handler (each carried message executes, a wrong authority and a malformed proposal are refused), add node/gov_bridge_test.go asserting the application's governance router has the bridge route and executes a generated proposal, and extend bridge/deploy/proposals/proposals_test.go to decode the emitted proposal field for field.
+    - _Requirements: 9.1, 9.2_
 
 ## Wave 3 - One Run, Recorded
 
@@ -144,7 +150,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }
