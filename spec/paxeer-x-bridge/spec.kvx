@@ -688,11 +688,11 @@ implemented_exit_code = 101
 implemented_log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.3"]
-do_1 = "Fix the five clippy findings observation 2.2.1 names in interop/crates/layerx-bridge-relayer by restructuring the code, never by an allow attribute or a lint-level change, so cargo clippy with -D warnings passes on the crate with all targets."
+do_1 = "Fix every clippy finding in interop/crates/layerx-bridge-relayer, the five observation 2.2.1 names under src and the ones under tests observation 2.17.1 names, by restructuring the code, never by an allow attribute or a lint-level change, so cargo clippy with -D warnings passes on the crate with all targets."
 do_2 = "Update modules/layerxbridge/ATTESTATION.md and the comment in modules/layerxbridge/types/attestation.go to the contract path wave 1 moved to bridge/evm (observation 1.1.1), and make the existing check that compares the two attestation documents, if there is one, assert the new path."
 verify_cmd = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p layerx-bridge-relayer --all-targets -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p layerx-bridge-relayer && go build ./modules/layerxbridge/... && grep -rL interop/contracts/ethereum-bridge modules/layerxbridge/ATTESTATION.md modules/layerxbridge/types/attestation.go | wc -l | grep -qx 2'"
 symbols = ["layerx-bridge-relayer"]
-touches = ["interop/crates/layerx-bridge-relayer/src","modules/layerxbridge/ATTESTATION.md","modules/layerxbridge/types/attestation.go"]
+touches = ["interop/crates/layerx-bridge-relayer/src","interop/crates/layerx-bridge-relayer/tests","modules/layerxbridge/ATTESTATION.md","modules/layerxbridge/types/attestation.go"]
 reqs = ["7.1","8.1"]
 
 [task.2.18]

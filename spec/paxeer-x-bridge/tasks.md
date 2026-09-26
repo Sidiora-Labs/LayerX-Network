@@ -162,7 +162,7 @@
     - With these in place, re-qualify task 2.7 on this revision: run its --record once to write bridge/deploy/tests/fixtures/solana_dry_run.json, run its verify_cmd once, and set task 2.7 to done with its four evidence fields only when that run passes.
     - _Requirements: 10.1, 10.3, 10.4, 13.2_
   - [ ] 2.17 Clear the relayer's clippy findings and point the attestation references at the moved contract — **Implemented - qualification pending**
-    - Fix the five clippy findings observation 2.2.1 names in interop/crates/layerx-bridge-relayer by restructuring the code, never by an allow attribute or a lint-level change, so cargo clippy with -D warnings passes on the crate with all targets.
+    - Fix every clippy finding in interop/crates/layerx-bridge-relayer, the five observation 2.2.1 names under src and the ones under tests observation 2.17.1 names, by restructuring the code, never by an allow attribute or a lint-level change, so cargo clippy with -D warnings passes on the crate with all targets.
     - Update modules/layerxbridge/ATTESTATION.md and the comment in modules/layerxbridge/types/attestation.go to the contract path wave 1 moved to bridge/evm (observation 1.1.1), and make the existing check that compares the two attestation documents, if there is one, assert the new path.
     - _Requirements: 7.1, 8.1_
   - [ ] 2.18 Register the Solana Sidiora pair through governance
