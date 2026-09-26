@@ -370,3 +370,19 @@ symbol = "execute_authorized_v2_with_budget"
 observed = "The lint crate builds, but cargo clippy -p layerx-program-lint --all-targets -- -D warnings also lints the path dependency layerx-programs-runtime and stops on a pre-existing too_many_arguments (8/7) there (.logs/build.log, exit 101); the file is outside this task's touches."
 assumption = "The runtime's owner resolves the finding; the lint crate itself is qualified by its verify_cmd."
 severity = "note"
+
+[observation.2.24.1]
+task = "2.24"
+file = "interop/crates/x-websearch/tests/fixtures/api/select-vectors.json"
+symbol = "es_number"
+observed = "At 3d0d603b7fb281f775567b2ddaae568f726f47b0 the parse of 123456789012345678901234 is already correctly rounded (str::parse, not serde_json; bits 0x44ba249b1f10a06d, exact 123456789012345685803008) and es_number prints 1.2345678901234569e+23, which ECMAScript Number::toString, Go strconv and Python also print (.logs/number-check.log); 1.2345678901234568e+23 also round-trips but lies 5803008 from the double against 4196992, so the vector pins non-ECMAScript digits, and modules/xweb/types/testdata/api-vectors.json holds no number vector."
+assumption = "Neither the code nor the vector is changed; the vector's 1.2345678901234568e+23 needs correcting to 1.2345678901234569e+23 by whoever owns it, after which the verify_cmd runs unchanged."
+severity = "blocker"
+
+[observation.2.24.2]
+task = "2.24"
+file = "interop/crates/x-websearch/tests/kernel.rs"
+symbol = "the_relay_answers_a_program_request_and_posts_its_observation"
+observed = "With src/kernel.rs now setting the majority level the build passes (.logs/build.log, exit 0), but the verify_cmd's clippy stops on too_many_lines (108/100) in this kernel test (.logs/verify.log, exit 101), a file outside task 2.24, so the api, attest, canonical and content tests did not run."
+assumption = "The kernel test's owner splits the function without an allow attribute, after which the verify_cmd runs unchanged."
+severity = "blocker"

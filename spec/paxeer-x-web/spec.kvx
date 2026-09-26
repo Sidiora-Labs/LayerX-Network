@@ -959,7 +959,11 @@ reqs = ["11.1"]
 
 [task.2.24]
 title = "Canonicalise JSON numbers as ECMAScript does so the shared vectors agree"
-status = "pending"
+status = "implemented"
+implemented_revision = "3d0d603b7fb281f775567b2ddaae568f726f47b0"
+implemented_command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test api --test attest --test canonical --test content'"
+implemented_exit_code = 101
+implemented_log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.17"]
 do_1 = "Make the sidecar's api canonicaliser produce, for every JSON number, the ECMAScript Number::toString digits of the correctly rounded IEEE 754 double the literal denotes, as RFC 8785 requires: parse the literal to the nearest double, enabling serde_json's float_roundtrip feature for the crate if its default parse is not correctly rounded for long literals, and print the shortest digit string that round-trips, choosing the closest when several do; the vector file stays as written."
@@ -967,7 +971,7 @@ do_2 = "Add a unit test in interop/crates/x-websearch/tests/api.rs that parses t
 do_3 = "Run task 2.17's verify_cmd once on the result, then task 2.14's build command and verify_cmd once each; on exit 0 record tasks 2.17 and 2.14 done with that revision, their commands, exit codes and logs, and close observations 2.17.1, 2.14.1 and 2.14.2 naming the revision."
 verify_cmd = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test api --test attest --test canonical --test content'"
 symbols = ["es_number"]
-touches = ["interop/Cargo.lock","interop/crates/x-websearch/Cargo.toml","interop/crates/x-websearch/src/api.rs","interop/crates/x-websearch/tests/api.rs"]
+touches = ["interop/Cargo.lock","interop/crates/x-websearch/Cargo.toml","interop/crates/x-websearch/src/api.rs","interop/crates/x-websearch/src/kernel.rs","interop/crates/x-websearch/tests/api.rs"]
 reqs = ["17.3","17.6"]
 
 [task.3.1]
