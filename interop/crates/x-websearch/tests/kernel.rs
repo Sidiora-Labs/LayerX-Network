@@ -30,13 +30,12 @@ type Checked<T = ()> = Result<T, Box<dyn Error>>;
 const NETWORK: u32 = 9;
 const SUBMITTER_DID: &str = "did:key:web-attestor-one";
 
-/// The three signatures over the origin-2 digest of the shared adapter
-/// observation, ascending by signer.
-const OBSERVATION_SIGNATURES: [&str; 3] = [
-    "5aa67dfdbcd13d3348b83646f6c940a4ab46bd53bd1e569949a77eff57e946e44b9cc5c576b7b15a7e80fa701d945af66a4a14d671a25785270c57f4a0c3d6d21b",
-    "ca5e20f8607e3dd9cf1cf34e2eb1bf9a608e399ea5da7044e8a0eb75c5b87fba5ac71a449071ba4afde29614adfb21b135367f0bbb847f9b2689ecceae9c39ef1b",
-    "4a8f5d5c2d772ad6fee3a946b594b91605c952e8cd522961368c4e3e6616a9d13c961187d6e87a4b3c727d3970871bc83a7b800752a2394bb702c56eb5a76db01b",
-];
+/// Set to re-record the shared observation activity fixture from the attestor
+/// keys below instead of only comparing against it.
+const RECORD_VARIABLE: &str = "X_WEBSEARCH_RECORD_EXCHANGE";
+
+/// The observation activity fixture the C adapter test reads.
+const ACTIVITY_FIXTURE: &str = "tests/fixtures/web/observation-activity.hex";
 
 const CONTENT_DIGEST: &str = "2d823e82313101707a7081be2efb28edce966e3e6d1eaec9f7c1e48088f90781";
 
@@ -70,11 +69,19 @@ fn fixed<const N: usize>(text: &str) -> Checked<[u8; N]> {
         .map_err(|_| fail(format!("{text} is not {N} bytes")))
 }
 
+/// The attestor whose secp256k1 secret is the scalar `index`, as the C
+/// program path test derives its signers.
 fn attestor_key(index: u8) -> Checked<SigningKey> {
     let mut secret = [0_u8; 32];
-    secret[0] = 0x3c;
     secret[31] = index;
     Ok(SigningKey::from_slice(&secret)?)
+}
+
+/// The registered attestors: the scalars 1, 2 and 3, ascending by signer.
+fn registered_attestors() -> Checked<Vec<SigningKey>> {
+    let mut keys = (1..=3).map(attestor_key).collect::<Checked<Vec<_>>>()?;
+    keys.sort_by_key(signer_address);
+    Ok(keys)
 }
 
 fn submitter_key() -> SubmitterKey {
@@ -350,10 +357,10 @@ fn adapter_ready(request: &ProgramRequest) -> Checked<Ready> {
     let digest = request
         .attestation(NETWORK, content_digest, &response, 16)
         .digest();
-    let signatures = OBSERVATION_SIGNATURES
+    let signatures = registered_attestors()?
         .iter()
-        .map(|signature| fixed::<65>(signature))
-        .collect::<Checked<Vec<_>>>()?;
+        .map(|key| sign_digest(key, &digest))
+        .collect::<Result<Vec<_>, _>>()?;
     let signers = signatures
         .iter()
         .map(|signature| recover_signer(&digest, signature))
@@ -368,6 +375,72 @@ fn adapter_ready(request: &ProgramRequest) -> Checked<Ready> {
         signers,
         signatures,
     })
+}
+
+const ADAPTER_OPTIONS: ActivityOptions<'static> = ActivityOptions {
+    network_id: NETWORK,
+    actor_did: SUBMITTER_DID,
+    account_sequence: 7,
+    fee_limit: 100,
+    not_before: 1_000,
+    not_after: 61_000,
+};
+
+/// Compares the activity with the committed fixture, first rewriting the
+/// fixture when the record variable is set.
+fn check_activity_fixture(activity: &[u8]) -> Checked {
+    let path = repository().join(ACTIVITY_FIXTURE);
+    if std::env::var_os(RECORD_VARIABLE).is_some() {
+        std::fs::write(&path, format!("{}\n", hex(activity)))?;
+    }
+    let fixture = std::fs::read_to_string(&path)?;
+    assert_eq!(hex(activity), fixture.trim());
+    Ok(())
+}
+
+fn check_refused_encodings(request: &ProgramRequest, ready: &Ready, observation: &[u8]) {
+    let options = ADAPTER_OPTIONS;
+    for refused in [
+        ActivityOptions {
+            network_id: 0,
+            ..options
+        },
+        ActivityOptions {
+            fee_limit: 0,
+            ..options
+        },
+        ActivityOptions {
+            actor_did: "",
+            ..options
+        },
+        ActivityOptions {
+            not_before: 61_001,
+            ..options
+        },
+    ] {
+        assert_eq!(
+            encode_activity(observation, &submitter_key(), &refused),
+            Err(KernelError::Encode)
+        );
+    }
+    let mut unsigned = ready.clone();
+    unsigned.signatures.clear();
+    assert_eq!(
+        observation_bytes(NETWORK, request, &unsigned),
+        Err(KernelError::Encode)
+    );
+    let mut short = ready.clone();
+    short.full_length = 15;
+    assert_eq!(
+        observation_bytes(NETWORK, request, &short),
+        Err(KernelError::Encode)
+    );
+    let mut other = ready.clone();
+    other.request_id += 1;
+    assert_eq!(
+        observation_bytes(NETWORK, request, &other),
+        Err(KernelError::Encode)
+    );
 }
 
 #[test]
@@ -398,60 +471,9 @@ fn the_observation_activity_equals_the_kernel_adapter_fixture() -> Checked {
     assert_eq!(&observation[33..65], &request.program_id);
     assert_eq!(&observation[65..73], &request.request_id.to_be_bytes());
 
-    let options = ActivityOptions {
-        network_id: NETWORK,
-        actor_did: SUBMITTER_DID,
-        account_sequence: 7,
-        fee_limit: 100,
-        not_before: 1_000,
-        not_after: 61_000,
-    };
-    let activity = encode_activity(&observation, &submitter_key(), &options)?;
-    let fixture =
-        std::fs::read_to_string(repository().join("tests/fixtures/web/observation-activity.hex"))?;
-    assert_eq!(hex(&activity), fixture.trim());
-
-    for refused in [
-        ActivityOptions {
-            network_id: 0,
-            ..options
-        },
-        ActivityOptions {
-            fee_limit: 0,
-            ..options
-        },
-        ActivityOptions {
-            actor_did: "",
-            ..options
-        },
-        ActivityOptions {
-            not_before: 61_001,
-            ..options
-        },
-    ] {
-        assert_eq!(
-            encode_activity(&observation, &submitter_key(), &refused),
-            Err(KernelError::Encode)
-        );
-    }
-    let mut unsigned = ready.clone();
-    unsigned.signatures.clear();
-    assert_eq!(
-        observation_bytes(NETWORK, &request, &unsigned),
-        Err(KernelError::Encode)
-    );
-    let mut short = ready.clone();
-    short.full_length = 15;
-    assert_eq!(
-        observation_bytes(NETWORK, &request, &short),
-        Err(KernelError::Encode)
-    );
-    let mut other = ready;
-    other.request_id += 1;
-    assert_eq!(
-        observation_bytes(NETWORK, &request, &other),
-        Err(KernelError::Encode)
-    );
+    let activity = encode_activity(&observation, &submitter_key(), &ADAPTER_OPTIONS)?;
+    check_activity_fixture(&activity)?;
+    check_refused_encodings(&request, &ready, &observation);
     Ok(())
 }
 
@@ -513,19 +535,25 @@ fn the_watcher_follows_request_records_through_the_recorded_gateway() -> Checked
     Ok(())
 }
 
-#[test]
-fn the_relay_answers_a_program_request_and_posts_its_observation() -> Checked {
-    let scratch = Scratch::new("relay")?;
-    let gateway = Gateway::start("relay.json")?;
-    let data = scratch.0.join("data");
-    let store = Arc::new(ContentStore::open(&data, &[])?);
-    let index = Arc::new(WebIndex::open(&data)?);
+fn relay_index(data: &Path) -> Checked<Arc<WebIndex>> {
+    let index = Arc::new(WebIndex::open(data)?);
     index.put(
         "https://paxeer.app/",
         "Paxeer",
         "Paxeer X Network web search for programs",
     )?;
     index.commit()?;
+    Ok(index)
+}
+
+/// A relay for the single attestor `key` over the recorded gateway.
+fn relay_for(
+    gateway: &Gateway,
+    scratch: &Scratch,
+    key: &SigningKey,
+    index: &Arc<WebIndex>,
+    store: &Arc<ContentStore>,
+) -> Checked<KernelRelay> {
     let fetcher = Arc::new(Fetcher::new(FetchLimits {
         connect_timeout_ms: 3_000,
         total_timeout_ms: 10_000,
@@ -533,20 +561,19 @@ fn the_relay_answers_a_program_request_and_posts_its_observation() -> Checked {
         max_redirects: 3,
         allow_loopback: true,
     })?);
-    let key = attestor_key(1)?;
     let attestor = KernelAttestor::new(
         key.clone(),
         NETWORK,
         fetcher,
-        Arc::clone(&index),
-        Arc::clone(&store),
+        Arc::clone(index),
+        Arc::clone(store),
     );
-    assert_eq!(attestor.signer(), signer_address(&key));
+    assert_eq!(attestor.signer(), signer_address(key));
     let set = AttestorSet {
-        signers: vec![signer_address(&key)],
+        signers: vec![signer_address(key)],
         threshold: 1,
     };
-    let mut relay = KernelRelay::new(
+    Ok(KernelRelay::new(
         KernelWatcher::open(&gateway.endpoint(), &scratch.0.join("state"), 0)?,
         attestor,
         SignatureExchange::open(&scratch.0.join("exchange"), &[])?,
@@ -558,21 +585,18 @@ fn the_relay_answers_a_program_request_and_posts_its_observation() -> Checked {
             NETWORK,
             100,
         )?,
-    );
-    let steps = relay.step(2_000)?;
-    assert_eq!(
-        steps,
-        vec![Step::Posted {
-            program_id: program(0xa0),
-            request_id: 0x0102_0304_0506_0708,
-            result: json!({ "state": "executed" }),
-        }]
-    );
-    assert!(relay.queued().is_empty());
-    assert!(relay.exchange.pending().is_empty());
+    ))
+}
 
-    let query = "paxeer network";
-    let results: Vec<search::SearchResult> = search::search(&index, query)?
+/// The activity the relay must post for the search `query`, rebuilt from the
+/// index and store it answered from.
+fn relay_activity(
+    key: &SigningKey,
+    index: &WebIndex,
+    store: &ContentStore,
+    query: &str,
+) -> Checked<Vec<u8>> {
+    let results: Vec<search::SearchResult> = search::search(index, query)?
         .into_iter()
         .map(|scored| scored.result)
         .collect();
@@ -598,12 +622,12 @@ fn the_relay_answers_a_program_request_and_posts_its_observation() -> Checked {
         full_length,
         callback_gas: 0,
         digest,
-        signers: vec![signer_address(&key)],
-        signatures: vec![sign_digest(&key, &digest)?],
+        signers: vec![signer_address(key)],
+        signatures: vec![sign_digest(key, &digest)?],
     };
     let observation = observation_bytes(NETWORK, &request, &ready)?;
     assert_eq!(&observation[74..106], &keccak(query.as_bytes()));
-    let activity = encode_activity(
+    Ok(encode_activity(
         &observation,
         &submitter_key(),
         &ActivityOptions {
@@ -614,7 +638,31 @@ fn the_relay_answers_a_program_request_and_posts_its_observation() -> Checked {
             not_before: 1_000,
             not_after: 62_000,
         },
-    )?;
+    )?)
+}
+
+#[test]
+fn the_relay_answers_a_program_request_and_posts_its_observation() -> Checked {
+    let scratch = Scratch::new("relay")?;
+    let gateway = Gateway::start("relay.json")?;
+    let data = scratch.0.join("data");
+    let store = Arc::new(ContentStore::open(&data, &[])?);
+    let index = relay_index(&data)?;
+    let key = attestor_key(1)?;
+    let mut relay = relay_for(&gateway, &scratch, &key, &index, &store)?;
+    let steps = relay.step(2_000)?;
+    assert_eq!(
+        steps,
+        vec![Step::Posted {
+            program_id: program(0xa0),
+            request_id: 0x0102_0304_0506_0708,
+            result: json!({ "state": "executed" }),
+        }]
+    );
+    assert!(relay.queued().is_empty());
+    assert!(relay.exchange.pending().is_empty());
+
+    let activity = relay_activity(&key, &index, &store, "paxeer network")?;
     assert_eq!(
         gateway.params("lx_getSequence"),
         vec![json!([SUBMITTER_DID, "identity"])]
