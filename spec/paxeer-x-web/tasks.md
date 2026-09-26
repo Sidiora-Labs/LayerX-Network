@@ -189,7 +189,7 @@
     - In src/attest.rs route the api kind to api.rs, sign under the majority level as for a fetch, and under the single level sign only when this sidecar is the named attestor and let src/submit.rs post fulfil with that one signature; add the module line to src/lib.rs.
     - Write tests/api.rs against a loopback API server the test starts that refuses a call without the credential header and answers JSON whose unselected fields differ per call: identical digests from two sidecars holding different envelopes, the refusal without an envelope, the pointer and canonicalisation vectors, the single level's one signature, and a scan of every file under each sidecar's data directory and of its log output proving the credential is absent.
     - _Requirements: 17.2, 17.3, 17.4, 17.6_
-  - [ ] 2.15 Give developers the api call helpers in the clients and on the page
+  - [x] 2.15 Give developers the api call helpers in the clients and on the page
     - Add agent/sdk/typescript/src/xweb-api.ts and agent/sdk/python/layerx_sdk/xweb_api.py building an api payload and its credential envelopes from the attestor set the precompile's getAttestors returns, encoding exactly as the Go codec decodes and matching modules/xweb/types/testdata/envelope-vectors.json, exported from each package's index with the Python stub kept in step.
     - Extend docs/site/docs/protocol/xweb.md with a section showing a contract calling an API through XWebApi in a dozen lines, the envelope rule, the selector rule and the two attestation levels, under the page's link and naming rules.
     - Tests: agent/sdk/typescript/test/xweb-api.test.ts and agent/sdk/python/tests/test_xweb_api.py pin the payload bytes and the envelope vectors, and the page builds under mkdocs --strict.

@@ -822,7 +822,11 @@ reqs = ["17.2","17.3","17.4","17.6"]
 
 [task.2.15]
 title = "Give developers the api call helpers in the clients and on the page"
-status = "pending"
+status = "done"
+revision = "ccf8fa472d567a842a86a404324a761341609817"
+command = "timeout 20m sh -c 'cd agent/sdk/typescript && npm ci && npm run build && node dist/test/xweb-api.test.js && cd ../python && python3 -m pytest -q tests/test_xweb_api.py && cd ../../.. && python3 -m venv build/xweb-docs-venv && build/xweb-docs-venv/bin/pip install -r docs/site/requirements.txt && build/xweb-docs-venv/bin/mkdocs build --strict -f docs/site/mkdocs.yml'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["1.9","2.5","2.13"]
 do_1 = "Add agent/sdk/typescript/src/xweb-api.ts and agent/sdk/python/layerx_sdk/xweb_api.py building an api payload and its credential envelopes from the attestor set the precompile's getAttestors returns, encoding exactly as the Go codec decodes and matching modules/xweb/types/testdata/envelope-vectors.json, exported from each package's index with the Python stub kept in step."

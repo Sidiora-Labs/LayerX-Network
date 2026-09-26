@@ -32,3 +32,4 @@ export * from "./launchpad.js";
 export * from "./perps.js";
 export * from "./spot.js";
 export * from "./web-search.js";
+export * from "./xweb-api.js";
