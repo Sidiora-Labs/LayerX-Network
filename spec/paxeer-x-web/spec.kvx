@@ -961,7 +961,11 @@ log_path = ".logs/verify.log"
 
 [task.2.23]
 title = "Let the prepare pass stage module values so a program's first paying call creates the web fee account"
-status = "pending"
+status = "implemented"
+implemented_revision = "a01484182da45a4e43ec13541b3b70a9466f9323"
+implemented_command = "timeout 20m sh -c 'make test-module-ctx test-kernel && make test-web-program-path'"
+implemented_exit_code = 2
+implemented_log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.18"]
 do_1 = "In src/protocol/lxp_kernel.c make lxp_kernel_prepare_activity open a journal over its snapshot for the duration of a program call, so lxp_ctx_account_stage_module_value in src/protocol/lxp_module_ctx.c stages the way it does on the commit path, and discard that journal with the snapshot; the prepare pass changes no committed state."

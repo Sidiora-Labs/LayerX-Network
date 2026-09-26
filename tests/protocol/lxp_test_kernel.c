@@ -424,6 +424,108 @@ static int web_handover_checks(void)
     return 0;
 }
 
+/* A module value staged by the prepare pass over a snapshot of the live store
+ * travels in the prepared transition. Discarding the prepare journal and the
+ * snapshot leaves the live kernel as it was; importing the transition on the
+ * commit path creates the account at the staged sequence. */
+static int prepare_staging_checks(void)
+{
+    static const uint32_t types[] = { UINT32_C(0x00090001) };
+    static const uint8_t token[32] = "prepare-level-snapshot";
+    static lx_account_registry accounts;
+    static lxp_state_store store;
+    static lxp_state_journal journal;
+    static lxp_state_journal prepare_journal;
+    static lxp_kernel kernel;
+    static lxp_kernel prepare_kernel;
+    static lxp_module_ctx ctx;
+    static lxp_effect_buffer effects;
+    static uint8_t arena_bytes[16384];
+    lxp_module_iface iface = named_iface(LXP_MODULE_PROGRAMS, "programs",
+                                         types);
+    lxp_prepared_module_transition *prepared = NULL;
+    lxp_state_snapshot *snapshot = NULL;
+    lxp_state_store *prepare_store;
+    lxp_arena arena;
+    lx_account *account = NULL;
+    uint8_t account_id[32];
+    uint8_t asset_id[32];
+    size_t slot = 0U;
+    bool created = false;
+    uint64_t parameters = 1U;
+    int result = 1;
+    (void)memset(account_id, 0x6E, sizeof(account_id));
+    (void)memset(asset_id, 0x3C, sizeof(asset_id));
+    (void)memset(&journal, 0, sizeof(journal));
+    (void)memset(&prepare_journal, 0, sizeof(prepare_journal));
+    if (lxp_state_store_init(&store, 9U) != LXP_OK ||
+        lx_account_registry_init(&accounts) != LXP_OK ||
+        lxp_state_store_bind_accounts(&store, &accounts) != LXP_OK ||
+        lxp_kernel_create(&kernel, &store, &journal, &parameters, 0U) !=
+            LXP_OK ||
+        lxp_kernel_register_module(&kernel, &iface) != LXP_OK ||
+        lxp_state_snapshot_create(&store, &snapshot) != LXP_OK)
+        goto done;
+    prepare_store = lxp_state_snapshot_store_for_prepare(snapshot);
+    if (prepare_store == NULL ||
+        lxp_kernel_create(&prepare_kernel, prepare_store, &prepare_journal,
+                          &parameters, 0U) != LXP_OK ||
+        lxp_kernel_register_module(&prepare_kernel, &iface) != LXP_OK ||
+        lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
+        lxp_state_journal_open(prepare_store, 9U, &prepare_journal) !=
+            LXP_OK ||
+        lxp_module_ctx_init(&ctx, &prepare_kernel, LXP_MODULE_PROGRAMS, 10U,
+                            0U, 9U, 100U, &arena, true) != LXP_OK ||
+        lxp_effect_buffer_init(&effects) != LXP_OK ||
+        lxp_module_ctx_bind_effects(&ctx, &effects) != LXP_OK ||
+        lxp_ctx_account_stage_module_value(&ctx, account_id, asset_id,
+                                           &account, &created) != LXP_OK ||
+        !created ||
+        lxp_module_ctx_export_prepared(&ctx, &effects, token, &prepared) !=
+            LXP_OK ||
+        prepared == NULL)
+        goto done;
+    lxp_module_ctx_rollback(&ctx);
+    if (lxp_state_journal_rollback(&prepare_journal) != LXP_OK)
+        goto done;
+    lxp_state_snapshot_destroy(snapshot);
+    snapshot = NULL;
+    if (accounts.count != 0U || store.next_sequence != 9U ||
+        store.account_root_required || journal.open ||
+        lx_account_registry_index_lookup(&accounts, account_id, &slot) !=
+            LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE)
+        goto done;
+    if (lxp_state_journal_open(&store, 9U, &journal) != LXP_OK ||
+        lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
+        lxp_module_ctx_init(&ctx, &kernel, LXP_MODULE_PROGRAMS, 10U, 0U, 9U,
+                            100U, &arena, true) != LXP_OK ||
+        lxp_effect_buffer_init(&effects) != LXP_OK ||
+        lxp_module_ctx_bind_effects(&ctx, &effects) != LXP_OK ||
+        lxp_module_ctx_import_prepared(&ctx, prepared, token, &effects) !=
+            LXP_OK ||
+        lxp_state_journal_commit(&journal) != LXP_OK ||
+        lxp_module_ctx_commit(&ctx) != LXP_OK)
+        goto done;
+    if (accounts.count != 1U || store.next_sequence != 10U ||
+        lx_account_registry_index_lookup(&accounts, account_id, &slot) !=
+            LXP_OK ||
+        accounts.accounts[slot].kind != LX_ACCOUNT_MODULE_VALUE ||
+        !accounts.accounts[slot].has_asset ||
+        memcmp(accounts.accounts[slot].asset_id, asset_id, 32U) != 0 ||
+        accounts.accounts[slot].created_at_sequence != 9U)
+        goto done;
+    result = 0;
+done:
+    lxp_prepared_module_transition_destroy(prepared);
+    if (prepare_journal.open)
+        (void)lxp_state_journal_rollback(&prepare_journal);
+    if (journal.open) (void)lxp_state_journal_rollback(&journal);
+    lxp_state_snapshot_destroy(snapshot);
+    lx_account_registry_release(&accounts);
+    if (lxp_state_store_destroy(&store) != LXP_OK) result = 1;
+    return result;
+}
+
 int main(void)
 {
     static const uint32_t v1_types[] = { UINT32_C(0x00010001),
@@ -481,5 +583,6 @@ int main(void)
     if (capacity_checks(&kernel, &store, &journal) != 0) return 1;
     if (lxp_state_store_destroy(&store) != LXP_OK) return 1;
     if (web_genesis_checks() != 0 || web_handover_checks() != 0) return 1;
+    if (prepare_staging_checks() != 0) return 1;
     return 0;
 }

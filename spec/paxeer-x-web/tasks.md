@@ -232,7 +232,7 @@
     - In programs/sdk/rust/lint/src/lib.rs make lint_artifact_for_abi and lint_project_for_abi accept layerx_programs_runtime::ABI_V3_VERSION and ABI_V4_VERSION with the host function set each version exports, refusing an import outside that set exactly as the v2 path does, and keep the unsupported-version refusal for anything above v4.
     - Add the lint step to programs/sdk/rust/examples/web-reader/build.sh in the shape of the escrow example's build.sh, and cover the v3 and v4 paths in the lint crate's tests with the web-reader artifact and a v4 artifact importing a host function outside the set; close observation 2.2.6 naming the revision.
     - _Requirements: 11.2_
-  - [ ] 2.23 Let the prepare pass stage module values so a program's first paying call creates the web fee account
+  - [ ] 2.23 Let the prepare pass stage module values so a program's first paying call creates the web fee account — **Implemented - qualification pending**
     - In src/protocol/lxp_kernel.c make lxp_kernel_prepare_activity open a journal over its snapshot for the duration of a program call, so lxp_ctx_account_stage_module_value in src/protocol/lxp_module_ctx.c stages the way it does on the commit path, and discard that journal with the snapshot; the prepare pass changes no committed state.
     - Extend tests/protocol/lxp_test_module_ctx.c and tests/protocol/lxp_test_kernel.c for staging under prepare and its discard, and extend tests/test_web_program_path.c with a run whose genesis carries no web fee account and whose first paying call creates it, keeping the genesis-provisioned run as it is; close observation 2.2.2 naming the revision.
     - _Requirements: 11.1_
