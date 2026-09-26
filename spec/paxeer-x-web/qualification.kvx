@@ -253,3 +253,11 @@ observed = "With PerpsPayload::MarketCreate boxed the large_enum_variant lint is
 assumption = "No allow attribute is added; the layerx-proof signature is left to its owner, after which the task 1.18 and 1.17 verify_cmds rerun unchanged."
 severity = "blocker"
 closed = "The task 1.17 and 1.18 verify_cmds now lint their own crates with --no-deps, the layerx-proof too_many_arguments finding is handed to task 2.11, and both verify_cmds passed at revision a9171bc99760fe8d1709ace1bba34d3db5cf9db6."
+
+[observation.2.5.1]
+task = "2.5"
+file = "interop/crates/x-websearch/src/content.rs"
+symbol = "register"
+observed = "The design and task 2.5 call GET /content/<digest> a paid route, but content::register installs it without the payment gate and lib.rs documents it as unpaid, so the page describes it as served without a payment."
+assumption = "The page follows the code; whether content by digest is paid is left to the sidecar's owner, and the page changes with it."
+severity = "suspect"

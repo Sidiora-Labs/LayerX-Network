@@ -597,7 +597,11 @@ reqs = ["13.1","13.2","13.3","13.4"]
 
 [task.2.5]
 title = "Write the xweb documentation page"
-status = "pending"
+status = "done"
+revision = "c024a5c510cad7d257b353c59ce65e631f38cda3"
+command = "timeout 20m sh -c 'python3 -m venv build/xweb-docs-venv && build/xweb-docs-venv/bin/pip install -r docs/site/requirements.txt && build/xweb-docs-venv/bin/mkdocs build --strict -f docs/site/mkdocs.yml'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["1.4","1.5","1.6","1.8"]
 do_1 = "Write docs/site/docs/protocol/xweb.md in the shape of docs/site/docs/protocol/sidiora.md: what x-websearch is, the four assets and the price rule, the three paid routes and GET /content/<digest>, the canonical content digest, the contract path with the address 0x0000000000000000000000000000000000001019, request, fulfil, refund and the callback, the attestor majority, the kernel path with web_read, and that the chain change reaches a running chain through the v6.8 upgrade and a governance proposal."

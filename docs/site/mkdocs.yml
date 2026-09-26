@@ -84,6 +84,7 @@ nav:
       - Commitment levels: protocol/commitment-levels.md
       - Finality: protocol/finality.md
       - Sidiora: protocol/sidiora.md
+      - Web search and xweb: protocol/xweb.md
   - Programs:
       - programs/index.md
       - Workspace: programs/workspace.md

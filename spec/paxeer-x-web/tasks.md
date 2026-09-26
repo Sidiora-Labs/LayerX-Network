@@ -137,7 +137,7 @@
     - Make every xweb state change reachable only at or after the upgrade height, so a node replaying blocks below it produces exactly the state it produces without this feature; apply nothing to a running chain; this includes the precompile's presence in precompiles/setup.go GetCustomPrecompiles, which task 1.6 registered for every binary (observation 1.6.3), so a binary below the upgrade height carries no 0x0000000000000000000000000000000000001019 entry.
     - Add node/upgrades_xweb_test.go asserting the handler is registered under the name in node/tags, the store is added, the defaults are set, the module is paused, the custom precompile set below the upgrade height holds no xweb entry, and the precompile answers only after the upgrade.
     - _Requirements: 13.1, 13.2, 13.3, 13.4_
-  - [ ] 2.5 Write the xweb documentation page
+  - [x] 2.5 Write the xweb documentation page
     - Write docs/site/docs/protocol/xweb.md in the shape of docs/site/docs/protocol/sidiora.md: what x-websearch is, the four assets and the price rule, the three paid routes and GET /content/<digest>, the canonical content digest, the contract path with the address 0x0000000000000000000000000000000000001019, request, fulfil, refund and the callback, the attestor majority, the kernel path with web_read, and that the chain change reaches a running chain through the v6.8 upgrade and a governance proposal.
     - Link the page from docs/site/mkdocs.yml beside the Sidiora page; carry no date, hostname, IP address, node count, internal URL or credential; name the product Paxeer X Network; use no link but https://paxeer.app, paths under github.com/Sidiora-Labs/Paxeer-X-Network and relative site links.
     - _Requirements: 14.1, 14.2, 14.3_
