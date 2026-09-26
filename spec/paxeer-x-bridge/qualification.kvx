@@ -244,3 +244,12 @@ symbol = "release_mints"
 observed = "BridgeOut carries only the 20-byte asset id and nothing on either chain maps it to a mint, so the relayer needs the configured mints (solana.release_mints) to find the asset PDA, and its fee payer is built from the remote signer in config.rs; ed25519-dalek joins the crate's Cargo.toml and interop/Cargo.lock for the off-curve PDA check."
 assumption = "These three files sit outside the task's touches but are the only way to configure and derive a release, so they change with their own tests; the relayer releases only to the recipient's associated token account and waits while it does not exist, and one legacy transaction holds about four attestor signatures."
 severity = "note"
+closed = "Task 2.13 rewrote sections 5 and 6 of the runbook to name the -proposals output, 04-proposal-open-chain.json and 05-proposal-sidiora-cap.json, and the governance proposal route that executes them, and docs-check.sh asserts it; the node's missing submit path is observation 2.13.1."
+
+[observation.2.13.1]
+task = "2.13"
+file = "sdk/x/gov/client/cli/tx.go"
+symbol = "NewCmdSubmitProposal"
+observed = "paxd tx gov submit-proposal builds only Text content from its flags or --proposal file, and no proposal subcommand the node mounts through getGovProposalHandlers in node/app.go carries the layerxbridge BridgeProposal, so no command the node exposes submits 04-proposal-open-chain.json or 05-proposal-sidiora-cap.json as content."
+assumption = "The runbook says so in one sentence and names no invented command; a submit-proposal subcommand for the bridge proposal belongs to a chain change under node/ or modules/, which the freeze and this task's touches exclude."
+severity = "blocker"

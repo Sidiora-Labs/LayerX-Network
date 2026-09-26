@@ -7,7 +7,9 @@
 # the nine per-chain pages must also exist, name the product Paxeer X Network,
 # name their pair, chain id and environment variables as the chain configuration
 # declares them, and the hyperevm and Solana pages must carry what only those
-# chains need. The check then mutates a copy of the pages one way at a time and
+# chains need; the runbook's submission section must name both governance
+# proposals and the node's submit command and must not claim the bodies have no
+# path to the chain. The check then mutates a copy of the pages one way at a time and
 # requires each mutation to be refused, so every assertion is known to bite.
 # No network is involved.
 set -euo pipefail
@@ -53,6 +55,14 @@ SOLANA_CHAIN_ID = 91600046870081
 SIDIORA_MINT = "5w3wVdJaESaJKyLmStM6Hv9UyUkmZ1b9DLQquAqqpump"
 SIDIORA_ASSET_ID = "0x21f7b20a555199fa73A238B1a91FD0f549068fEe"
 RUNBOOK = "bridge/README.md"
+PROPOSAL_FILES = ("04-proposal-open-chain.json", "05-proposal-sidiora-cap.json")
+SUBMIT_COMMAND = "paxd tx gov submit-proposal"
+STALE_SUBMISSION_CLAIMS = [
+    ("that the module registers no message service", re.compile(r"registers\s+no\s+(?:message|Msg)\s+service", re.I)),
+    ("that no command carries the bodies", re.compile(
+        r"no\s+(?:transaction\s+)?command\s+(?:that\s+)?(?:broadcasts|carries|submits)\s+(?:them|the\s+(?:message\s+)?bodies)\b"
+        r"|carries\s+no\s+command\s+that\s+broadcasts", re.I)),
+]
 
 ALLOWED_LINK = re.compile(
     r"^https://(?:paxeer\.app|github\.com/Sidiora-Labs/Paxeer-X-Network)(?:/[^\s]*)?$"
@@ -280,6 +290,18 @@ if RUNBOOK in texts:
         section = runbook[sidiora:]
         for needle in ("getCap(uint64,address)", "91600046870081 " + SIDIORA_ASSET_ID, "/usid"):
             require(RUNBOOK, section, needle, "the Sidiora section says what to read back before the cap body")
+    submit = runbook.find("### 6. Submit the proposals")
+    readback = runbook.find("### 7. Read the deployment back")
+    if submit >= 0 and readback > submit:
+        section = runbook[submit:readback]
+        for name in PROPOSAL_FILES:
+            require(RUNBOOK, section, "`%s`" % name, "section 6 names every proposal the generator writes through -proposals")
+        require(RUNBOOK, section, "`%s`" % SUBMIT_COMMAND, "section 6 names the node's governance submit command")
+    require(RUNBOOK, runbook, "-proposals <proposals directory>", "section 5 runs the generator with its -proposals output")
+    for label, regex in STALE_SUBMISSION_CLAIMS:
+        for match in regex.finditer(runbook):
+            problem(RUNBOOK, line_of(runbook, match.start()),
+                    "still claims %s; the proposals carry the bodies through governance" % label)
 
 for chain, (symbol, chain_id) in EVM_CHAINS.items():
     page = "bridge/evm/chains/%s/README.md" % chain
@@ -368,5 +390,11 @@ remove_line 'its environment variables' bridge/evm/chains/base/README.md 'PAXEER
 remove_line 'the big-block requirement' bridge/evm/chains/hyperevm/README.md 'big blocks'
 remove_line "Sidiora's asset id" bridge/solana/chains/solana/README.md '0x21f7b20a555199fa73A238B1a91FD0f549068fEe'
 remove_line 'the checklist step' bridge/README.md '### 7. Read the deployment back'
+remove_line 'the open-chain proposal' bridge/README.md '04-proposal-open-chain.json'
+remove_line "the Sidiora cap proposal" bridge/README.md '05-proposal-sidiora-cap.json'
+remove_line 'the governance submit command' bridge/README.md 'paxd tx gov submit-proposal'
+remove_line 'the -proposals output' bridge/README.md '-proposals <proposals directory>'
+mutate 'the claim that the module registers no message service' bridge/README.md 'The bridge module registers no message service.'
+mutate 'the claim that no command carries the bodies' bridge/README.md 'This repository carries no command that broadcasts them.'
 
 printf 'docs-check: the bridge documentation passes and every mutation is refused\n'

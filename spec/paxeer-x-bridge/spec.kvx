@@ -615,7 +615,11 @@ reqs = ["10.3","10.5","13.2","14.2"]
 
 [task.2.13]
 title = "Make the runbook submit the generated proposals through governance"
-status = "pending"
+status = "done"
+revision = "ca0b76c203b7e2e8710ba612a523eff6be11f770"
+command = "timeout 20m sh -c 'bash bridge/deploy/tests/docs-check.sh'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.5","2.11"]
 do_1 = "Rewrite sections 5 and 6 of bridge/README.md so they describe what the generator writes now: the message bodies in the output directory as before, and, through -proposals, 04-proposal-open-chain.json and on Solana 05-proposal-sidiora-cap.json, each the content of one governance proposal carrying the same messages in submission order (observation 2.11.1)."

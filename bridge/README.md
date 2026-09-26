@@ -114,10 +114,10 @@ Two things the Solana page covers in full: the admin client the script calls is 
 ### 5. Generate the proposals
 
 ```sh
-go run ./bridge/deploy/proposals/cmd/paxeer-bridge-proposals -manifest bridge/deploy/attestors.json <proposal input> <output directory>
+go run ./bridge/deploy/proposals/cmd/paxeer-bridge-proposals -manifest bridge/deploy/attestors.json -proposals <proposals directory> <proposal input> <output directory>
 ```
 
-`-manifest` defaults to `bridge/deploy/attestors.json`. The generator reads one chain's proposal input and the manifest, and writes into an empty or absent output directory, in the order they are submitted:
+`-manifest` defaults to `bridge/deploy/attestors.json`. The generator reads one chain's proposal input and the manifest, and writes the message bodies into an empty or absent output directory, in the order the proposals carry them:
 
 | File | Body |
 | --- | --- |
@@ -125,17 +125,28 @@ go run ./bridge/deploy/proposals/cmd/paxeer-bridge-proposals -manifest bridge/de
 | `02-set-attestors.json` | `MsgSetAttestors`: the shared attestor set and the threshold |
 | `03-set-cap-<NN>-<asset id>.json` | one `MsgSetCap` per asset, the native coin first; for Solana, `SID` under `0x21f7b20a555199fa73A238B1a91FD0f549068fEe` |
 
-Every body is marshalled from the message types in `modules/layerxbridge/types`, so it cannot drift from what the keeper accepts. The generator refuses a placeholder or zero authority, owner, vault or attestor, a zero threshold or one above the attestor count, a zero cap, and a set that differs from the manifest, and it writes nothing when it refuses.
+Given `-proposals`, it also writes the governance proposals into a second empty or absent directory, which must not be the output directory:
+
+| File | Proposal |
+| --- | --- |
+| `04-proposal-open-chain.json` | the proposal that opens the chain: `MsgRegisterChain`, `MsgSetAttestors` and every `MsgSetCap` except Sidiora's, in the order of the bodies, the native coin's cap first |
+| `05-proposal-sidiora-cap.json` | Solana only: Sidiora's `MsgSetCap` alone, in a proposal of its own |
+
+Each file is the content of one governance proposal as a transaction carries it: a `BridgeProposal` under the type URL `/paxprotocol.paxchain.layerxbridge.BridgeProposal`, with its title, its description and every message packed under its own type URL. The proposals are written apart from the bodies because the checklist counts every JSON file in the bodies directory.
+
+Every body and every proposal is marshalled from the message types in `modules/layerxbridge/types`, so it cannot drift from what the keeper accepts. The generator refuses a placeholder or zero authority, owner, vault or attestor, a zero threshold or one above the attestor count, a zero cap, and a set that differs from the manifest, and it writes nothing when it refuses.
 
 The proposal input is a JSON file in the generator's own schema, decoded with unknown fields refused: `name`, `chain_id`, `native_symbol`, `native_decimals`, `rpc_endpoint_env`, `explorer_key_env`, `governance_authority`, `owner`, `vault`, `attestors`, `threshold`, `finality_depth`, `program_id`, `commitment`, `big_blocks_required` and `assets`, each asset carrying `address`, `asset_id`, `decimals`, `max_per_tx` and `max_total`. It is not the chain configuration file: the generator refuses the configuration's own fields. Write it from three sources - the chain configuration for the chain, the attestors, the finality depth and the assets with their caps; the deployment record for `vault`; and the bridge authority for `governance_authority`. `bridge/deploy/proposals/testdata/ethereum.json` and `bridge/deploy/proposals/testdata/solana.json` show the shape.
 
-`governance_authority` is the bech32 account the bridge module's parameters name as its authority; the module's default genesis names the governance module account. The keeper applies each body only when its authority is that account.
+`governance_authority` is the bech32 account of the governance module, the authority a governance proposal executes with; the generator refuses any other account. The keeper applies each message only when its authority is that account.
 
 ### 6. Submit the proposals
 
-Submit `01-register-chain.json`, then `02-set-attestors.json`, then the `03-set-cap-*` bodies in their numbered order, each executed as the bridge authority. For Solana, the Sidiora cap body waits for the check in the next section.
+The bodies reach the chain inside governance proposals. Submit `04-proposal-open-chain.json` as the content of one governance proposal; it carries `01-register-chain.json`, `02-set-attestors.json` and the `03-set-cap-*` bodies in their numbered order, Sidiora's excepted. For Solana, submit `05-proposal-sidiora-cap.json` as a second proposal only after the usid pair reads back as the Sidiora section below requires.
 
-The bodies are the bridge module's message types field for field. The bridge module registers no message service and no transaction command, so this repository carries no command that broadcasts them; the holder of the bridge authority submits them through the path that authority executes with.
+When a proposal passes, the governance module account executes it through the application's `layerxbridge` proposal route: `NewProposalHandler` in `modules/layerxbridge/handler.go` runs every message it carries, in order, through the bridge module's message service and so through the keeper. It refuses a proposal carrying a message for any authority other than the governance module account, and if one message fails none of them changes the state.
+
+The node's governance submit command, `paxd tx gov submit-proposal`, builds only a `Text` proposal from its flags or from its `--proposal` file, and none of the proposal subcommands the node mounts under it carries the bridge proposal, so no command the node exposes today submits `04-proposal-open-chain.json` or `05-proposal-sidiora-cap.json` as its content.
 
 ### 7. Read the deployment back
 
@@ -176,13 +187,13 @@ An inbound SID deposit from Solana resolves to the `usid` denom only if the Paxe
 - `MsgSetCap` for a pair the Paxeer side has not registered registers it itself, under the bridge's generic denom `factory/<bridge module account>/lxb<hex>`, not under `usid`. Submitting Sidiora's cap body first binds Solana's SID to the wrong denom, and `EnsureSidioraDenom` then refuses to rebind it.
 - No generated body registers the pair against `usid`. The chain does it: `EnsureSidioraDenom` in `modules/layerxbridge/keeper/sidiora.go` records it, and its production caller is the handler of the `v6.7` upgrade in `node/upgrades.go`, which calls it for the chain the `usid` denom is already recorded against and refuses to run when the denom is recorded against none. The bridge module's genesis state is the other place an asset record is written.
 
-So, for Solana: submit `01-register-chain.json` and `02-set-attestors.json`, then the wrapped SOL cap. Before Sidiora's cap body, read the pair back:
+So, for Solana: submit `04-proposal-open-chain.json`, which registers the chain, installs the attestors and sets the wrapped SOL cap without Sidiora's. Before `05-proposal-sidiora-cap.json`, read the pair back:
 
 ```sh
 cast call 0x0000000000000000000000000000000000001016 'getCap(uint64,address)(string,uint256,uint256,uint256)' 91600046870081 0x21f7b20a555199fa73A238B1a91FD0f549068fEe --rpc-url <Paxeer X Network EVM endpoint>
 ```
 
-Submit Sidiora's cap body only when the denom it returns is `factory/pax1dzfx9mk4fl9kl2mysjmtvk2xp75ljumk6nynhf/usid`, the `usid` denom of the bridge module account. An empty denom means the pair is not recorded yet; a denom ending in `lxb` followed by hex means a cap was set first and the pair is bound to the wrong denom.
+Submit `05-proposal-sidiora-cap.json` only when the denom it returns is `factory/pax1dzfx9mk4fl9kl2mysjmtvk2xp75ljumk6nynhf/usid`, the `usid` denom of the bridge module account. An empty denom means the pair is not recorded yet; a denom ending in `lxb` followed by hex means a cap was set first and the pair is bound to the wrong denom.
 
 ## The relayer
 
