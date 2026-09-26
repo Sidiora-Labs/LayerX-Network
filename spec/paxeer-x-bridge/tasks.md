@@ -116,6 +116,16 @@
     - Be the admin client deploy-solana-program.sh calls, satisfying the PAXEER_BRIDGE_SOLANA_ADMIN_CLI requirement task 1.4 declares, and refuse an already-initialised program whose owner differs from the configuration.
     - Write bridge/solana/admin/tests/admin.rs under solana-program-test running the client against the real program: initialisation, both registrations with their ids, the caps, the printed state, the placeholder and missing-variable refusals, and the different-owner refusal.
     - _Requirements: 3.8, 4.2, 4.3, 10.3, 10.4_
+  - [ ] 2.9 Expose the bridge module's messages to governance
+    - Define api/layerxbridge/tx.proto with a Msg service carrying RegisterChain, SetAttestors, SetCap, Pause and Unpause, field for field the messages modules/layerxbridge/types/msgs.go holds today, each with the governance authority as its signer, and generate the Go code into modules/layerxbridge/types with the repository's proto generation the way modules/tokenfactory and modules/layerxexchange are generated; keep the generated messages as the one definition and delete the hand-written duplicates.
+    - In modules/layerxbridge/module.go register the message types in RegisterInterfaces and the message server in RegisterServices, and in modules/layerxbridge/keeper/msg_server.go implement the generated MsgServer over the existing keeper methods, refusing every message whose authority is not the module's governance authority; the module stays without a transaction command because only governance sends these messages.
+    - Make bridge/deploy/proposals/proposals.go emit each body as a governance proposal message with its real type URL, so the bundle submits through the chain's governance transaction as it stands, and keep its marshalling of the real generated types with no copy of them.
+    - Extend modules/layerxbridge/keeper/keeper_test.go and bridge/deploy/proposals/proposals_test.go: every message routes through the message service router to the keeper, a wrong authority is refused, and a decoded proposal body equals the generated message field for field.
+    - _Requirements: 9.1, 9.2_
+  - [ ] 2.10 Derive the Solana vault handle from the program's own seed
+    - In bridge/deploy/deploy-solana-program.sh derive the vault authority and the vault handle from the seed the program declares as VAULT_SEED in bridge/solana/src/state.rs, vault-authority, instead of vault (observations 2.5.1 and 2.8.1), and make the first-deployment path write the deployed program id into the deployment record and refuse to continue to the initialise step while solana.program_id is still a placeholder, naming the field.
+    - Extend bridge/deploy/tests/deploy-scripts-check.sh so it derives the vault authority from the program's seed against the recorded fixture, fails when the script names any other seed, and covers the placeholder refusal.
+    - _Requirements: 3.1, 3.2_
 
 ## Wave 3 - One Run, Recorded
 
@@ -134,7 +144,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }
