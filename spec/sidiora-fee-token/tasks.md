@@ -209,7 +209,7 @@
     - Add tests/service.rs binding the real service to an ephemeral loopback port over the recorded node fixture, sending the SDK's quote body and the web adapter's submission body over a real socket, and asserting the response shapes, the 4xx and 5xx split, the body size refusal, and that the quote verifies against the relayer address; extend the #[cfg(test)] modules of main.rs and config.rs for the new argument handling and the listen address refusals.
     - Close observation 1.5.2 in spec/sidiora-fee-token/qualification.kvx naming the revision at which the verify_cmd passes.
     - _Requirements: 2.1, 2.4, 2.5, 3.3_
-  - [ ] 4.4 Resolve the Paxeer Foundry libraries without a manual clone
+  - [x] 4.4 Resolve the Paxeer Foundry libraries without a manual clone
     - Add contracts/bootstrap-libs.sh in the shape of bridge/evm/bootstrap-libs.sh, cloning forge-std v1.9.6 and openzeppelin-contracts v5.3.0, the tags .github/workflows/paxeer-forge-test.yml clones, into contracts/lib, doing nothing when both are already at their pinned tag and unmodified and replacing a checkout that is at another tag or was edited.
     - Add to foundry.paxeer.toml the remappings forge-std/=contracts/lib/forge-std/src/ and @openzeppelin/contracts/=contracts/lib/openzeppelin-contracts/contracts/, leaving every other key exactly as it is, so the standalone build resolves Test.sol, Vm.sol and the OpenZeppelin imports with no environment override.
     - Commit nothing under contracts/lib and change no contract or test; the configuration and the script are not production files for the test ratio, and the build in the verify_cmd is their test.

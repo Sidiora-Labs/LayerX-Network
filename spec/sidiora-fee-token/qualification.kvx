@@ -222,6 +222,7 @@ command = "FOUNDRY_CONFIG=foundry.paxeer.toml forge build contracts/test/Sidiora
 log_path = ".logs/build.log"
 observed = "Foundry inferred forge-std/contracts/src instead of the pinned dependency's src directory and could not resolve Test.sol or Vm.sol."
 assumption = "The focused verify run uses explicit dependency remappings in the environment; the failed build is not rerun."
+closed = "At ecebaa2f51cecadf1de6ca104b4609548e1c72a9 contracts/bootstrap-libs.sh fetches forge-std v1.9.6 and openzeppelin-contracts v5.3.0 into contracts/lib and foundry.paxeer.toml remaps forge-std/ to its src directory and @openzeppelin/contracts/ to the contracts directory, so the standalone build resolves Test.sol, Vm.sol and the OpenZeppelin imports with no environment override."
 
 [observation.2.2.4]
 revision = "a9224a86520f442902062b3d8f71afb996646778"
@@ -335,6 +336,7 @@ command = "FOUNDRY_CONFIG=foundry.paxeer.toml forge build --evm-version=prague c
 log_path = ".logs/build.log"
 observed = "Foundry resolves forge-std/Test.sol under the absent contracts/lib/forge-std/contracts/src directory, preventing the standalone build from compiling."
 assumption = "The exact verification command requires FOUNDRY_REMAPPINGS pointing forge-std/ to contracts/lib/forge-std/src/ and @openzeppelin/contracts/ to contracts/lib/openzeppelin-contracts/contracts/, with no repository configuration change."
+closed = "At ecebaa2f51cecadf1de6ca104b4609548e1c72a9 contracts/bootstrap-libs.sh fetches forge-std v1.9.6 and openzeppelin-contracts v5.3.0 into contracts/lib and foundry.paxeer.toml remaps forge-std/ to its src directory and @openzeppelin/contracts/ to the contracts directory, so the standalone build resolves Test.sol, Vm.sol and the OpenZeppelin imports with no environment override."
 
 [observation.1.7.3]
 task = "1.7"; file = "contracts/src/BatchCallAndSponsor.sol"; symbol = "currentRate"

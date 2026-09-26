@@ -742,7 +742,7 @@ reqs = ["2.1","2.4","2.5","3.3"]
 
 [task.4.4]
 title = "Resolve the Paxeer Foundry libraries without a manual clone"
-status = "pending"
+status = "done"
 wave = 4
 requires = []
 do_1 = "Add contracts/bootstrap-libs.sh in the shape of bridge/evm/bootstrap-libs.sh, cloning forge-std v1.9.6 and openzeppelin-contracts v5.3.0, the tags .github/workflows/paxeer-forge-test.yml clones, into contracts/lib, doing nothing when both are already at their pinned tag and unmodified and replacing a checkout that is at another tag or was edited."
@@ -753,6 +753,10 @@ verify_cmd = "timeout 20m sh -c 'bash contracts/bootstrap-libs.sh && FOUNDRY_CON
 symbols = ["bootstrap-libs","remappings"]
 touches = ["contracts/bootstrap-libs.sh","foundry.paxeer.toml"]
 reqs = ["1.7","6.5"]
+revision = "ecebaa2f51cecadf1de6ca104b4609548e1c72a9"
+command = "timeout 20m sh -c 'bash contracts/bootstrap-libs.sh && FOUNDRY_CONFIG=foundry.paxeer.toml forge build --evm-version=prague'"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.4.5]
 title = "Accept the registered Sidiora denom in bridge genesis"

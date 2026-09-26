@@ -3,6 +3,10 @@ src = "contracts/src"
 out = "contracts/out"
 test = "contracts/test"
 libs = ["contracts/lib"]
+remappings = [
+    "forge-std/=contracts/lib/forge-std/src/",
+    "@openzeppelin/contracts/=contracts/lib/openzeppelin-contracts/contracts/",
+]
 solc_version = "0.8.27"
 auto_detect_solc = false
 
