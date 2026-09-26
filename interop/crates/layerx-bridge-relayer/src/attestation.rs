@@ -1,4 +1,4 @@
-//! The two PaxeerX bridge attestation digests and the signature rules both
+//! The two `PaxeerX` bridge attestation digests and the signature rules both
 //! verifiers enforce, byte for byte as
 //! `bridge/evm/ATTESTATION.md` and
 //! `modules/layerxbridge/ATTESTATION.md` specify them.

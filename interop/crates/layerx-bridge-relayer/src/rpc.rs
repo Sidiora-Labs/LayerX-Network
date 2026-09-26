@@ -129,15 +129,15 @@ impl PaxeerRpc {
     }
 
     fn request(&self, method: &str, params: &Value) -> Vec<Result<Value, EndpointFault>> {
-        let converted = params
-            .as_array()
-            .map(|values| {
+        let converted = params.as_array().map_or_else(
+            || Ok(Vec::new()),
+            |values| {
                 values
                     .iter()
                     .map(|value| layerx_paxeer_verifier::parse_json(&value.to_string()))
                     .collect::<Result<Vec<Json>, _>>()
-            })
-            .unwrap_or_else(|| Ok(Vec::new()));
+            },
+        );
         let Ok(converted) = converted else {
             return vec![Err(EndpointFault::MalformedResponse)];
         };

@@ -11,7 +11,7 @@ import (
 )
 
 // The attestation layouts are fixed by the Ethereum PaxeerXVault
-// (interop/contracts/ethereum-bridge/src/BridgeAttestation.sol) and
+// (bridge/evm/src/BridgeAttestation.sol) and
 // documented byte for byte in ATTESTATION.md.
 const (
 	DomainIn  = "PAXEERX_BRIDGE_IN_V1"

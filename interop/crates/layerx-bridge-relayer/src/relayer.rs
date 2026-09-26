@@ -37,6 +37,7 @@
 //! submits first wins and the others' identical or later calls resolve to
 //! `AlreadyBridged`.
 
+use std::collections::btree_map::Entry as CachedHash;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -761,12 +762,10 @@ impl Relayer {
             if position.block_number < from || position.block_number > to {
                 return Err(RelayerError::Rpc(RpcFault::Malformed));
             }
-            let hash = match canonical.get(&position.block_number) {
-                Some(hash) => *hash,
-                None => {
-                    let hash = canonical_hash(link.rpc.as_ref(), position.block_number)?;
-                    canonical.insert(position.block_number, hash);
-                    hash
+            let hash = match canonical.entry(position.block_number) {
+                CachedHash::Occupied(cached) => *cached.get(),
+                CachedHash::Vacant(slot) => {
+                    *slot.insert(canonical_hash(link.rpc.as_ref(), position.block_number)?)
                 }
             };
             if hash != position.block_hash {
@@ -840,12 +839,10 @@ impl Relayer {
                 return Err(RelayerError::Rpc(RpcFault::Malformed));
             }
             let vault = *vaults.get(&log.chain_id).ok_or(AbiError::UnexpectedLog)?;
-            let hash = match canonical.get(&position.block_number) {
-                Some(hash) => *hash,
-                None => {
-                    let hash = canonical_hash(rpc, position.block_number)?;
-                    canonical.insert(position.block_number, hash);
-                    hash
+            let hash = match canonical.entry(position.block_number) {
+                CachedHash::Occupied(cached) => *cached.get(),
+                CachedHash::Vacant(slot) => {
+                    *slot.insert(canonical_hash(rpc, position.block_number)?)
                 }
             };
             if hash != position.block_hash {

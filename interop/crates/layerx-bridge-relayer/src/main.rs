@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use layerx_bridge_relayer::config::RelayerConfig;
-use layerx_bridge_relayer::relayer::Relayer;
+use layerx_bridge_relayer::relayer::{Relayer, StepReport};
 
 fn config_path() -> Option<PathBuf> {
     let mut arguments = std::env::args_os().skip(1);
@@ -37,7 +37,7 @@ fn main() -> ExitCode {
     loop {
         for (stream, result) in relayer.tick() {
             match result {
-                Ok(report) if report == Default::default() => {}
+                Ok(report) if report == StepReport::default() => {}
                 Ok(report) => eprintln!("layerx-bridge-relayer: {stream}: {report:?}"),
                 Err(error) => eprintln!("layerx-bridge-relayer: {stream}: {error}"),
             }

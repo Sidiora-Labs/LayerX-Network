@@ -270,3 +270,11 @@ symbol = "TestPaxeerSide"
 observed = "The Solana dry run's Paxeer side refused 01-register-chain.json with 'unknown field \"@type\"' because the generator now writes each body under its type URL, and it now reads the bodies through proposals.DecodeBody; the EVM dry run's Paxeer side still decodes them with a plain JSON decoder that disallows unknown fields."
 assumption = "Not run here; the EVM dry run is expected to stop the same way until it reads the bodies through proposals.DecodeBody."
 severity = "suspect"
+
+[observation.2.17.1]
+task = "2.17"
+file = "interop/crates/layerx-bridge-relayer/tests"
+symbol = "cargo clippy -D warnings"
+observed = "With every src target clean, clippy --all-targets -D warnings exits 101 on seven lints in the integration tests outside this task's touches (support/mod.rs:133 assigning_clones and :336 type_complexity, loops.rs:231 too_many_lines, solana.rs:120 ptr_arg, :544 too_many_lines and :642 map_unwrap_or, solana_release.rs:223 type_complexity); log .logs/verify.log."
+assumption = "The touches list names only the crate's src, so the tests directory needs a task that owns it before the all-targets clippy leg can pass."
+severity = "blocker"
