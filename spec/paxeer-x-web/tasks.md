@@ -145,6 +145,7 @@
     - Write interop/deploy/x-websearch/tests/dry-run-check.sh starting anvil, a real loopback web server serving committed pages and three x-websearch processes with run-local attestor keys and allow_loopback set, and deploying contracts/src/xweb/XWebConsumer.sol to anvil.
     - Fetch the same page through the three sidecars, assert the digests are identical and the signatures are valid and ascending over the origin-1 preimage, assert the submitter's fulfil calldata decodes against precompiles/xweb/abi.json, and deliver the consumer's callback on anvil from the impersonated precompile address with the attested response and the bounded gas, asserting the consumer's stored result.
     - Record the exchange as interop/deploy/x-websearch/tests/fixtures/dry-run.json, replayable without the nodes, carrying no key material, no endpoint but the loopback ones the run started and no date or hostname; stop with a message naming a missing tool rather than skipping a step.
+    - Add an api request carrying a credential envelope for each of the three sidecars against a loopback API server the run starts that refuses the call without it, asserting identical digests and the fulfil under the majority level, one more request under the single level fulfilled by the named sidecar alone, and that no file the sidecars wrote and no log line carries the credential; record it in the same fixture.
     - _Requirements: 15.1, 15.2, 15.3_
   - [x] 2.7 Widen the xweb workflow's path filters to every tree its legs exercise
     - Extend the path filters in .github/workflows/xweb-test.yml with every tree observation 1.11.1 names and every path tasks 1.12 to 1.15 and 2.1 to 2.6 touch that one of the workflow's legs exercises, so a change to any of them runs the legs; add no leg and change no command.
@@ -174,6 +175,22 @@
     - In agent/sdk/python/layerx_sdk/x402.py make verify_payment_receipt verify the receipt with the protocol version the receipt itself carries, refusing by name a version the module does not support, and in layerx_sdk/web_search.py make the client verify the same way when no protocol_version was configured, keeping a configured version as an explicit bound that refuses a receipt of another version (observation 1.9.3).
     - Extend agent/sdk/python/tests/test_web_search.py so the recorded version 3 receipts verify through a client constructed without protocol_version and are refused by a client configured for version 2, and add agent/sdk/python/tests/test_x402.py covering verify_payment_receipt on a version 3 receipt, a version 2 receipt and an unsupported version; keep the .pyi stubs in step.
     - _Requirements: 9.1, 9.2, 9.4_
+  - [ ] 2.13 Define the api request kind, its envelopes and the single attestation level
+    - In modules/xweb/types add KindApi with a payload codec and validation for the method, the https URL, the public headers, the body, the JSON pointers, the attestation level and the credential envelopes, bounding each part, refusing an attestor outside the registered set and more envelopes than attestors, and raise DefaultMaxPayloadBytes to 8192 so a payload with envelopes for a majority-sized set fits; keep the 188-byte origin-1 preimage and every existing vector exactly as they are - the level is bound through the payload hash - and append api vectors to types/testdata/preimage-vectors.json.
+    - In modules/xweb/keeper make fulfil accept, under the single level, one signature from the request's named attestor and require the threshold otherwise, and store the level in the result; in precompiles/xweb/xweb.go and abi.json validate the api kind at request and expose the level in getResult and XWebFulfilled, touching nothing scripts/bump_version generates.
+    - Write modules/xweb/types/envelope.go, the ECIES envelope over secp256k1 with HKDF-SHA256 and AES-256-GCM every implementation shares, with types/testdata/envelope-vectors.json carrying keys, plaintexts and ciphertexts the Rust, TypeScript and Python implementations pin; add no dependency the Go module does not already carry unless the standard library cannot provide it.
+    - Write contracts/src/xweb/XWebApi.sol, a library that builds an api payload with get, post, select, withCredential and single, encodes it exactly as the Go codec decodes it and submits it through the precompile interface in one statement; extend the interface and XWeb.sol for the level; add contracts/src/xweb/examples/ApiConsumer.sol using the library; tests in Go for the codec, every refusal, the envelope vectors and both levels through the keeper and the precompile, and Foundry tests for the library and the example.
+    - _Requirements: 17.1, 17.2, 17.4, 17.5, 17.6_
+  - [ ] 2.14 Perform api requests in the sidecar with envelopes, selectors and the single level
+    - Write interop/crates/x-websearch/src/api.rs: decode the api payload exactly as modules/xweb/types does, pick the envelope addressed to this sidecar's attestor address and decrypt it in memory with the attestor key against modules/xweb/types/testdata/envelope-vectors.json, perform the call with the public and the credential headers under the fetch limits and destination refusals of the fetch path, apply the JSON pointers, canonicalise in RFC 8785 form, bound the answer and zeroise the plaintext; the credential never reaches a log line, the index, the content store, a fixture or any file, and a request with no envelope for this attestor is refused, never called without it.
+    - In src/attest.rs route the api kind to api.rs, sign under the majority level as for a fetch, and under the single level sign only when this sidecar is the named attestor and let src/submit.rs post fulfil with that one signature; add the module line to src/lib.rs.
+    - Write tests/api.rs against a loopback API server the test starts that refuses a call without the credential header and answers JSON whose unselected fields differ per call: identical digests from two sidecars holding different envelopes, the refusal without an envelope, the pointer and canonicalisation vectors, the single level's one signature, and a scan of every file under each sidecar's data directory and of its log output proving the credential is absent.
+    - _Requirements: 17.2, 17.3, 17.4, 17.6_
+  - [ ] 2.15 Give developers the api call helpers in the clients and on the page
+    - Add agent/sdk/typescript/src/xweb-api.ts and agent/sdk/python/layerx_sdk/xweb_api.py building an api payload and its credential envelopes from the attestor set the precompile's getAttestors returns, encoding exactly as the Go codec decodes and matching modules/xweb/types/testdata/envelope-vectors.json, exported from each package's index with the Python stub kept in step.
+    - Extend docs/site/docs/protocol/xweb.md with a section showing a contract calling an API through XWebApi in a dozen lines, the envelope rule, the selector rule and the two attestation levels, under the page's link and naming rules.
+    - Tests: agent/sdk/typescript/test/xweb-api.test.ts and agent/sdk/python/tests/test_xweb_api.py pin the payload bytes and the envelope vectors, and the page builds under mkdocs --strict.
+    - _Requirements: 17.5, 17.6_
 
 ## Wave 3 - One Run, Recorded
 
@@ -191,7 +208,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17", "1.18"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }
