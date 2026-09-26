@@ -98,7 +98,7 @@ func (k *Keeper) GetFeeTokenCharge(ctx sdk.Context, payer common.Address) (*stat
 		return nil, nil
 	}
 	if allowed, _ := k.IsAllowedFeeDenom(ctx, denom); !allowed {
-		return nil, fmt.Errorf("%w: %q: %w", ErrFeeTokenDenomNotAllowed, denom, ErrFeeTokenRateUnavailable)
+		return nil, nil
 	}
 	rate, err := k.GetFeeTokenRate(ctx, denom)
 	if err != nil {

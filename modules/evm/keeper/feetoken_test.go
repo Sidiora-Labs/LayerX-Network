@@ -140,10 +140,10 @@ func TestFeeTokenChargeReaderAndRecord(t *testing.T) {
 	require.Nil(t, disabled)
 	k.Paramstore.Set(ctx, types.KeyFeeTokenEnabled, true)
 	k.Paramstore.Set(ctx, types.KeyAllowedFeeDenoms, []types.AllowedFeeDenom{})
-	_, err = k.GetFeeTokenCharge(ctx, payer)
-	require.ErrorIs(t, err, keeper.ErrFeeTokenDenomNotAllowed)
-	require.ErrorIs(t, err, keeper.ErrFeeTokenRateUnavailable)
-	require.Contains(t, err.Error(), "usid")
+	withdrawn, err := k.GetFeeTokenCharge(ctx, payer)
+	require.NoError(t, err)
+	require.Nil(t, withdrawn)
+	require.Equal(t, "usid", k.GetAccountFeeDenom(ctx, payer))
 	recorded, err = k.GetAnteFeeTokenCharge(ctx, hash)
 	require.NoError(t, err)
 	require.Equal(t, charge, recorded)
@@ -151,4 +151,34 @@ func TestFeeTokenChargeReaderAndRecord(t *testing.T) {
 	absent, err = k.GetAnteFeeTokenCharge(ctx, hash)
 	require.NoError(t, err)
 	require.Nil(t, absent)
+}
+
+func TestFeeTokenChargeWithdrawnPreference(t *testing.T) {
+	app := testkeeper.EVMTestApp
+	k := &app.EvmKeeper
+	ctx, _ := app.GetContextForDeliverTx(nil).WithBlockHeight(100).CacheContext()
+	payer := common.HexToAddress("0x4321")
+	params := types.DefaultParams()
+	params.FeeTokenEnabled = true
+	params.AllowedFeeDenoms = []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.NewDec(types.InitialSidioraBaseUnitsPerPax), RateUpdateHeight: 100}, {Denom: "uasset", Rate: sdk.NewDec(1_000_000), RateUpdateHeight: 100}}
+	k.SetParams(ctx, params)
+	require.NoError(t, k.SetAccountFeeDenom(ctx, payer, "usid"))
+	k.Paramstore.Set(ctx, types.KeyAllowedFeeDenoms, []types.AllowedFeeDenom{{Denom: "uasset", Rate: sdk.NewDec(1_000_000), RateUpdateHeight: 100}})
+	allowed, _ := k.IsAllowedFeeDenom(ctx, "usid")
+	require.False(t, allowed)
+	charge, err := k.GetFeeTokenCharge(ctx, payer)
+	require.NoError(t, err)
+	require.Nil(t, charge)
+	require.Equal(t, "usid", k.GetAccountFeeDenom(ctx, payer))
+	k.Paramstore.Set(ctx, types.KeyAllowedFeeDenoms, []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.Dec{}, RateUpdateHeight: 100}, {Denom: "uasset", Rate: sdk.NewDec(1_000_000), RateUpdateHeight: 100}})
+	allowed, _ = k.IsAllowedFeeDenom(ctx, "usid")
+	require.True(t, allowed)
+	charge, err = k.GetFeeTokenCharge(ctx, payer)
+	require.ErrorIs(t, err, keeper.ErrFeeTokenRateInvalid)
+	require.Contains(t, err.Error(), "usid")
+	require.Nil(t, charge)
+	k.ClearAccountFeeDenom(ctx, payer)
+	charge, err = k.GetFeeTokenCharge(ctx, payer)
+	require.NoError(t, err)
+	require.Nil(t, charge)
 }

@@ -441,6 +441,7 @@ command = "timeout 20m sh -c 'go test -count=1 ./modules/evm/ante/...'"; exit_co
 observed = "Req 9.2 forbids an account being locked into a denom that stops being allowed, but under the governed rate a denom absent from the allowed list is the same state as an unavailable rate, so the refusal req 10.2 orders also refuses the precompile call that clears the preference."
 assumption = "Falling through to the base denom for a withdrawn denom was tried and made TestFeeTokenAnte/missing_rate fail on the charge the network coin must refuse, so the refusal stays and only an owner decision - a fee-check exemption for the clearing call or reconciled requirement text - resolves the lockout."
 severity = "blocker"
+closed = "GetFeeTokenCharge charges a preference naming a withdrawn denom in the network coin, the clearFeeDenom call from such an account is accepted, and a missing rate on an allowed denom stays refused; the ante, feetoken and FeeToken keeper tests pass at exit 0 on ecebaa2f51cecadf1de6ca104b4609548e1c72a9."
 
 [observation.2.6.5]
 task = "2.6"; file = "modules/evm/keeper/abci.go"; symbol = "EndBlock"

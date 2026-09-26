@@ -141,6 +141,24 @@ func TestFeeDenomClearAfterGovernanceChanges(t *testing.T) {
 	}
 }
 
+func TestFeeDenomClearWithdrawnPreference(t *testing.T) {
+	h := newHarness(t)
+	k := &testkeeper.EVMTestApp.EvmKeeper
+	h.call(feetoken.SetFeeDenomMethod, "usid")
+	k.Paramstore.Set(h.db.Ctx(), types.KeyAllowedFeeDenoms, []types.AllowedFeeDenom{{Denom: "uasset", Rate: sdk.NewDec(1_000_000), RateUpdateHeight: h.db.Ctx().BlockHeight()}})
+	require.True(t, k.GetFeeTokenEnabled(h.db.Ctx()))
+	require.Equal(t, "usid", h.denom(h.caller))
+	charge, err := k.GetFeeTokenCharge(h.db.Ctx(), h.caller)
+	require.NoError(t, err)
+	require.Nil(t, charge)
+	h.call(feetoken.ClearFeeDenomMethod)
+	require.Equal(t, "uhpx", h.denom(h.caller))
+	require.False(t, h.db.Ctx().KVStore(testkeeper.EVMTestApp.GetKey(types.StoreKey)).Has(types.AccountFeeDenomKey(h.caller)))
+	charge, err = k.GetFeeTokenCharge(h.db.Ctx(), h.caller)
+	require.NoError(t, err)
+	require.Nil(t, charge)
+}
+
 func TestFeeDenomViewDoesNotWriteOrChargeAnteGas(t *testing.T) {
 	h := newHarness(t)
 	h.call(feetoken.SetFeeDenomMethod, "usid")

@@ -17,6 +17,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
 	node "github.com/sidiora-labs/paxeer-network/node"
 	"github.com/sidiora-labs/paxeer-network/node/antedecorators"
+	"github.com/sidiora-labs/paxeer-network/precompiles/feetoken"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	sdkerrors "github.com/sidiora-labs/paxeer-network/sdk/types/errors"
 	testkeeper "github.com/sidiora-labs/paxeer-network/testutil/keeper"
@@ -281,15 +282,18 @@ func TestFeeTokenAnte(t *testing.T) {
 		tokenBalance           int64
 		nativeBalance          int64
 		missing, stale, future bool
+		withdrawn, clear       bool
 		value                  int64
 		wantError              error
 	}{
 		{name: "Sidiora", preference: "usid", enabled: true, tokenBalance: 1_000_000},
 		{name: "insufficient Sidiora", preference: "usid", enabled: true, tokenBalance: 1, wantError: sdkerrors.ErrInsufficientFunds},
-		{name: "missing rate", preference: "usid", enabled: true, tokenBalance: 1_000_000, missing: true, wantError: keeper.ErrFeeTokenRateUnavailable},
+		{name: "missing rate", preference: "usid", enabled: true, tokenBalance: 1_000_000, missing: true, wantError: keeper.ErrFeeTokenRateInvalid},
+		{name: "withdrawn preference", preference: "usid", enabled: true, nativeBalance: 1_000_000, tokenBalance: 1_000_000, withdrawn: true},
+		{name: "clear withdrawn preference", preference: "usid", enabled: true, nativeBalance: 1_000_000, tokenBalance: 1_000_000, withdrawn: true, clear: true},
 		{name: "stale rate", preference: "usid", enabled: true, tokenBalance: 1_000_000, stale: true, wantError: keeper.ErrFeeTokenRateStale},
 		{name: "future rate", preference: "usid", enabled: true, tokenBalance: 1_000_000, future: true, wantError: keeper.ErrFeeTokenRateInvalid},
-		{name: "disallowed denom", preference: "uother", enabled: true, tokenBalance: 1_000_000, wantError: keeper.ErrFeeTokenDenomNotAllowed},
+		{name: "disallowed denom", preference: "uother", enabled: true, nativeBalance: 1_000_000, tokenBalance: 1_000_000},
 		{name: "switch off", preference: "usid", nativeBalance: 1_000_000, tokenBalance: 1_000_000},
 		{name: "no preference", enabled: true, nativeBalance: 1_000_000, tokenBalance: 1_000_000},
 		{name: "network preference", preference: "uhpx", enabled: true, nativeBalance: 1_000_000, tokenBalance: 1_000_000},
@@ -308,15 +312,24 @@ func TestFeeTokenAnte(t *testing.T) {
 				height = 101
 			}
 			params.AllowedFeeDenoms = []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.NewDec(types.InitialSidioraBaseUnitsPerPax), RateUpdateHeight: height}}
-			if tc.missing {
+			if tc.withdrawn {
 				params.AllowedFeeDenoms = nil
 			}
 			k.SetParams(ctx, params)
+			if tc.missing {
+				k.Paramstore.Set(ctx, types.KeyAllowedFeeDenoms, []types.AllowedFeeDenom{{Denom: "usid", Rate: sdk.Dec{}, RateUpdateHeight: height}})
+			}
 			key, err := crypto.GenerateKey()
 			require.NoError(t, err)
 			to := common.HexToAddress("0x4567")
 			signer := ethtypes.LatestSignerForChainID(k.ChainID(ctx))
-			tx, err := ethtypes.SignTx(ethtypes.NewTx(&ethtypes.LegacyTx{Gas: 100_000, GasPrice: big.NewInt(1_000_000_000_000), To: &to, Value: big.NewInt(tc.value)}), signer, key)
+			var input []byte
+			if tc.clear {
+				to = common.HexToAddress(feetoken.FeeTokenAddress)
+				input, err = feetoken.NewPrecompileWithKeeper(k).GetABI().Pack(feetoken.ClearFeeDenomMethod)
+				require.NoError(t, err)
+			}
+			tx, err := ethtypes.SignTx(ethtypes.NewTx(&ethtypes.LegacyTx{Gas: 100_000, GasPrice: big.NewInt(1_000_000_000_000), To: &to, Value: big.NewInt(tc.value), Data: input}), signer, key)
 			require.NoError(t, err)
 			data, err := ethtx.NewLegacyTx(tx)
 			require.NoError(t, err)
@@ -336,7 +349,7 @@ func TestFeeTokenAnte(t *testing.T) {
 			result, err := ante.NewEVMFeeCheckDecorator(k, &app.UpgradeKeeper).AnteHandle(ctx, builder.GetTx(), false, func(ctx sdk.Context, _ sdk.Tx, _ bool) (sdk.Context, error) { return ctx, nil })
 			if tc.wantError != nil {
 				require.ErrorIs(t, err, tc.wantError)
-				if tc.name == "insufficient Sidiora" || tc.name == "disallowed denom" {
+				if tc.name == "insufficient Sidiora" || tc.name == "missing rate" {
 					require.Contains(t, err.Error(), tc.preference)
 				}
 				require.Equal(t, sdk.NewInt(tc.tokenBalance), k.BankKeeper().GetBalance(ctx, payer, "usid").Amount)
@@ -346,7 +359,7 @@ func TestFeeTokenAnte(t *testing.T) {
 			priorities = append(priorities, result.Priority())
 			charge, err := k.GetAnteFeeTokenCharge(ctx, tx.Hash())
 			require.NoError(t, err)
-			if tc.preference == "usid" && tc.enabled {
+			if tc.preference == "usid" && tc.enabled && !tc.withdrawn {
 				require.Equal(t, sdk.NewInt(688_600), k.BankKeeper().GetBalance(ctx, payer, "usid").Amount)
 				require.Equal(t, nativeBefore, k.GetBalance(ctx, payer))
 				require.NotNil(t, charge)
@@ -363,12 +376,15 @@ func TestFeeTokenAnte(t *testing.T) {
 				require.Equal(t, nativeBefore, k.GetBalance(ctx, payer))
 			} else {
 				require.Nil(t, charge)
+				if tc.withdrawn {
+					require.Equal(t, "usid", k.GetAccountFeeDenom(ctx, msg.Derived.SenderEVMAddr))
+				}
 				require.Equal(t, sdk.NewInt(tc.tokenBalance), k.BankKeeper().GetBalance(ctx, payer, "usid").Amount)
 				require.Equal(t, new(big.Int).Sub(nativeBefore, big.NewInt(100_000_000_000_000_000)), k.GetBalance(ctx, payer))
 			}
 		})
 	}
-	require.Len(t, priorities, 4)
+	require.Len(t, priorities, 7)
 	for _, priority := range priorities {
 		require.Equal(t, priorities[0], priority)
 	}
