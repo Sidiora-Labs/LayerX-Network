@@ -710,7 +710,11 @@ reqs = ["16.1","16.2"]
 
 [task.2.8]
 title = "Configure the crawl interval and stop the sidecar cleanly"
-status = "pending"
+status = "done"
+revision = "c4662b1a14cda1ceba7fe41c60a4a386a375bd80"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test config --test binary --test crawl'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["1.13","2.1","2.10"]
 do_1 = "Add crawl_interval_seconds to the configuration in interop/crates/x-websearch/src/config.rs with a documented default of 900 when absent, refusing zero and any value above 86400 by naming the field, and make the crawler in src/crawl.rs and the binary in src/main.rs schedule cycles from it instead of the constant (observation 1.13.1)."
@@ -787,7 +791,11 @@ reqs = ["9.1","9.2","9.4"]
 
 [task.2.13]
 title = "Define the api request kind, its envelopes and the single attestation level"
-status = "pending"
+status = "done"
+revision = "2c48c1b10062a8c81112a98c2849ee69923595f4"
+command = "timeout 20m sh -c 'go test -count=1 ./modules/xweb/... ./precompiles/xweb/... ./precompiles/ && bash tools/ci/xweb-forge-libs.sh && FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague --match-path contracts/test/XWebConsumer.t.sol -vvv'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["1.5","1.6"]
 do_1 = "In modules/xweb/types add KindApi with a payload codec and validation for the method, the https URL, the public headers, the body, the JSON pointers, the attestation level and the credential envelopes, bounding each part, refusing an attestor outside the registered set and more envelopes than attestors, and raise DefaultMaxPayloadBytes to 8192 so a payload with envelopes for a majority-sized set fits; keep the 188-byte origin-1 preimage and every existing vector exactly as they are - the level is bound through the payload hash - and append api vectors to types/testdata/preimage-vectors.json."

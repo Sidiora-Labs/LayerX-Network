@@ -367,18 +367,17 @@ pub struct RunningServer {
     workers: Vec<JoinHandle<()>>,
 }
 
-impl RunningServer {
-    #[must_use]
-    pub const fn local_addr(&self) -> SocketAddr {
-        self.address
-    }
+/// Stops a running server's acceptor from any thread.
+#[derive(Clone, Debug)]
+pub struct Stopper {
+    address: SocketAddr,
+    stop: Arc<AtomicBool>,
+}
 
-    /// Stops accepting, lets the workers finish the queued connections and
-    /// joins every thread.
-    ///
-    /// # Errors
-    /// Returns the acceptor's error or a thread that panicked.
-    pub fn shutdown(self) -> io::Result<()> {
+impl Stopper {
+    /// Makes the acceptor stop accepting and close the listener. The
+    /// connections already accepted are still served.
+    pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
         let wake = match self.address.ip() {
             IpAddr::V4(ip) if ip.is_unspecified() => {
@@ -390,6 +389,32 @@ impl RunningServer {
             _ => self.address,
         };
         drop(TcpStream::connect_timeout(&wake, Duration::from_secs(1)));
+    }
+}
+
+impl RunningServer {
+    #[must_use]
+    pub const fn local_addr(&self) -> SocketAddr {
+        self.address
+    }
+
+    /// A handle that stops this server from another thread; [`Self::wait`]
+    /// then returns once the queued connections are served.
+    #[must_use]
+    pub fn stopper(&self) -> Stopper {
+        Stopper {
+            address: self.address,
+            stop: Arc::clone(&self.stop),
+        }
+    }
+
+    /// Stops accepting, lets the workers finish the queued connections and
+    /// joins every thread.
+    ///
+    /// # Errors
+    /// Returns the acceptor's error or a thread that panicked.
+    pub fn shutdown(self) -> io::Result<()> {
+        self.stopper().stop();
         self.wait()
     }
 

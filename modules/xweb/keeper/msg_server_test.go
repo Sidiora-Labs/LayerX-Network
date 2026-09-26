@@ -2,8 +2,10 @@ package keeper_test
 
 import (
 	"bytes"
+	"encoding/hex"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/crypto"
 	xwebtestutil "github.com/sidiora-labs/paxeer-network/modules/xweb/testutil"
 	"github.com/sidiora-labs/paxeer-network/modules/xweb/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
@@ -154,4 +156,30 @@ func TestPauseAndUnpause(t *testing.T) {
 	require.NoError(t, s.k.Unpause(s.ctx, types.MsgUnpause{Authority: authority}))
 	require.False(t, s.k.IsPaused(s.ctx))
 	require.Len(t, s.events(types.EventUnpaused), 2, "the suite unpaused once on activation")
+}
+
+func TestRegisterAttestorWithAPublicKey(t *testing.T) {
+	s := newSuite(t, false)
+	attestor := s.attestors[0]
+	registration := attestor.Registration()
+	registration.PublicKey = crypto.CompressPubkey(&attestor.Key.PublicKey)
+	require.NoError(t, s.k.RegisterAttestor(s.ctx, types.MsgRegisterAttestor{Authority: authority, Attestor: registration}))
+	stored, found := s.k.GetAttestorSet(s.ctx).Find(attestor.Signer)
+	require.True(t, found)
+	require.Equal(t, registration.PublicKey, stored.PublicKey)
+	events := s.events(types.EventAttestorAdded)
+	require.Len(t, events, 1)
+	require.Equal(t, hex.EncodeToString(registration.PublicKey), attribute(events[0], types.AttributePublicKey))
+
+	require.NoError(t, s.register(s.attestors[1]))
+	events = s.events(types.EventAttestorAdded)
+	require.Len(t, events, 2)
+	require.Empty(t, attribute(events[1], types.AttributePublicKey))
+
+	wrong := s.attestors[2].Registration()
+	wrong.PublicKey = registration.PublicKey
+	err := s.k.RegisterAttestor(s.ctx, types.MsgRegisterAttestor{Authority: authority, Attestor: wrong})
+	require.ErrorIs(t, err, types.ErrInvalidAttestors)
+	require.ErrorContains(t, err, "belongs to "+attestor.Signer.Hex())
+	require.Len(t, s.k.GetAttestorSet(s.ctx).Attestors, 2)
 }

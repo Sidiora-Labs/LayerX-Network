@@ -26,7 +26,7 @@ Domain `PAXEERX_WEB_V1`. Preimage length 188 bytes.
 |     15 |   32 | networkId      | uint256, the EVM chain id for origin 1, the kernel network id for origin 2 |
 |     47 |   32 | requester      | bytes32, the EVM address left-padded with zeros for origin 1, the 32-byte program id for origin 2 |
 |     79 |    8 | requestId      | uint64, the request id the module or the kernel assigned                 |
-|     87 |    1 | kind           | uint8, 1 fetch, 2 search                                                 |
+|     87 |    1 | kind           | uint8, 1 fetch, 2 search, 3 api                                          |
 |     88 |   32 | payloadHash    | bytes32, keccak256 of the request payload bytes                          |
 |    120 |   32 | contentDigest  | bytes32, keccak256 of the canonical content bytes                        |
 |    152 |   32 | responseHash   | bytes32, keccak256 of the stored response bytes (at most 4096)           |
@@ -50,6 +50,13 @@ and by the kernel web intake:
   than it;
 - a request is fulfilled at most once, and a refunded request is never
   fulfilled.
+
+An api request (kind 3) names its attestation level inside its payload, so the
+level is bound through `payloadHash` and the preimage keeps its 188 bytes.
+Under the single level a fulfilment carries exactly one signature, which must
+recover to the attestor the payload names; the threshold rule above applies to
+the majority level. `types/api.go` specifies the payload and
+`types/testdata/api-vectors.json` pins it.
 
 ## Vectors
 
@@ -82,5 +89,20 @@ Vector `program-search` (origin 2):
 - digest `0xc634942bc32e91ff577e48527c40c951d7f00b0808764b080540b57292343379`
 - signer `0x767eb87feba9e1851bd2f5d6fc931d2476b1db90`, signature
   `0x7893009709dc168f1378cc7296bca594594b522e937a17b1948efb399726e78c4532a5ce1715617c5ce302722588935b996f8b8d115093c7475932a081717aa91b`
+
+Vector `evm-api-single` (origin 1):
+
+- networkId `713714`
+- requester `0x00000000000000000000000000000000000000000000000000000000000a11ce`
+- requestId `9`, kind `3`
+- payload: the `post-single-credential` api vector, payloadHash
+  `0xd6c5bc752f9769fa30ebf29d2e9b8fc6ae47892c6bdffb659612f490d89b7ca5`
+- contentDigest `0x4444444444444444444444444444444444444444444444444444444444444444`
+- response `["3.114"]`, responseHash
+  `0x2c85cb58c805de4b2edb12efa1506788e69c5d32749f03c9e9d402b09013e9ec`
+- fullLength `9`
+- digest `0x18ef556323e81c5d30bff202abbf20910cc82809cf280e08279e658441ac865e`
+- signer `0xe35182c595c7db5baf6237c02cf6f8177831f384`, signature
+  `0x9144452b00ca7e3d2ff7909a87bc504d45409126175bee22aacf06eb64e8470e0ad0adf0f3c1b1c2ebb9887ae5fb5b293bdb0cbea5462f9bc54500064f7bbd9f1c`
 
 The full preimage bytes of each vector are in `types/testdata/preimage-vectors.json`.

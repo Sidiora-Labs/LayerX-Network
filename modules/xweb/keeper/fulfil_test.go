@@ -212,3 +212,89 @@ func TestRecordCallback(t *testing.T) {
 	require.Equal(t, types.StatusFulfilled, request.Status, "a failed callback does not undo the fulfilment")
 	require.Len(t, s.events(types.EventCallback), 1)
 }
+
+// apiSigned signs the attestation of an api request, whose payload hash is
+// that of its api payload.
+func (s *suite) apiSigned(id uint64, apiPayload []byte, attestors ...xwebtestutil.Attestor) [][]byte {
+	attestation := s.attestation(id, response, digest, uint32(len(response)))
+	attestation.PayloadHash = types.Keccak(apiPayload)
+	return xwebtestutil.Sign(types.Digest(attestation), attestors...)
+}
+
+func TestFulfilSingleLevelTakesTheNamedAttestorAlone(t *testing.T) {
+	s := newSuite(t, true)
+	s.allowApi()
+	named := s.attestors[2]
+	body := s.apiPayload(named.Signer, named)
+	id, err := s.k.Request(s.ctx, requester, types.KindApi, body, callbackGas, sdk.NewInt(fee))
+	require.NoError(t, err)
+	request, _ := s.k.GetRequest(s.ctx, id)
+	attestation := s.attestation(id, response, digest, uint32(len(response)))
+	attestation.PayloadHash = types.Keccak(body)
+	require.Equal(t, attestation, s.k.Attestation(s.ctx, request, response, digest, uint32(len(response))))
+
+	_, result, err := s.k.Fulfil(s.ctx, id, response, digest, uint32(len(response)), s.apiSigned(id, body, named))
+	require.NoError(t, err)
+	require.Equal(t, types.LevelSingle, result.Level)
+	require.Equal(t, []types.Address20{named.Signer}, result.Signers)
+	stored, found := s.k.GetResult(s.ctx, id)
+	require.True(t, found)
+	require.Equal(t, result, stored)
+	require.Equal(t, sdk.NewInt(fee), s.balance(named.Payout))
+	require.True(t, s.balance(s.attestors[0].Payout).IsZero())
+	require.True(t, s.balance(s.k.ModuleAddress()).IsZero())
+	events := s.events(types.EventFulfilled)
+	require.Len(t, events, 1)
+	require.Equal(t, "1", attribute(events[0], types.AttributeLevel))
+	require.Equal(t, named.Signer.Hex(), attribute(events[0], types.AttributeSigners))
+}
+
+func TestFulfilSingleLevelRefusals(t *testing.T) {
+	s := newSuite(t, true)
+	s.allowApi()
+	named, other := s.attestors[0], s.attestors[1]
+	body := s.apiPayload(named.Signer)
+	id, err := s.k.Request(s.ctx, requester, types.KindApi, body, callbackGas, sdk.NewInt(fee))
+	require.NoError(t, err)
+	length := uint32(len(response))
+	for name, tc := range map[string]struct {
+		signatures [][]byte
+		err        error
+		refuses    string
+	}{
+		"no signature":   {nil, types.ErrBadSignature, "exactly one signature, got 0"},
+		"two signatures": {s.apiSigned(id, body, named, other), types.ErrBadSignature, "exactly one signature, got 2"},
+		"another attestor": {s.apiSigned(id, body, other), types.ErrBadSignature,
+			"signature from " + other.Signer.Hex() + ", the single level names " + named.Signer.Hex()},
+		"a majority payload hash": {s.signed(id, response, digest, length, named), types.ErrBadSignature,
+			"the single level names"},
+		"short signature": {[][]byte{s.apiSigned(id, body, named)[0][:64]}, types.ErrBadSignature, "signature 0"},
+	} {
+		_, _, err := s.k.Fulfil(s.ctx, id, response, digest, length, tc.signatures)
+		require.ErrorIs(t, err, tc.err, name)
+		require.ErrorContains(t, err, tc.refuses, name)
+	}
+
+	require.NoError(t, s.k.RemoveAttestor(s.ctx, types.MsgRemoveAttestor{Authority: authority, Signer: named.Signer}))
+	_, _, err = s.k.Fulfil(s.ctx, id, response, digest, length, s.apiSigned(id, body, named))
+	require.ErrorIs(t, err, types.ErrUnknownAttestor)
+	require.ErrorContains(t, err, "no longer registered")
+	_, found := s.k.GetResult(s.ctx, id)
+	require.False(t, found)
+}
+
+func TestFulfilMajorityApiRequestKeepsTheThreshold(t *testing.T) {
+	s := newSuite(t, true)
+	s.allowApi()
+	body := s.apiPayload(types.Address20{}, s.attestors...)
+	id, err := s.k.Request(s.ctx, requester, types.KindApi, body, callbackGas, sdk.NewInt(fee))
+	require.NoError(t, err)
+	length := uint32(len(response))
+	_, _, err = s.k.Fulfil(s.ctx, id, response, digest, length, s.apiSigned(id, body, s.attestors[0]))
+	require.ErrorIs(t, err, types.ErrBelowThreshold)
+	_, result, err := s.k.Fulfil(s.ctx, id, response, digest, length,
+		s.apiSigned(id, body, s.attestors[0], s.attestors[1]))
+	require.NoError(t, err)
+	require.Equal(t, types.LevelMajority, result.Level)
+	require.Len(t, result.Signers, 2)
+}

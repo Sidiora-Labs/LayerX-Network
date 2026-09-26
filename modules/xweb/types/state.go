@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/ethereum/go-ethereum/crypto"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 )
 
@@ -42,19 +43,28 @@ func unmarshalFixedHex(raw []byte, out []byte) error {
 	return nil
 }
 
-// Request kinds.
+// Request kinds. KindApi carries an api payload (api.go).
 const (
 	KindFetch  uint8 = 1
 	KindSearch uint8 = 2
+	KindApi    uint8 = 3
 )
 
 // KnownKind reports whether kind is a request kind the module accepts.
-func KnownKind(kind uint8) bool { return kind == KindFetch || kind == KindSearch }
+func KnownKind(kind uint8) bool { return kind == KindFetch || kind == KindSearch || kind == KindApi }
+
+// Attestation levels. Under LevelMajority a fulfilment needs the threshold of
+// attestor signatures; under LevelSingle, open to the api kind only, it needs
+// exactly one signature from the attestor the payload names.
+const (
+	LevelMajority uint8 = 0
+	LevelSingle   uint8 = 1
+)
 
 // Documented parameter defaults. The module ships paused with an empty
 // attestor set; governance sets the live values before unpausing.
 const (
-	DefaultMaxPayloadBytes = uint32(2048)
+	DefaultMaxPayloadBytes = uint32(8192)
 	DefaultMaxCallbackGas  = uint64(500_000)
 	DefaultTimeoutBlocks   = uint64(3600)
 
@@ -114,10 +124,13 @@ func ValidateSettings(fee sdk.Int, maxPayloadBytes uint32, maxCallbackGas, timeo
 }
 
 // Attestor is one web attestor: the EVM address its secp256k1 signatures
-// recover to and the bank account its share of each fee is paid to.
+// recover to, the bank account its share of each fee is paid to and, for an
+// attestor that accepts api credential envelopes, the 33-byte compressed
+// public key of the same secp256k1 key, which envelopes are encrypted to.
 type Attestor struct {
-	Signer Address20 `json:"signer"`
-	Payout string    `json:"payout"`
+	Signer    Address20 `json:"signer"`
+	Payout    string    `json:"payout"`
+	PublicKey []byte    `json:"public_key,omitempty"`
 }
 
 func (a Attestor) Validate() error {
@@ -126,6 +139,20 @@ func (a Attestor) Validate() error {
 	}
 	if _, err := sdk.AccAddressFromBech32(a.Payout); err != nil {
 		return ErrInvalidAttestors.Wrapf("payout of %s: %v", a.Signer.Hex(), err)
+	}
+	if len(a.PublicKey) == 0 {
+		return nil
+	}
+	if len(a.PublicKey) != EnvelopeKeyLength {
+		return ErrInvalidAttestors.Wrapf("public key of %s is %d bytes, want %d compressed", a.Signer.Hex(),
+			len(a.PublicKey), EnvelopeKeyLength)
+	}
+	key, err := crypto.DecompressPubkey(a.PublicKey)
+	if err != nil {
+		return ErrInvalidAttestors.Wrapf("public key of %s: %v", a.Signer.Hex(), err)
+	}
+	if derived := Address20(crypto.PubkeyToAddress(*key)); derived != a.Signer {
+		return ErrInvalidAttestors.Wrapf("public key of %s belongs to %s", a.Signer.Hex(), derived.Hex())
 	}
 	return nil
 }
@@ -198,7 +225,9 @@ const (
 	StatusRefunded  RequestStatus = 2
 )
 
-// Request is one contract request for web data, stored under its nonce.
+// Request is one contract request for web data, stored under its nonce. Level
+// and Attestor come from an api payload; every other kind is LevelMajority
+// with a zero attestor.
 type Request struct {
 	ID            uint64        `json:"id"`
 	Requester     Address20     `json:"requester"`
@@ -209,6 +238,8 @@ type Request struct {
 	Height        int64         `json:"height"`
 	TimeoutHeight int64         `json:"timeout_height"`
 	Status        RequestStatus `json:"status"`
+	Level         uint8         `json:"level"`
+	Attestor      Address20     `json:"attestor"`
 }
 
 func (r Request) Validate() error {
@@ -233,6 +264,27 @@ func (r Request) Validate() error {
 	if r.Status > StatusRefunded {
 		return ErrInvalidRequest.Wrapf("request %d status %d", r.ID, r.Status)
 	}
+	return validateLevel(r.Kind, r.Level, r.Attestor)
+}
+
+// validateLevel checks a level and its named attestor: single only for the
+// api kind and with a named attestor, majority with none.
+func validateLevel(kind, level uint8, attestor Address20) error {
+	switch level {
+	case LevelMajority:
+		if attestor != (Address20{}) {
+			return ErrInvalidLevel.Wrapf("majority level names attestor %s", attestor.Hex())
+		}
+	case LevelSingle:
+		if kind != KindApi {
+			return ErrInvalidLevel.Wrapf("single level on kind %d, open to the api kind only", kind)
+		}
+		if attestor == (Address20{}) {
+			return ErrInvalidLevel.Wrap("single level names no attestor")
+		}
+	default:
+		return ErrInvalidLevel.Wrapf("level %d", level)
+	}
 	return nil
 }
 
@@ -247,7 +299,8 @@ const (
 	CallbackOutOfGas  CallbackOutcome = 3
 )
 
-// Result is the attested answer to one request.
+// Result is the attested answer to one request and the level it was
+// attested under.
 type Result struct {
 	RequestID       uint64          `json:"request_id"`
 	Response        []byte          `json:"response"`
@@ -257,6 +310,7 @@ type Result struct {
 	Height          int64           `json:"height"`
 	Callback        CallbackOutcome `json:"callback"`
 	CallbackGasUsed uint64          `json:"callback_gas_used"`
+	Level           uint8           `json:"level"`
 }
 
 func (r Result) Validate() error {
@@ -274,6 +328,15 @@ func (r Result) Validate() error {
 	}
 	if r.Callback > CallbackOutOfGas {
 		return ErrInvalidRequest.Wrapf("result %d callback outcome %d", r.RequestID, r.Callback)
+	}
+	switch r.Level {
+	case LevelMajority:
+	case LevelSingle:
+		if len(r.Signers) != 1 {
+			return ErrInvalidLevel.Wrapf("result %d under the single level has %d signers", r.RequestID, len(r.Signers))
+		}
+	default:
+		return ErrInvalidLevel.Wrapf("result %d level %d", r.RequestID, r.Level)
 	}
 	return nil
 }

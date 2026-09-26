@@ -23,7 +23,7 @@ use x_websearch::search::search;
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 const WAIT: Duration = Duration::from_secs(20);
-const SIGTERM: i32 = 15;
+const SIGHUP: i32 = 1;
 const CURRENCIES: [&str; 4] = ["SID", "PAX", "USDC", "USDL"];
 
 fn fixtures() -> PathBuf {
@@ -293,9 +293,9 @@ impl Sidecar {
         }
     }
 
-    fn terminate(&mut self) -> TestResult<ExitStatus> {
+    fn signal(&mut self, name: &str) -> TestResult<ExitStatus> {
         let status = Command::new("kill")
-            .arg("-TERM")
+            .arg(format!("-{name}"))
             .arg(self.child.id().to_string())
             .status()?;
         assert!(status.success());
@@ -464,10 +464,14 @@ fn one_crawl_cycle_lands_a_searchable_document_and_the_binary_stops_cleanly() ->
     assert_eq!(site.count("/beacons.html"), 1);
     assert_eq!(site.count("/notes.txt"), 0);
 
-    let status = sidecar.terminate()?;
-    assert_eq!(status.signal(), Some(SIGTERM));
-    assert!(!status.core_dumped());
-    assert!(!sidecar.stderr()?.contains(&secret));
+    let status = sidecar.signal("TERM")?;
+    assert_eq!(status.code(), Some(0), "{}", sidecar.stderr()?);
+    assert_eq!(status.signal(), None);
+    let log = sidecar.stderr()?;
+    assert!(log.contains("x-websearch stopping on SIGTERM"), "{log}");
+    assert!(log.ends_with("x-websearch stopped cleanly\n"), "{log}");
+    assert!(!log.contains(&secret));
+    assert_eq!(site.count("/index.html"), 1, "one cycle in the interval");
     TcpListener::bind(sidecar.address)?;
 
     let index = WebIndex::open(&scratch.0.join("data"))?;
@@ -477,6 +481,35 @@ fn one_crawl_cycle_lands_a_searchable_document_and_the_binary_stops_cleanly() ->
     assert_eq!(found[0].result.title, "Lighthouse Register");
     let beacons = search(&index, "beacon flashes")?;
     assert_eq!(beacons[0].result.url, site.url("/beacons.html"));
+    Ok(())
+}
+
+#[test]
+fn sigint_stops_the_binary_cleanly_and_other_signals_keep_their_default_action() -> TestResult {
+    let scratch = Scratch::new("signals")?;
+    let site = Site::start(&fixtures().join("binary/site"))?;
+    let config = configure(&scratch, &site, |config| {
+        config["crawl_interval_seconds"] = json!(86_400);
+    })?;
+    let (receiver, _) = receiver_key(&scratch)?;
+
+    let mut sidecar = Sidecar::start(&scratch, &config, &receiver)?;
+    sidecar.wait_for_log("crawl cycle finished")?;
+    let status = sidecar.signal("INT")?;
+    assert_eq!(status.code(), Some(0), "{}", sidecar.stderr()?);
+    let log = sidecar.stderr()?;
+    assert!(log.contains("x-websearch stopping on SIGINT"), "{log}");
+    assert!(log.ends_with("x-websearch stopped cleanly\n"), "{log}");
+    TcpListener::bind(sidecar.address)?;
+    drop(sidecar);
+
+    let mut sidecar = Sidecar::start(&scratch, &config, &receiver)?;
+    sidecar.wait_for_log("crawl cycle finished")?;
+    let status = sidecar.signal("HUP")?;
+    assert_eq!(status.signal(), Some(SIGHUP));
+    assert_eq!(status.code(), None);
+    assert!(!sidecar.stderr()?.contains("stopped cleanly"));
+    assert_eq!(site.count("/index.html"), 2, "one cycle per start");
     Ok(())
 }
 

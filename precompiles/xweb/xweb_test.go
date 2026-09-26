@@ -2,6 +2,7 @@ package xweb_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"maps"
 	"math"
 	"math/big"
@@ -267,6 +268,8 @@ func TestRequestTakesTheFeeAndEmits(t *testing.T) {
 	require.Equal(t, uint64(startHeight), view.Height)
 	require.Equal(t, uint64(startHeight)+timeout, view.TimeoutHeight)
 	require.Equal(t, uint8(types.StatusPending), view.Status)
+	require.Equal(t, types.LevelMajority, view.Level)
+	require.Equal(t, common.Address{}, view.Attestor)
 
 	logs := h.logs("XWebRequested")
 	require.Len(t, logs, 1)
@@ -343,6 +346,7 @@ func TestFulfilDeliversTheCallback(t *testing.T) {
 	require.Equal(t, uint64(startHeight), result.Height)
 	require.Equal(t, uint8(types.CallbackDelivered), result.Callback)
 	require.Equal(t, used, result.CallbackGasUsed)
+	require.Equal(t, types.LevelMajority, result.Level)
 	require.Equal(t, uint8(types.StatusFulfilled), h.requestView(id).Status)
 
 	logs := h.logs("XWebFulfilled")
@@ -352,8 +356,9 @@ func TestFulfilDeliversTheCallback(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, digest, data[0].([32]byte))
 	require.Equal(t, fullLength, data[1].(uint32))
-	require.Equal(t, uint8(types.CallbackDelivered), data[2].(uint8))
-	require.Equal(t, used, data[3].(uint64))
+	require.Equal(t, types.LevelMajority, data[2].(uint8))
+	require.Equal(t, uint8(types.CallbackDelivered), data[3].(uint8))
+	require.Equal(t, used, data[4].(uint64))
 
 	signatures := h.signatures(id, response, digest, fullLength)
 	_, _, reason := h.call(stranger, xweb.FulfilMethod, nil, supplied, id, response, digest, fullLength, signatures)
@@ -468,6 +473,7 @@ func TestViews(t *testing.T) {
 	for i, attestor := range h.attestors {
 		require.Equal(t, common.Address(attestor.Signer), attestors[i].Signer)
 		require.Equal(t, attestor.Payout.String(), attestors[i].Payout)
+		require.Empty(t, attestors[i].PublicKey)
 	}
 	require.Equal(t, uint32(2), out[1].(uint32))
 
@@ -547,6 +553,121 @@ func TestABIMatchesTheSolidityInterface(t *testing.T) {
 	imported, err := os.ReadFile("../../contracts/src/precompiles/IXWeb.sol")
 	require.NoError(t, err)
 	require.True(t, bytes.Equal(local, imported))
+}
+
+// TestApiRequestAtTheSingleLevel registers an attestor with its public key,
+// requests an api call naming it with a credential sealed to it, and fulfils
+// with its one signature.
+func TestApiRequestAtTheSingleLevel(t *testing.T) {
+	h := newHarness(t)
+	require.NoError(t, h.keeper.UpdateParams(h.ctx(), types.MsgSetParams{Authority: authority, Fee: sdk.NewInt(fee),
+		MaxPayloadBytes: types.DefaultMaxPayloadBytes, MaxCallbackGas: callbackCap, TimeoutBlocks: timeout}))
+	var named xwebtestutil.Attestor
+	for _, candidate := range xwebtestutil.Attestors(4) {
+		if !h.keeper.GetAttestorSet(h.ctx()).Has(candidate.Signer) {
+			named = candidate
+		}
+	}
+	require.NotNil(t, named.Key)
+	registration := named.Registration()
+	registration.PublicKey = crypto.CompressPubkey(&named.Key.PublicKey)
+	require.NoError(t, h.keeper.RegisterAttestor(h.ctx(), types.MsgRegisterAttestor{Authority: authority,
+		Attestor: registration}))
+
+	var attestors []xweb.AttestorView
+	attestors = *abi.ConvertType(h.view(xweb.GetAttestorsMethod)[0], &attestors).(*[]xweb.AttestorView)
+	require.Len(t, attestors, 4)
+	var published []byte
+	for _, attestor := range attestors {
+		if attestor.Signer == common.Address(named.Signer) {
+			published = attestor.PublicKey
+		} else {
+			require.Empty(t, attestor.PublicKey)
+		}
+	}
+	require.Equal(t, registration.PublicKey, published)
+	recipient, err := crypto.DecompressPubkey(published)
+	require.NoError(t, err)
+
+	call := types.ApiPayload{Method: types.MethodPost, Level: types.LevelSingle, Attestor: named.Signer,
+		URL: "https://paxeer.app/api/v1/quote", Headers: []types.ApiHeader{{Name: "Content-Type", Value: "application/json"}},
+		Body: []byte(`{"asset":"SID","amount":"1"}`), Pointers: []string{"/quote/amount"}}
+	origin, err := call.Origin()
+	require.NoError(t, err)
+	credential, err := types.EncodeCredential([]types.ApiHeader{{Name: "X-Api-Key", Value: "paxeer-test-credential"}})
+	require.NoError(t, err)
+	sealed, err := types.SealEnvelope(recipient, origin, credential)
+	require.NoError(t, err)
+	envelope, err := types.ParseEnvelope(sealed)
+	require.NoError(t, err)
+	call.Envelopes = []types.Envelope{envelope}
+	body, err := call.Encode()
+	require.NoError(t, err)
+
+	out, _, reason := h.call(recorder, xweb.RequestMethod, weiOf(fee), supplied, types.KindApi, body, callbackGas)
+	require.Empty(t, reason)
+	id := out[0].(uint64)
+	view := h.requestView(id)
+	require.Equal(t, types.KindApi, view.Kind)
+	require.Equal(t, [32]byte(types.Keccak(body)), view.PayloadHash)
+	require.Equal(t, types.LevelSingle, view.Level)
+	require.Equal(t, common.Address(named.Signer), view.Attestor)
+	opened, err := types.OpenEnvelope(sealed, named.Key, origin)
+	require.NoError(t, err)
+	require.Equal(t, credential, opened)
+
+	unregistered := call
+	unregistered.Attestor = types.Address20{0x0b}
+	unregistered.Envelopes = nil
+	refused, err := unregistered.Encode()
+	require.NoError(t, err)
+	_, _, reason = h.call(recorder, xweb.RequestMethod, weiOf(fee), supplied, types.KindApi, refused, callbackGas)
+	require.Contains(t, reason, "the single level names")
+
+	request, found := h.keeper.GetRequest(h.ctx(), id)
+	require.True(t, found)
+	attested := types.Digest(h.keeper.Attestation(h.ctx(), request, response, types.Hash32(digest), fullLength))
+	majority := xwebtestutil.Sign(attested, h.attestors[0], h.attestors[1])
+	_, _, reason = h.call(stranger, xweb.FulfilMethod, nil, supplied, id, response, digest, fullLength, majority)
+	require.Contains(t, reason, "exactly one signature")
+
+	signatures := xwebtestutil.Sign(attested, named)
+	input := h.input(xweb.FulfilMethod, id, response, digest, fullLength, signatures)
+	payout := h.balance(named.Payout)
+	out, left, reason := h.call(stranger, xweb.FulfilMethod, nil, supplied, id, response, digest, fullLength, signatures)
+	require.Empty(t, reason)
+	used := out[1].(uint64)
+	require.Equal(t, supplied-cost(input, xweb.WriteBaseGas, 1)-used-xweb.CallbackRecordGas, left)
+	requireAmount(t, payout.AddRaw(fee), h.balance(named.Payout))
+
+	result := h.result(id)
+	require.Equal(t, types.LevelSingle, result.Level)
+	require.Equal(t, []common.Address{common.Address(named.Signer)}, result.Signers)
+	logs := h.logs("XWebFulfilled")
+	require.Len(t, logs, 1)
+	data, err := h.precompile.GetABI().Events["XWebFulfilled"].Inputs.NonIndexed().Unpack(logs[0].Data)
+	require.NoError(t, err)
+	require.Equal(t, types.LevelSingle, data[2].(uint8))
+}
+
+// TestFoundrySuitePinsTheApiVectors checks the Foundry suite carries every api
+// vector payload the XWebApi library must reproduce.
+func TestFoundrySuitePinsTheApiVectors(t *testing.T) {
+	suite, err := os.ReadFile("../../contracts/test/XWebConsumer.t.sol")
+	require.NoError(t, err)
+	raw, err := os.ReadFile("../../modules/xweb/types/testdata/api-vectors.json")
+	require.NoError(t, err)
+	var file struct {
+		Vectors []struct {
+			Name    string `json:"name"`
+			Payload string `json:"payload"`
+		} `json:"vectors"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &file))
+	require.Len(t, file.Vectors, 4)
+	for _, v := range file.Vectors {
+		require.True(t, strings.Contains(string(suite), `hex"`+strings.TrimPrefix(v.Payload, "0x")+`"`), v.Name)
+	}
 }
 
 func mustType(t *testing.T, name string) abi.Type {

@@ -7,11 +7,16 @@ IXWeb constant XWEB_CONTRACT = IXWeb(XWEB_PRECOMPILE_ADDRESS);
 
 /// Attested web data for contracts on Paxeer X Network.
 ///
-/// A contract calls request with a kind (1 fetch, 2 search), the payload (the
-/// URL or the query) and the gas its callback may use, paying exactly fee()
-/// in wei. Attestors fetch independently and sign the 188-byte PAXEERX_WEB_V1
-/// preimage; a submitter calls fulfil once a majority of the registered
-/// attestors signed, in strictly ascending signer order. The precompile then
+/// A contract calls request with a kind (1 fetch, 2 search, 3 api), the payload
+/// (the URL, the query, or an api payload built with the XWebApi library) and
+/// the gas its callback may use, paying exactly fee() in wei. Attestors fetch
+/// independently and sign the 188-byte PAXEERX_WEB_V1 preimage; a submitter
+/// calls fulfil once a majority of the registered attestors signed, in
+/// strictly ascending signer order, or, for an api request under the single
+/// level (1), with the one signature of the attestor the payload names. The
+/// result and XWebFulfilled carry the level (0 majority, 1 single). An api
+/// payload may carry credential envelopes sealed to the public keys
+/// getAttestors returns. The precompile then
 /// stores at most 4096 bytes of the response with its content digest and full
 /// length, pays the fee to the signers' payout accounts and calls
 /// onXWebResponse on the requester with at most min(callbackGas, the module's
@@ -35,6 +40,8 @@ interface IXWeb {
         uint64 height;
         uint64 timeoutHeight;
         uint8 status;
+        uint8 level;
+        address attestor;
     }
 
     struct Result {
@@ -46,11 +53,13 @@ interface IXWeb {
         uint64 height;
         uint8 callback;
         uint64 callbackGasUsed;
+        uint8 level;
     }
 
     struct Attestor {
         address signer;
         string payout;
+        bytes publicKey;
     }
 
     struct Params {
@@ -75,6 +84,7 @@ interface IXWeb {
         address indexed requester,
         bytes32 contentDigest,
         uint32 fullLength,
+        uint8 level,
         uint8 callback,
         uint64 callbackGasUsed
     );

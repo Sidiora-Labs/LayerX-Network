@@ -5,8 +5,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use x_websearch::config::{CrawlConfig, FetchLimits, BODY_LIMIT_BYTES, MAX_DEPTH};
-use x_websearch::crawl::{links, title_of, CrawlBudget, CrawlError, Crawler, PageOutcome};
+use x_websearch::config::{Config, CrawlConfig, FetchLimits, BODY_LIMIT_BYTES, MAX_DEPTH};
+use x_websearch::crawl::{
+    links, title_of, CrawlBudget, CrawlError, Crawler, PageOutcome, StopSignal,
+};
 use x_websearch::fetch::{FetchError, Fetcher};
 use x_websearch::index::WebIndex;
 use x_websearch::search::search;
@@ -499,5 +501,102 @@ fn links_are_read_from_anchor_elements_in_document_order() -> TestResult {
     );
     assert_eq!(title_of("Tide Tables\n\nSprings follow"), "Tide Tables");
     assert_eq!(title_of(""), "");
+    Ok(())
+}
+
+/// The committed configuration with `crawl_interval_seconds` set, parsed by
+/// the real loader.
+fn configured_interval(seconds: u64) -> Result<Config, Box<dyn std::error::Error>> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/config/valid.json");
+    let mut value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path)?)?;
+    value["crawl_interval_seconds"] = serde_json::json!(seconds);
+    Ok(Config::parse(&value.to_string())?)
+}
+
+#[test]
+fn cycles_are_scheduled_from_the_configured_interval() -> TestResult {
+    let scratch = Scratch::new("interval")?;
+    let site = Site::start(&fixture_site(), "127.0.0.1")?;
+    let (mut crawler, index) = crawler(&scratch, budget(100, 100, 0, 1), true)?;
+    let config = configured_interval(1)?;
+    let interval = config.crawl_interval();
+    assert_eq!(interval, Duration::from_secs(1));
+    let seeds = [site.url("/index.html")];
+    let stop = StopSignal::new();
+    let reporter = stop.clone();
+    let mut reports = Vec::new();
+    let started = Instant::now();
+    let cycles = crawler.run_every(&seeds, interval, &stop, |result| {
+        reports.push(result.map(|report| report.visited().len()).ok());
+        if reports.len() == 3 {
+            reporter.raise();
+        }
+    });
+    let elapsed = started.elapsed();
+    assert_eq!(cycles, 3);
+    assert_eq!(reports, [Some(1), Some(1), Some(1)]);
+    let starts: Vec<Instant> = site
+        .requests()
+        .into_iter()
+        .filter(|(path, _)| path == "/index.html")
+        .map(|(_, at)| at)
+        .collect();
+    assert_eq!(starts.len(), 3);
+    for (cycle, start) in (0_u32..).zip(&starts) {
+        let offset = start.duration_since(started);
+        assert!(offset >= interval * cycle, "cycle {cycle} at {offset:?}");
+    }
+    for pair in starts.windows(2) {
+        let gap = pair[1].duration_since(pair[0]);
+        assert!(gap < interval * 3, "cycles {gap:?} apart");
+    }
+    assert!(elapsed >= interval * 2);
+    assert!(elapsed < interval * 5, "three cycles took {elapsed:?}");
+    assert_eq!(index.num_docs(), 1);
+    assert_eq!(index.documents_for(&seeds[0])?, 1);
+    Ok(())
+}
+
+#[test]
+fn a_raised_stop_ends_the_wait_for_the_next_cycle_at_once() -> TestResult {
+    let scratch = Scratch::new("stop")?;
+    let site = Site::start(&fixture_site(), "127.0.0.1")?;
+    let (mut walker, index) = crawler(&scratch, budget(100, 100, 2, 1), true)?;
+    let config = configured_interval(86_400)?;
+    let seeds = vec![site.url("/index.html")];
+    let stop = StopSignal::new();
+    let raiser = stop.clone();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let worker = thread::spawn(move || {
+        walker.run_every(&seeds, config.crawl_interval(), &stop, |result| {
+            let _ = sender.send(result.map(|report| report.indexed().count()).ok());
+        })
+    });
+    assert_eq!(receiver.recv_timeout(Duration::from_secs(20))?, Some(6));
+    let asked_at = Instant::now();
+    raiser.raise();
+    let cycles = worker.join().map_err(|_| "the crawler thread panicked")?;
+    assert!(asked_at.elapsed() < Duration::from_secs(5));
+    assert_eq!(cycles, 1);
+    assert!(receiver.try_recv().is_err());
+    assert_eq!(site.count("/index.html"), 1);
+    assert_eq!(index.num_docs(), 6);
+
+    let again = Scratch::new("stop-raised")?;
+    let (mut crawler, _) = crawler(&again, budget(100, 100, 2, 1), true)?;
+    let stopped = StopSignal::new();
+    stopped.raise();
+    assert!(stopped.is_raised());
+    assert!(stopped.wait_timeout(Duration::from_secs(60)));
+    let mut reported = 0;
+    let cycles = crawler.run_every(
+        &[site.url("/index.html")],
+        Duration::from_secs(1),
+        &stopped,
+        |_| reported += 1,
+    );
+    assert_eq!(cycles, 0);
+    assert_eq!(reported, 0);
+    assert_eq!(site.count("/index.html"), 1);
     Ok(())
 }

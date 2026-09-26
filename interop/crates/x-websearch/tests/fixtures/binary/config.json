@@ -10,6 +10,7 @@
     "max_depth": 3,
     "politeness_delay_ms": 10
   },
+  "crawl_interval_seconds": 900,
   "fetch": {
     "connect_timeout_ms": 3000,
     "total_timeout_ms": 10000,

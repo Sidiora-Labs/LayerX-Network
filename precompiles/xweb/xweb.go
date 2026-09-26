@@ -92,6 +92,8 @@ type RequestView struct {
 	Height        uint64
 	TimeoutHeight uint64
 	Status        uint8
+	Level         uint8
+	Attestor      common.Address
 }
 
 // ResultView is the ABI tuple returned by getResult(uint64).
@@ -104,12 +106,16 @@ type ResultView struct {
 	Height          uint64
 	Callback        uint8
 	CallbackGasUsed uint64
+	Level           uint8
 }
 
-// AttestorView is one entry of getAttestors().
+// AttestorView is one entry of getAttestors(). PublicKey is the compressed
+// key credential envelopes are sealed to, empty for an attestor that
+// registered none.
 type AttestorView struct {
-	Signer common.Address
-	Payout string
+	Signer    common.Address
+	Payout    string
+	PublicKey []byte
 }
 
 // ParamsView is the ABI tuple returned by getParams().
@@ -248,7 +254,11 @@ func (p PrecompileExecutor) Execute(ctx sdk.Context, method *abi.Method, caller 
 		set := p.keeper.GetAttestorSet(ctx)
 		attestors := make([]AttestorView, len(set.Attestors))
 		for i, attestor := range set.Attestors {
-			attestors[i] = AttestorView{Signer: common.Address(attestor.Signer), Payout: attestor.Payout}
+			attestors[i] = AttestorView{Signer: common.Address(attestor.Signer), Payout: attestor.Payout,
+				PublicKey: common.CopyBytes(attestor.PublicKey)}
+			if attestors[i].PublicKey == nil {
+				attestors[i].PublicKey = []byte{}
+			}
 		}
 		return method.Outputs.Pack(attestors, set.Threshold)
 	case ThresholdMethod:
@@ -347,7 +357,7 @@ func (p PrecompileExecutor) getRequest(ctx sdk.Context, method *abi.Method, args
 	return method.Outputs.Pack(RequestView{Id: request.ID, Requester: common.Address(request.Requester),
 		Kind: request.Kind, PayloadHash: [32]byte(request.PayloadHash), CallbackGas: request.CallbackGas, Fee: wei(request.Fee),
 		Height: uint64(request.Height), TimeoutHeight: uint64(request.TimeoutHeight), //nolint:gosec
-		Status: uint8(request.Status)})
+		Status: uint8(request.Status), Level: request.Level, Attestor: common.Address(request.Attestor)})
 }
 
 func (p PrecompileExecutor) getResult(ctx sdk.Context, method *abi.Method, args []interface{}) ([]byte, error) {
@@ -366,7 +376,7 @@ func (p PrecompileExecutor) getResult(ctx sdk.Context, method *abi.Method, args 
 	return method.Outputs.Pack(ResultView{RequestId: result.RequestID, Response: result.Response,
 		ContentDigest: [32]byte(result.ContentDigest), FullLength: result.FullLength, Signers: signers,
 		Height: uint64(result.Height), Callback: uint8(result.Callback), //nolint:gosec
-		CallbackGasUsed: result.CallbackGasUsed})
+		CallbackGasUsed: result.CallbackGasUsed, Level: result.Level})
 }
 
 // fulfil accepts the attested answer and delivers the callback. budget is the
@@ -423,7 +433,7 @@ func (p Precompile) fulfil(evm *vm.EVM, caller common.Address, input []byte, bud
 		return nil, 0, err
 	}
 	if err := x.log(evm, "XWebFulfilled", []common.Hash{topicUint64(id), common.BytesToHash(request.Requester[:])},
-		digest, fullLength, uint8(outcome), gasUsed); err != nil {
+		digest, fullLength, result.Level, uint8(outcome), gasUsed); err != nil {
 		return nil, 0, err
 	}
 	ret, err = method.Outputs.Pack(uint8(outcome), gasUsed)

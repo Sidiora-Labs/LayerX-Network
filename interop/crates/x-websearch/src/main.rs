@@ -2,22 +2,21 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use signal_hook::consts::{SIGINT, SIGTERM};
+use signal_hook::iterator::{Handle, Signals};
 use x_websearch::attest::{self, Attestor, SignatureExchange};
 use x_websearch::content::{self, ContentStore};
-use x_websearch::crawl::{CrawlBudget, CrawlReport, Crawler};
+use x_websearch::crawl::{CrawlBudget, CrawlReport, Crawler, StopSignal};
 use x_websearch::fetch::Fetcher;
 use x_websearch::index::WebIndex;
 use x_websearch::payment::{system_clock, PaymentGate};
+use x_websearch::server::Stopper;
 use x_websearch::submit::{self, Outcome, Submitter};
 use x_websearch::watch::{EvmRpc, RequestWatcher};
 use x_websearch::{search, Config, KeyFiles, Keys, Limits, RouteTable, Server};
-
-/// How long after the start of one crawl cycle the next one starts. The
-/// first cycle starts when the sidecar does.
-const CRAWL_INTERVAL: Duration = Duration::from_secs(900);
 
 /// How long after the start of one attestation round the next one starts.
 const ATTEST_INTERVAL: Duration = Duration::from_secs(2);
@@ -40,12 +39,18 @@ fn config_path(arguments: impl IntoIterator<Item = OsString>) -> Option<PathBuf>
         .then(|| PathBuf::from(path))
 }
 
+/// What the configuration and the keys assemble into: the routes, the
+/// crawler, the index it writes and the attestor's loops.
+struct Assembled {
+    routes: RouteTable,
+    crawler: Crawler,
+    index: Arc<WebIndex>,
+    pipeline: Option<Pipeline>,
+}
+
 /// The routes and the crawler built from the configuration and the keys.
 /// Every refusal names the configuration field or key it concerns.
-fn assemble(
-    config: &Config,
-    keys: &Keys,
-) -> Result<(RouteTable, Crawler, Option<Pipeline>), String> {
+fn assemble(config: &Config, keys: &Keys) -> Result<Assembled, String> {
     let conformance = x_websearch::conformance_suite()
         .map_err(|error| format!("payment conformance suite: {error}"))?;
     let gate = Arc::new(
@@ -71,7 +76,12 @@ fn assemble(
     content::register(&mut routes, &gate, &fetcher, &store)
         .map_err(|error| format!("route /fetch or /content: {error}"))?;
     let pipeline = pipeline(config, keys, &mut routes, &fetcher, &index, &store)?;
-    Ok((routes, crawler, pipeline))
+    Ok(Assembled {
+        routes,
+        crawler,
+        index,
+        pipeline,
+    })
 }
 
 /// The attestor's loops when an attestor key is present, with the
@@ -198,8 +208,8 @@ fn settle(
 }
 
 /// Rebroadcasts the journalled fulfilments, then runs an attestation round
-/// every [`ATTEST_INTERVAL`] on its own thread.
-fn start_attestor(mut pipeline: Pipeline) -> std::io::Result<()> {
+/// every [`ATTEST_INTERVAL`] on its own thread until `stop` is raised.
+fn start_attestor(mut pipeline: Pipeline, stop: StopSignal) -> std::io::Result<JoinHandle<()>> {
     thread::Builder::new()
         .name("x-websearch-attestor".to_owned())
         .spawn(move || {
@@ -215,13 +225,14 @@ fn start_attestor(mut pipeline: Pipeline) -> std::io::Result<()> {
                     Err(error) => eprintln!("x-websearch journal unreadable: {error}"),
                 }
             }
-            loop {
+            while !stop.is_raised() {
                 let started = Instant::now();
                 attest_round(&mut pipeline);
-                thread::sleep(ATTEST_INTERVAL.saturating_sub(started.elapsed()));
+                if stop.wait_timeout(ATTEST_INTERVAL.saturating_sub(started.elapsed())) {
+                    break;
+                }
             }
         })
-        .map(drop)
 }
 
 fn describe(report: &CrawlReport) -> String {
@@ -233,20 +244,80 @@ fn describe(report: &CrawlReport) -> String {
     )
 }
 
-/// Runs a crawl cycle over the seeds every [`CRAWL_INTERVAL`], the first at
-/// once, on its own thread.
-fn start_crawler(mut crawler: Crawler, seeds: Vec<String>) -> std::io::Result<()> {
+/// Runs a crawl cycle over the seeds every `interval`, the first at once,
+/// on its own thread until `stop` is raised.
+fn start_crawler(
+    mut crawler: Crawler,
+    seeds: Vec<String>,
+    interval: Duration,
+    stop: StopSignal,
+) -> std::io::Result<JoinHandle<()>> {
     thread::Builder::new()
         .name("x-websearch-crawler".to_owned())
-        .spawn(move || loop {
-            let started = Instant::now();
-            match crawler.run_cycle(&seeds) {
+        .spawn(move || {
+            crawler.run_every(&seeds, interval, &stop, |result| match result {
                 Ok(report) => eprintln!("{}", describe(&report)),
                 Err(error) => eprintln!("x-websearch crawl cycle failed: {error}"),
-            }
-            thread::sleep(CRAWL_INTERVAL.saturating_sub(started.elapsed()));
+            });
         })
-        .map(drop)
+}
+
+/// Raises `stop` and stops the server on the first SIGTERM or SIGINT, on
+/// its own thread. Every other signal keeps its default action.
+fn start_signals(
+    mut signals: Signals,
+    stop: StopSignal,
+    server: Stopper,
+) -> std::io::Result<JoinHandle<Option<i32>>> {
+    thread::Builder::new()
+        .name("x-websearch-signals".to_owned())
+        .spawn(move || {
+            let received = signals.forever().next();
+            stop.raise();
+            server.stop();
+            received
+        })
+}
+
+fn signal_name(signal: i32) -> &'static str {
+    match signal {
+        SIGTERM => "SIGTERM",
+        SIGINT => "SIGINT",
+        _ => "a signal",
+    }
+}
+
+/// Stops the loops, waits for them, and commits the index. `true` when
+/// every step succeeded.
+fn wind_down(
+    stop: &StopSignal,
+    signals: &Handle,
+    watcher: JoinHandle<Option<i32>>,
+    loops: Vec<JoinHandle<()>>,
+    index: &WebIndex,
+) -> bool {
+    stop.raise();
+    signals.close();
+    let mut clean = true;
+    match watcher.join() {
+        Ok(Some(signal)) => eprintln!("x-websearch stopping on {}", signal_name(signal)),
+        Ok(None) => {}
+        Err(_) => {
+            eprintln!("x-websearch stopped: the signal thread panicked");
+            clean = false;
+        }
+    }
+    for handle in loops {
+        if handle.join().is_err() {
+            eprintln!("x-websearch stopped: a sidecar thread panicked");
+            clean = false;
+        }
+    }
+    if let Err(error) = index.commit() {
+        eprintln!("x-websearch stopped: index commit failed: {error}");
+        clean = false;
+    }
+    clean
 }
 
 fn main() -> ExitCode {
@@ -271,38 +342,91 @@ fn main() -> ExitCode {
     };
     let assembled = assemble(&config, &keys);
     drop(keys);
-    let (routes, crawler, pipeline) = match assembled {
+    let Assembled {
+        routes,
+        crawler,
+        index,
+        pipeline,
+    } = match assembled {
         Ok(assembled) => assembled,
         Err(error) => {
             eprintln!("x-websearch refused startup: {error}");
             return ExitCode::from(2);
         }
     };
-    let server = match Server::bind(config.listen, Limits::default(), routes) {
-        Ok(server) => server,
+    let signals = match Signals::new([SIGTERM, SIGINT]) {
+        Ok(signals) => signals,
         Err(error) => {
-            eprintln!("x-websearch refused startup: listen: {error}");
+            eprintln!("x-websearch refused startup: signal handling: {error}");
             return ExitCode::FAILURE;
         }
     };
-    if let Err(error) = start_crawler(crawler, config.seeds) {
-        eprintln!("x-websearch refused startup: crawler thread: {error}");
-        return ExitCode::FAILURE;
-    }
-    if let Some(pipeline) = pipeline {
-        if let Err(error) = start_attestor(pipeline) {
-            eprintln!("x-websearch refused startup: attestor thread: {error}");
+    let server =
+        match Server::bind(config.listen, Limits::default(), routes).and_then(Server::spawn) {
+            Ok(server) => server,
+            Err(error) => {
+                eprintln!("x-websearch refused startup: listen: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+    let stop = StopSignal::new();
+    let handle = signals.handle();
+    let watcher = match start_signals(signals, stop.clone(), server.stopper()) {
+        Ok(watcher) => watcher,
+        Err(error) => {
+            eprintln!("x-websearch refused startup: signal thread: {error}");
+            drop(server.shutdown());
             return ExitCode::FAILURE;
         }
-    }
-    eprintln!("x-websearch listening on {}", config.listen);
-    match server.run() {
-        Ok(()) => ExitCode::SUCCESS,
+    };
+    let (loops, started) = start_loops(
+        crawler,
+        pipeline,
+        config.seeds.clone(),
+        config.crawl_interval(),
+        &stop,
+    );
+    match &started {
+        Ok(()) => eprintln!("x-websearch listening on {}", config.listen),
         Err(error) => {
-            eprintln!("x-websearch stopped: {error}");
-            ExitCode::FAILURE
+            eprintln!("x-websearch refused startup: {error}");
+            server.stopper().stop();
         }
     }
+    let outcome = server.wait();
+    if let Err(error) = &outcome {
+        eprintln!("x-websearch stopped: {error}");
+    }
+    let clean = wind_down(&stop, &handle, watcher, loops, &index);
+    if started.is_ok() && outcome.is_ok() && clean {
+        eprintln!("x-websearch stopped cleanly");
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// Starts the crawler and, with an attestor key, the attestor loop. The
+/// handles of the threads that started come back with the first failure.
+fn start_loops(
+    crawler: Crawler,
+    pipeline: Option<Pipeline>,
+    seeds: Vec<String>,
+    interval: Duration,
+    stop: &StopSignal,
+) -> (Vec<JoinHandle<()>>, Result<(), String>) {
+    let mut loops = Vec::with_capacity(2);
+    match start_crawler(crawler, seeds, interval, stop.clone()) {
+        Ok(handle) => loops.push(handle),
+        Err(error) => return (loops, Err(format!("crawler thread: {error}"))),
+    }
+    if let Some(pipeline) = pipeline {
+        match start_attestor(pipeline, stop.clone()) {
+            Ok(handle) => loops.push(handle),
+            Err(error) => return (loops, Err(format!("attestor thread: {error}"))),
+        }
+    }
+    (loops, Ok(()))
 }
 
 #[cfg(test)]

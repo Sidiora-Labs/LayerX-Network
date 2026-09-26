@@ -12,8 +12,9 @@ import (
 // Request stores a contract's request for web data under the next nonce and
 // takes paid, which must equal the current fee exactly, from the requester's
 // account into the module account. It refuses when paused, for an unknown
-// kind, an empty payload or one over the payload cap, and a callback gas of
-// zero or over the callback cap. It returns the request id.
+// kind, an empty payload or one over the payload cap, an api payload that
+// does not decode or names an attestor outside the registered set, and a
+// callback gas of zero or over the callback cap. It returns the request id.
 func (k Keeper) Request(ctx sdk.Context, requester common.Address, kind uint8, payload []byte,
 	callbackGas uint64, paid sdk.Int) (uint64, error) {
 	if k.IsPaused(ctx) {
@@ -25,6 +26,17 @@ func (k Keeper) Request(ctx sdk.Context, requester common.Address, kind uint8, p
 	}
 	if len(payload) == 0 || uint64(len(payload)) > uint64(params.MaxPayloadBytes) {
 		return 0, types.ErrPayloadSize.Wrapf("%d bytes, cap %d", len(payload), params.MaxPayloadBytes)
+	}
+	level, attestor := types.LevelMajority, types.Address20{}
+	if kind == types.KindApi {
+		api, err := types.DecodeApiPayload(payload)
+		if err != nil {
+			return 0, err
+		}
+		if err := api.CheckAttestors(k.GetAttestorSet(ctx)); err != nil {
+			return 0, err
+		}
+		level, attestor = api.Level, api.Attestor
 	}
 	if callbackGas == 0 || callbackGas > params.MaxCallbackGas {
 		return 0, types.ErrCallbackGas.Wrapf("%d, cap %d", callbackGas, params.MaxCallbackGas)
@@ -52,6 +64,8 @@ func (k Keeper) Request(ctx sdk.Context, requester common.Address, kind uint8, p
 		Height:        ctx.BlockHeight(),
 		TimeoutHeight: ctx.BlockHeight() + int64(params.TimeoutBlocks),
 		Status:        types.StatusPending,
+		Level:         level,
+		Attestor:      attestor,
 	}
 	k.setNonce(cached, id)
 	k.setRequest(cached, request)
@@ -69,6 +83,8 @@ func (k Keeper) Request(ctx sdk.Context, requester common.Address, kind uint8, p
 		sdk.NewAttribute(types.AttributeCallbackGas, fmt.Sprint(callbackGas)),
 		sdk.NewAttribute(types.AttributeFee, params.Fee.String()),
 		sdk.NewAttribute(types.AttributeHeight, fmt.Sprint(request.Height)),
-		sdk.NewAttribute(types.AttributeTimeoutHeight, fmt.Sprint(request.TimeoutHeight))))
+		sdk.NewAttribute(types.AttributeTimeoutHeight, fmt.Sprint(request.TimeoutHeight)),
+		sdk.NewAttribute(types.AttributeLevel, fmt.Sprint(level)),
+		sdk.NewAttribute(types.AttributeAttestor, attestor.Hex())))
 	return id, nil
 }
