@@ -7,12 +7,14 @@
 //! `server::Server` serves `GET /health` free and `GET /search`, `GET /fetch`
 //! and `GET /content/<digest>` through its route table.
 
+pub mod assets;
 pub mod canonical;
 pub mod config;
 pub mod content;
 pub mod extract;
 pub mod fetch;
 pub mod keys;
+pub mod payment;
 pub mod robots;
 pub mod server;
 

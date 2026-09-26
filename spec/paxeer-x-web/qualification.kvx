@@ -77,4 +77,35 @@ file = "contracts/test/XWebConsumer.t.sol"
 symbol = "test_InterfaceMatchesThePrecompileABI"
 observed = "Foundry's default fs_permissions do not let the suite read precompiles/xweb/abi.json and the precompile does not exist under Foundry, so selectors are checked against literal signatures and request is answered with vm.mockCall."
 assumption = "precompiles/xweb/xweb_test.go pins every abi.json method and event signature to those literals and XWeb.sol to IXWeb.sol byte for byte."
+
+[observation.1.4.1]
+task = "1.4"
+file = "interop/crates/x-websearch/src/payment.rs"
+symbol = "metered_payload"
+observed = "spec/402lxp/protocol.md has the metered buyer send a receive payload whose ordinal-6 draw the receiver signs, which a buyer cannot author; the task has the receiver key sign the draw."
+assumption = "The metered PAYMENT-SIGNATURE payload carries the payer-signed canonical grant and the draw's idempotencyKey, and the sidecar signs and submits the draw."
+severity = "suspect"
+
+[observation.1.4.2]
+task = "1.4"
+file = "interop/crates/layerx-x402/src/seller.rs"
+symbol = "Seller::settled"
+observed = "The protocol asks a grant settlement to repeat purposeHash in extensions.layerx of PAYMENT-RESPONSE; the Seller does not, and seller.rs is outside this task's touches."
+assumption = "The purpose is carried in the metered offer's extra.layerx.purposeHash only."
+severity = "note"
+
+[observation.1.4.3]
+task = "1.4"
+file = "interop/crates/x-websearch/src/payment.rs"
+symbol = "PaymentGate::new"
+observed = "The configuration has no field naming the payer, the draw fee limit or the adapter conformance suite, and src/main.rs is outside this task's touches."
+assumption = "The payer names itself in the LAYERX-PAYER-DID header, every asset including PAX settles to its per-asset account, the draw fee limit is a fixed constant, and the binary wires PaymentGate with its pinned suite in a later task."
+severity = "assumption"
+
+[observation.1.4.4]
+task = "1.4"
+file = "interop/crates/x-websearch/src/payment.rs"
+symbol = "PaymentGate::settle"
+observed = "The server's status table has no 202, so a pending payment answers 503 payment_pending with Retry-After 1."
+assumption = "Clients retry the same PAYMENT-SIGNATURE on 503 payment_pending."
 severity = "note"

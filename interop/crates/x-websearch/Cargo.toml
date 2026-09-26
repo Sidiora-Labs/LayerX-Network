@@ -16,10 +16,16 @@ path = "src/main.rs"
 base64.workspace = true
 ed25519-dalek.workspace = true
 k256.workspace = true
+layerx-crypto.workspace = true
+layerx-interop-gateway.workspace = true
+layerx-proof.workspace = true
+layerx-types.workspace = true
+layerx-wire.workspace = true
 layerx-x402 = { path = "../layerx-x402" }
 native-tls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 sha3.workspace = true
 tantivy = "=0.26.2"
 unicode-normalization = "=0.1.25"

@@ -413,3 +413,141 @@ fn seller_resource_info_is_preserved_in_signal() {
         required.resource.service_name
     );
 }
+
+const ASSET_HEX: &str = "abababababababababababababababababababababababababababababababab";
+const OTHER_ASSET_HEX: &str = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
+
+fn hex_id(id: [u8; 32]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(64);
+    for byte in id {
+        text.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    text
+}
+
+fn asset_account(did: &str, asset_hex: &str) -> String {
+    format!("agent:{did}:asset:{asset_hex}")
+}
+
+fn asset_offer(account: &str, pay_to: String) -> PaymentRequirements {
+    PaymentRequirements {
+        pay_to,
+        extra: Some(json!({
+            "layerx": {"commitment": "executed", "account": account, "currency": "SID"}
+        })),
+        ..test_requirements()
+    }
+}
+
+fn required_with(offer: PaymentRequirements) -> PaymentRequired {
+    PaymentRequired {
+        accepts: vec![offer],
+        ..test_payment_required()
+    }
+}
+
+#[test]
+fn seller_accepts_a_per_asset_payee_account_for_the_offered_asset() {
+    let account = asset_account("did:layerx:test-resource", ASSET_HEX);
+    let identifiers = account_identifiers(&account)
+        .unwrap_or_else(|error| panic!("asset account identifiers: {error}"));
+    for (index, identifier) in identifiers.into_iter().enumerate() {
+        let offer = asset_offer(&account, format!("0x{}", hex_id(identifier)));
+        assert_eq!(offer.validate(), Ok(()), "derivation {index}");
+        assert_eq!(
+            offer
+                .layerx_terms()
+                .map(|terms| (terms.account, terms.currency)),
+            Ok((account.clone(), "SID".to_owned())),
+            "derivation {index}"
+        );
+        assert!(Seller::new(required_with(offer.clone())).is_ok());
+
+        let bare = PaymentRequirements {
+            asset: ASSET_HEX.to_owned(),
+            pay_to: hex_id(identifier),
+            ..offer
+        };
+        assert_eq!(
+            bare.validate(),
+            Ok(()),
+            "unprefixed asset, derivation {index}"
+        );
+    }
+
+    let main_account = "agent:did:layerx:test-resource:main";
+    let main_offer = asset_offer(main_account, pay_to(main_account));
+    assert_eq!(main_offer.validate(), Ok(()));
+}
+
+#[test]
+fn seller_refuses_every_other_per_asset_payee_form() {
+    let did = "did:layerx:test-resource";
+    let accepted = asset_account(did, ASSET_HEX);
+
+    let other_asset = asset_account(did, OTHER_ASSET_HEX);
+    let refused_accounts = [
+        other_asset.clone(),
+        asset_account(did, &ASSET_HEX.to_uppercase()),
+        asset_account(did, &format!("0x{ASSET_HEX}")),
+        asset_account(did, &ASSET_HEX[..62]),
+        asset_account(did, &format!("{ASSET_HEX}ab")),
+        asset_account(did, ""),
+        asset_account("", ASSET_HEX),
+        asset_account(&format!("{did}:asset:{ASSET_HEX}"), ASSET_HEX),
+        asset_account(&format!("{did}:"), ASSET_HEX),
+        asset_account("did:layerx:Test-Resource", ASSET_HEX),
+        format!("agent:{did}:asset:{ASSET_HEX}:main"),
+        format!("{did}:asset:{ASSET_HEX}"),
+        format!("agent:{did}:assets:{ASSET_HEX}"),
+        "agent:did:layerx:api-seller:asset:lxp:main".to_owned(),
+    ];
+    for account in &refused_accounts {
+        let offer = asset_offer(account, pay_to(&accepted));
+        assert_eq!(
+            offer.validate(),
+            Err(layerx_x402::model::X402Error::ProfileMismatch),
+            "{account}"
+        );
+        assert!(Seller::new(required_with(offer)).is_err(), "{account}");
+    }
+
+    let bound_to_other = asset_offer(&other_asset, pay_to(&other_asset));
+    assert_eq!(
+        bound_to_other.validate(),
+        Err(layerx_x402::model::X402Error::ProfileMismatch)
+    );
+
+    let redirected = asset_offer(&accepted, pay_to(PAYEE_ACCOUNT));
+    assert_eq!(
+        redirected.validate(),
+        Err(layerx_x402::model::X402Error::ProfileMismatch)
+    );
+    let main_payee = asset_offer(PAYEE_ACCOUNT, pay_to(&accepted));
+    assert_eq!(
+        main_payee.validate(),
+        Err(layerx_x402::model::X402Error::ProfileMismatch)
+    );
+
+    let unparsed_asset = PaymentRequirements {
+        asset: "lxp".to_owned(),
+        ..asset_offer(&accepted, pay_to(&accepted))
+    };
+    assert!(unparsed_asset.validate().is_err());
+    assert!(Seller::new(required_with(unparsed_asset)).is_err());
+
+    let external = PaymentRequirements {
+        network: "eip155:8453".to_owned(),
+        ..asset_offer(&accepted, pay_to(&accepted))
+    };
+    assert_eq!(
+        external.validate(),
+        Err(layerx_x402::model::X402Error::ProfileMismatch)
+    );
+    assert_eq!(
+        external.layerx_facts(),
+        Err(layerx_x402::model::X402Error::UnsupportedOffer)
+    );
+}
