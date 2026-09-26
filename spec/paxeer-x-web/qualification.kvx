@@ -306,6 +306,7 @@ symbol = "the_observation_activity_equals_the_kernel_adapter_fixture"
 observed = "make test-web-program-path passes, but in the kernel test the signers recovered from the fixture's C signatures are not the addresses of the three test attestor keys, so the registered-signer assertion fails (.logs/verify.log, exit 101) after the two repair cycles were spent."
 assumption = "The test's attestor key derivation is aligned with the keys that signed the C intake fixture and the verify_cmd reruns unchanged."
 severity = "blocker"
+closed = "Task 2.19 at a01484182da45a4e43ec13541b3b70a9466f9323 re-signed tests/fixtures/web/observation-activity.hex with the attestor keys from the scalars 1, 2 and 3 that the kernel test now derives, so the recovered signers are the registered ones; task 2.2's verify_cmd passed."
 
 [observation.2.2.2]
 task = "2.2"
@@ -365,6 +366,7 @@ symbol = "the_observation_activity_equals_the_kernel_adapter_fixture"
 observed = "The three signatures in tests/fixtures/web/observation-activity.hex recover to 0x957e1e3b0fce62061853544c13e02cceba82ba8b, 0xb417ffcf7bc5996e2a0677ba25033da7e90c4fe2 and 0xc2bce316fab52b8263d3c679f36a6bb453242784, the signer vectors pinned in tests/modules/test_web_intake.c, while tests/test_web_program_path.c holds only the scalars 1, 2 and 3 (0x7e5f4552091a69125d5dfcb7b8c2659029395bdf, 0x2b5ad5c4795c026514f8317c7a215e218dccd6cf, 0x6813eb9362372eef6200f3b1dbc3f819671cba69) and none of the derivations the web tests use (a scalar, a 0x3c or 0x5e first byte with an index last byte, or a keccak label) yields them; separately interop/crates/x-websearch/src/kernel.rs builds Answer without its level field, so the crate's library does not compile and no build or verify_cmd ran."
 assumption = "The kernel test takes its registered set from the intake test's signer vectors or the fixture is re-signed by its owner with keys a test holds, and KernelAttestor::attest sets the level, after which the verify_cmd runs unchanged."
 severity = "blocker"
+closed = "Task 2.19 at a01484182da45a4e43ec13541b3b70a9466f9323 re-recorded the fixture through the kernel test's X_WEBSEARCH_RECORD_EXCHANGE recorder with the scalar 1, 2 and 3 keys and pinned the new signer vectors in the intake and adapter tests; its verify_cmd passed."
 
 [observation.2.22.1]
 task = "2.22"
@@ -389,6 +391,7 @@ symbol = "the_relay_answers_a_program_request_and_posts_its_observation"
 observed = "With src/kernel.rs now setting the majority level the build passes (.logs/build.log, exit 0), but the verify_cmd's clippy stops on too_many_lines (108/100) in this kernel test (.logs/verify.log, exit 101), a file outside task 2.24, so the api, attest, canonical and content tests did not run."
 assumption = "The kernel test's owner splits the function without an allow attribute, after which the verify_cmd runs unchanged."
 severity = "blocker"
+closed = "Task 2.19 at a01484182da45a4e43ec13541b3b70a9466f9323 split the relay test into named helpers without an allow attribute, and the crate's clippy pass over all targets is clean under -D warnings; its verify_cmd passed."
 
 [observation.2.21.1]
 task = "2.21"

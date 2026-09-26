@@ -551,7 +551,7 @@ reqs = ["10.1","10.2","10.3","10.4","10.5"]
 
 [task.2.2]
 title = "Close the program request path from record to web_read"
-status = "implemented"
+status = "done"
 wave = 2
 requires = ["1.4","1.7","1.8","2.1"]
 do_1 = "In src/modules/programs/call.c record a pending program web request only when the call emits the web request record through event_emit and its transfer_402 to the web fee account succeeds in the same call, and in src/modules/web/lx_web_intake.c split the fee equally to the signing attestors' kernel accounts at intake with the remainder to the lowest signer; route the web observation and attestor-set activity ids through kernel dispatch beside the oracle's and bind the web root into the batch header beside oracle_root, closing observation 1.7.1."
@@ -564,10 +564,10 @@ symbols = ["web_request_record","KernelWatcher","web-reader"]
 touches = ["include/layerx/lx_batch.h","src/sequencer/lx_web_root.c","tests/sequencer/test_web_root.c","src/modules/programs/call.c","src/modules/web/lx_web_intake.c","programs/sdk/rust/examples/web-reader","interop/crates/x-websearch/src/lib.rs","interop/crates/x-websearch/src/kernel.rs","interop/crates/x-websearch/tests/kernel.rs","interop/crates/x-websearch/tests/fixtures/kernel","tests/test_web_program_path.c","Makefile"]
 tests = ["tests/sequencer/test_web_root.c","tests/test_web_program_path.c","interop/crates/x-websearch/tests/kernel.rs"]
 reqs = ["11.1","11.2","11.3","11.4"]
-implemented_revision = "b24558ee384fb8c325df32de1b856bff8bf773a1"
-implemented_command = "timeout 20m sh -c 'make test-web-program-path && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test kernel'"
-implemented_exit_code = 101
-implemented_log_path = ".logs/verify.log"
+revision = "a01484182da45a4e43ec13541b3b70a9466f9323"
+command = "timeout 20m sh -c 'make test-web-program-path && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test kernel'"
+exit_code = 0
+log_path = ".logs/verify-2.2.log"
 
 [task.2.3]
 title = "Package the sidecar and add it to the node image"
@@ -895,8 +895,12 @@ touches = ["include/layerx/lxp_module.h","src/protocol/lxp_genesis.c","src/proto
 reqs = ["11.1","11.3"]
 
 [task.2.19]
-title = "Align the kernel test's attestor keys with the intake fixture's signers and qualify the program request path"
-status = "pending"
+title = "Re-sign the observation activity fixture with keys the tests hold and qualify the program request path"
+status = "done"
+revision = "a01484182da45a4e43ec13541b3b70a9466f9323"
+command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && make test-web-intake test-web-adapter && make test-web-program-path && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test kernel'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.2","2.24"]
 do_1 = "The three signatures in tests/fixtures/web/observation-activity.hex come from keys no test holds, so no sidecar test can reproduce its bytes; re-record the fixture through a recorder in interop/crates/x-websearch/tests/kernel.rs, enabled by an environment variable in the shape of X_WEBSEARCH_RECORD_EXCHANGE, that signs the same origin-2 digest with the attestor keys derived from the scalars 1, 2 and 3 that tests/test_web_program_path.c holds, in ascending signer order, and writes the fixture; the recorder is a test path, never a production one."
@@ -906,7 +910,7 @@ do_4 = "Split the test function in interop/crates/x-websearch/tests/kernel.rs th
 do_5 = "Run task 2.2's verify_cmd once on the result; on exit 0 record task 2.2 done with that revision, command, exit code and log, and close observations 2.2.1 and 2.19.1 naming the revision."
 verify_cmd = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && make test-web-intake test-web-adapter && make test-web-program-path && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test kernel'"
 symbols = ["the_observation_activity_equals_the_kernel_adapter_fixture"]
-touches = ["interop/crates/x-websearch/tests/kernel.rs","interop/crates/x-websearch/tests/fixtures/kernel"]
+touches = ["tests/fixtures/web","tests/modules/test_web_intake.c","tests/network/test_web_adapter.c","interop/crates/x-websearch/tests/kernel.rs","interop/crates/x-websearch/tests/fixtures/kernel"]
 reqs = ["11.4"]
 
 [task.2.20]
