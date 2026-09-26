@@ -38,6 +38,13 @@
 # be reproduced by the program keypair the run deploys with and stops the run if
 # the deployment lands elsewhere.
 #
+# The program is built with the platform tools release PLATFORM_TOOLS_VERSION
+# names, passed to cargo-build-sbf as --tools-version, and not with the release
+# the Solana toolchain installs by default, whose cargo rejects the dependency
+# manifests that declare edition 2024. cargo-build-sbf fetches that release on
+# its first use; the toolchain directory still supplies solana, solana-keygen and
+# cargo-build-sbf itself.
+#
 # The vault authority is the PDA of the seed the program declares as VAULT_SEED
 # in bridge/solana/src/state.rs, and its handle is the vault Paxeer registers.
 #
@@ -66,6 +73,7 @@ SIDIORA_ASSET_ID=0x21f7b20a555199fa73a238b1a91fd0f549068fee
 SIDIORA_DECIMALS=6
 UPGRADEABLE_LOADER=BPFLoaderUpgradeab1e11111111111111111111111
 VAULT_AUTHORITY_SEED=vault-authority
+PLATFORM_TOOLS_VERSION=v1.56
 
 fail() {
     printf 'deploy-solana-program: error: %s\n' "$*" >&2
@@ -310,10 +318,11 @@ genesis_hash=$("$SOLANA" genesis-hash --url "$rpc") \
 [ -n "$genesis_hash" ] || fail "$rpc_variable answered an empty genesis hash"
 publisher=$("$KEYGEN" pubkey "$keypair") || fail "$key_variable does not name a Solana keypair"
 
-"$BUILD_SBF" --manifest-path "$PROGRAM_DIR/Cargo.toml" --sbf-out-dir "$work/deploy" \
+"$BUILD_SBF" --tools-version "$PLATFORM_TOOLS_VERSION" \
+    --manifest-path "$PROGRAM_DIR/Cargo.toml" --sbf-out-dir "$work/deploy" \
     > "$work/build.log" 2>&1 || {
     cat "$work/build.log" >&2
-    fail "cargo-build-sbf could not build $PROGRAM_DIR"
+    fail "cargo-build-sbf could not build $PROGRAM_DIR with platform tools $PLATFORM_TOOLS_VERSION"
 }
 mapfile -t built < <(find "$work/deploy" -maxdepth 1 -name '*.so' -type f | sort)
 [ "${#built[@]}" -eq 1 ] \

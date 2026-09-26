@@ -74,7 +74,7 @@ jobs:
         run: cargo test --locked --manifest-path bridge/solana/Cargo.toml
 
       - name: Run cargo build-sbf for the bridge/solana program
-        run: cargo build-sbf --manifest-path bridge/solana/Cargo.toml
+        run: cargo build-sbf --tools-version v1.56 --manifest-path bridge/solana/Cargo.toml
 
   relayer-crate:
     name: cargo test for the layerx-bridge-relayer crate

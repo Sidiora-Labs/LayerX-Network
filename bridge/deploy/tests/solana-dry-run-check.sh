@@ -730,6 +730,8 @@ python3 -c 'import cryptography.hazmat.primitives.asymmetric.ed25519' 2> /dev/nu
     || fail "the Python cryptography package is required to sign the run's transactions and is not installed"
 
 TOOLCHAIN=$(dirname "$(command -v solana)")
+PLATFORM_TOOLS=$(sed -n 's/^PLATFORM_TOOLS_VERSION=//p' "$DEPLOY")
+[ -n "$PLATFORM_TOOLS" ] || fail "$DEPLOY declares no PLATFORM_TOOLS_VERSION, so the platform tools it builds with are unknown"
 for tool in solana-keygen cargo-build-sbf; do
     [ "$(dirname "$(command -v "$tool")")" = "$TOOLCHAIN" ] \
         || fail "$tool is not in $TOOLCHAIN beside solana; the dry run deploys with one pinned toolchain"
@@ -878,7 +880,7 @@ if ! env HOME="$CLI_HOME" "PAXEER_BRIDGE_SOLANA_CHAINS_ROOT=$WORK/chains" "$RPC_
     if grep -q 'cargo-build-sbf could not build' "$WORK/deploy.log"; then
         missing=$(grep -m 1 -oE 'feature .[a-z0-9_-]+. is required' "$WORK/deploy.log" \
             || grep -m 1 -E '^error' "$WORK/deploy.log" || printf 'see the build output above')
-        fail "cargo-build-sbf in $TOOLCHAIN cannot build bridge/solana, so there is no program to deploy: the cargo of its platform tools reports $missing"
+        fail "cargo-build-sbf in $TOOLCHAIN cannot build bridge/solana with platform tools $PLATFORM_TOOLS, so there is no program to deploy: the cargo of those platform tools reports $missing"
     fi
     fail "deploy-solana-program.sh did not deploy, initialise and register the program"
 fi

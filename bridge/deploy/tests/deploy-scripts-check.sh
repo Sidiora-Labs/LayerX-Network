@@ -21,8 +21,11 @@
 # authority the script records must be the PDA of the seed the program declares
 # as VAULT_SEED, pinned by the bridge/vectors Solana vector, a script that names
 # any other seed is caught, and a placeholder solana.program_id stops the run
-# before the initialise step. A deployment against a real cluster is the Solana
-# dry run's job, not this check's.
+# before the initialise step. The platform tools release the Solana script
+# declares must be no older than the first whose cargo accepts edition 2024, it
+# must reach cargo-build-sbf as --tools-version, and every cargo build-sbf the
+# bridge workflow runs must name the same release. A deployment against a real
+# cluster is the Solana dry run's job, not this check's.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -43,6 +46,8 @@ SOLANA_KEYS="$SOLANA_FIXTURES/solana_keys.py"
 VAULT_FIXTURE="$SOLANA_FIXTURES/vault-authority.json"
 PROGRAM_STATE="$REPO_ROOT/bridge/solana/src/state.rs"
 SOLANA_VECTORS="$REPO_ROOT/bridge/vectors/solana.go"
+WORKFLOW="$REPO_ROOT/.github/workflows/bridge-test.yml"
+OLDEST_PLATFORM_TOOLS=v1.52
 
 fail() {
     printf 'deploy-scripts-check: error: %s\n' "$*" >&2
@@ -56,7 +61,7 @@ for script in "$DEPLOY_EVM" "$VERIFY_EVM" "$DEPLOY_SOLANA"; do
     [ -r "$script" ] || fail "$script is missing"
 done
 for fixture in "$SOLANA_KEYS" "$VAULT_FIXTURE" "$SOLANA_FIXTURES/cluster.json" \
-    "$PROGRAM_STATE" "$SOLANA_VECTORS"; do
+    "$PROGRAM_STATE" "$SOLANA_VECTORS" "$WORKFLOW"; do
     [ -r "$fixture" ] || fail "$fixture is missing"
 done
 for tool in solana solana-keygen cargo-build-sbf; do
@@ -586,6 +591,118 @@ records_program_vault() {
 
 REASON=$(names_program_seed "$DEPLOY_SOLANA") || fail "$DEPLOY_SOLANA: $REASON"
 
+# A platform tools release as a number that orders releases; the patch level
+# does not move a release across the edition 2024 line.
+tools_release_number() {
+    [[ $1 =~ ^v([0-9]+)\.([0-9]+)(\.[0-9]+)?$ ]] || return 1
+    printf '%d\n' $((10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]}))
+}
+
+# A deployment script and the workflow pin the same platform tools when the
+# script declares a release no older than OLDEST_PLATFORM_TOOLS, hands it to every
+# cargo-build-sbf it runs as --tools-version, and every cargo build-sbf the
+# workflow runs names that release.
+pins_platform_tools() {
+    local script=$1 workflow=$2 version number line named
+    local -a builds steps
+    version=$(sed -n 's/^PLATFORM_TOOLS_VERSION=//p' "$script")
+    if [ -z "$version" ]; then
+        printf 'the script declares no PLATFORM_TOOLS_VERSION\n'
+        return 1
+    fi
+    if ! number=$(tools_release_number "$version"); then
+        printf 'PLATFORM_TOOLS_VERSION is %s, which names no platform tools release\n' "$version"
+        return 1
+    fi
+    if [ "$number" -lt "$(tools_release_number "$OLDEST_PLATFORM_TOOLS")" ]; then
+        printf 'PLATFORM_TOOLS_VERSION is %s, older than %s, the first platform tools release whose cargo accepts edition 2024\n' \
+            "$version" "$OLDEST_PLATFORM_TOOLS"
+        return 1
+    fi
+    # shellcheck disable=SC2016 # the literal text the script runs its build with
+    mapfile -t builds < <(grep -F '"$BUILD_SBF" ' "$script" || true)
+    if [ "${#builds[@]}" -eq 0 ]; then
+        printf 'the script runs no cargo-build-sbf\n'
+        return 1
+    fi
+    for line in "${builds[@]}"; do
+        # shellcheck disable=SC2016 # the literal text the script passes
+        if ! grep -qF -- '"$BUILD_SBF" --tools-version "$PLATFORM_TOOLS_VERSION" ' <<< "$line"; then
+            printf 'the script runs cargo-build-sbf without --tools-version "$PLATFORM_TOOLS_VERSION": %s\n' "$line"
+            return 1
+        fi
+    done
+    mapfile -t steps < <(grep -E 'cargo build-sbf( |$)' "$workflow" | grep -vE '^[[:space:]]*(- )?name:' || true)
+    if [ "${#steps[@]}" -eq 0 ]; then
+        printf '%s runs no cargo build-sbf\n' "$workflow"
+        return 1
+    fi
+    for line in "${steps[@]}"; do
+        named=$(grep -oE -- '--tools-version[ =][^[:space:]]+' <<< "$line" | sed -E 's/^--tools-version[ =]//' || true)
+        if [ -z "$named" ]; then
+            printf '%s runs cargo build-sbf without --tools-version, and the script declares %s: %s\n' \
+                "$workflow" "$version" "${line#"${line%%[![:space:]]*}"}"
+            return 1
+        fi
+        if [ "$named" != "$version" ]; then
+            printf '%s runs cargo build-sbf with platform tools %s, and the script declares %s\n' \
+                "$workflow" "$named" "$version"
+            return 1
+        fi
+    done
+}
+
+REASON=$(pins_platform_tools "$DEPLOY_SOLANA" "$WORKFLOW") || fail "$DEPLOY_SOLANA: $REASON"
+PLATFORM_TOOLS=$(sed -n 's/^PLATFORM_TOOLS_VERSION=//p' "$DEPLOY_SOLANA")
+
+# Each way of losing the pin is caught: a workflow step that names no release or
+# another one, a script that declares a release older than the edition 2024 line,
+# and a script whose cargo-build-sbf is not handed the release it declares.
+PINNED_PATTERN=${PLATFORM_TOOLS//./\\.}
+mkdir -p "$WORK/unpinned"
+UNPINNED_SCRIPT="$WORK/unpinned/deploy-solana-program.sh"
+UNPINNED_WORKFLOW="$WORK/unpinned/bridge-test.yml"
+# shellcheck disable=SC2016 # sed expressions matching the files' literal text
+for mutation in "workflow|s/ --tools-version $PINNED_PATTERN//|without --tools-version" \
+    "workflow|s/--tools-version $PINNED_PATTERN/--tools-version v1.55/|with platform tools v1.55" \
+    "both|s/$PINNED_PATTERN/v1.51/|older than $OLDEST_PLATFORM_TOOLS" \
+    'script|s/ --tools-version "\$PLATFORM_TOOLS_VERSION"//|without --tools-version "$PLATFORM_TOOLS_VERSION"'; do
+    IFS='|' read -r target expression reason <<< "$mutation"
+    cp "$DEPLOY_SOLANA" "$UNPINNED_SCRIPT"
+    cp "$WORKFLOW" "$UNPINNED_WORKFLOW"
+    case $target in
+    workflow) sed -i -e "$expression" "$UNPINNED_WORKFLOW" ;;
+    script) sed -i -e "$expression" "$UNPINNED_SCRIPT" ;;
+    both) sed -i -e "$expression" "$UNPINNED_SCRIPT" "$UNPINNED_WORKFLOW" ;;
+    esac
+    if cmp -s "$DEPLOY_SOLANA" "$UNPINNED_SCRIPT" && cmp -s "$WORKFLOW" "$UNPINNED_WORKFLOW"; then
+        fail "the mutation $expression changed nothing in $DEPLOY_SOLANA or $WORKFLOW"
+    fi
+    if REASON=$(pins_platform_tools "$UNPINNED_SCRIPT" "$UNPINNED_WORKFLOW"); then
+        fail "a $target changed by $expression was taken to pin platform tools $PLATFORM_TOOLS"
+    fi
+    grep -qF -- "$reason" <<< "$REASON" \
+        || fail "a $target changed by $expression was refused without naming: $reason ($REASON)"
+done
+
+# The recorded cluster's toolchain, behind a cargo-build-sbf that answers only a
+# build asked for the declared platform tools, so the first deployment below
+# proves the script hands its cargo-build-sbf the pinned release.
+PINNED_TOOLCHAIN="$WORK/pinned-toolchain"
+mkdir -p "$PINNED_TOOLCHAIN"
+for tool in solana solana-keygen; do
+    printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$REPLAY_TOOLCHAIN/$tool" > "$PINNED_TOOLCHAIN/$tool"
+done
+# shellcheck disable=SC2016 # the stand-in is written as literal shell text
+{
+    printf '#!/usr/bin/env bash\n'
+    printf 'if [ "${1:-}" != --tools-version ] || [ "${2:-}" != %q ]; then\n' "$PLATFORM_TOOLS"
+    printf '    printf %q "$*" >&2\n' "cargo-build-sbf was not asked for platform tools $PLATFORM_TOOLS: %s\n"
+    printf '    exit 64\nfi\nshift 2\n'
+    printf 'exec %q "$@"\n' "$REPLAY_TOOLCHAIN/cargo-build-sbf"
+} > "$PINNED_TOOLCHAIN/cargo-build-sbf"
+chmod 0755 "$PINNED_TOOLCHAIN"/*
+
 # deploy-solana-program.sh: a first deployment against the recorded cluster. The
 # committed solana.program_id placeholder is kept, so the run deploys, records
 # the program and its vault, and stops before the initialise step naming the
@@ -599,7 +716,7 @@ first_deployment() {
     attempt env "PAXEER_BRIDGE_SOLANA_CHAINS_ROOT=$root" \
         "PAXEER_BRIDGE_SOLANA_RPC_URL=$ENDPOINT" \
         "PAXEER_BRIDGE_SOLANA_KEYPAIR_FILE=$WORK/publisher.json" \
-        "PAXEER_BRIDGE_SOLANA_TOOLCHAIN_BIN=$REPLAY_TOOLCHAIN" \
+        "PAXEER_BRIDGE_SOLANA_TOOLCHAIN_BIN=$PINNED_TOOLCHAIN" \
         "PAXEER_BRIDGE_DEPLOYMENT_RECORD=$WORK/records/$name.json" \
         "PAXEER_BRIDGE_SOLANA_ADMIN_CLI=$ADMIN" \
         "DEPLOY_CHECK_REPLAY_STATE=$state" \
@@ -609,13 +726,17 @@ first_deployment() {
 accepts 'is ready to deploy' 'a first Solana deployment against the recorded cluster, at --preflight' \
     env "PAXEER_BRIDGE_SOLANA_CHAINS_ROOT=$SOLANA_ROOT" "PAXEER_BRIDGE_SOLANA_RPC_URL=$ENDPOINT" \
     "PAXEER_BRIDGE_SOLANA_KEYPAIR_FILE=$WORK/publisher.json" \
-    "PAXEER_BRIDGE_SOLANA_TOOLCHAIN_BIN=$REPLAY_TOOLCHAIN" \
+    "PAXEER_BRIDGE_SOLANA_TOOLCHAIN_BIN=$PINNED_TOOLCHAIN" \
     "PAXEER_BRIDGE_DEPLOYMENT_RECORD=$WORK/records/solana.json" \
     "PAXEER_BRIDGE_SOLANA_ADMIN_CLI=$ADMIN" \
     bash "$DEPLOY_SOLANA" --preflight
 
 first_deployment "$DEPLOY_SOLANA" solana-first-deployment
 FIRST_RECORD="$WORK/records/solana-first-deployment.json"
+if grep -qF 'was not asked for platform tools' "$WORK/last.log"; then
+    quote
+    fail "a first Solana deployment ran cargo-build-sbf without platform tools $PLATFORM_TOOLS"
+fi
 [ "$STATUS" -ne 0 ] || {
     quote
     fail 'a first Solana deployment with a placeholder solana.program_id went on to the initialise step'
@@ -669,5 +790,5 @@ for mutation in 's/^VAULT_AUTHORITY_SEED=.*/VAULT_AUTHORITY_SEED=vault/' \
     fi
 done
 
-printf 'deploy-scripts-check: the %d committed chain configurations are refused while they carry their placeholders, a filled one is ready to deploy, every argument, placeholder, missing variable and inconsistent record is refused, and a first Solana deployment records the vault the program derives from %s and stops before the initialise step\n' \
-    $((${#EVM_CHAIN_NAMES[@]} + 1)) "$PROGRAM_SEED" >&2
+printf 'deploy-scripts-check: the %d committed chain configurations are refused while they carry their placeholders, a filled one is ready to deploy, every argument, placeholder, missing variable and inconsistent record is refused, a first Solana deployment builds with platform tools %s, which the workflow names too, records the vault the program derives from %s and stops before the initialise step\n' \
+    $((${#EVM_CHAIN_NAMES[@]} + 1)) "$PLATFORM_TOOLS" "$PROGRAM_SEED" >&2

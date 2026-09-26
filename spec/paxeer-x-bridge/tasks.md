@@ -132,7 +132,7 @@
     - Make bridge/deploy/proposals/proposals.go emit each bundle as that proposal content, so the chain's submit-proposal transaction carries it as it stands, keeping DecodeBody and the type URLs task 2.9 added.
     - Extend modules/layerxbridge/keeper/keeper_test.go for the handler (each carried message executes, a wrong authority and a malformed proposal are refused), add node/gov_bridge_test.go asserting the application's governance router has the bridge route and executes a generated proposal, and extend bridge/deploy/proposals/proposals_test.go to decode the emitted proposal field for field.
     - _Requirements: 9.1, 9.2_
-  - [ ] 2.12 Pin platform tools whose cargo accepts edition 2024 for every cargo build-sbf
+  - [x] 2.12 Pin platform tools whose cargo accepts edition 2024 for every cargo build-sbf
     - In bridge/deploy/deploy-solana-program.sh declare the platform tools version once, v1.56, and pass it to cargo-build-sbf as --tools-version so the build no longer depends on the platform tools the Solana toolchain installs by default, whose cargo 1.84.1 rejects the 35 transitive manifests that declare edition 2024 (observations 1.2.1 and 2.7.1); keep the toolchain directory variable as the source of solana, solana-keygen and cargo-build-sbf.
     - Make the cargo build-sbf step of .github/workflows/bridge-test.yml pass the same --tools-version literal, and leave the Solana toolchain release the workflow installs unchanged.
     - Extend bridge/deploy/tests/deploy-scripts-check.sh so it reads the version the deploy script declares, fails when the workflow's cargo build-sbf step names a different version or none, and fails when the declared version is older than v1.52, the first platform tools release whose cargo accepts edition 2024.
@@ -144,12 +144,6 @@
     - Replace the sentence that the module registers no message service and no command carries the bodies with the path that runs them: a governance proposal whose content is the bridge proposal, executed by the governance module account through the application's proposal route, submitted with the chain's own governance submit command named exactly as the node exposes it and shown with the generated file as its argument; keep the Solana rule that the Sidiora cap proposal is submitted only after the usid pair reads back.
     - Extend bridge/deploy/tests/docs-check.sh so it asserts section 6 names both proposal files and the submit command, and fails when the runbook still claims the module registers no message service or that no command carries the bodies.
     - _Requirements: 12.1, 12.5, 9.1_
-  - [ ] 2.14 Mount the bridge proposal on the node's governance submit command
-    - Add modules/layerxbridge/client/cli with a governance proposal handler in the shape modules/mint/client/cli/tx.go mounts as UpdateMinterHandler: a subcommand of paxd tx gov submit-proposal that reads one generated proposal file, 04-proposal-open-chain.json or 05-proposal-sidiora-cap.json, exactly as bridge/deploy/proposals writes it, decodes it into the BridgeProposal content with the application's codec, refuses a file with unknown or missing fields, takes the deposit and the signer from the standard flags and builds MsgSubmitProposal with that content (observation 2.13.1).
-    - Mount the handler in getGovProposalHandlers in node/app.go and change nothing else there; the module's GetTxCmd stays nil because only governance sends the module's messages.
-    - Test it: modules/layerxbridge/client/cli/tx_test.go parses the generator's committed testdata proposals into MsgSubmitProposal and asserts the content equals what proposals.go emits and that a malformed file, an unknown field and a missing deposit are refused; node/gov_bridge_test.go asserts the handler is mounted and that the message it builds executes through the stored route.
-    - Update section 6 of bridge/README.md to show the command with the generated file as its argument, remove the sentence that no command submits the proposals, and make bridge/deploy/tests/docs-check.sh assert the command and its file argument and fail on the removed sentence.
-    - _Requirements: 9.1, 12.1, 12.5_
 
 ## Wave 3 - One Run, Recorded
 
@@ -168,7 +162,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }
