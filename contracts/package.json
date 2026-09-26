@@ -17,7 +17,7 @@
   "license": "ISC",
   "devDependencies": {
     "@nomicfoundation/hardhat-foundry": "^1.1.1",
-    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "@nomicfoundation/hardhat-toolbox": "^7.0.0",
     "@openzeppelin/hardhat-upgrades": "^3.0.2",
     "@openzeppelin/test-helpers": "^0.5.16",
     "@types/node": "^24.2.0",
