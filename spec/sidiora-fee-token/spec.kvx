@@ -460,7 +460,7 @@ reqs = ["10.1","10.2","10.3","10.4","10.5","10.6"]
 
 [task.2.7]
 title = "Accept the same fee denoms on the Cosmos path"
-status = "pending"
+status = "done"
 wave = 2
 requires = ["2.4","2.6","2.12"]
 do_1 = "Add a fee-denom conversion to the Cosmos fee path so a fee offered in a denom the x/evm fee-token parameters allow is converted to Paxeer terms through GetFeeTokenRate and the same spread bound the EVM path uses, and a denom the parameters do not allow is refused; propagate the named refusal error for a missing, invalid, future or stale rate without falling back to the network coin, a zero charge or an unbounded stale rate."
@@ -470,8 +470,12 @@ do_4 = "Leave the path behaving exactly as it behaves now when the fee-token swi
 do_5 = "Add tests beside node/antedecorators covering a Sidiora-paid Cosmos transaction, a disallowed denom refused, the minimum-fee check against the converted amount, a missing rate refusing, and the gasless path unchanged; extend node/ante_test.go, with test names carrying a FeeDenom prefix, asserting the assembled handler still places the decorators in the order node/ante.go declares today."
 verify_cmd = "timeout 20m sh -c 'go test -count=1 ./node/antedecorators/... && go test -count=1 -run FeeDenom ./node/'"
 symbols = ["GaslessDecorator","NewAnteHandler","PriorityDecorator","ConvertFeeToDenom"]
-touches = ["node/ante.go","node/ante_test.go","node/antedecorators/gasless.go","node/antedecorators/gasless_test.go","node/antedecorators/feedenom.go","node/antedecorators/feedenom_test.go"]
+touches = ["node/ante.go","node/ante_test.go","node/antedecorators/feedenom.go","node/antedecorators/feedenom_test.go","spec/sidiora-fee-token/spec.kvx","spec/sidiora-fee-token/qualification.kvx"]
 reqs = ["11.1","11.2","11.3","11.4","11.5"]
+revision = "b8f9e1f9f92a13416988108fc5265c770e34d3ce"
+command = "timeout 20m sh -c 'go test -count=1 ./node/antedecorators/... && go test -count=1 -run FeeDenom ./node/'"
+exit_code = 0
+log_path = "/root/lx-lanes/sid-t2-7b/.logs/verify.log"
 
 [task.2.8]
 title = "Decide where collected Sidiora fees go"
