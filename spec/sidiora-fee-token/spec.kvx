@@ -895,11 +895,11 @@ log_path = ".logs/verify.log"
 
 [task.4.12]
 title = "Regenerate the evm parameters with the pinned protobuf pipeline"
-status = "implemented"
-implemented_revision = "23444184e79cc0f145cb482c50b0527a2d707f3a"
-implemented_command = "timeout 20m sh -c 'bash scripts/protoc.sh && git diff --exit-code -- modules/evm/types/params.pb.go && go test -count=1 ./modules/evm/types/...'"
-implemented_exit_code = 1
-implemented_log_path = ".logs/verify.log"
+status = "done"
+revision = "f67c23e4a3d44fdbe573d9197bd1288422907fae"
+command = "timeout 20m sh -c 'bash scripts/protoc.sh && git diff --exit-code -- modules/evm/types/params.pb.go && go test -count=1 ./modules/evm/types/...'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 4
 requires = []
 do_1 = "Run scripts/protoc.sh, which pins buf v1.58.0, keep its output for modules/evm/types/params.pb.go and revert every other file it rewrites; stage the regenerated file so the verify_cmd's second generation is compared against it."
@@ -913,7 +913,11 @@ reqs = ["8.1","8.5"]
 
 [task.4.14]
 title = "Reconcile the fee-token rate accessor with the generated parameters and qualify the regeneration"
-status = "pending"
+status = "done"
+revision = "f67c23e4a3d44fdbe573d9197bd1288422907fae"
+command = "timeout 20m sh -c 'bash scripts/protoc.sh && git diff --exit-code -- modules/evm/types/params.pb.go && go test -count=1 ./modules/evm/types/...'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 4
 requires = ["4.12"]
 do_1 = "The pinned pipeline emits no GetRate getter for the fee-token rate field, while modules/evm/types/params_test.go calls one that only the earlier hand edit provided; regenerate modules/evm/types/params.pb.go through scripts/protoc.sh and commit it exactly as emitted, and if any non-test code calls GetRate provide that accessor in the hand-written modules/evm/types/params.go, otherwise make the test read the field directly; no assertion changes."
