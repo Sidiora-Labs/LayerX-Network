@@ -111,7 +111,7 @@ Contracts call the xweb precompile at `0x000000000000000000000000000000000000101
 
 ### Request
 
-A contract names the kind (`1` fetch, `2` search), the payload - the URL or the query - and the gas its callback may use, and sends exactly the current fee in PAX. The module refuses the request while it is paused, for an unknown kind, for an empty payload or one over the payload cap, and for a callback gas of zero or over the callback cap. Otherwise it takes the fee into the module account, stores the request under the next id with the requester, the kind, the payload hash, the callback gas, the fee, the height and the timeout height, and emits `XWebRequested` with every field an attestor needs.
+A contract names the kind (`1` fetch, `2` search, `3` api), the payload - the URL, the query or the api payload of [Calling an API](#calling-an-api) - and the gas its callback may use, and sends exactly the current fee in PAX. The module refuses the request while it is paused, for an unknown kind, for an empty payload or one over the payload cap, and for a callback gas of zero or over the callback cap. Otherwise it takes the fee into the module account, stores the request under the next id with the requester, the kind, the payload hash, the callback gas, the fee, the height and the timeout height, and emits `XWebRequested` with every field an attestor needs.
 
 ### Fulfil
 
@@ -125,7 +125,7 @@ The precompile then calls the requester, from `0x0000000000000000000000000000000
 function onXWebResponse(uint64 requestId, bytes32 contentDigest, uint32 fullLength, bytes calldata response) external;
 ```
 
-The callback's gas is bounded by the smaller of the request's `callbackGas` and the module's maximum, and `fulfil` refuses unless the gas left covers that full bound. A callback that reverts or runs out of gas is recorded in the result - delivered, reverted or out of gas, with the gas it used - and the fulfilment stands. `XWebFulfilled` carries the same outcome.
+The callback's gas is bounded by the smaller of the request's `callbackGas` and the module's maximum, and `fulfil` refuses unless the gas left covers that full bound. A callback that reverts or runs out of gas is recorded in the result - delivered, reverted or out of gas, with the gas it used - and the fulfilment stands. `XWebFulfilled` carries the same outcome together with the attestation level, `0` majority or `1` single, which `getResult` also returns.
 
 ### Refund
 
@@ -139,9 +139,9 @@ Every call costs a base plus 16 gas per byte of calldata after the selector. The
 
 ## The attestors
 
-Attestors are sidecars holding a web-attestor secp256k1 key, separate from any consensus, validator or bridge key. Governance registers each attestor's 20-byte signer address together with its payout account.
+Attestors are sidecars holding a web-attestor secp256k1 key, separate from any consensus, validator or bridge key. Governance registers each attestor's 20-byte signer address together with its payout account and, for an attestor that accepts credential envelopes, the 33-byte compressed public key of the same key, which must derive the signer address. `getAttestors` returns all three.
 
-**The threshold is always a majority.** The keeper refuses a threshold at or below half of the registered set or above it. Registering an attestor raises the threshold to the majority of the new set when it would otherwise fall below it; removing one lowers a threshold above the new set size to that size, which is still a majority.
+**The threshold is always a majority.** Only an api request under the single level is answered by one attestor, as [Calling an API](#calling-an-api) describes. The keeper refuses a threshold at or below half of the registered set or above it. Registering an attestor raises the threshold to the majority of the new set when it would otherwise fall below it; removing one lowers a threshold above the new set size to that size, which is still a majority.
 
 Each attestor watches the request event, fetches independently, and signs one raw digest: `keccak256` of a 188-byte preimage, with no EIP-191 prefix and no EIP-712 domain.
 
@@ -152,7 +152,7 @@ Each attestor watches the request event, fetches independently, and signs one ra
 | network id | 32 | the EVM chain id for origin 1, the kernel network id for origin 2 |
 | requester | 32 | the EVM address left-padded with zeros for origin 1, the program id for origin 2 |
 | request id | 8 | `uint64` |
-| kind | 1 | `1` fetch, `2` search |
+| kind | 1 | `1` fetch, `2` search, `3` api |
 | payload hash | 32 | `keccak256` of the request payload |
 | content digest | 32 | the canonical content digest |
 | response hash | 32 | `keccak256` of the stored response bytes |
@@ -176,6 +176,84 @@ Kernel programs read web data through the `web_read` host import, fed by a web o
 
 ---
 
+## Calling an API
+
+A contract can ask for an HTTP API call beyond the network with the request kind `3`, api. The payload names the method (`GET` or `POST`), an `https` URL, public request headers, a request body, the JSON fields to attest and the attestation level, and it may carry credential envelopes. The Solidity library `XWebApi` builds that payload and submits it in one statement:
+
+```solidity
+import {IXWebConsumer, XWEB_PRECOMPILE_ADDRESS} from "../../precompiles/IXWeb.sol";
+import {XWebApi} from "../XWebApi.sol";
+
+contract ApiConsumer is IXWebConsumer {
+    mapping(uint64 => bytes) public prices;
+
+    function askPrice(bytes calldata envelope, address attestor) external payable returns (uint64) {
+        return XWebApi.get("https://paxeer.app/api/v1/price?asset=PAX").select("/data/price").withCredential(envelope)
+            .single(attestor).submit(200_000);
+    }
+
+    function onXWebResponse(uint64 requestId, bytes32, uint32, bytes calldata response) external {
+        require(msg.sender == XWEB_PRECOMPILE_ADDRESS, "only xweb");
+        prices[requestId] = response;
+    }
+}
+```
+
+`get` and `post` start the call, `header` adds a public header, `select` adds a JSON pointer, `withCredential` adds an envelope and `single` names the one attestor that answers. `submit` pays the current `fee()` from the contract's balance and returns the request id. The example lives at [`contracts/src/xweb/examples/ApiConsumer.sol`](https://github.com/Sidiora-Labs/Paxeer-X-Network/blob/main/contracts/src/xweb/examples/ApiConsumer.sol).
+
+| Part | Bound |
+| --- | --- |
+| URL | 1 to 2048 bytes of printable ASCII, `https://` with a lower-case host, no fragment |
+| public headers | at most 16, names of at most 64 token characters, values of at most 1024 bytes; `Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `TE`, `Trailer` and `Upgrade` are refused |
+| body | at most 4096 bytes, empty under `GET` |
+| JSON pointers | at most 16, each at most 256 bytes |
+| envelopes | at most one per registered attestor, never two for one attestor |
+| whole payload | the payload cap, `8192` bytes by default |
+
+The module refuses a payload that breaks one of those bounds, names an attestor outside the registered set or carries more envelopes than there are registered attestors.
+
+### The envelope rule
+
+A credential - an API key, a bearer token, any header the API needs - never travels in the clear. It never lives in chain state, in the request event or in a file on any sidecar. It travels as one envelope per attestor, sealed to that attestor's registered public key:
+
+- **The seal.** A fresh ephemeral secp256k1 key per envelope; the shared secret is the x coordinate of the ephemeral key times the attestor's key; HKDF-SHA256 over it, salted with the compressed ephemeral key under the info `PAXEERX_WEB_API_ENVELOPE_V1`, gives the AES-256-GCM key; a fresh 12-byte nonce.
+- **The binding.** The associated data is the attestor's address and the origin of the URL - `https://` and its host and port - so an envelope copied into a request for another origin does not open.
+- **The layout.** The attestor's 20-byte address in the clear, so each sidecar picks its own, then the 33-byte ephemeral key, the nonce, the ciphertext and the 16-byte tag.
+- **The use.** The sidecar opens its envelope in memory for the one call and adds the credential headers to the public ones. A request that carries envelopes but none for a sidecar is refused by that sidecar rather than called without the credential.
+
+Under the majority level every attestor that makes the call needs its own envelope. An attestor replaced through governance stops receiving envelopes as soon as `getAttestors` stops returning it, and the holder of a credential rotates it at the API as with any other client.
+
+### The selector rule
+
+The attested answer is not the whole response. Each JSON pointer (RFC 6901) selects one field of a JSON response, and the selected values are put in RFC 8785 canonical form, so attestors agree on the answer even when an API's full responses differ from call to call. A response that is not JSON when pointers are given, or a pointer that resolves to nothing, is refused and the pointer is named. With no pointer the attested answer is the raw bounded body.
+
+### The two attestation levels
+
+| Level | Who answers | What `fulfil` needs |
+| --- | --- | --- |
+| majority (`0`) | every attestor holding an envelope, independently | the threshold of signatures over the same answer, exactly as for a fetch |
+| single (`1`) | the one attestor `single` names | one signature, from that attestor only |
+
+The single level is for an API that tolerates one call only, or one credential that only one operator holds. The level is stored in the result and carried in `XWebFulfilled`, so a consumer can tell a single-attestor answer from a majority one. An attested answer is public on chain like every other result, whatever credential produced it.
+
+### Building envelopes off chain
+
+`agent/sdk/typescript` and `agent/sdk/python` build the payload and its envelopes from the attestor set `getAttestors` returns, so a developer needs no encoding knowledge:
+
+```typescript
+const set = decodeXWebAttestors(await provider.call({ to: XWEB_PRECOMPILE, data: xwebGetAttestorsCallData() }));
+const request = buildXWebApiRequest(
+  { method: "GET", url: "https://paxeer.app/api/v1/price?asset=PAX", pointers: ["/data/price"] },
+  set,
+  { credential: [{ name: "X-Api-Key", value: apiKey }] },
+);
+const call = xwebApiRequestCall(request.payload, 200_000n, fee);
+```
+
+In Python the same steps are `decode_xweb_attestors`, `build_xweb_api_request` with `credential=` and `xweb_api_request_call`. Under the majority level the helpers seal one envelope to every attestor that registered a public key and refuse when fewer of them than the threshold did; with `single` they seal only to the named attestor. Every public key is checked against its signer address before anything is sealed, and the ephemeral key and nonce come from the operating system's secure random source. The payload bytes and the envelopes are pinned against the same vectors the module's Go codec is tested with.
+
+---
+
 ## Agent clients
 
 `agent/sdk/typescript` and `agent/sdk/python` carry web search clients that perform the full 402LXP exchange against a sidecar for search, fetch and content by digest, verify the `PAYMENT-RESPONSE` settlement before returning content, and recompute the content digest locally. The MCP server exposes `web.search`, `web.fetch` and `web.content`; each spends through the server's approval boundary, and everything they return is untrusted external content. [SDKs](../agents/sdks.md) and [MCP](../agents/mcp.md) describe the clients around them.
@@ -188,7 +266,7 @@ The module parameters and the attestor set change only through governance messag
 
 | Message | What it changes |
 | --- | --- |
-| `MsgRegisterAttestor` | adds a signer address with its payout account |
+| `MsgRegisterAttestor` | adds a signer address with its payout account and, optionally, its envelope public key |
 | `MsgRemoveAttestor` | removes a signer |
 | `MsgSetThreshold` | sets the threshold, within the majority rule |
 | `MsgSetParams` | sets the fee, the payload cap, the callback cap and the timeout |
@@ -196,7 +274,7 @@ The module parameters and the attestor set change only through governance messag
 
 | Parameter | Default |
 | --- | --- |
-| payload cap | `2048` bytes |
+| payload cap | `8192` bytes |
 | callback gas cap | `500000` |
 | timeout | `3600` blocks |
 | attestor set | empty |
