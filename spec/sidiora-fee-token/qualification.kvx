@@ -52,6 +52,7 @@ exit_code = 127
 log_path = ".logs/guard.log"
 observed = "The required guard executable is unavailable."
 assumption = "Publication remains restricted to the requested branch with no chain interaction."
+closed = "The guard is the workflow's codify guard tool, run by the orchestrator before a destructive or publishing action, not an executable in the workspace, so its absence from a task shell is expected and blocks nothing."
 
 [observation.2.4.3]
 task = "2.4"
@@ -96,6 +97,7 @@ revision = "92d9139d9bdc4cae205b19744f48715e6ef6f56d"
 observed = "Review comment 4107298026 identifies existing records that follow requirement 15.3 evidence fields but omit metadata required by this file's header."
 assumption = "The append-only rule and conflicting schema declarations require preserving both existing records and declarations until the feature owner reconciles them."
 severity = "suspect"
+closed = "The spec amendment that added wave 4 reconciled the schema by appending the missing severity line to observation.1.4.2, the record the schema correction named, leaving every record otherwise as written."
 
 [observation.2.4.2]
 revision = "17c8ed319f18cbe5a003614c4ee082c2c3c0b122"
@@ -104,6 +106,7 @@ exit_code = 127
 log_path = ".logs/guard.log"
 observed = "The required guard executable is unavailable."
 assumption = "Publication remains restricted to the requested branch with no chain interaction."; severity = "assumption"
+closed = "The guard is the workflow's codify guard tool, run by the orchestrator before a destructive or publishing action, not an executable in the workspace, so its absence from a task shell is expected and blocks nothing."
 
 [observation.2.8.1]
 task = "2.8"; file = "modules/evm/types/params.pb.go"; symbol = "Params"; severity = "blocker"
@@ -157,6 +160,7 @@ file = "spec/sidiora-fee-token/spec.kvx"
 observed = "Review comment 4107486051 requests relative evidence paths, conflicting with the explicitly required absolute task evidence path and unchanged existing pull request body."
 assumption = "Other tasks' evidence is outside scope; the prescribed evidence format and existing body are preserved pending reconciliation with the naming rule."
 severity = "suspect"
+closed = "The spec amendment that added wave 4 rewrote every absolute log_path in the spec.kvx task records to the repository-relative .logs/<name>.log form."
 
 [observation.1.4.1]
 revision = "d718ed9a3d5b67fc2545c14f02207acd1e9c2e7b"
@@ -173,6 +177,7 @@ symbol = "typedMarket"
 observed = "The pre-existing TS2352 came from asserting an untyped fixture record directly as the market_create activity."
 assumption = "Decoding the same validated fixture and narrowing its activity discriminant preserves the parameter-bounds assertion while supplying its real type."
 closed = "At 797af3dd3d852c6139c06d927c633b5f932eb95c typedMarket comes from decodePerpsActivity rather than a direct assertion of the untyped record."
+severity = "note"
 
 [observation.1.4.3]
 task = "1.4"; file = "spec/sidiora-fee-token/spec.kvx"
@@ -180,6 +185,7 @@ symbol = "log_path"
 observed = "Review comment 4107522668 identifies absolute evidence paths in task records and the qualification ledger that conflict with the naming rule."
 assumption = "Historical evidence is outside the task touches and append-only; the review instruction explicitly requires an absolute path for the new task evidence, so path normalization requires separate authorization."
 severity = "suspect"
+closed = "The spec amendment that added wave 4 rewrote every absolute log_path in the spec.kvx task records to the repository-relative .logs/<name>.log form; ledger entries keep their paths as written under the append-only rule."
 
 [observation.1.4.4]
 task = "1.4"; file = "spec/sidiora-fee-token/qualification.kvx"
@@ -187,6 +193,7 @@ symbol = "observation.1.4.2"
 observed = "Review comment 4107698855 correctly identifies the missing severity field required by the documented observation schema."
 assumption = "The existing observation is outside the task touches and the ledger forbids editing written records; correcting its schema requires separate authorization."
 severity = "assumption"
+closed = "The spec amendment that added wave 4 appended the missing severity line to observation.1.4.2 without rewording it."
 
 [observation.1.4.5]
 task = "1.4"; file = "spec/sidiora-fee-token/qualification.kvx"
@@ -244,6 +251,7 @@ exit_code = 127
 log_path = ".logs/guard.log"
 observed = "The required guard executable is unavailable."
 assumption = "The explicitly authorized branch publication remains subject to the written hard-rule self-check."
+closed = "The guard is the workflow's codify guard tool, run by the orchestrator before a destructive or publishing action, not an executable in the workspace, so its absence from a task shell is expected and blocks nothing."
 
 [observation.1.6.2]
 revision = "17c8ed319f18cbe5a003614c4ee082c2c3c0b122"
@@ -339,6 +347,7 @@ task = "1.7"; file = "spec/sidiora-fee-token/spec.kvx"; symbol = "task.1.7.log_p
 severity = "blocker"
 observed = "The review requests a relative evidence path, but the explicit follow-up instructions require the exact absolute log_path, conflicting with the naming rule."
 assumption = "Preserve the explicitly required evidence path and the unchanged existing pull request body; an authorized publication-policy resolution is required."
+closed = "The spec amendment that added wave 4 rewrote task.1.7.log_path and every other absolute log_path in the spec.kvx task records to the repository-relative .logs/<name>.log form."
 
 [observation.2.12.1]
 task = "2.12"
@@ -439,6 +448,7 @@ task = "2.9"; file = "node/upgrades.go"; symbol = "RegisterUpgradeHandlers"
 observed = "The handler reads the chain of the Sidiora remote asset from the bridge registry and returns an error naming the missing registration when the registry carries no such record."
 assumption = "The Sidiora remote asset registration is a deployment prerequisite that must land before the upgrade proposal executes; the handler registers neither the chain nor the asset itself."
 severity = "note"
+closed = "At 00b44c7cc660def0eeae9ae7332d87396e7be20f the feature carries the bridge's governance-only MsgRegisterSidioraPair, which records the Sidiora remote asset the handler reads, so the prerequisite is a governance message the upgrade proposal can carry."
 
 [observation.2.9.2]
 task = "2.9"; file = "precompiles/bank/setup.go"; symbol = "GetVersioned"
