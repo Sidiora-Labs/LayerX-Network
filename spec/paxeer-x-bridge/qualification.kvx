@@ -297,3 +297,4 @@ symbol = "journal::tests::a_solana_release_replays_through_pending_recipient_exp
 observed = "At revision ab0b3de5dc718381c7d4e0a62b8ef2e9b0ee60cf the verify_cmd exits 101 after its clippy leg passes: this unit test, never run by task 2.3's verify_cmd, asserts pending_release() is None after a Completed Released entry, but apply leaves the matching release Pending; log .logs/verify.log."
 assumption = "Pre-existing and outside this lint task: the code and the test disagree on release completion semantics, so both stay as written for the journal's owner to decide."
 severity = "blocker"
+closed = "The journal now marks the transaction a completion names as landed, so pending_release() no longer matches a released transaction; the unit test passed unchanged and the verify_cmd exited 0 on revision cb4fc6f879a1784f4d4e194dcebbdff39338d216; log .logs/verify.log."

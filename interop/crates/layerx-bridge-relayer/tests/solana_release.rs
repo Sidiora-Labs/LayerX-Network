@@ -752,6 +752,8 @@ fn a_restarted_relayer_rebroadcasts_the_journaled_release_and_completes_it_once_
         })
     );
     assert_eq!(item.releases.len(), 1);
+    assert_eq!(item.releases[0].status, SubmissionStatus::Landed);
+    assert_eq!(item.pending_release(), None);
     assert_eq!(step(&mut relayer), report(0, 0, 0, 0));
     assert_eq!(recording.count("solana", "sendTransaction"), 2);
     assert_eq!(signers.attestor_requests(), 1);

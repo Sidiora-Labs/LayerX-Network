@@ -161,7 +161,7 @@
     - Extend bridge/deploy/tests/deploy-scripts-check.sh to cover the executable wait, the kept keypair and its overwrite refusal, and an EVM deploy driven from a directory other than bridge/evm.
     - With these in place, re-qualify task 2.7 on this revision: run its --record once to write bridge/deploy/tests/fixtures/solana_dry_run.json, run its verify_cmd once, and set task 2.7 to done with its four evidence fields only when that run passes.
     - _Requirements: 10.1, 10.3, 10.4, 13.2_
-  - [ ] 2.17 Clear the relayer's clippy findings and point the attestation references at the moved contract — **Implemented - qualification pending**
+  - [x] 2.17 Clear the relayer's clippy findings and point the attestation references at the moved contract
     - Fix every clippy finding in interop/crates/layerx-bridge-relayer, the five observation 2.2.1 names under src and the ones under tests observation 2.17.1 names, by restructuring the code, never by an allow attribute or a lint-level change, so cargo clippy with -D warnings passes on the crate with all targets.
     - Update modules/layerxbridge/ATTESTATION.md and the comment in modules/layerxbridge/types/attestation.go to the contract path wave 1 moved to bridge/evm (observation 1.1.1), and make the existing check that compares the two attestation documents, if there is one, assert the new path.
     - _Requirements: 7.1, 8.1_
@@ -170,7 +170,7 @@
     - Make bridge/deploy/proposals emit it for Solana inside 05-proposal-sidiora-cap.json ahead of the cap message, so one proposal registers the pair and then caps it, and keep the proposal refused for any chain that is not Sidiora's foreign home.
     - Update section 6 and the Sidiora section of bridge/README.md so the ordering rule reads from the proposal itself, and extend bridge/deploy/tests/docs-check.sh, keeper_test.go, proposals_test.go and the cli tests for the new message; re-record bridge/deploy/tests/fixtures/solana_dry_run.json only if the Solana dry run's Paxeer side applies a body this task changes.
     - _Requirements: 9.1, 12.1_
-  - [ ] 2.19 Replay a completion out of the pending set in the relayer journal
+  - [x] 2.19 Replay a completion out of the pending set in the relayer journal
     - In interop/crates/layerx-bridge-relayer/src/journal.rs add SubmissionStatus::Landed and make the Completed replay arm apply it: Completion::Included marks the submission whose tx_hash it names, Completion::Released marks the release whose signature it names, and a completion naming a transaction the item never submitted is refused as a JournalError::Conflict naming the item; Completion::AlreadyBridged names nothing and marks nothing; pending() and pending_release() keep matching Pending only, so the unit test observation 2.17.2 records passes as written.
     - Extend the journal tests beside it: the EVM item has no pending submission after Completed Included and still replays to the same state, the refusal fires for an unknown tx_hash and an unknown release signature, and the existing release test stays byte for byte; keep src/relayer.rs behaviour unchanged except where it relied on a landed transaction still reading as pending, and cover any such change in the relayer's tests.
     - Run task 2.17's verify_cmd once on the result; on exit 0 record task 2.17 done with that revision, command, exit code and log, and close observation 2.17.2 naming the revision.
