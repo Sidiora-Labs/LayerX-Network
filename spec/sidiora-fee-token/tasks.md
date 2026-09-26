@@ -172,7 +172,7 @@
 ## Wave 3 - One Aggregate Run, Recorded
 
 - [ ] 3. Qualify the merged waves once and write down what ran
-  - [ ] 3.1 Run the aggregate suites once on the merged revision and record the evidence
+  - [ ] 3.1 Run the aggregate suites once on the merged revision and record the evidence — **Implemented - qualification pending**
     - On the revision that merges waves 1 and 2, run the three legs of the gate once, in order - the Go packages under modules/evm, modules/layerxbridge, precompiles and node/antedecorators, then the gas-station crate, then the Paxeer Foundry project - writing each leg's output to its own log under build/sidiora-gates/.
     - Append one gate record per leg to spec/sidiora-fee-token/qualification.kvx carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code and the log path, written only from a command that actually ran.
     - Append one observation per failure the run exposes that belongs to no task in this feature: revision, command, exit code, log path, one sentence of what was observed and one sentence of what is assumed; do not investigate it further and do not rerun it.

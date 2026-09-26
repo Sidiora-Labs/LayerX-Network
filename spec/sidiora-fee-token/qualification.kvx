@@ -486,3 +486,13 @@ observed = "TestFeeTokenRegistration builds GetCustomPrecompiles for v6.6, below
 assumption = "The test lies outside task 2.14 touches and was not run by its verify_cmd; it stays as written until a task owning it builds the set at or after the fee-token upgrade."
 severity = "suspect"
 closed = "Task 2.16 builds the set at the fee-token upgrade, requires the single version keyed by it and no entry below it; the precompiles package tests pass on d714b6402b9b7d78c6b15bc002fcbc3ad170e58b."
+
+[gate.3.1.1]
+task = "3.1"
+reqs = ["15.1","15.2","15.3","15.4"]
+revision = "4eae9588f43f6141083dde5af3aab92480aa082c"
+command = "go test -count=1 ./modules/evm/... ./modules/layerxbridge/... ./precompiles/ ./precompiles/feetoken/... ./node/antedecorators/..."
+environment = "linux/amd64, go1.25.6, the first leg of the task 3.1 verify_cmd under one timeout 20m"
+outcome = "fail"
+evidence = "build/sidiora-gates/go.log"
+note = "Exit code 1: 21 packages passed and github.com/sidiora-labs/paxeer-network/modules/evm failed in TestModuleExportGenesis (modules/evm/module_test.go:58 expects the exported params without allowed_fee_denoms, max_fee_token_spread, fee_token_enabled, fee_token_distribution and max_fee_token_rate_age, which task 2.4 added) and TestConsensusVersion (modules/evm/module_test.go:64 expects 21, the module reports 22 after the task 2.9 raise). Both failures belong to tasks in this feature, so no observation is written; the verify_cmd stops at the first failing leg, so the gas-station leg and the Paxeer Foundry leg never ran and no record is written for them."
