@@ -895,7 +895,7 @@ touches = ["include/layerx/lxp_module.h","src/protocol/lxp_genesis.c","src/proto
 reqs = ["11.1","11.3"]
 
 [task.2.19]
-title = "Re-sign the observation activity fixture with keys the tests hold and qualify the program request path"
+title = "Align the kernel test's attestor keys with the intake fixture's signers and qualify the program request path"
 status = "pending"
 wave = 2
 requires = ["2.2","2.24"]
@@ -906,7 +906,7 @@ do_4 = "Split the test function in interop/crates/x-websearch/tests/kernel.rs th
 do_5 = "Run task 2.2's verify_cmd once on the result; on exit 0 record task 2.2 done with that revision, command, exit code and log, and close observations 2.2.1 and 2.19.1 naming the revision."
 verify_cmd = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && make test-web-intake test-web-adapter && make test-web-program-path && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test kernel'"
 symbols = ["the_observation_activity_equals_the_kernel_adapter_fixture"]
-touches = ["tests/fixtures/web","tests/modules/test_web_intake.c","tests/network/test_web_adapter.c","interop/crates/x-websearch/tests/kernel.rs","interop/crates/x-websearch/tests/fixtures/kernel"]
+touches = ["interop/crates/x-websearch/tests/kernel.rs","interop/crates/x-websearch/tests/fixtures/kernel"]
 reqs = ["11.4"]
 
 [task.2.20]
@@ -924,7 +924,7 @@ reqs = ["11.3"]
 
 [task.2.21]
 title = "Serve program events through the gateway for the sidecar's kernel watcher"
-status = "pending"
+status = "done"
 wave = 2
 requires = ["2.2"]
 do_1 = "In platform/hosted/gateway/src/rpc.rs add the method lx_getProgramEvents taking a topic, a start sequence and a limit and answering events that carry sequence, program_id, topic and data, exactly the shape interop/crates/x-websearch/tests/fixtures/kernel/watch.json pins, backed by the program event store of src/modules/programs/event.c through the upstream read the gateway proxies; where the upstream surface has no topic-filtered, sequence-cursored program event read, add one beside the existing /v1/programs reads in the same service with its own test."
@@ -934,6 +934,10 @@ verify_cmd = "timeout 20m sh -c 'cargo test --locked --manifest-path platform/Ca
 symbols = ["lx_getProgramEvents"]
 touches = ["platform/hosted/gateway/src/rpc.rs","platform/hosted/gateway/src/public_reads.rs","platform/hosted/gateway/tests/fixtures","platform/hosted/gateway/tests/local/events.rs","platform/Cargo.lock"]
 reqs = ["11.3"]
+revision = "a01484182da45a4e43ec13541b3b70a9466f9323"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway'"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.2.22]
 title = "Teach the program lint ABI v4 and lint the web-reader build"

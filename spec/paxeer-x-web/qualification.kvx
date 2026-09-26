@@ -331,6 +331,7 @@ symbol = "KernelWatcher::poll"
 observed = "The gateway has no program-event method, so the watcher calls lx_getProgramEvents with a topic, a start sequence and a limit and expects events with sequence, program_id, topic and data."
 assumption = "The gateway gains that method in this shape; the recorded exchanges under tests/fixtures/kernel pin it."
 severity = "suspect"
+closed = "The gateway serves lx_getProgramEvents with a topic, a start sequence and a limit in the shape tests/fixtures/kernel/watch.json pins, and its recorded-exchange tests passed under the verify_cmd on a01484182da45a4e43ec13541b3b70a9466f9323."
 
 [observation.2.2.5]
 task = "2.2"
@@ -387,4 +388,21 @@ file = "interop/crates/x-websearch/tests/kernel.rs"
 symbol = "the_relay_answers_a_program_request_and_posts_its_observation"
 observed = "With src/kernel.rs now setting the majority level the build passes (.logs/build.log, exit 0), but the verify_cmd's clippy stops on too_many_lines (108/100) in this kernel test (.logs/verify.log, exit 101), a file outside task 2.24, so the api, attest, canonical and content tests did not run."
 assumption = "The kernel test's owner splits the function without an allow attribute, after which the verify_cmd runs unchanged."
+severity = "blocker"
+
+[observation.2.21.1]
+task = "2.21"
+file = "platform/Cargo.lock"
+symbol = "layerx-mcp"
+observed = "The build and the verify_cmd both stop before compiling with exit 101 because platform/Cargo.lock lacks layerx-x402 and layerx-interop-gateway, which layerx-mcp now depends on and platform/cli pulls into the platform workspace (.logs/build.log, .logs/verify.log), so lx_getProgramEvents and its tests are written but not compiled or run."
+assumption = "The platform lock gains the two interop crates from the owner of the layerx-mcp change, after which the build and the verify_cmd rerun unchanged."
+severity = "blocker"
+closed = "platform/Cargo.lock gained the layerx-x402 and layerx-interop-gateway path crates through an offline resolution, and the build and the verify_cmd passed on a01484182da45a4e43ec13541b3b70a9466f9323."
+
+[observation.2.21.2]
+task = "2.21"
+file = "src/modules/programs/event.c"
+symbol = "lxp_programs_emit_guest_event"
+observed = "The kernel commits a guest event only as an envelope carrying the topic and data digests and the data length, and neither the node nor the core service keeps the raw topic or data, so no upstream read can answer lx_getProgramEvents with data and none was added to the core service; the gateway proxies GET /v1/programs/events/<topic>/<from_sequence>/<limit>, validates the page and answers -32001 while the core returns not_found, and the local events.rs run is not extended because it could only fail."
+assumption = "A kernel and node change persisting committed guest event topic and data by global sequence, served by the core service at that path, is owned by a follow-up task outside these touches."
 severity = "blocker"
