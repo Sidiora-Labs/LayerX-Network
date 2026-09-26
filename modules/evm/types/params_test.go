@@ -365,7 +365,7 @@ func TestFeeTokenParamsProtoRateBoundaries(t *testing.T) {
 		var actual types.AllowedFeeDenom
 		require.NoError(t, actual.Unmarshal(data))
 		require.Equal(t, expected, actual)
-		require.Equal(t, expected.Rate, actual.GetRate())
+		require.Equal(t, expected.Rate, actual.Rate)
 		require.Equal(t, height, actual.GetRateUpdateHeight())
 		params := types.DefaultParams()
 		params.MaxFeeTokenRateAge = height
@@ -378,7 +378,7 @@ func TestFeeTokenParamsProtoRateBoundaries(t *testing.T) {
 		require.Equal(t, height, decoded.GetMaxFeeTokenRateAge())
 	}
 	var unset *types.AllowedFeeDenom
-	require.True(t, unset.GetRate().IsNil())
+	require.True(t, types.AllowedFeeDenom{}.Rate.IsNil())
 	require.Zero(t, unset.GetRateUpdateHeight())
 	var params *types.Params
 	require.Zero(t, params.GetMaxFeeTokenRateAge())

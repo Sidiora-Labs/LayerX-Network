@@ -116,6 +116,7 @@ revision = "5241cfaeda1a9536e3bf2cde20e3125a5f5a1112"
 command = "gh pr view 530 --json body -q .body"; exit_code = 0; log_path = "https://github.com/Sidiora-Labs/Paxeer-X-Network/pull/530#discussion_r4107607635"
 observed = "The pull request reports manual protobuf edits despite the generation contract, and regenerating params.pb.go would modify a file outside task 2.8 touches."
 assumption = "Regeneration requires separately authorized scope; the existing toolchain observation 2.4.1 is not rerun or re-investigated."
+closed = "The pinned pipeline regenerated params.pb.go at f67c23e4a3d44fdbe573d9197bd1288422907fae and it is committed exactly as emitted, with no hand edit left in the generated file."
 
 [observation.2.8.2]
 task = "2.8"; file = "contracts/src/BatchCallAndSponsor.sol"; symbol = "_readRate"; severity = "blocker"
@@ -577,3 +578,4 @@ revision = "23444184e79cc0f145cb482c50b0527a2d707f3a"
 command = "timeout 20m sh -c 'bash scripts/protoc.sh && git diff --exit-code -- modules/evm/types/params.pb.go && go test -count=1 ./modules/evm/types/...'"; exit_code = 1; log_path = ".logs/verify.log"
 observed = "The pinned pipeline reproduces params.pb.go byte for byte but emits no GetRate getter for the customtype rate field, so params_test.go lines 368 and 381, which call GetRate, no longer compile."
 assumption = "The earlier hand-edited getter must move into hand-written code or the test must change, both outside task 4.12 touches and forbidden by its do_3, so observation 2.8.1 stays open."
+closed = "At f67c23e4a3d44fdbe573d9197bd1288422907fae no non-test code calls GetRate, so params_test.go reads the Rate field directly with its assertions unchanged, and the verify_cmd exits 0."
