@@ -298,10 +298,10 @@ reqs = ["4.1","4.2","4.3","4.4","4.5","4.6","4.7"]
 [task.1.3]
 title = "Document the Solana identity mapping and pin it as vectors"
 status = "done"
-revision = "360f86f7a3abc9bbfdb780345d3b5dfb9ef75737"
+revision = "f37eca32497dbc1cd2d3abd38fed70db03427030"
 command = "timeout 20m sh -c 'go test -count=1 ./bridge/vectors/...'"
 exit_code = 0
-log_path = "/root/lx-lanes/br-t1-3/.logs/verify.log"
+log_path = ".logs/verify-review.log"
 wave = 1
 requires = []
 do_1 = "Write bridge/ATTESTATION-SOLANA.md stating the mapping in full: the handle of a 32-byte Solana key as the last 20 bytes of keccak256 of that key, the vault handle as the handle of the vault-authority PDA, the asset id as the registry's value with the derived handle as its default, the inbound txHash as keccak256 of the 64-byte transaction signature, the inbound logIndex as the deposit nonce recorded in the receipt PDA, the release recipient as the full 32-byte pubkey whose handle the program derives, and the Solana chain id as the reserved uint64 91600046870081, the big-endian ASCII bytes of SOLANA left-padded to eight bytes, with the reason it cannot collide with an EIP-155 id."
