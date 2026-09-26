@@ -15,7 +15,7 @@ use layerx_program_lint::{
 };
 use serde::de::{self, Deserialize, Deserializer, IgnoredAny, MapAccess, Visitor};
 
-const USAGE: &str = "usage: layerx-program-lint <project-directory> [artifact.wasm]\n       layerx-program-lint --abi-version <1|2> <project-directory> [artifact.wasm]\n       layerx-program-lint --abi-version <1|2> --artifact <artifact.wasm>\n       layerx-program-lint --abi";
+const USAGE: &str = "usage: layerx-program-lint <project-directory> [artifact.wasm]\n       layerx-program-lint --abi-version <1|2|3|4> <project-directory> [artifact.wasm]\n       layerx-program-lint --abi-version <1|2|3|4> --artifact <artifact.wasm>\n       layerx-program-lint --abi";
 const USAGE_STATUS: u8 = 2;
 
 fn main() -> ExitCode {
@@ -25,12 +25,12 @@ fn main() -> ExitCode {
         ["--abi"] => abi_surface_violations(),
         ["--abi-version", version, "--artifact", artifact] => {
             let Some(version) = parse_version(version) else {
-                return usage_refusal("ABI version must be exactly 1 or 2");
+                return usage_refusal("ABI version must be exactly 1, 2, 3 or 4");
             };
             artifact_violations(Path::new(artifact), version)
         }
         ["--artifact", _] => {
-            return usage_refusal("artifact lint requires --abi-version <1|2>");
+            return usage_refusal("artifact lint requires --abi-version <1|2|3|4>");
         }
         ["--abi-version", version, project] => {
             project_violations(Path::new(project), None, Some(version))
@@ -79,7 +79,7 @@ fn project_violations(
         let Some(requested) = parse_version(requested) else {
             return vec![metadata_refusal(
                 project,
-                "ABI version must be exactly 1 or 2",
+                "ABI version must be exactly 1, 2, 3 or 4",
             )];
         };
         if requested != recorded {
@@ -152,9 +152,10 @@ fn parse_version(value: &str) -> Option<u16> {
 
 const fn parse_version_number(value: u16) -> Option<u16> {
     match value {
-        layerx_programs_runtime::ABI_V1_VERSION | layerx_programs_runtime::ABI_V2_VERSION => {
-            Some(value)
-        }
+        layerx_programs_runtime::ABI_V1_VERSION
+        | layerx_programs_runtime::ABI_V2_VERSION
+        | layerx_programs_runtime::ABI_V3_VERSION
+        | layerx_programs_runtime::ABI_V4_VERSION => Some(value),
         _ => None,
     }
 }
@@ -224,6 +225,12 @@ mod tests {
             .unwrap_or_else(|error| panic!("negative fixture manifest: {error}"));
         assert!(recorded_abi_version(&root).is_err());
         fs::write(root.join("layerx-program.json"), "{\"abi_version\":3}\n")
+            .unwrap_or_else(|error| panic!("v3 fixture manifest: {error}"));
+        assert_eq!(recorded_abi_version(&root), Ok(3));
+        fs::write(root.join("layerx-program.json"), "{\"abi_version\":4}\n")
+            .unwrap_or_else(|error| panic!("v4 fixture manifest: {error}"));
+        assert_eq!(recorded_abi_version(&root), Ok(4));
+        fs::write(root.join("layerx-program.json"), "{\"abi_version\":5}\n")
             .unwrap_or_else(|error| panic!("unknown fixture manifest: {error}"));
         assert!(recorded_abi_version(&root).is_err());
         fs::write(root.join("layerx-program.json"), "{}\n")
@@ -232,6 +239,9 @@ mod tests {
         fs::remove_dir_all(&root).unwrap_or_else(|error| panic!("fixture cleanup: {error}"));
         assert_eq!(parse_version("1"), Some(1));
         assert_eq!(parse_version("2"), Some(2));
-        assert_eq!(parse_version("3"), None);
+        assert_eq!(parse_version("3"), Some(3));
+        assert_eq!(parse_version("4"), Some(4));
+        assert_eq!(parse_version("5"), None);
+        assert_eq!(parse_version("0"), None);
     }
 }

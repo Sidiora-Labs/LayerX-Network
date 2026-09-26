@@ -929,7 +929,7 @@ reqs = ["11.3"]
 
 [task.2.22]
 title = "Teach the program lint ABI v4 and lint the web-reader build"
-status = "pending"
+status = "done"
 wave = 2
 requires = ["2.2"]
 do_1 = "In programs/sdk/rust/lint/src/lib.rs make lint_artifact_for_abi and lint_project_for_abi accept layerx_programs_runtime::ABI_V3_VERSION and ABI_V4_VERSION with the host function set each version exports, refusing an import outside that set exactly as the v2 path does, and keep the unsupported-version refusal for anything above v4."
@@ -938,6 +938,10 @@ verify_cmd = "timeout 20m sh -c 'cd programs && cargo test --locked -p layerx-pr
 symbols = ["lint_artifact_for_abi"]
 touches = ["programs/sdk/rust/lint/src/lib.rs","programs/sdk/rust/lint/src/main.rs","programs/sdk/rust/lint/tests","programs/sdk/rust/examples/web-reader/build.sh"]
 reqs = ["11.2"]
+revision = "a570f44efec8e5c7e8eb14eecf4ded1ffcae9d9b"
+command = "timeout 20m sh -c 'cd programs && cargo test --locked -p layerx-program-lint && cd .. && make programs-reference-web-reader'"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.2.23]
 title = "Let the prepare pass stage module values so a program's first paying call creates the web fee account"
