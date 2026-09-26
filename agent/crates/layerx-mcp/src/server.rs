@@ -2,7 +2,6 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
-use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -306,6 +305,12 @@ impl ScopeBinding {
         &self.tenant
     }
 
+    /// Returns the agent the bound session speaks for; a web route pays as this agent.
+    #[must_use]
+    pub const fn agent(&self) -> &Did {
+        &self.agent
+    }
+
     #[must_use]
     pub const fn session_id(&self) -> SessionId {
         self.session_id
@@ -534,6 +539,16 @@ impl Server {
         self.tools.iter().find(|tool| tool.name == name).copied()
     }
 
+    /// Reports whether this full binding serves a web tool, so its boundary needs a web route.
+    #[must_use]
+    pub fn serves_web(&self) -> bool {
+        self.mode == DeploymentMode::Full
+            && self
+                .tools
+                .iter()
+                .any(|tool| catalogue::untrusted_output(tool.name))
+    }
+
     /// Constructs an invocation only after the common daemon resolver authorizes the exact
     /// credential and arms its exact-generation stop signal.
     fn route(
@@ -702,12 +717,7 @@ impl Server {
         inner: B,
         route: WebRoute,
     ) -> Result<WebBoundary<B>, ServerError> {
-        if self.mode != DeploymentMode::Full
-            || !self
-                .tools
-                .iter()
-                .any(|tool| catalogue::untrusted_output(tool.name))
-        {
+        if !self.serves_web() {
             return Err(ServerError::ToolAbsent);
         }
         if route.config.payer_did().as_bytes() != self.binding.agent.as_bytes() {
@@ -777,7 +787,7 @@ pub struct WebRoute {
     config: WebConfig,
     approvals: Arc<ApprovalRegistry>,
     policy: ApprovalPolicy,
-    payer: Box<dyn WebPayer>,
+    payer: Box<dyn WebPayer + Send>,
 }
 
 impl WebRoute {
@@ -786,7 +796,7 @@ impl WebRoute {
         config: WebConfig,
         approvals: Arc<ApprovalRegistry>,
         policy: ApprovalPolicy,
-        payer: Box<dyn WebPayer>,
+        payer: Box<dyn WebPayer + Send>,
     ) -> Self {
         Self {
             config,
@@ -887,14 +897,14 @@ fn web_refusal(error: &WebToolError) -> BoundaryRefusal {
         WebToolError::OfferMismatch(field) => {
             refused(format!("the web offer does not bind the {field}"))
         }
-        WebToolError::ApprovalRequired(ticket) => refused(format!(
-            "the web spend is held for approval under hold {}",
-            hex(&ticket.hold_id)
-        )),
-        WebToolError::ApprovalPending(ticket) => refused(format!(
-            "the web spend is still awaiting approval under hold {}",
-            hex(&ticket.hold_id)
-        )),
+        WebToolError::ApprovalRequired(ticket) => BoundaryRefusal::Held {
+            hold_id: ticket.hold_id,
+            awaiting: false,
+        },
+        WebToolError::ApprovalPending(ticket) => BoundaryRefusal::Held {
+            hold_id: ticket.hold_id,
+            awaiting: true,
+        },
         WebToolError::ApprovalRefused(state) => {
             refused(format!("the web spend approval is {state:?}"))
         }
@@ -923,13 +933,6 @@ fn web_refusal(error: &WebToolError) -> BoundaryRefusal {
             refused(format!("the web {what} answer is malformed"))
         }
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().fold(String::new(), |mut output, byte| {
-        let _ = write!(output, "{byte:02x}");
-        output
-    })
 }
 
 #[derive(Debug)]

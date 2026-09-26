@@ -36,6 +36,7 @@ const (
 	LayerXExchangeStoreKey = "layerxexchange" // modules/layerxexchange/types.StoreKey
 	LayerXBridgeStoreKey   = "layerxbridge"   // modules/layerxbridge/types.StoreKey
 	LaunchpadStoreKey      = "launchpad"      // modules/launchpad/types.StoreKey
+	XWebStoreKey           = "xweb"           // modules/xweb/types.StoreKey
 )
 
 // MemIAVLStoreKeys is the canonical list of module KV store keys that are
@@ -68,6 +69,7 @@ var MemIAVLStoreKeys = []string{
 	LayerXExchangeStoreKey,
 	LayerXBridgeStoreKey,
 	LaunchpadStoreKey,
+	XWebStoreKey,
 }
 
 // memIAVLStoreKeySet is MemIAVLStoreKeys materialized as a set for O(1)

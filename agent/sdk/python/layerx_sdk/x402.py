@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, NoReturn
 
+from .generated.receipt import ReceiptFailureCode
 from .production import PlatformSdkError, SdkErrorCode
 from .verifier import (
     AuthorizedReceiptBatch,
@@ -11,6 +12,7 @@ from .verifier import (
     LocalSignatureVerifier,
     MerkleProof,
     ReceiptVerification,
+    ReceiptVerificationError,
     SequencerAuthorization,
     verify_batch_inclusion,
     verify_checkpoint,
@@ -18,6 +20,7 @@ from .verifier import (
 )
 
 PaymentCommitment = Literal["executed", "batched", "finalised"]
+PAYMENT_RECEIPT_PROTOCOL_VERSIONS = (2, 3)
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,16 @@ class PaymentCommitmentEvidence:
 
 def _failure() -> NoReturn:
     raise PlatformSdkError(SdkErrorCode.VERIFICATION_FAILURE, "never")
+
+
+def receipt_protocol_version(canonical_receipt: bytes) -> int:
+    if not isinstance(canonical_receipt, bytes) or len(canonical_receipt) < 6:
+        raise ReceiptVerificationError(ReceiptFailureCode.DECODE)
+    envelope = int.from_bytes(canonical_receipt[0:2], "big")
+    version = int.from_bytes(canonical_receipt[4:6], "big")
+    if envelope != version or version not in PAYMENT_RECEIPT_PROTOCOL_VERSIONS:
+        raise ReceiptVerificationError(ReceiptFailureCode.PROTOCOL_VERSION)
+    return version
 
 
 def payment_commitment(extra: object = None) -> PaymentCommitment:
@@ -172,7 +185,12 @@ def verify_payment_receipt(
             _failure()
     if payer == "0" * 64:
         _failure()
-    verified = verify_receipt(canonical_receipt, authorized, signatures)
+    verified = verify_receipt(
+        canonical_receipt,
+        authorized,
+        signatures,
+        protocol_version=receipt_protocol_version(canonical_receipt),
+    )
     if (
         verified.receipt.amount != int(amount)
         or verified.receipt.asset.hex() != asset

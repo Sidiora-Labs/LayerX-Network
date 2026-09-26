@@ -58,13 +58,23 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -X '${VERSION_PKG}.BuildTags=${BUILD_TAGS}'" && \
     go build -tags "${BUILD_TAGS}" -ldflags "${LDFLAGS}" ${GO_BUILD_ARGS} -o /go/bin/paxd ./daemon/paxd
 
+FROM docker.io/rust:1.91.1-bookworm@sha256:c1e5f19e773b7878c3f7a805dd00a495e747acbdc76fb2337a4ebf0418896b33 AS x-websearch
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libssl-dev pkg-config && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+ENV CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/src/.x-websearch-target
+COPY . .
+RUN cargo build --locked --manifest-path interop/Cargo.toml --release --package x-websearch --bin x-websearch
+
 FROM docker.io/ubuntu:24.04@sha256:104ae83764a5119017b8e8d6218fa0832b09df65aae7d5a6de29a85d813da2fb
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates && \
+    apt-get install -y --no-install-recommends ca-certificates libssl3t64 && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /go/bin/paxd /usr/bin/
+COPY --from=x-websearch /src/.x-websearch-target/release/x-websearch /usr/bin/x-websearch
 COPY --from=paxctl /usr/bin/paxctl /usr/bin/
 COPY --from=builder /go/lib/*.so /usr/lib/
 

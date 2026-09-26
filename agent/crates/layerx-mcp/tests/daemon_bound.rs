@@ -19,8 +19,8 @@ use layerx_agentd::identity::{
 };
 use layerx_agentd::session::{open, OpenRequest, SessionId, SessionRegistry};
 use layerx_agentd::store::{Store, TenantId};
-use layerx_mcp::binding::{Binding, BindingError};
-use layerx_mcp::catalogue;
+use layerx_mcp::binding::{Binding, BindingError, DaemonBoundary};
+use layerx_mcp::catalogue::{self, WEB_TOOLS};
 use layerx_mcp::listener::{Listener, ListenerConfig, ListenerError};
 use layerx_mcp::server::{catalogue as served, DeploymentMode, ToolKind};
 use layerx_mcp::stdio::Session;
@@ -120,6 +120,17 @@ fn daemon_records(store: &mut Store) -> (Capability, IdentityRecord) {
 
 /// Persists one real capability and one real open session, returning its bearer token.
 fn enrol(root: &Path) -> [u8; 32] {
+    enrol_scopes(
+        root,
+        served()
+            .iter()
+            .map(|tool| tool.required_scope.to_owned())
+            .collect(),
+    )
+}
+
+/// Persists one real capability and one real open session carrying `scopes`.
+fn enrol_scopes(root: &Path, scopes: BTreeSet<String>) -> [u8; 32] {
     let mut store =
         Store::open(root.join("store")).unwrap_or_else(|error| panic!("store: {error}"));
     let (capability, identity) = daemon_records(&mut store);
@@ -130,10 +141,7 @@ fn enrol(root: &Path) -> [u8; 32] {
         agent: identity.did().clone(),
         authority: ProtocolAuthority::CapabilityGrant(capability.id.0),
         permitted_activity_types: BTreeSet::from([7]),
-        scopes: served()
-            .iter()
-            .map(|tool| tool.required_scope.to_owned())
-            .collect(),
+        scopes,
         expiry_sequence: 300,
         opening_client: "mcp".to_owned(),
         policy_version: "policy-v1".to_owned(),
@@ -147,7 +155,17 @@ fn enrol(root: &Path) -> [u8; 32] {
 
 fn document(root: &Path, endpoint: &str, mode: &str, listener: Option<&str>) -> String {
     let token = enrol(root);
-    let token_file = secret(root, "session-token", &hex(&token));
+    document_for(root, &token, endpoint, mode, listener)
+}
+
+fn document_for(
+    root: &Path,
+    token: &[u8; 32],
+    endpoint: &str,
+    mode: &str,
+    listener: Option<&str>,
+) -> String {
+    let token_file = secret(root, "session-token", &hex(token));
     let bearer_file = secret(root, "agent-bearer", &"b".repeat(48));
     let mut value = json!({
         "mode": mode,
@@ -261,10 +279,7 @@ fn balances(program: &str) -> String {
     )
 }
 
-fn exchange(
-    session: &mut Session<layerx_mcp::boundary::ProgramReads>,
-    requests: &[Value],
-) -> Vec<Value> {
+fn exchange(session: &mut Session<DaemonBoundary>, requests: &[Value]) -> Vec<Value> {
     let mut input = String::new();
     for request in requests {
         input.push_str(
@@ -914,4 +929,146 @@ fn connect(socket: &Path) -> UnixStream {
         thread::sleep(Duration::from_millis(25));
     }
     panic!("the protocol socket never accepted an admitted peer");
+}
+
+/// A session holding the catalogue scopes and the three web scopes.
+fn web_scoped_document(root: &Path, endpoint: &str, web: Option<Value>) -> String {
+    let mut scopes: BTreeSet<String> = served()
+        .iter()
+        .map(|tool| tool.required_scope.to_owned())
+        .collect();
+    scopes.extend(WEB_TOOLS.iter().map(|tool| tool.required_scope.to_owned()));
+    let token = enrol_scopes(root, scopes);
+    let body = document_for(root, &token, endpoint, "full", None);
+    let mut value: Value =
+        serde_json::from_str(&body).unwrap_or_else(|error| panic!("reparse: {error}"));
+    if let (Some(web), Some(fields)) = (web, value.as_object_mut()) {
+        fields.insert("web".to_owned(), web);
+    }
+    serde_json::to_string(&value).unwrap_or_else(|error| panic!("document: {error}"))
+}
+
+fn web_section() -> Value {
+    json!({
+        "endpoint": "http://127.0.0.1:9450",
+        "network": "layerx:1",
+        "sequencer_public_key": "5e".repeat(32),
+        "timeout_ms": 5_000,
+        "pending_attempts": 3,
+        "approval_threshold": "0",
+    })
+}
+
+#[test]
+fn a_web_scoped_session_without_the_web_section_is_refused_naming_the_field() {
+    let root = directory("web-absent");
+    let endpoint = agent_daemon("b".repeat(48));
+    let body = web_scoped_document(&root, &endpoint, None);
+    let path = write_document(&root, &body);
+    let binding = Binding::open(&path).unwrap_or_else(|error| panic!("open: {error:?}"));
+    let refusal = binding
+        .open_session()
+        .err()
+        .unwrap_or_else(|| panic!("a web scope opened without the web section"));
+    assert!(matches!(refusal, BindingError::Refused(_)));
+    assert!(
+        refusal.detail().contains("field web is absent"),
+        "{}",
+        refusal.detail()
+    );
+
+    let mut narrowed = binding.clone();
+    narrowed.restrict_to_read_only();
+    let mut session = narrowed
+        .open_session()
+        .unwrap_or_else(|error| panic!("read-only session: {}", error.detail()));
+    let responses = exchange(
+        &mut session,
+        &[json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})],
+    );
+    let listed = responses[0]
+        .pointer("/result/tools")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("tools absent"));
+    assert!(!listed.is_empty());
+    assert!(listed
+        .iter()
+        .all(|tool| { !catalogue::untrusted_output(tool["name"].as_str().unwrap_or_default()) }));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_web_scoped_session_without_an_attached_payer_is_refused() {
+    let root = directory("web-unattached");
+    let endpoint = agent_daemon("b".repeat(48));
+    let body = web_scoped_document(&root, &endpoint, Some(web_section()));
+    let path = write_document(&root, &body);
+    let binding = Binding::open(&path).unwrap_or_else(|error| panic!("open: {error:?}"));
+    let refusal = binding
+        .open_session()
+        .err()
+        .unwrap_or_else(|| panic!("a web scope opened without a payer"));
+    assert!(matches!(refusal, BindingError::Refused(_)));
+    assert!(
+        refusal
+            .detail()
+            .contains("no web payer and approval registry"),
+        "{}",
+        refusal.detail()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn the_web_section_is_closed_and_typed() {
+    let root = directory("web-section");
+    let body = web_scoped_document(&root, "127.0.0.1:9440", Some(web_section()));
+    assert!(Binding::parse(&body).is_ok());
+    let parsed: Value =
+        serde_json::from_str(&body).unwrap_or_else(|error| panic!("reparse: {error}"));
+    let cases: [(&str, Value, &str); 6] = [
+        (
+            "unexpected",
+            json!("1"),
+            "web field unexpected is not accepted",
+        ),
+        ("approval_threshold", json!(10), "field approval_threshold"),
+        (
+            "approval_threshold",
+            json!("-1"),
+            "field approval_threshold",
+        ),
+        (
+            "sequencer_public_key",
+            json!("5e"),
+            "field sequencer_public_key",
+        ),
+        ("pending_attempts", json!(256), "field web.pending_attempts"),
+        ("timeout_ms", json!("5000"), "field timeout_ms"),
+    ];
+    for (field, value, expected) in cases {
+        let mut copy = parsed.clone();
+        if let Some(web) = copy.pointer_mut("/web").and_then(Value::as_object_mut) {
+            web.insert(field.to_owned(), value);
+        }
+        let text = serde_json::to_string(&copy).unwrap_or_else(|error| panic!("encode: {error}"));
+        let refusal = Binding::parse(&text)
+            .err()
+            .unwrap_or_else(|| panic!("web.{field} was accepted"));
+        assert!(matches!(refusal, BindingError::Malformed(_)));
+        assert!(refusal.detail().contains(expected), "{}", refusal.detail());
+    }
+    let mut missing = parsed.clone();
+    if let Some(web) = missing.pointer_mut("/web").and_then(Value::as_object_mut) {
+        web.remove("network");
+    }
+    let text = serde_json::to_string(&missing).unwrap_or_else(|error| panic!("encode: {error}"));
+    assert!(Binding::parse(&text).is_err());
+    let mut scalar = parsed;
+    if let Some(fields) = scalar.as_object_mut() {
+        fields.insert("web".to_owned(), json!("sidecar"));
+    }
+    let text = serde_json::to_string(&scalar).unwrap_or_else(|error| panic!("encode: {error}"));
+    assert!(Binding::parse(&text).is_err());
+    let _ = fs::remove_dir_all(root);
 }

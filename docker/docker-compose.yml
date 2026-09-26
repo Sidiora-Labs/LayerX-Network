@@ -124,6 +124,35 @@ services:
       localnet:
         ipv4_address: 192.168.10.13
 
+  x-websearch:
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    container_name: pax-x-websearch
+    image: "pax-chain/x-websearch"
+    build:
+      context: ..
+      dockerfile: interop/deploy/x-websearch/Dockerfile
+    user: "${USERID}:${GROUPID}"
+    command: ["--config", "/etc/x-websearch/config.json"]
+    ports:
+      - "8480:8480"
+    environment:
+      - X_WEBSEARCH_ATTESTOR_KEY_FILE=/run/x-websearch/keys/attestor.key
+      - X_WEBSEARCH_SUBMITTER_KEY_FILE=/run/x-websearch/keys/submitter.key
+      - X_WEBSEARCH_RECEIVER_KEY_FILE=/run/x-websearch/keys/receiver.key
+    volumes:
+      - "${X_WEBSEARCH_HOME}/config.json:/etc/x-websearch/config.json:ro,Z"
+      - "${X_WEBSEARCH_HOME}/keys:/run/x-websearch/keys:ro,Z"
+      - "${X_WEBSEARCH_HOME}/data:/var/lib/x-websearch:Z"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - localnet
+
 networks:
   localnet:
     driver: bridge

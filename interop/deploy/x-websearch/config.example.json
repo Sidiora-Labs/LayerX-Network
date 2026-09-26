@@ -1,0 +1,51 @@
+{
+  "note": "Price rule: set each asset's price, in that asset's base units, so that one request costs one tenth of a US cent (0.001 USD) at the time of configuration. Replace every REPLACE_WITH value and delete this note before starting x-websearch: the loader refuses placeholders and unknown fields. Keys never go in this file; they are read from the files X_WEBSEARCH_ATTESTOR_KEY_FILE, X_WEBSEARCH_SUBMITTER_KEY_FILE and X_WEBSEARCH_RECEIVER_KEY_FILE name.",
+  "listen": "0.0.0.0:8480",
+  "data_dir": "/var/lib/x-websearch",
+  "seeds": [
+    "REPLACE_WITH_SEED_URL"
+  ],
+  "crawl": {
+    "pages_per_cycle": 1000,
+    "pages_per_host": 100,
+    "max_depth": 3,
+    "politeness_delay_ms": 1000
+  },
+  "fetch": {
+    "connect_timeout_ms": 3000,
+    "total_timeout_ms": 10000,
+    "max_body_bytes": 2097152,
+    "max_redirects": 3,
+    "allow_loopback": false
+  },
+  "assets": {
+    "SID": {
+      "asset_id": "REPLACE_WITH_SID_ASSET_ID",
+      "price": "REPLACE_WITH_SID_PRICE"
+    },
+    "PAX": {
+      "asset_id": "REPLACE_WITH_PAX_ASSET_ID",
+      "price": "REPLACE_WITH_PAX_PRICE"
+    },
+    "USDC": {
+      "asset_id": "REPLACE_WITH_USDC_ASSET_ID",
+      "price": "REPLACE_WITH_USDC_PRICE"
+    },
+    "USDL": {
+      "asset_id": "REPLACE_WITH_USDL_ASSET_ID",
+      "price": "REPLACE_WITH_USDL_PRICE"
+    }
+  },
+  "gateway": {
+    "endpoint": "REPLACE_WITH_GATEWAY_ENDPOINT",
+    "sequencer_id": "REPLACE_WITH_SEQUENCER_ID",
+    "sequencer_public_key": "REPLACE_WITH_SEQUENCER_PUBLIC_KEY"
+  },
+  "evm": {
+    "endpoint": "REPLACE_WITH_EVM_ENDPOINT",
+    "chain_id": 0,
+    "confirmations": 12
+  },
+  "kernel_network_id": 0,
+  "peers": []
+}

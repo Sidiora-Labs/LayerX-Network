@@ -96,14 +96,14 @@
     - In agent/crates/layerx-mcp/src/server.rs list catalogue::WEB_TOOLS in tools/list and route their tools/call through tools/web.rs behind the same approval boundary the other paid tools use, carrying the layerx/output untrusted marker on every result (observation 1.10.2); change no other tool's routing.
     - Extend agent/crates/layerx-mcp/tests/web.rs to drive a bound server through tools/list and tools/call for search, fetch and content over the recorded exchange, asserting the listing, a paid call, a held spend and the untrusted marker.
     - _Requirements: 9.1, 9.2_
-  - [ ] 1.17 Settle main-account offers and grant evidence in the buyer and the web tool — **Implemented - qualification pending**
+  - [x] 1.17 Settle main-account offers and grant evidence in the buyer and the web tool
     - In interop/crates/layerx-x402/src/buyer.rs let LayerXEvidence carry the optional purposeHash the Seller repeats, and make Buyer::capture_settlement refuse a grant settlement whose purposeHash is absent or differs from the purposeHash of the payment it built, and refuse an exact settlement that carries one, exactly as spec/402lxp/protocol.md states for buyers (observation 1.15.3), with tests in interop/crates/layerx-x402/tests/buyer.rs for the accepted repeat, the missing one, the differing one and the exact settlement carrying one.
     - In agent/crates/layerx-mcp/src/tools/web.rs make offer_facts accept the receiver account agent:<did>:main when the offer's asset is PAX, the kernel's native coin, and derive the payer's account the same way, keeping agent:<did>:asset:<id> for SID, USDC and USDL exactly as interop/crates/x-websearch/src/payment.rs derives them (observation 1.15.1).
     - Make the web tool's content call request GET /content/<digest> without a payment, accept a 200 whose body's digest equals the digest it asked for, refuse a body whose digest differs, and treat a 402 on the content path as a protocol mismatch rather than paying for it (observation 1.15.2).
     - Extend agent/crates/layerx-mcp/tests/web.rs so the recording task 1.15 made replays through the web tool end to end: the PAX exact success to the main account, the SID metered success whose settlement repeats purposeHash, the USDC and USDL exact successes and the unpaid content fetch, plus a refusal for a content body whose digest differs.
     - With these in place, run task 1.15's verify_cmd once on this revision and set task 1.15 to done with its four evidence fields when it passes, leaving it implemented with the run's fields otherwise.
     - _Requirements: 4.1, 4.2, 9.1, 9.4_
-  - [ ] 1.18 Box the perps market payload variant so the agent workspace passes clippy — **Implemented - qualification pending**
+  - [x] 1.18 Box the perps market payload variant so the agent workspace passes clippy
     - In agent/crates/layerx-types/src/payload.rs box the PerpsMarket carried by PerpsPayload::MarketCreate, the variant clippy's large_enum_variant names (observation 1.10.4), keeping every other variant and the hand-written encoder and decoder as they are so the kernel payload layout does not move; add no allow attribute anywhere.
     - Adjust agent/crates/layerx-types/tests/trading_payload.rs to the boxed variant and keep every vector under tests/fixtures/trading-payloads asserting byte for byte, so the change is proven to leave the encoding untouched.
     - With the lint gone, run task 1.17's verify_cmd once on this revision and set task 1.17 to done with its four evidence fields when it passes, leaving it implemented with the run's fields otherwise.
@@ -112,7 +112,7 @@
 ## Wave 2 - Integration
 
 - [ ] 2. Close the contract and program loops, package the sidecar, write the v6.8 plan and the page, and dry-run it
-  - [ ] 2.1 Sign as an attestor and submit fulfil from the sidecar
+  - [x] 2.1 Sign as an attestor and submit fulfil from the sidecar
     - Write interop/crates/x-websearch/src/watch.rs following XWebRequested logs from the configured EVM endpoint with eth_blockNumber and eth_getLogs to the configured confirmation depth, and src/attest.rs fetching each payload independently, building the origin-1 preimage and signing its digest with the web-attestor key, asserting the preimage against modules/xweb/types/testdata/preimage-vectors.json in its tests.
     - Add an authenticated signature-exchange route to the server for the configured peers, discarding and recording a signature over a different digest, and refusing to start when the attestor key equals the submitter or receiver key.
     - Write src/submit.rs posting fulfil through the precompile once the threshold is reached with signatures in ascending signer order, signing the EIP-1559 transaction with the submitter key in the shape interop/crates/layerx-gas-station/src/tx.rs uses, journalling the signed bytes before broadcast so a restart rebroadcasts, and recording an already-fulfilled request as completed; add the module lines to src/lib.rs and wire the loops into src/main.rs.
@@ -125,19 +125,21 @@
     - Write tests/test_web_program_path.c with the make target test-web-program-path running the reference program through request, payment, observation intake and web_read, and interop/crates/x-websearch/tests/kernel.rs asserting the sidecar's activity bytes equal tests/fixtures/web/observation-activity.hex and covering the watch against a recorded gateway exchange.
     - Route web observation intake through the programs module context so the committed answers live in the storage lx_web_committed_read reads (observation 1.8.2), and cover it in tests/test_web_program_path.c by reading an answer committed at intake back through web_read.
     - _Requirements: 11.1, 11.2, 11.3, 11.4_
-  - [ ] 2.3 Package the sidecar and add it to the node image
+  - [x] 2.3 Package the sidecar and add it to the node image
     - Write interop/deploy/x-websearch/Dockerfile building x-websearch from the interop workspace on pinned base images in the shape of interop/deploy/mirror/Dockerfile, running as a non-root user, and interop/deploy/x-websearch/x-websearch.service with a dedicated user, the three key-file environment variables and a hardened sandbox.
     - Write interop/deploy/x-websearch/config.example.json with placeholder asset ids, prices and trust inputs the loader refuses, allow_loopback false, and a note field stating the price rule of one tenth of a US cent per request at the time of configuration.
     - Add an x-websearch service to docker/docker-compose.yml beside the node services, and add a build stage to the root Dockerfile that builds x-websearch and copies it into the node image.
     - Write interop/deploy/x-websearch/tests/packaging-check.sh asserting the pinned bases, the non-root user, the unit's user, environment and sandbox directives, the compose entry, the node image's copy of the binary, and that the built loader refuses the configuration example.
     - _Requirements: 12.1, 12.2, 12.3_
-  - [ ] 2.4 Write the v6.8 upgrade plan that wires xweb into the application
+  - [x] 2.4 Write the v6.8 upgrade plan that wires xweb into the application
     - Append v6.8 to node/tags in the order the file's parser requires and register its handler in node/upgrades.go beside the v6.7 handler, adding the xweb store key through the upgrade's store loader and initialising the parameters to their documented defaults with an empty attestor set and the module paused.
     - Wire the xweb keeper, module and store key into node/app.go in the shape the layerxbridge keeper uses, implement the XWebK accessor in node/precompiles.go, and regenerate precompiles/xweb/setup.go with go generate so it names v6.8, asserting the regeneration produces no diff.
     - Make every xweb state change reachable only at or after the upgrade height, so a node replaying blocks below it produces exactly the state it produces without this feature; apply nothing to a running chain; this includes the precompile's presence in precompiles/setup.go GetCustomPrecompiles, which task 1.6 registered for every binary (observation 1.6.3), so a binary below the upgrade height carries no 0x0000000000000000000000000000000000001019 entry.
     - Add node/upgrades_xweb_test.go asserting the handler is registered under the name in node/tags, the store is added, the defaults are set, the module is paused, the custom precompile set below the upgrade height holds no xweb entry, and the precompile answers only after the upgrade.
+    - Move the latest-tag and LatestUpgrade assertions of node/upgrades_test.go from v6.7 to v6.8 while every assertion about the v6.7 handler itself stays as written, and add XWebStoreKey = \"xweb\" to storage/common/keys/store_keys.go and to MemIAVLStoreKeys so the store the application mounts is named there (observation 2.4.1).
+    - Run scripts/bump_version for v6.8 exactly as the go generate directive runs it and keep everything it writes, including the legacy copies its archive phase produces, so a second run produces no diff; never edit an archived legacy folder by hand.
     - _Requirements: 13.1, 13.2, 13.3, 13.4_
-  - [ ] 2.5 Write the xweb documentation page
+  - [x] 2.5 Write the xweb documentation page
     - Write docs/site/docs/protocol/xweb.md in the shape of docs/site/docs/protocol/sidiora.md: what x-websearch is, the four assets and the price rule, the three paid routes and GET /content/<digest>, the canonical content digest, the contract path with the address 0x0000000000000000000000000000000000001019, request, fulfil, refund and the callback, the attestor majority, the kernel path with web_read, and that the chain change reaches a running chain through the v6.8 upgrade and a governance proposal.
     - Link the page from docs/site/mkdocs.yml beside the Sidiora page; carry no date, hostname, IP address, node count, internal URL or credential; name the product Paxeer X Network; use no link but https://paxeer.app, paths under github.com/Sidiora-Labs/Paxeer-X-Network and relative site links.
     - _Requirements: 14.1, 14.2, 14.3_
@@ -145,8 +147,9 @@
     - Write interop/deploy/x-websearch/tests/dry-run-check.sh starting anvil, a real loopback web server serving committed pages and three x-websearch processes with run-local attestor keys and allow_loopback set, and deploying contracts/src/xweb/XWebConsumer.sol to anvil.
     - Fetch the same page through the three sidecars, assert the digests are identical and the signatures are valid and ascending over the origin-1 preimage, assert the submitter's fulfil calldata decodes against precompiles/xweb/abi.json, and deliver the consumer's callback on anvil from the impersonated precompile address with the attested response and the bounded gas, asserting the consumer's stored result.
     - Record the exchange as interop/deploy/x-websearch/tests/fixtures/dry-run.json, replayable without the nodes, carrying no key material, no endpoint but the loopback ones the run started and no date or hostname; stop with a message naming a missing tool rather than skipping a step.
+    - Add an api request carrying a credential envelope for each of the three sidecars against a loopback API server the run starts that refuses the call without it, asserting identical digests and the fulfil under the majority level, one more request under the single level fulfilled by the named sidecar alone, and that no file the sidecars wrote and no log line carries the credential; record it in the same fixture.
     - _Requirements: 15.1, 15.2, 15.3_
-  - [ ] 2.7 Widen the xweb workflow's path filters to every tree its legs exercise
+  - [x] 2.7 Widen the xweb workflow's path filters to every tree its legs exercise
     - Extend the path filters in .github/workflows/xweb-test.yml with every tree observation 1.11.1 names and every path tasks 1.12 to 1.15 and 2.1 to 2.6 touch that one of the workflow's legs exercises, so a change to any of them runs the legs; add no leg and change no command.
     - Extend tools/ci/xweb-workflow-check.sh to assert the widened list, keeping the rule that every filter names a path that exists or a path a task of this feature adds.
     - _Requirements: 16.1, 16.2_
@@ -155,12 +158,47 @@
     - Handle SIGTERM and SIGINT in src/main.rs through the signal-hook crate pinned in interop/Cargo.toml and declared in interop/crates/x-websearch/Cargo.toml, with no unsafe code: stop accepting connections, finish the requests in flight, commit the index and exit 0; keep the default action for every other signal.
     - Extend tests/config.rs for the new field and its refusals, tests/crawl.rs for a cycle scheduled from the configured interval, and tests/binary.rs so the clean-shutdown test asserts exit 0 on SIGTERM, a freed port and a reopened index with every page searchable; update tests/fixtures/binary as the configuration requires.
     - _Requirements: 2.1, 3.1, 4.1_
-  - [ ] 2.9 Open daemon-bound sessions with the web route
+  - [x] 2.9 Open daemon-bound sessions with the web route
     - In agent/crates/layerx-mcp/src/binding.rs make open_session build the WebRoute task 1.16 added from the binding's sidecar configuration, approval registry, threshold and payer, so a daemon-bound session with write:web:* scopes serves the web tools instead of listing tools it refuses; refuse to open the session when the sidecar configuration is absent while a web scope is present, naming the field.
     - In agent/crates/layerx-agentd/src/tenant.rs add the write:web:* scopes to the scopes Operation::Submit authorises, so a web session no longer needs the class scope write; change no other operation's scopes.
     - In agent/crates/layerx-mcp/src/boundary.rs add a BoundaryRefusal variant for a held spend carrying the hold id, and report it in its own words instead of the malformed-response text.
     - Extend agent/crates/layerx-mcp/tests/daemon_bound.rs and tests/web.rs: a session opened through open_session serves search, fetch and content over the recorded exchange with only the web scopes, a session without the sidecar configuration is refused, and a held spend is reported as held; add the matching layerx-agentd test for the scope table.
+    - Qualify the layerx-agentd half with the library tests of the tenant module this task changes; the crate's remaining library tests need the boundary and native binaries the Makefile's agent-test target builds for them and run under task 2.16 (observation 2.9.1).
     - _Requirements: 9.1, 9.2_
+  - [x] 2.10 Settle the metered draw signer and the sidecar's payment configuration
+    - Amend spec/402lxp/protocol.md so the metered flow reads as the code and the recorded exchanges already work: the buyer authorises a purpose-bound grant with a fee limit, and the receiver draws against it per request, signing each draw with its receiver key and repeating the challenge's purposeHash in the settlement; remove the sentence that has the buyer author a receive payload the receiver signs (observation 1.4.1), and keep every vector and conformance answer the suite pins unchanged.
+    - In interop/crates/x-websearch/src/config.rs add the fields observation 1.4.3 names - the payer account the sidecar draws as, the per-draw fee limit and the path of the adapter conformance suite - each with a documented default that reproduces today's behaviour when absent and a refusal that names the field on a malformed value, and make src/payment.rs read them instead of its constants.
+    - Extend tests/config.rs for the three fields and their refusals and tests/payment.rs so a draw above the configured limit is refused and the configured payer appears in the draw, replaying the recording task 1.15 made without re-recording it.
+    - _Requirements: 4.1, 4.2_
+  - [ ] 2.11 Clear the pre-existing agent workspace clippy findings so agent-lint passes
+    - Run make agent-lint on this revision, and fix every clippy finding it reports in crates this feature did not write - starting with too_many_arguments in agent/crates/layerx-proof/src/program.rs verify_program_execution_receipt (observation 1.18.1) - by restructuring the code, never by an allow attribute, a lint-level change or a clippy configuration change, keeping every public signature the agent SDKs and services call unchanged unless a caller in the workspace is updated in the same task.
+    - Keep every test of each touched crate passing, and add or extend a test where a restructuring changes a function's shape.
+    - _Requirements: 9.1_
+  - [x] 2.12 Verify a receipt by the protocol version it carries in the Python client
+    - In agent/sdk/python/layerx_sdk/x402.py make verify_payment_receipt verify the receipt with the protocol version the receipt itself carries, refusing by name a version the module does not support, and in layerx_sdk/web_search.py make the client verify the same way when no protocol_version was configured, keeping a configured version as an explicit bound that refuses a receipt of another version (observation 1.9.3).
+    - Extend agent/sdk/python/tests/test_web_search.py so the recorded version 3 receipts verify through a client constructed without protocol_version and are refused by a client configured for version 2, and add agent/sdk/python/tests/test_x402.py covering verify_payment_receipt on a version 3 receipt, a version 2 receipt and an unsupported version; keep the .pyi stubs in step.
+    - _Requirements: 9.1, 9.2, 9.4_
+  - [ ] 2.13 Define the api request kind, its envelopes and the single attestation level
+    - In modules/xweb/types add KindApi with a payload codec and validation for the method, the https URL, the public headers, the body, the JSON pointers, the attestation level and the credential envelopes, bounding each part, refusing an attestor outside the registered set and more envelopes than attestors, and raise DefaultMaxPayloadBytes to 8192 so a payload with envelopes for a majority-sized set fits; keep the 188-byte origin-1 preimage and every existing vector exactly as they are - the level is bound through the payload hash - and append api vectors to types/testdata/preimage-vectors.json.
+    - In modules/xweb/keeper make fulfil accept, under the single level, one signature from the request's named attestor and require the threshold otherwise, and store the level in the result; in precompiles/xweb/xweb.go and abi.json validate the api kind at request and expose the level in getResult and XWebFulfilled, touching nothing scripts/bump_version generates.
+    - Write modules/xweb/types/envelope.go, the ECIES envelope over secp256k1 with HKDF-SHA256 and AES-256-GCM every implementation shares, with types/testdata/envelope-vectors.json carrying keys, plaintexts and ciphertexts the Rust, TypeScript and Python implementations pin; add no dependency the Go module does not already carry unless the standard library cannot provide it.
+    - Write contracts/src/xweb/XWebApi.sol, a library that builds an api payload with get, post, select, withCredential and single, encodes it exactly as the Go codec decodes it and submits it through the precompile interface in one statement; extend the interface and XWeb.sol for the level; add contracts/src/xweb/examples/ApiConsumer.sol using the library; tests in Go for the codec, every refusal, the envelope vectors and both levels through the keeper and the precompile, and Foundry tests for the library and the example.
+    - _Requirements: 17.1, 17.2, 17.4, 17.5, 17.6_
+  - [ ] 2.14 Perform api requests in the sidecar with envelopes, selectors and the single level
+    - Write interop/crates/x-websearch/src/api.rs: decode the api payload exactly as modules/xweb/types does, pick the envelope addressed to this sidecar's attestor address and decrypt it in memory with the attestor key against modules/xweb/types/testdata/envelope-vectors.json, perform the call with the public and the credential headers under the fetch limits and destination refusals of the fetch path, apply the JSON pointers, canonicalise in RFC 8785 form, bound the answer and zeroise the plaintext; the credential never reaches a log line, the index, the content store, a fixture or any file, and a request with no envelope for this attestor is refused, never called without it.
+    - In src/attest.rs route the api kind to api.rs, sign under the majority level as for a fetch, and under the single level sign only when this sidecar is the named attestor and let src/submit.rs post fulfil with that one signature; add the module line to src/lib.rs.
+    - Write tests/api.rs against a loopback API server the test starts that refuses a call without the credential header and answers JSON whose unselected fields differ per call: identical digests from two sidecars holding different envelopes, the refusal without an envelope, the pointer and canonicalisation vectors, the single level's one signature, and a scan of every file under each sidecar's data directory and of its log output proving the credential is absent.
+    - _Requirements: 17.2, 17.3, 17.4, 17.6_
+  - [ ] 2.15 Give developers the api call helpers in the clients and on the page
+    - Add agent/sdk/typescript/src/xweb-api.ts and agent/sdk/python/layerx_sdk/xweb_api.py building an api payload and its credential envelopes from the attestor set the precompile's getAttestors returns, encoding exactly as the Go codec decodes and matching modules/xweb/types/testdata/envelope-vectors.json, exported from each package's index with the Python stub kept in step.
+    - Extend docs/site/docs/protocol/xweb.md with a section showing a contract calling an API through XWebApi in a dozen lines, the envelope rule, the selector rule and the two attestation levels, under the page's link and naming rules.
+    - Tests: agent/sdk/typescript/test/xweb-api.test.ts and agent/sdk/python/tests/test_xweb_api.py pin the payload bytes and the envelope vectors, and the page builds under mkdocs --strict.
+    - _Requirements: 17.5, 17.6_
+  - [ ] 2.16 Run the agent workspace tests with the binaries the workflow builds for them
+    - Build the prerequisites the Makefile declares for agent-test (public-tls-test-prerequisites for the boundary and clock binaries, agent-test-native-prerequisites for the native daemon binaries) and run make agent-test once, exactly as the workflow's test step does.
+    - For every test that fails outside this feature's crates, fix its real cause in code or fixtures, starting with the native terminal evidence test in agent/crates/layerx-agentd/src/protocol_evidence_native_tests.rs, which fails to decode tests/fixtures/custody/daemon-credit-receipt with Decode(MalformedPayload): determine which side drifted from the receipt format the platform writes and correct that side, regenerating the fixture through the tool that produced it when the fixture is stale; never ignore, delete, relax or skip a test.
+    - Close observation 2.9.1 naming the revision at which make agent-test passes.
+    - _Requirements: 9.1_
 
 ## Wave 3 - One Run, Recorded
 
@@ -178,7 +216,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17", "1.18"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }

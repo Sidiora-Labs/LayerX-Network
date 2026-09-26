@@ -1,0 +1,51 @@
+[Unit]
+Description=Paxeer X Network web search sidecar
+Documentation=https://github.com/Sidiora-Labs/Paxeer-X-Network
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=x-websearch
+Group=x-websearch
+LoadCredential=attestor.key:/etc/x-websearch/keys/attestor.key
+LoadCredential=submitter.key:/etc/x-websearch/keys/submitter.key
+LoadCredential=receiver.key:/etc/x-websearch/keys/receiver.key
+Environment=X_WEBSEARCH_ATTESTOR_KEY_FILE=%d/attestor.key
+Environment=X_WEBSEARCH_SUBMITTER_KEY_FILE=%d/submitter.key
+Environment=X_WEBSEARCH_RECEIVER_KEY_FILE=%d/receiver.key
+ExecStart=/usr/local/bin/x-websearch --config /etc/x-websearch/config.json
+Restart=on-failure
+RestartSec=5
+StateDirectory=x-websearch
+StateDirectoryMode=0700
+UMask=0077
+LimitNOFILE=65536
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

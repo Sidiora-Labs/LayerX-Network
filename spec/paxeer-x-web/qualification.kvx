@@ -37,6 +37,7 @@ symbol = "task.1.11.do_1"
 observed = "The do_1 path filters omit trees whose changes the legs exercise - Makefile, tests/modules, tests/sequencer, tests/network, tests/test_programs_web_read.c, tests/test_web_program_path.c, tests/fixtures/web, src/modules/programs/call.c, include/layerx/programs.h, programs/sdk/rust, agent/sdk/typescript/test, agent/sdk/python/tests and modules/layerxbridge - so a change confined to them does not start the workflow."
 assumption = "The workflow carries exactly the do_1 list and tools/ci/xweb-workflow-check.sh asserts that list; widening it is a spec change for the feature owner, not this task."
 severity = "suspect"
+closed = "Task 2.7 at a9171bc99760fe8d1709ace1bba34d3db5cf9db6 added every named tree to both path filter lists and made tools/ci/xweb-workflow-check.sh assert the widened list, which passes."
 
 [observation.1.7.1]
 task = "1.7"
@@ -85,6 +86,7 @@ symbol = "metered_payload"
 observed = "spec/402lxp/protocol.md has the metered buyer send a receive payload whose ordinal-6 draw the receiver signs, which a buyer cannot author; the task has the receiver key sign the draw."
 assumption = "The metered PAYMENT-SIGNATURE payload carries the payer-signed canonical grant and the draw's idempotencyKey, and the sidecar signs and submits the draw."
 severity = "suspect"
+closed = "Task 2.10 amends spec/402lxp/protocol.md so the metered payload carries the payer-signed grant and idempotencyKey and the receiver signs each draw with its receiver key and repeats purposeHash in the settlement; the layerx-x402 suite and the recorded exchange replayed in its verify_cmd at revision a9171bc99760fe8d1709ace1bba34d3db5cf9db6."
 
 [observation.1.4.2]
 task = "1.4"
@@ -102,6 +104,7 @@ symbol = "PaymentGate::new"
 observed = "The configuration has no field naming the payer, the draw fee limit or the adapter conformance suite, and src/main.rs is outside this task's touches."
 assumption = "The payer names itself in the LAYERX-PAYER-DID header, every asset including PAX settles to its per-asset account, the draw fee limit is a fixed constant, and the binary wires PaymentGate with its pinned suite in a later task."
 severity = "assumption"
+closed = "Task 2.10 adds payment.payer_did, payment.draw_fee_limit and payment.conformance_suite to the configuration with defaults reproducing the prior behaviour, and PaymentGate reads them; tests/config.rs and tests/payment.rs passed in its verify_cmd at revision a9171bc99760fe8d1709ace1bba34d3db5cf9db6."
 
 [observation.1.4.4]
 task = "1.4"
@@ -152,6 +155,7 @@ symbol = "clippy::byte_char_slices"
 observed = "Clippy with -D warnings on the Rust program SDK refuses the unchanged naming.rs line 183 byte-char slice, so the SDK lint gate fails before this task's SDK modules are linted."
 assumption = "The naming.rs lint is outside this task's touches and is left for its owner."
 severity = "suspect"
+closed = "programs/sdk/rust/src/naming.rs now checks the request tag against the byte string b\"LXN\" and carries no byte-char slice, last changed at revision 7f7f8be2dc0f3c424d09317163617f94676d279d and unchanged at revision a9171bc99760fe8d1709ace1bba34d3db5cf9db6."
 
 [observation.1.9.1]
 task = "1.9"
@@ -178,6 +182,7 @@ symbol = "verify_payment_receipt"
 observed = "verify_payment_receipt verifies only protocol version 2 and the recorded receipts are version 3, and the Python SDK configures no type checker."
 assumption = "web_search.py calls verify_receipt with the configured protocol_version, and the Python build check is py_compile."
 severity = "note"
+closed = "Resolved at c024a5c510cad7d257b353c59ce65e631f38cda3 by task 2.12: verify_payment_receipt and the web search client read the protocol version from the receipt envelope, verify versions 2 and 3 with it and refuse any other version by name."
 
 [observation.1.10.1]
 task = "1.10"
@@ -186,6 +191,7 @@ symbol = "layerx-mcp dependencies"
 observed = "The buyer path, receipt verification and content digest need layerx-x402, layerx-interop-gateway, layerx-proof, base64, serde and sha3, and Cargo.toml and agent/Cargo.lock are outside this task's touches."
 assumption = "The manifest gains those dependencies and the lock gains only the two interop crates and the layerx-mcp dependency list."
 severity = "assumption"
+closed = "Since task 1.10 agent/crates/layerx-mcp/Cargo.toml depends on layerx-x402, layerx-interop-gateway, layerx-proof, base64, serde and sha3, and agent/Cargo.lock lists them for layerx-mcp together with the two interop crates, as read at revision a9171bc99760fe8d1709ace1bba34d3db5cf9db6."
 
 [observation.1.10.2]
 task = "1.10"
@@ -212,6 +218,7 @@ symbol = "PerpsPayload"
 observed = "cargo clippy -p layerx-mcp --all-targets -- -D warnings also lints the path dependency and fails on a pre-existing large_enum_variant in layerx-types (.logs/build.log); with --no-deps the crate is clean (.logs/clippy.log, exit 0)."
 assumption = "The dependency lint belongs to layerx-types and is left unchanged."
 severity = "note"
+closed = "Task 1.18 boxed the PerpsMarket carried by PerpsPayload::MarketCreate with every trading payload vector unchanged, and its verify_cmd, which lints layerx-types, passed at revision a9171bc99760fe8d1709ace1bba34d3db5cf9db6."
 
 [observation.1.15.1]
 task = "1.15"
@@ -247,3 +254,29 @@ symbol = "verify_program_execution_receipt"
 observed = "With PerpsPayload::MarketCreate boxed the large_enum_variant lint is gone and every layerx-types test passes, but clippy on layerx-mcp now reaches the path dependency layerx-proof and fails on too_many_arguments (8/7) in verify_program_execution_receipt (.logs/verify.log, exit 101); program.rs is outside this task's touches."
 assumption = "No allow attribute is added; the layerx-proof signature is left to its owner, after which the task 1.18 and 1.17 verify_cmds rerun unchanged."
 severity = "blocker"
+closed = "The task 1.17 and 1.18 verify_cmds now lint their own crates with --no-deps, the layerx-proof too_many_arguments finding is handed to task 2.11, and both verify_cmds passed at revision a9171bc99760fe8d1709ace1bba34d3db5cf9db6."
+
+[observation.2.5.1]
+task = "2.5"
+file = "interop/crates/x-websearch/src/content.rs"
+symbol = "register"
+observed = "The design and task 2.5 call GET /content/<digest> a paid route, but content::register installs it without the payment gate and lib.rs documents it as unpaid, so the page describes it as served without a payment."
+assumption = "The page follows the code; whether content by digest is paid is left to the sidecar's owner, and the page changes with it."
+severity = "suspect"
+
+[observation.2.9.1]
+task = "2.9"
+file = "agent/crates/layerx-agentd/src/outbound_tls.rs"
+symbol = "private_ca_checks_the_actual_server_identity"
+observed = "The layerx-agentd lib half of the verify_cmd fails on three tests outside this task's touches (two TLS tests that need the platform TLS boundary built first, and the native terminal evidence test with Decode(MalformedPayload)), so the layerx-mcp half never runs (.logs/verify.log, exit 101); run on its own it passes 32 of 32 (.logs/verify-mcp.log, exit 0), the new scope-table test passes, and the clippy step stops on pre-existing pedantic lints in layerx-agentd files outside the touches (.logs/build.log)."
+assumption = "Nothing is relaxed; the verify_cmd reruns unchanged once the TLS boundary is built and the native terminal evidence decodes."
+severity = "blocker"
+
+[observation.2.4.1]
+task = "2.4"
+file = "node/upgrades_test.go"
+symbol = "TestSidioraFeeTokenUpgradeIsRegisteredAndRunsTheFeeTokenMigration"
+observed = "With v6.8 appended to node/tags that test still requires v6.7 to be the last tag and LatestUpgrade and fails (.logs/verify.log, exit 1), so go test -run Upgrade ./node/ stops before ./precompiles/xweb/... runs; storage/common/keys/store_keys.go also lacks the xweb store key the application now mounts, which TestKVStoreKeyNamesMatchMemIAVLStoreKeys and the memiavl composite store require, and the archive phase of scripts/bump_version for v6.8 would write legacy copies outside this task."
+assumption = "Neither assertion is changed here; the owner of node/upgrades_test.go moves its latest-tag checks to v6.8 and storage/common/keys/store_keys.go gains XWebStoreKey = \"xweb\" in MemIAVLStoreKeys, after which the verify_cmd reruns unchanged."
+severity = "blocker"
+closed = "The upgrade tests now take v6.8 as the latest tag and LatestUpgrade with the v6.7 handler assertions unchanged, storage/common/keys names XWebStoreKey in MemIAVLStoreKeys, scripts/bump_version archived common and xweb into legacy/v68 with a diff-free second run, and the precompile test builds its unwired precompile from utils.EmptyKeepers now that the application wires the xweb keeper; the verify_cmd passed at revision c4662b1a14cda1ceba7fe41c60a4a386a375bd80."

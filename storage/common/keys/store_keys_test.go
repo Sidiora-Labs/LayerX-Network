@@ -83,3 +83,15 @@ func TestAllModulesExcept_DoesNotMutateMemIAVLStoreKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, before, MemIAVLStoreKeys)
 }
+
+func TestXWebStoreKeyIsTheLastMemIAVLStoreKey(t *testing.T) {
+	require.Equal(t, "xweb", XWebStoreKey)
+	require.True(t, IsMemIAVLStoreKey(XWebStoreKey))
+	require.Equal(t, XWebStoreKey, MemIAVLStoreKeys[len(MemIAVLStoreKeys)-1])
+	require.Equal(t, LaunchpadStoreKey, MemIAVLStoreKeys[len(MemIAVLStoreKeys)-2])
+
+	got, err := AllModulesExcept(XWebStoreKey)
+	require.NoError(t, err)
+	require.NotContains(t, got, XWebStoreKey)
+	require.Len(t, got, len(MemIAVLStoreKeys)-1)
+}

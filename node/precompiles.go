@@ -5,6 +5,7 @@ import (
 	layerxbridgekeeper "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/keeper"
 	layerxcustodykeeper "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/keeper"
 	layerxexchangekeeper "github.com/sidiora-labs/paxeer-network/modules/layerxexchange/keeper"
+	xwebkeeper "github.com/sidiora-labs/paxeer-network/modules/xweb/keeper"
 	putils "github.com/sidiora-labs/paxeer-network/precompiles/utils"
 	"github.com/sidiora-labs/paxeer-network/sdk/client"
 	bankkeeper "github.com/sidiora-labs/paxeer-network/sdk/x/bank/keeper"
@@ -36,6 +37,7 @@ type PrecompileKeepers struct {
 	layerxExchange *layerxexchangekeeper.Keeper
 	layerxBridge   *layerxbridgekeeper.Keeper
 	launchpad      *launchpadkeeper.Keeper
+	xweb           *xwebkeeper.Keeper
 }
 
 func NewPrecompileKeepers(a *App) *PrecompileKeepers {
@@ -62,6 +64,7 @@ func NewPrecompileKeepers(a *App) *PrecompileKeepers {
 		layerxExchange:     a.LayerXExchangeKeeper,
 		layerxBridge:       &a.LayerXBridgeKeeper,
 		launchpad:          a.LaunchpadKeeper,
+		xweb:               &a.XWebKeeper,
 	}
 }
 
@@ -95,3 +98,10 @@ func (pk *PrecompileKeepers) LayerXBridgeK() *layerxbridgekeeper.Keeper {
 func (pk *PrecompileKeepers) LaunchpadK() *launchpadkeeper.Keeper {
 	return pk.launchpad
 }
+
+// XWebK hands the xweb precompile the application's xweb keeper.
+func (pk *PrecompileKeepers) XWebK() *xwebkeeper.Keeper {
+	return pk.xweb
+}
+
+var _ putils.XWebKeepers = (*PrecompileKeepers)(nil)

@@ -14,7 +14,9 @@ from typing import Literal, Protocol
 from urllib.parse import quote, urlsplit
 
 from .account_derivation import keccak256
-from .verifier import AuthorizedReceiptBatch, LocalSignatureVerifier, ReceiptVerification, verify_receipt
+from .generated.receipt import ReceiptFailureCode
+from .verifier import AuthorizedReceiptBatch, LocalSignatureVerifier, ReceiptVerification, ReceiptVerificationError, verify_receipt
+from .x402 import PAYMENT_RECEIPT_PROTOCOL_VERSIONS, receipt_protocol_version
 from .x402_receive import _GRANT, encode_grant
 
 WEB_CONTENT_DOMAIN = b"PAXEERX_WEB_CONTENT_V1"
@@ -386,6 +388,8 @@ class WebSearchClient:
             raise WebSearchError("invalid-payer")
         if isinstance(pending_attempts, bool) or not isinstance(pending_attempts, int) or not 1 <= pending_attempts <= 60:
             raise WebSearchError("invalid-pending-attempts")
+        if protocol_version is not None and (type(protocol_version) is not int or protocol_version not in PAYMENT_RECEIPT_PROTOCOL_VERSIONS):
+            raise WebSearchError("invalid-protocol-version")
         self._scheme = parts.scheme
         self._host = host
         self._port = parts.port
@@ -553,11 +557,14 @@ class WebSearchClient:
 
     def _verify(self, receipt: bytes, offer: WebSearchOffer) -> ReceiptVerification:
         try:
+            version = receipt_protocol_version(receipt)
+        except ReceiptVerificationError as error:
+            raise WebSearchError("receipt-protocol-version" if error.check is ReceiptFailureCode.PROTOCOL_VERSION else "receipt-unverified") from None
+        if self._protocol_version is not None and version != self._protocol_version:
+            raise WebSearchError("receipt-protocol-version")
+        try:
             authorized = self._authority(receipt, offer)
-            if self._protocol_version is None:
-                verified = verify_receipt(receipt, authorized, self._signatures)
-            else:
-                verified = verify_receipt(receipt, authorized, self._signatures, protocol_version=self._protocol_version)
+            verified = verify_receipt(receipt, authorized, self._signatures, protocol_version=version)
         except Exception:
             raise WebSearchError("receipt-unverified") from None
         body = verified.receipt

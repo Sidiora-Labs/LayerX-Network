@@ -28,7 +28,13 @@ import (
 	"github.com/sidiora-labs/paxeer-network/precompiles/utils"
 	"github.com/sidiora-labs/paxeer-network/precompiles/wasmd"
 	"github.com/sidiora-labs/paxeer-network/precompiles/xweb"
+	"golang.org/x/mod/semver"
 )
+
+// XWebUpgrade is the upgrade that brings the xweb precompile. A custom
+// precompile set built for an earlier latest upgrade carries no entry at
+// xweb.XWebAddress.
+const XWebUpgrade = "v6.8"
 
 var SetupMtx = &sync.Mutex{}
 var Initialized = false
@@ -52,7 +58,7 @@ func GetCustomPrecompiles(
 	latestUpgrade string,
 	keepers utils.Keepers,
 ) map[ecommon.Address]utils.VersionedPrecompiles {
-	return map[ecommon.Address]utils.VersionedPrecompiles{
+	custom := map[ecommon.Address]utils.VersionedPrecompiles{
 		ecommon.HexToAddress(feetoken.FeeTokenAddress):           feetoken.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(bank.BankAddress):                   bank.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(wasmd.WasmdAddress):                 wasmd.GetVersioned(latestUpgrade, keepers),
@@ -73,8 +79,11 @@ func GetCustomPrecompiles(
 		ecommon.HexToAddress(layerxexchange.ExchangeAddress):     layerxexchange.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(layerxbridge.BridgeAddress):         layerxbridge.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(launchpad.LaunchpadAddress):         launchpad.GetVersioned(latestUpgrade, keepers),
-		ecommon.HexToAddress(xweb.XWebAddress):                   xweb.GetVersioned(latestUpgrade, keepers),
 	}
+	if semver.Compare(latestUpgrade, XWebUpgrade) >= 0 {
+		custom[ecommon.HexToAddress(xweb.XWebAddress)] = xweb.GetVersioned(latestUpgrade, keepers)
+	}
+	return custom
 }
 
 func InitializePrecompiles(
