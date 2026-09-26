@@ -686,7 +686,7 @@ reqs = ["10.1","10.3","10.4","13.2"]
 [task.2.17]
 title = "Clear the relayer's clippy findings and point the attestation references at the moved contract"
 status = "implemented"
-implemented_revision = "c165961b77317cc89a9c5b3025fddb6d8ada372a"
+implemented_revision = "ab0b3de5dc718381c7d4e0a62b8ef2e9b0ee60cf"
 implemented_command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p layerx-bridge-relayer --all-targets -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p layerx-bridge-relayer && go build ./modules/layerxbridge/... && grep -rL interop/contracts/ethereum-bridge modules/layerxbridge/ATTESTATION.md modules/layerxbridge/types/attestation.go | wc -l | grep -qx 2'"
 implemented_exit_code = 101
 implemented_log_path = ".logs/verify.log"

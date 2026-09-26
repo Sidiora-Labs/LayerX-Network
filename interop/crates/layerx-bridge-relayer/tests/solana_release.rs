@@ -216,11 +216,14 @@ fn recording(name: &str) -> Recording {
     )
 }
 
+/// One request the fee-payer signer served: (handle, domain, message).
+type FeePayerRequest = (String, Vec<u8>, Vec<u8>);
+
 /// An ed25519 signer daemon for tests: each handle owns one key and may sign
 /// messages under its listed policy domains only; anything else is refused.
 struct FeePayerServer {
     socket: PathBuf,
-    requests: Arc<Mutex<Vec<(String, Vec<u8>, Vec<u8>)>>>,
+    requests: Arc<Mutex<Vec<FeePayerRequest>>>,
 }
 
 fn read_frame(stream: &mut UnixStream) -> Option<Vec<u8>> {
@@ -250,7 +253,7 @@ fn take_sized(cursor: &mut &[u8], width: usize) -> Option<Vec<u8>> {
 
 /// (handle, domain, message) of an ed25519 request whose digest is the
 /// sha256 of its message.
-fn parse_request(frame: &[u8]) -> Option<(String, Vec<u8>, Vec<u8>)> {
+fn parse_request(frame: &[u8]) -> Option<FeePayerRequest> {
     let mut cursor = frame.strip_prefix(b"LXCS")?;
     if take(&mut cursor, 3)? != [0, 1, 2] {
         return None;
@@ -311,7 +314,7 @@ impl FeePayerServer {
         Self { socket, requests }
     }
 
-    fn requests(&self) -> Vec<(String, Vec<u8>, Vec<u8>)> {
+    fn requests(&self) -> Vec<FeePayerRequest> {
         self.requests
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

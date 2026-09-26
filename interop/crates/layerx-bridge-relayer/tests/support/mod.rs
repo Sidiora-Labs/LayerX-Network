@@ -130,7 +130,7 @@ impl Recording {
     }
 
     pub fn set_phase(&self, phase: &str) {
-        self.lock().phase = phase.to_owned();
+        phase.clone_into(&mut self.lock().phase);
     }
 
     pub fn endpoint(&self, name: &str) -> Box<dyn JsonRpc> {
@@ -329,11 +329,14 @@ struct SignerKey {
     domains: Vec<Vec<u8>>,
 }
 
+/// One request the test signer served: (handle, domain, digest).
+pub type SignerRequest = (String, Vec<u8>, [u8; 32]);
+
 /// A signer daemon for tests: each handle owns one key and may sign under one
 /// policy domain only; anything else is refused.
 pub struct SignerServer {
     pub socket: PathBuf,
-    requests: Arc<Mutex<Vec<(String, Vec<u8>, [u8; 32])>>>,
+    requests: Arc<Mutex<Vec<SignerRequest>>>,
 }
 
 fn read_frame(stream: &mut UnixStream) -> Option<Vec<u8>> {
@@ -451,7 +454,7 @@ impl SignerServer {
     }
 
     /// Requests served so far: (handle, domain, digest).
-    pub fn requests(&self) -> Vec<(String, Vec<u8>, [u8; 32])> {
+    pub fn requests(&self) -> Vec<SignerRequest> {
         self.requests
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
