@@ -445,11 +445,11 @@ assumption = "The completion record reports the strict docs build that ran and p
 severity = "blocker"
 
 [observation.1.5.1]
-revision = "pending"
-command = "timeout 20m sh -c 'npm --prefix human/apps/web run typecheck && cd human/apps/web && node --test e2e/gas-station.test.ts'"; exit_code = 1
+revision = "f7745bc651f12e9c8557418145a97f1355d07180"
+command = "timeout 20m sh -c 'npm --prefix human/apps/web run typecheck && cd human/apps/web && node --test e2e/gas-station.test.ts'"; exit_code = 0
 log_path = ".logs/verify.log"
-observed = "Typecheck passed; the focused test process failed before assertions: TypeError [ERR_INVALID_RETURN_PROPERTY_VALUE]: Expected a string, an ArrayBuffer, or a TypedArray to be returned for the \"source\" from the \"load\" hook but got undefined."
-assumption = "The Node TypeScript and TSX loader needs a further task-scoped correction; both authorized repair cycles are exhausted."
+observed = "Closed: with the web application and TypeScript SDK dependencies installed, the test's own TypeScript and TSX load hooks run all seven assertions and pass unchanged."
+assumption = "The earlier load-hook failure came from the prior environment, not the tests or the runner configuration; observation 1.5.2 remains open."
 
 [observation.1.5.2]
 task = "1.5"; file = "interop/crates/layerx-gas-station/src/main.rs"

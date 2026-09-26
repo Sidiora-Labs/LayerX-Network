@@ -24,7 +24,7 @@
     - Write src/policy.rs enforcing the per-account, per-interval and per-quote limits and the Paxeer balance floor, refusing to quote rather than quoting something the station cannot pay for, and returning a typed refusal that names which limit was hit.
     - Write the crate's unit tests as #[cfg(test)] modules beside each file: the digest vector, each pricing refusal, each limit refusal, the balance floor refusal and the configuration refusals; write src/lib.rs and src/main.rs so the binary takes --config PATH and exits with a distinct code for a refused configuration.
     - _Requirements: 2.1, 2.2, 2.3, 2.5_
-  - [ ] 1.3 Submit the sponsored transaction and prove a full cycle
+  - [x] 1.3 Submit the sponsored transaction and prove a full cycle
     - Write interop/crates/layerx-gas-station/src/rpc.rs as the transport seam in the shape interop/crates/layerx-bridge-relayer/src/rpc.rs uses, reading the chain through the configured endpoints and returning a typed fault for a configuration error, an unavailable endpoint, a rate limit, a divergence, a malformed response and a rejection.
     - Write src/tx.rs building the EIP-7702 transaction that carries the account's authorisation and calls executeSponsored with the signed quote, signing it with the station key, and src/journal.rs recording the exact signed bytes append-only before broadcast so a restart rebroadcasts rather than re-signs; carry no key material and no credential into the journal.
     - Write src/station.rs driving the cycle - accept a request, price it, apply the policy, sign the quote, build and journal the transaction, broadcast it, and confirm - and treat a quote nonce already consumed on chain as a completed submission recorded as such rather than an error to retry.
@@ -38,7 +38,7 @@
     - Export the new surface from agent/sdk/typescript/src/index.ts beside the existing precompile call exports, keeping every existing export unchanged.
     - Add agent/sdk/typescript/test/gas-station.test.ts asserting the digests against the same vector contracts/test/BatchCallAndSponsorTest.t.sol asserts, the sponsored batch it builds, and each refusal; add it to the test script in agent/sdk/typescript/package.json beside the existing test files.
     - _Requirements: 3.1, 3.2, 3.5_
-  - [ ] 1.5 Let a person choose to pay in Sidiora in the web application
+  - [x] 1.5 Let a person choose to pay in Sidiora in the web application
     - Add human/apps/web/src/api/gas-station.ts wrapping the SDK's quote request and sponsored batch builder, and export it from human/apps/web/src/api/sdk.ts beside the existing precompile re-exports, taking the gas station's location from the application's server configuration with no literal endpoint in the source.
     - Extend the wallet send path so a person can choose to pay a transaction's fee in Sidiora, showing the quoted amount, the maximum they are agreeing to and the deadline before they sign, and signing the authorisation through the same provider path human/apps/web/src/api/wallet.ts already uses.
     - Return the outcome through the same shape sendWalletPrecompileCall returns - sent, cancelled, rejected, unavailable or failed - so a refused quote, an unreachable station and a rejected signature are each distinguishable, and add no new outcome vocabulary.

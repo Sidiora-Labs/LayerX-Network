@@ -286,7 +286,7 @@ reqs = ["3.1","3.2","3.5"]
 
 [task.1.5]
 title = "Let a person choose to pay in Sidiora in the web application"
-status = "implemented"
+status = "done"
 wave = 1
 requires = ["1.4"]
 do_1 = "Add human/apps/web/src/api/gas-station.ts wrapping the SDK's quote request and sponsored batch builder, and export it from human/apps/web/src/api/sdk.ts beside the existing precompile re-exports, taking the gas station's location from the application's server configuration with no literal endpoint in the source."
@@ -298,9 +298,9 @@ verify_cmd = "timeout 20m sh -c 'npm --prefix human/apps/web run typecheck && cd
 symbols = ["requestSidioraGasQuote","sendSponsoredBatch","GasQuoteOutcome"]
 touches = ["human/apps/web/src/api/gas-station.ts","human/apps/web/src/api/sdk.ts","human/apps/web/src/api/wallet.ts","human/apps/web/src/settings/wallet/model.ts","human/apps/web/src/settings/wallet/wallet-screen.tsx","human/apps/web/copy/catalog.ts","human/apps/web/package.json","human/apps/web/e2e/gas-station.test.ts"]
 reqs = ["3.3","3.4","3.5"]
-revision = "78f82fdc26d0067e910dd5341dffbbaf9141ac19"
+revision = "f7745bc651f12e9c8557418145a97f1355d07180"
 command = "timeout 20m sh -c 'npm --prefix human/apps/web run typecheck && cd human/apps/web && node --test e2e/gas-station.test.ts'"
-exit_code = 1
+exit_code = 0
 log_path = ".logs/verify.log"
 
 [task.1.6]
