@@ -299,3 +299,47 @@ observed = "At revision ab0b3de5dc718381c7d4e0a62b8ef2e9b0ee60cf the verify_cmd 
 assumption = "Pre-existing and outside this lint task: the code and the test disagree on release completion semantics, so both stay as written for the journal's owner to decide."
 severity = "blocker"
 closed = "The journal now marks the transaction a completion names as landed, so pending_release() no longer matches a released transaction; the unit test passed unchanged and the verify_cmd exited 0 on revision cb4fc6f879a1784f4d4e194dcebbdff39338d216; log .logs/verify.log."
+
+[gate.3.1.1]
+task = "3.1"
+reqs = ["1.2","1.3","2.1","2.7","15.1","15.2"]
+revision = "47dc2b993f502c9f92ee09ac8fd47a72daeabf60"
+command = "bash bridge/evm/bootstrap-libs.sh && forge test --root bridge/evm"
+environment = "Linux x86_64; forge 1.7.1; cargo 1.91.1; solana-cli 3.0.10 with platform tools v1.56; go 1.25.6"
+exit_code = 0
+outcome = "pass"
+evidence = "build/bridge-gates/leg-1-evm.log"
+note = "First leg of the task 3.1 verify_cmd: the pinned libraries bootstrapped and forge ran 2 suites, 51 tests passed, 0 failed, 0 skipped."
+
+[gate.3.1.2]
+task = "3.1"
+reqs = ["4.7","5.5","6.6","10.3","15.1","15.2"]
+revision = "47dc2b993f502c9f92ee09ac8fd47a72daeabf60"
+command = "cargo test --locked --manifest-path bridge/solana/Cargo.toml && cargo build-sbf --tools-version v1.56 --manifest-path bridge/solana/Cargo.toml"
+environment = "Linux x86_64; forge 1.7.1; cargo 1.91.1; solana-cli 3.0.10 with platform tools v1.56; go 1.25.6"
+exit_code = 0
+outcome = "pass"
+evidence = "build/bridge-gates/leg-2-solana.log"
+note = "Second leg: 4 test binaries, 20 tests passed, 0 failed, and cargo build-sbf finished the release build of the program."
+
+[gate.3.1.3]
+task = "3.1"
+reqs = ["5.5","7.6","8.5","15.1","15.2"]
+revision = "47dc2b993f502c9f92ee09ac8fd47a72daeabf60"
+command = "cargo test --locked --manifest-path interop/Cargo.toml -p layerx-bridge-relayer"
+environment = "Linux x86_64; forge 1.7.1; cargo 1.91.1; solana-cli 3.0.10 with platform tools v1.56; go 1.25.6"
+exit_code = 0
+outcome = "pass"
+evidence = "build/bridge-gates/leg-3-relayer.log"
+note = "Third leg: the relayer crate's unit and integration tests, 70 passed, 0 failed, 0 ignored."
+
+[gate.3.1.4]
+task = "3.1"
+reqs = ["3.7","5.4","9.6","10.5","11.5","12.5","13.5","14.4","15.1","15.2"]
+revision = "47dc2b993f502c9f92ee09ac8fd47a72daeabf60"
+command = "go test -count=1 ./bridge/vectors/... ./bridge/deploy/... && for s in bridge/deploy/tests/*-check.sh; do bash $s || exit 1; done"
+environment = "Linux x86_64; forge 1.7.1; cargo 1.91.1; solana-cli 3.0.10 with platform tools v1.56; go 1.25.6"
+exit_code = 0
+outcome = "pass"
+evidence = "build/bridge-gates/leg-4-deploy.log"
+note = "Fourth leg: the vectors, chainconfig and proposals packages passed, then the checklist, deploy-scripts, docs, evm-dry-run, solana-dry-run and workflow check scripts each passed; the EVM dry run's checklist passed all 23 checks and the Solana dry run's all 38 against local nodes only."

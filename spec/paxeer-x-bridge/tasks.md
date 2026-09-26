@@ -179,7 +179,7 @@
 ## Wave 3 - One Run, Recorded
 
 - [ ] 3. Run the workflow's command set once on the merged revision and write down what ran
-  - [ ] 3.1 Run the bridge workflow's command set once on the merged revision and record the evidence
+  - [x] 3.1 Run the bridge workflow's command set once on the merged revision and record the evidence
     - On the revision that merges waves 1 and 2, run the workflow's four legs once, in order - the bridge/evm Foundry suite after bootstrapping the pinned libraries, the bridge/solana crate with its release tests and cargo build-sbf, the layerx-bridge-relayer crate, and the bridge/deploy and bridge/vectors Go packages with the offline check scripts - writing each leg's output to its own log under build/bridge-gates/.
     - Append one gate record per leg to spec/paxeer-x-bridge/qualification.kvx carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code, the log path, the outcome and the evidence, written only from a command that actually ran.
     - Append one [observation.*] entry per failure the run exposes that belongs to no task in this feature, in the spec/workflow.kvx [qualification_log] shape: task, file, symbol, one sentence observed, one sentence assumption and severity; do not investigate it further and do not rerun it.
