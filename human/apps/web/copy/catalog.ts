@@ -29,6 +29,20 @@ export interface CopyEntry {
 }
 
 export const copyEntries = [
+  { key: "gas.sidiora.title", message: "Transaction fees", context: "Sidiora fee selection and signing journey.", surface: "default", kind: "body", moneyAdjacent: true },
+  { key: "gas.sidiora.scope", message: "Choose how this tab pays wallet transaction fees on Paxeer X Network.", context: "Sidiora fee selection and signing journey.", surface: "default", kind: "body", moneyAdjacent: true },
+  { key: "gas.sidiora.paxeer", message: "Pay fees in Paxeer", context: "Sidiora fee selection and signing journey.", surface: "default", kind: "action", moneyAdjacent: true },
+  { key: "gas.sidiora.choose", message: "Pay fees in Sidiora", context: "Sidiora fee selection and signing journey.", surface: "default", kind: "action", moneyAdjacent: true },
+  { key: "gas.sidiora.maximum", message: "Maximum fee in Sidiora (SID)", context: "Sidiora fee selection and signing journey.", surface: "default", kind: "body", moneyAdjacent: true },
+  { key: "gas.sidiora.review", message: "Before signing, review the exact Sidiora fee, its maximum and when the quote expires.", context: "Sidiora fee selection and signing journey.", surface: "default", kind: "body", moneyAdjacent: true },
+  { key: "gas.sidiora.invalid", message: "Enter a positive maximum with no more than six decimal places.", context: "Sidiora fee selection and signing journey.", surface: "default", kind: "status", moneyAdjacent: true },
+  { key: "gas.sidiora.consent", message: "Pay {amount} SID for this transaction? Maximum: {maximum} SID. Quote expires: {deadline}. Continuing asks your wallet to sign the transaction and authorise sponsored execution.", context: "Sidiora fee selection and signing journey.", surface: "default", kind: "body", moneyAdjacent: true },
+  { key: "gas.sidiora.sent", message: "The sponsored transaction was sent.", context: "Sidiora fee selection and signing journey.", surface: "default", kind: "status", moneyAdjacent: true },
+  { key: "gas.sidiora.cancelled", message: "You cancelled before submission.", context: "Sidiora fee selection and signing journey.", surface: "default", kind: "status", moneyAdjacent: true },
+  { key: "gas.sidiora.rejected", message: "The quote or signing request was refused. Nothing was submitted.", context: "Sidiora fee selection and signing journey.", surface: "default", kind: "status", moneyAdjacent: true },
+  { key: "gas.sidiora.unavailable", message: "Sidiora fee payment is unavailable. Nothing was submitted.", context: "Sidiora fee selection and signing journey.", surface: "default", kind: "status", moneyAdjacent: true },
+  { key: "gas.sidiora.failed", message: "The sponsored transaction could not be confirmed. Check its status before trying again.", context: "Sidiora fee selection and signing journey.", surface: "default", kind: "status", moneyAdjacent: true },
+
   { key: "fees.limits.title", message: "Fee limits", context: "Owner-approved fees before opening a session or creating an agent.", surface: "default", kind: "body", moneyAdjacent: true },
   { key: "fees.limits.body", message: "Choose the most this access may spend on fees. These limits do not reserve or move money. The 24-hour limit starts when access opens; the total limit does not reset.", context: "Explicit fee allowance scope and renewal boundaries.", surface: "default", kind: "body", moneyAdjacent: true },
   { key: "fees.limits.perAction", message: "Maximum fee per action ({currency})", context: "Exact per-action fee ceiling in the registered currency.", surface: "default", kind: "body", moneyAdjacent: true },

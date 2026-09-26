@@ -23,6 +23,8 @@ import { formatLastActive } from "../security/model.ts";
 import { browserBindingWalletBridge } from "./bridge.ts";
 import {
   WalletBindingController,
+  WalletFeeController,
+  type WalletFeeSnapshot,
   newestWalletSecurityNotification,
   type WalletBindingSnapshot,
 } from "./model.ts";
@@ -133,6 +135,7 @@ export function WalletBindingScreen({
         dataApplication="wallet-binding"
       >
         <div className="flex flex-col gap-4 pt-4">
+          <WalletFeeSettings />
           <InlineNotice tone="neutral">{copyEntry("settings.wallet.no_authority").message}</InlineNotice>
           {snapshot.status?.state === "binding" ? (
             <InlineNotice tone="neutral">{copyEntry("settings.wallet.binding.body").message}</InlineNotice>
@@ -175,6 +178,7 @@ export function WalletBindingScreen({
     >
       <div className="flex flex-col gap-4 pt-4">
         <InlineNotice tone="neutral">{copyEntry("settings.wallet.no_authority").message}</InlineNotice>
+        <WalletFeeSettings />
         <SettingsSection title={copyEntry("settings.wallet.current").message}>
           <LabelValue
             label={copyEntry("settings.wallet.linked_at").message}
@@ -252,4 +256,47 @@ export function WalletBindingScreen({
       </div>
     </ScreenCard>
   );
+}
+
+
+export function WalletFeeChoice({ snapshot, onChange }: Readonly<{
+  snapshot: WalletFeeSnapshot;
+  onChange: (currency: WalletFeeSnapshot["currency"], maximum: string) => void;
+}>) {
+  return (
+    <fieldset className="flex flex-col gap-3 border border-border p-4">
+      <legend>{copyEntry("gas.sidiora.title").message}</legend>
+      <p>{copyEntry("gas.sidiora.scope").message}</p>
+      <label className="flex items-center gap-2">
+        <input type="radio" name="fee-currency" checked={snapshot.currency === "paxeer"}
+          onChange={() => { onChange("paxeer", snapshot.maximum); }} />
+        {copyEntry("gas.sidiora.paxeer").message}
+      </label>
+      <label className="flex items-center gap-2">
+        <input type="radio" name="fee-currency" checked={snapshot.currency === "sidiora"}
+          onChange={() => { onChange("sidiora", snapshot.maximum); }} />
+        {copyEntry("gas.sidiora.choose").message}
+      </label>
+      {snapshot.currency === "sidiora" ? (
+        <>
+          <label className="flex flex-col gap-2">
+            {copyEntry("gas.sidiora.maximum").message}
+            <input inputMode="decimal" value={snapshot.maximum} aria-invalid={!snapshot.valid}
+              className="border border-border bg-transparent p-2"
+              onChange={(event) => { onChange("sidiora", event.target.value); }} />
+          </label>
+          <p>{copyEntry("gas.sidiora.review").message}</p>
+          {snapshot.valid ? null : <p role="alert">{copyEntry("gas.sidiora.invalid").message}</p>}
+        </>
+      ) : null}
+    </fieldset>
+  );
+}
+
+export function WalletFeeSettings() {
+  const [controller] = useState(() => new WalletFeeController());
+  const [snapshot, setSnapshot] = useState(controller.snapshot);
+  return <WalletFeeChoice snapshot={snapshot} onChange={(currency, maximum) => {
+    setSnapshot(controller.choose(currency, maximum));
+  }} />;
 }

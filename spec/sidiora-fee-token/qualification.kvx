@@ -380,6 +380,7 @@ task = "2.6"; file = "node/app.go"
 observed = "executeEVMTxWithGigaExecutor pre-charges gas through a separate StateDB and bypasses the EVM fee-token ante charge and its recorded refund rate."
 assumption = "The separate execution path requires its own fee-token integration before network-wide activation."
 severity = "note"
+closed = "Task 2.13 at 007b27c8ec5210ec9344e966db6bbc8c4caf3999 charges, refunds and records the fee-token charge in executeEVMTxWithGigaExecutor, proven by the FeeToken block tests at exit 0."
 
 [observation.2.7.1]
 revision = "pending"
@@ -443,3 +444,37 @@ task = "2.11"; file = "spec/sidiora-fee-token/spec.kvx"; symbol = "req.14.ac_2"
 observed = "Supplement to observation.2.11.1: the oracle clause of req 14.2 and task.2.11.do_2 cannot be documented as written while the precompile is retired, so the page describes the governed rate instead and the requirement stays unmet."
 assumption = "The completion record reports the strict docs build that ran and passed, not the unmet clause; the clause is a blocker on the requirement text that only an owner revision of req 14.2 and task.2.11.do_2 clears."
 severity = "blocker"
+
+[observation.1.5.1]
+revision = "f7745bc651f12e9c8557418145a97f1355d07180"
+command = "timeout 20m sh -c 'npm --prefix human/apps/web run typecheck && cd human/apps/web && node --test e2e/gas-station.test.ts'"; exit_code = 0
+log_path = ".logs/verify.log"
+observed = "Closed: with the web application and TypeScript SDK dependencies installed, the test's own TypeScript and TSX load hooks run all seven assertions and pass unchanged."
+assumption = "The earlier load-hook failure came from the prior environment, not the tests or the runner configuration; observation 1.5.2 remains open."
+
+[observation.1.5.2]
+task = "1.5"; file = "interop/crates/layerx-gas-station/src/main.rs"
+symbol = "main"
+observed = "The station executable checks initialization and explicitly reports that no service was started; a quote and sponsored-submission HTTP service is not supplied by that executable."
+assumption = "The web adapter requires separately supplied quote and submission services matching its request and response contracts; no submission was attempted."
+severity = "blocker"
+
+[observation.2.10.1]
+task = "2.10"; file = "tests/chain/sidiora_fee_test.go"; symbol = "TestSidioraFeePaid"
+observed = "In the processblock harness the EVM ante router, EVMFeeCheckDecorator and GetFeeTokenCharge are never invoked for block transactions, so a Sidiora-preferring payer pays gas in the network coin and the short-balance and stale-rate refusals succeed."
+assumption = "Keeper state is correct (switch on, preference set, rate fresh, GetFeeTokenCharge returns a charge when called directly); the cause lies in the block execution path, outside this task's files, and the assertions stay intact."
+severity = "blocker"
+closed = "EvmCheckAndChargeFees on the delivery path charges and refuses in the payer's fee denom through GetFeeTokenCharge and SetAnteFeeTokenCharge; the SidioraFee block tests pass at exit 0 on c69c004dc53f6a067c6d16ac735eec94dc3d5cb2."
+
+[observation.2.10.2]
+task = "2.10"; file = "tests/chain/sidiora_fee_test.go"; symbol = "TestSidioraFeeRefused"
+observed = "Requirement 13.5 names a block in which the oracle reports no rate, but the oracle pair was retired in favour of a governed rate with a maximum age."
+assumption = "The missing-rate case is proven as a governed rate older than max_fee_token_rate_age, which is the only way the current chain reports no usable rate."
+severity = "note"
+
+[observation.2.13.1]
+revision = "007b27c8ec5210ec9344e966db6bbc8c4caf3999"; command = "timeout 20m sh -c 'go test -count=1 -run SidioraFee ./tests/chain/'"; exit_code = 1
+log_path = ".logs/verify-2.10.log"
+observed = "The processblock harness delivers EVM transactions through the V2 DeliverTx path, whose EvmCheckAndChargeFees in node/ante/evm_checktx.go charges the network coin, so the giga-path fee-token charge is not reached and observation 2.10.1 stays open."
+assumption = "Charging the fee token in EvmCheckAndChargeFees lies outside this task's files; the SidioraFee assertions stay intact and task 2.10 remains implemented."
+closed = "EvmCheckAndChargeFees now charges the fee token on the delivery path the processblock harness uses, and the SidioraFee block tests pass at exit 0 on c69c004dc53f6a067c6d16ac735eec94dc3d5cb2."

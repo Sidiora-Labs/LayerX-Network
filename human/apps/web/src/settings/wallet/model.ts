@@ -1,3 +1,4 @@
+import { chooseWalletFee, sidioraAmount, walletFeePreference, type WalletFeePreference } from "../../api/wallet.ts";
 import type {
   BindingStatement,
   EvidenceRef,
@@ -214,4 +215,34 @@ export const wallet_binding = Object.freeze({
 
 export function human_web_wallet_binding() {
   return wallet_binding;
+}
+
+
+export interface WalletFeeSnapshot {
+  readonly currency: WalletFeePreference["currency"];
+  readonly maximum: string;
+  readonly valid: boolean;
+}
+
+export class WalletFeeController {
+  #snapshot: WalletFeeSnapshot;
+
+  constructor() {
+    const preference = walletFeePreference();
+    this.#snapshot = Object.freeze({
+      currency: preference.currency,
+      maximum: preference.maximum === undefined ? "" : sidioraAmount(preference.maximum),
+      valid: preference.currency === "paxeer" || preference.maximum !== undefined,
+    });
+  }
+
+  get snapshot(): WalletFeeSnapshot {
+    return this.#snapshot;
+  }
+
+  choose(currency: WalletFeePreference["currency"], maximum: string): WalletFeeSnapshot {
+    const valid = chooseWalletFee(currency, maximum);
+    this.#snapshot = Object.freeze({ currency, maximum, valid });
+    return this.#snapshot;
+  }
 }

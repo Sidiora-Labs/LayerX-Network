@@ -24,7 +24,7 @@
     - Write src/policy.rs enforcing the per-account, per-interval and per-quote limits and the Paxeer balance floor, refusing to quote rather than quoting something the station cannot pay for, and returning a typed refusal that names which limit was hit.
     - Write the crate's unit tests as #[cfg(test)] modules beside each file: the digest vector, each pricing refusal, each limit refusal, the balance floor refusal and the configuration refusals; write src/lib.rs and src/main.rs so the binary takes --config PATH and exits with a distinct code for a refused configuration.
     - _Requirements: 2.1, 2.2, 2.3, 2.5_
-  - [ ] 1.3 Submit the sponsored transaction and prove a full cycle
+  - [x] 1.3 Submit the sponsored transaction and prove a full cycle
     - Write interop/crates/layerx-gas-station/src/rpc.rs as the transport seam in the shape interop/crates/layerx-bridge-relayer/src/rpc.rs uses, reading the chain through the configured endpoints and returning a typed fault for a configuration error, an unavailable endpoint, a rate limit, a divergence, a malformed response and a rejection.
     - Write src/tx.rs building the EIP-7702 transaction that carries the account's authorisation and calls executeSponsored with the signed quote, signing it with the station key, and src/journal.rs recording the exact signed bytes append-only before broadcast so a restart rebroadcasts rather than re-signs; carry no key material and no credential into the journal.
     - Write src/station.rs driving the cycle - accept a request, price it, apply the policy, sign the quote, build and journal the transaction, broadcast it, and confirm - and treat a quote nonce already consumed on chain as a completed submission recorded as such rather than an error to retry.
@@ -38,7 +38,7 @@
     - Export the new surface from agent/sdk/typescript/src/index.ts beside the existing precompile call exports, keeping every existing export unchanged.
     - Add agent/sdk/typescript/test/gas-station.test.ts asserting the digests against the same vector contracts/test/BatchCallAndSponsorTest.t.sol asserts, the sponsored batch it builds, and each refusal; add it to the test script in agent/sdk/typescript/package.json beside the existing test files.
     - _Requirements: 3.1, 3.2, 3.5_
-  - [ ] 1.5 Let a person choose to pay in Sidiora in the web application
+  - [x] 1.5 Let a person choose to pay in Sidiora in the web application
     - Add human/apps/web/src/api/gas-station.ts wrapping the SDK's quote request and sponsored batch builder, and export it from human/apps/web/src/api/sdk.ts beside the existing precompile re-exports, taking the gas station's location from the application's server configuration with no literal endpoint in the source.
     - Extend the wallet send path so a person can choose to pay a transaction's fee in Sidiora, showing the quoted amount, the maximum they are agreeing to and the deadline before they sign, and signing the authorisation through the same provider path human/apps/web/src/api/wallet.ts already uses.
     - Return the outcome through the same shape sendWalletPrecompileCall returns - sent, cancelled, rejected, unavailable or failed - so a refused quote, an unreachable station and a rejected signature are each distinguishable, and add no new outcome vocabulary.
@@ -129,7 +129,7 @@
     - Add modules/evm/migrations/migrate_fee_token_params_test.go asserting the defaults on a store without them, every existing parameter left untouched, and a second run changing nothing; add an upgrade test beside node/upgrades_test.go asserting the handler is registered under the name in node/tags and that the migration runs through it.
     - Apply nothing to a running chain: this task writes the handler and the migration and leaves them to a governance proposal.
     - _Requirements: 13.1, 13.2, 13.3, 13.6_
-  - [ ] 2.10 Prove the whole path over real blocks
+  - [x] 2.10 Prove the whole path over real blocks
     - Add testutil/processblock/msgs/feetoken.go building the messages this proof needs in the shape testutil/processblock/msgs/bank.go builds its own: an attested Sidiora bridge in, a fee-preference set through the precompile, and a transaction sent by an account whose preference is Sidiora.
     - Add testutil/processblock/verify/feetoken.go asserting balances across a block in the shape testutil/processblock/verify/bank.go and verify/distribution.go assert theirs: the sender's Sidiora balance, the collector or holding account's balance, the sender's Paxeer balance and the validator rewards.
     - Add tests/chain/sidiora_fee_test.go, with test names carrying a SidioraFee prefix, driving real blocks through processblock: bridge Sidiora in, set the preference, send a transaction paid in Sidiora, and assert the sender's Sidiora balance fell by the converted fee, the collector or holding account received it, the sender's Paxeer balance did not move, and a second account paying in Paxeer is charged exactly as before.
@@ -150,6 +150,20 @@
     - In modules/evm/keeper/params.go return governed rates from IsAllowedFeeDenom, expose GetMaxFeeTokenRateAge with its unset default, and add GetFeeTokenRate refusing missing, invalid, future or stale rates with named errors and no fallback.
     - Extend modules/evm/types/params_test.go with validator refusals and acceptances, defaults, the initial-rate scale, parameter-store and protobuf round trips, and extend modules/evm/keeper/params_test.go under the FeeTokenParams prefix with fresh, boundary, stale and unset reads through a real parameter store.
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
+  - [x] 2.13 Charge the fee-token path on the block execution path
+    - In node/app.go make validateGigaEVMTx and executeEVMTxWithGigaExecutor consult the x/evm keeper's GetFeeTokenCharge when the fee-token switch is on and the payer's preference is a fee denom: check the balance in that denom at the governed rate instead of the network coin, refuse a short balance and an unusable rate with the errors the ante path returns, pre-charge and refund in that denom at the recorded rate, and record the charge the way SetAnteFeeTokenCharge does so the message server applies it; with the switch off, and for every block below the upgrade height, the path stays exactly what it is today (observations 2.6.3 and 2.10.1).
+    - Add node/app_feetoken_test.go asserting through the application's real block path the debit in the fee denom, the refund at the recorded rate, the short-balance and unusable-rate refusals, and the unchanged network-coin charge with the switch off.
+    - With this in place, re-qualify task 2.10 on this revision: run its verify_cmd once and set task 2.10 to done with its four evidence fields when it passes, leaving it implemented with the run's fields otherwise, and add a closing line to observations 2.6.3 and 2.10.1 in spec/sidiora-fee-token/qualification.kvx when the run proves them resolved.
+    - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 13.4, 13.5_
+  - [ ] 2.14 Serve the fee-token precompile only at or after the upgrade
+    - In precompiles/setup.go make the fee-token entry of GetCustomPrecompiles absent below the upgrade height task 2.9 named, in the shape the xweb entry is gated there, and in modules/evm/keeper/keeper.go make CustomPrecompiles select the set for the block's upgrade height for ordinary execution instead of latestCustomPrecompiles (observation 2.5.3), changing no other precompile's version selection.
+    - Extend node/upgrades_test.go so the custom precompile set below the upgrade height holds no fee-token entry and the precompile answers only after the upgrade, and cover the keeper's selection in modules/evm/keeper.
+    - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 13.1, 13.2, 13.3, 13.6_
+  - [x] 2.15 Charge the fee token on the transaction delivery path
+    - Make EvmCheckAndChargeFees in node/ante/evm_checktx.go, and through it the delivery path in node/ante/evm_delivertx.go, charge gas in the payer's fee denom at the governed rate through the keeper's GetFeeTokenCharge and SetAnteFeeTokenCharge exactly as node/app.go charges it on the block execution path since task 2.13, refusing a payer whose fee denom balance cannot cover the gas with the same error, so the two paths charge and refuse the same transaction identically; charge the network coin as today for a payer without a fee denom.
+    - Add the matching node/ante tests: a payer with a fee denom is charged in it and not in the network coin on the delivery path, an uncovered payer is refused with the insufficient-funds error naming the denom, and a payer without a fee denom is charged in the network coin as before.
+    - Run task 2.10's verify_cmd once on the result; on exit 0 record task 2.10 done with that revision, command, exit code and log, and close observations 2.10.1 and 2.13.1 naming the revision.
+    - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 13.4, 13.5_
 
 ## Wave 3 - One Aggregate Run, Recorded
 
@@ -168,7 +182,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }
