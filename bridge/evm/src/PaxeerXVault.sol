@@ -1,19 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity 0.8.30;
 
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
 import {BridgeAttestation} from "./BridgeAttestation.sol";
 
-interface IERC20Minimal {
-    function balanceOf(address account) external view returns (uint256);
-    function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-}
+/// @notice Foreign-chain custody half of the PaxeerX bridge. Deposits lock
+/// ERC20 or the chain's native coin and emit BridgeDeposit for the Paxeer side
+/// to mint against. Releases pay out locked funds once a threshold of attestors
+/// has signed the outbound digest for a Paxeer burn. Not upgradeable: no proxy
+/// surface and no EIP-165 surface. Ownership moves in two steps.
+contract PaxeerXVault is Ownable2Step, ReentrancyGuard {
+    using SafeERC20 for IERC20;
 
-/// @notice Ethereum custody half of the PaxeerX bridge. Deposits lock ERC20
-/// or native ETH and emit BridgeDeposit for the Paxeer side to mint against.
-/// Releases pay out locked funds once a threshold of attestors has signed the
-/// outbound digest for a Paxeer burn. Not upgradeable; no proxy surface.
-contract PaxeerXVault {
     address public constant NATIVE_ASSET = address(0);
     uint256 private constant SECP256K1_HALF_ORDER = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
 
@@ -22,7 +25,6 @@ contract PaxeerXVault {
         uint256 total;
     }
 
-    address public owner;
     bool public paused;
     uint64 public depositNonce;
     uint256 public threshold;
@@ -31,7 +33,9 @@ contract PaxeerXVault {
     mapping(address => AssetCap) public caps;
     mapping(address => uint256) public outstanding;
     mapping(bytes32 => bool) public nullified;
-    uint256 private locked = 1;
+    /// @notice Every asset the owner has ever capped, so the rescue path can
+    /// tell an asset this bridge carries from a token that arrived by accident.
+    mapping(address => bool) public registered;
 
     event BridgeDeposit(
         address indexed asset, uint256 amount, address indexed sender, bytes32 indexed paxeerRecipient, uint64 nonce
@@ -45,15 +49,13 @@ contract PaxeerXVault {
     );
     event AttestorsSet(address[] attestors, uint256 threshold);
     event CapSet(address indexed asset, uint256 perTx, uint256 total);
+    event AssetRegistered(address indexed asset);
+    event Rescued(address indexed token, address indexed to, uint256 amount);
     event Paused(address account);
     event Unpaused(address account);
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
-    error NotOwner();
-    error InvalidOwner();
     error WhenPaused();
     error NotPaused();
-    error Reentrant();
     error ZeroAmount();
     error InvalidRecipient();
     error InvalidAttestor(address attestor);
@@ -68,38 +70,20 @@ contract PaxeerXVault {
     error SignersNotAscending(address signer);
     error UnknownSigner(address signer);
     error UseDepositNative();
-    error TokenTransferFailed();
     error TransferAmountMismatch(uint256 received, uint256 amount);
     error NativeTransferFailed();
-
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
-        _;
-    }
+    error NativeAssetNotRescuable();
+    error OutstandingNotZero(address token, uint256 outstanding);
+    error AssetRegisteredForBridging(address token);
+    error NothingToRescue(address token);
 
     modifier whenNotPaused() {
         if (paused) revert WhenPaused();
         _;
     }
 
-    modifier nonReentrant() {
-        if (locked != 1) revert Reentrant();
-        locked = 2;
-        _;
-        locked = 1;
-    }
-
-    constructor(address owner_, address[] memory attestors_, uint256 threshold_) {
-        if (owner_ == address(0)) revert InvalidOwner();
-        owner = owner_;
-        emit OwnershipTransferred(address(0), owner_);
+    constructor(address owner_, address[] memory attestors_, uint256 threshold_) Ownable(owner_) {
         _setAttestors(attestors_, threshold_);
-    }
-
-    function transferOwnership(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) revert InvalidOwner();
-        emit OwnershipTransferred(owner, newOwner);
-        owner = newOwner;
     }
 
     function pause() external onlyOwner {
@@ -120,10 +104,32 @@ contract PaxeerXVault {
 
     /// @notice Sets the per-transaction cap (deposits and releases) and the
     /// cap on the total amount locked for an asset. A zero total disables new
-    /// deposits while releases of already locked funds stay possible.
+    /// deposits while releases of already locked funds stay possible. Naming an
+    /// asset here registers it for bridging for good, so the rescue path can
+    /// never reach it again.
     function setCap(address asset, uint256 perTx, uint256 total) external onlyOwner {
+        if (!registered[asset]) {
+            registered[asset] = true;
+            emit AssetRegistered(asset);
+        }
         caps[asset] = AssetCap({perTx: perTx, total: total});
         emit CapSet(asset, perTx, total);
+    }
+
+    /// @notice Moves the whole balance of a token that holds nothing on the
+    /// bridge's behalf and was never registered for bridging. It is the only
+    /// way a token that reached this contract by accident can leave it, and it
+    /// reaches neither the native asset nor any asset the owner has capped.
+    function rescue(address token, address to) external onlyOwner nonReentrant {
+        if (token == NATIVE_ASSET) revert NativeAssetNotRescuable();
+        if (to == address(0)) revert InvalidRecipient();
+        uint256 locked_ = outstanding[token];
+        if (locked_ != 0) revert OutstandingNotZero(token, locked_);
+        if (registered[token]) revert AssetRegisteredForBridging(token);
+        uint256 balance = IERC20(token).balanceOf(address(this));
+        if (balance == 0) revert NothingToRescue(token);
+        emit Rescued(token, to, balance);
+        IERC20(token).safeTransfer(to, balance);
     }
 
     function attestors() external view returns (address[] memory) {
@@ -133,9 +139,10 @@ contract PaxeerXVault {
     function deposit(address asset, uint256 amount, bytes32 paxeerRecipient) external whenNotPaused nonReentrant {
         if (asset == NATIVE_ASSET) revert UseDepositNative();
         _admitDeposit(asset, amount, paxeerRecipient);
-        uint256 before = IERC20Minimal(asset).balanceOf(address(this));
-        _callToken(asset, abi.encodeCall(IERC20Minimal.transferFrom, (msg.sender, address(this), amount)));
-        uint256 received = IERC20Minimal(asset).balanceOf(address(this)) - before;
+        IERC20 token = IERC20(asset);
+        uint256 before = token.balanceOf(address(this));
+        token.safeTransferFrom(msg.sender, address(this), amount);
+        uint256 received = token.balanceOf(address(this)) - before;
         if (received != amount) revert TransferAmountMismatch(received, amount);
         _recordDeposit(asset, amount, paxeerRecipient);
     }
@@ -178,7 +185,7 @@ contract PaxeerXVault {
             (bool ok,) = recipient.call{value: amount}("");
             if (!ok) revert NativeTransferFailed();
         } else {
-            _callToken(asset, abi.encodeCall(IERC20Minimal.transfer, (recipient, amount)));
+            IERC20(asset).safeTransfer(recipient, amount);
         }
     }
 
@@ -261,13 +268,5 @@ contract PaxeerXVault {
         if (uint256(s) > SECP256K1_HALF_ORDER || (v != 27 && v != 28)) revert InvalidSignature();
         signer = ecrecover(digest, v, r, s);
         if (signer == address(0)) revert InvalidSignature();
-    }
-
-    function _callToken(address token, bytes memory data) private {
-        if (token.code.length == 0) revert TokenTransferFailed();
-        (bool ok, bytes memory ret) = token.call(data);
-        if (!ok || (ret.length != 0 && (ret.length != 32 || abi.decode(ret, (uint256)) != 1))) {
-            revert TokenTransferFailed();
-        }
     }
 }

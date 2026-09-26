@@ -7,7 +7,7 @@
 ## Wave 1 - Foundations, Six Lanes at Once
 
 - [ ] 1. Build the two custody sides, the identity mapping, the configuration, the proposals and the workflow
-  - [ ] 1.1 Move the EVM vault to bridge/evm and harden it to production grade
+  - [x] 1.1 Move the EVM vault to bridge/evm and harden it to production grade
     - Move the project with git mv so its history follows: interop/contracts/ethereum-bridge/src/PaxeerXVault.sol, src/BridgeAttestation.sol, test/PaxeerXVault.t.sol, test/TestToken.sol, test/Vm.sol, ATTESTATION.md and foundry.toml become bridge/evm/..., and nothing is left at the old path.
     - Rewrite bridge/evm/foundry.toml for its new root: src, test and script under bridge/evm, libs lib, solc 0.8.30, optimizer on at 100000 runs, via_ir, no bytecode hash, no cbor metadata, offline, artifacts and cache under build, and a remapping for the OpenZeppelin contracts directory.
     - Add bridge/evm/bootstrap-libs.sh cloning forge-std v1.9.6 and openzeppelin-contracts v5.3.0 into bridge/evm/lib at their pinned tags the way .github/workflows/paxeer-forge-test.yml clones them, idempotent when they are already present, and add bridge/evm/lib to .gitignore so neither library is committed.

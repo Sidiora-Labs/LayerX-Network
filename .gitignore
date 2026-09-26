@@ -4,6 +4,10 @@
 /out/
 /cache/
 /broadcast/
+# The bridge Foundry project: lib is populated by bridge/evm/bootstrap-libs.sh
+# and build holds its artifacts and cache. Neither is committed.
+/bridge/evm/lib/
+/bridge/evm/build/
 *.o
 *.a
 *.so

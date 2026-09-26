@@ -3302,6 +3302,15 @@ interop-lint:
 	sh interop/tools/dependency-policy.sh
 	cargo deny --manifest-path $(INTEROP_MANIFEST) check advisories bans sources
 
+.PHONY: bridge-test-evm bridge-test-solana
+
+bridge-test-evm:
+	bash bridge/evm/bootstrap-libs.sh
+	forge test --root bridge/evm -vvv
+
+bridge-test-solana:
+	cargo test --locked --manifest-path bridge/solana/Cargo.toml
+
 PROGRAMS_CARGO ?= cargo
 PROGRAMS_TARGET_DIR := $(CURDIR)/programs/target
 PROGRAMS_WORKSPACE_CARGO = env CARGO_TARGET_DIR='$(PROGRAMS_TARGET_DIR)' $(PROGRAMS_CARGO)
