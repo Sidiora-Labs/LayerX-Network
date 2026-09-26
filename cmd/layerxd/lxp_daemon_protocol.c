@@ -11,7 +11,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { PROTOCOL_RESPONSE_MAX_BYTES = 64 * 1024 * 1024 };
+enum {
+    PROTOCOL_RESPONSE_MAX_BYTES = 64 * 1024 * 1024,
+    PROGRAM_EVENTS_TOPIC_MAX_BYTES = 64,
+    PROGRAM_EVENTS_MAX_LIMIT = 256
+};
 
 typedef struct json_writer {
     char *bytes;
@@ -496,7 +500,9 @@ static lxp_result pending_artifacts_route(
                 (pending->terminal_payload.length != 0U &&
                  pending->terminal_payload.bytes == NULL) ||
                 (pending->call_graph.length != 0U &&
-                 pending->call_graph.bytes == NULL) ?
+                 pending->call_graph.bytes == NULL) ||
+                (pending->event_list.length != 0U &&
+                 pending->event_list.bytes == NULL) ?
             LXP_FATAL_INVARIANT : LXP_OK;
         if (status == LXP_OK)
             status = lxp_receipt_decode(
@@ -514,7 +520,8 @@ static lxp_result pending_artifacts_route(
             status = LXP_ERR_CONTEXT_MISMATCH;
         if (status == LXP_OK)
             status = lxp_receipt_bind_program_artifacts(
-                &receipt, pending->terminal_payload, pending->call_graph, (lxp_byte_span){NULL, 0U});
+                &receipt, pending->terminal_payload, pending->call_graph,
+                pending->event_list);
         if (status == LXP_OK)
             status = put_program_artifacts(
                 activity_id, receipt_digest, pending->terminal_payload,
@@ -549,7 +556,8 @@ static lxp_result artifacts_route(lxp_daemon_protocol_owner *owner,
         status = LXP_ERR_CONTEXT_MISMATCH;
     if (status == LXP_OK)
         status = lxp_receipt_bind_program_artifacts(
-            &receipt, evidence.terminal_payload, evidence.call_graph, (lxp_byte_span){NULL, 0U});
+            &receipt, evidence.terminal_payload, evidence.call_graph,
+            evidence.event_list);
     if (status != LXP_OK) return status;
     return put_program_artifacts(
         activity_id, receipt_digest, evidence.terminal_payload,
@@ -582,6 +590,194 @@ static lxp_result parse_artifacts_request(
         parse_hex32(activity + 64U + sizeof(tail) - 1U,
                     receipt_digest) != LXP_OK)
         return LXP_ERR_NON_CANONICAL;
+    return LXP_OK;
+}
+
+static uint32_t read_event_u32(const uint8_t *bytes)
+{
+    return ((uint32_t)bytes[0] << 24U) | ((uint32_t)bytes[1] << 16U) |
+           ((uint32_t)bytes[2] << 8U) | (uint32_t)bytes[3];
+}
+
+/* Writes every event of one bound event list whose topic matches, and counts
+ * them; the list layout is the programs runtime's canonical event envelope. */
+static lxp_result put_matching_events(
+    lxp_byte_span list, uint64_t sequence, const uint8_t *topic,
+    size_t topic_length, bool write, json_writer *writer, size_t *written,
+    size_t *matched)
+{
+    static const uint8_t domain[] = "LayerX/programs/events/v1";
+    size_t cursor = sizeof(domain);
+    uint32_t count;
+    uint32_t index;
+    *matched = 0U;
+    if (list.bytes == NULL || list.length < sizeof(domain) + 4U ||
+        memcmp(list.bytes, domain, sizeof(domain)) != 0)
+        return LXP_ERR_LOG_CORRUPT;
+    count = read_event_u32(list.bytes + cursor);
+    cursor += 4U;
+    for (index = 0U; index < count; ++index) {
+        const uint8_t *program_id;
+        const uint8_t *event_topic;
+        const uint8_t *data;
+        uint32_t event_topic_length;
+        uint32_t data_length;
+        if (list.length - cursor < 32U + 32U + 8U + 1U + 4U)
+            return LXP_ERR_LOG_CORRUPT;
+        program_id = list.bytes + cursor;
+        cursor += 32U + 32U + 8U + 1U;
+        event_topic_length = read_event_u32(list.bytes + cursor);
+        cursor += 4U;
+        if (event_topic_length > list.length - cursor ||
+            list.length - cursor - event_topic_length < 4U)
+            return LXP_ERR_LOG_CORRUPT;
+        event_topic = list.bytes + cursor;
+        cursor += event_topic_length;
+        data_length = read_event_u32(list.bytes + cursor);
+        cursor += 4U;
+        if (data_length > list.length - cursor) return LXP_ERR_LOG_CORRUPT;
+        data = list.bytes + cursor;
+        cursor += data_length;
+        if (event_topic_length != topic_length ||
+            memcmp(event_topic, topic, topic_length) != 0)
+            continue;
+        ++*matched;
+        if (!write) continue;
+        if (*written != 0U) json_text(writer, ",");
+        json_format(writer, "{\"sequence\":%llu,\"program_id\":\"",
+                    (unsigned long long)sequence);
+        json_hex(writer, program_id, 32U);
+        json_text(writer, "\",\"topic\":\"");
+        json_hex(writer, event_topic, event_topic_length);
+        json_text(writer, "\",\"data\":\"");
+        json_hex(writer, data, data_length);
+        json_text(writer, "\"}");
+        ++*written;
+    }
+    return cursor == list.length ? writer->status : LXP_ERR_LOG_CORRUPT;
+}
+
+/* Pages the program events bound in the receipt authority log by topic from a
+ * global sequence; next_sequence is where the following page starts and never
+ * passes the durable head, the sequence after the last durable record. */
+static lxp_result program_events_route(
+    lxp_daemon_protocol_owner *owner, const uint8_t *topic,
+    size_t topic_length, uint64_t from_sequence, size_t limit,
+    lxp_arena *arena, json_writer *writer)
+{
+    const lxp_daemon_receipt_authority_store *store = owner->receipt_authority;
+    uint64_t head;
+    uint64_t next_sequence;
+    uint64_t offset = 0U;
+    uint64_t best_sequence = 0U;
+    size_t written = 0U;
+    size_t index;
+    lxp_result status = LXP_OK;
+    if (store == NULL || store->log == NULL) return LXP_ERR_PROJECTION_STALE;
+    if (store->record_count != 0U && store->last_global_sequence == UINT64_MAX)
+        return LXP_FATAL_INVARIANT;
+    head = store->record_count == 0U ? 0U : store->last_global_sequence + 1U;
+    next_sequence = from_sequence < head ? from_sequence : head;
+    for (index = 0U; index < store->cache_count; ++index) {
+        const lxp_daemon_receipt_authority_entry *entry = &store->cache[index];
+        if (entry->global_sequence <= from_sequence &&
+            entry->global_sequence >= best_sequence) {
+            best_sequence = entry->global_sequence;
+            offset = entry->record_offset;
+        }
+    }
+    json_text(writer, "{\"events\":[");
+    while (status == LXP_OK && next_sequence < head) {
+        lxp_daemon_receipt_evidence evidence;
+        uint64_t record_offset = offset;
+        size_t mark = lxp_arena_mark(arena);
+        size_t matched = 0U;
+        bool present = false;
+        status = lxp_daemon_receipt_authority_scan(
+            store, &offset, arena, &evidence, &present);
+        if (status != LXP_OK || !present) {
+            (void)lxp_arena_reset(arena, mark);
+            break;
+        }
+        if (evidence.global_sequence >= from_sequence) {
+            lxp_receipt receipt;
+            if (evidence.event_list.length != 0U) {
+                status = lxp_receipt_decode(evidence.canonical_receipt.bytes,
+                    evidence.canonical_receipt.length, true, &receipt);
+                if (status == LXP_OK &&
+                    (receipt.result_code != LXP_OK ||
+                     !receipt.program_outcome.present ||
+                     receipt.program_outcome.terminal_kind !=
+                         LXP_PROGRAM_TERMINAL_SUCCESS))
+                    evidence.event_list = (lxp_byte_span){NULL, 0U};
+            }
+            if (status == LXP_OK && evidence.event_list.length != 0U) {
+                status = put_matching_events(evidence.event_list,
+                    evidence.global_sequence, topic, topic_length, false,
+                    writer, &written, &matched);
+                if (status == LXP_OK && matched != 0U && written != 0U &&
+                    matched > limit - written) {
+                    offset = record_offset;
+                    (void)lxp_arena_reset(arena, mark);
+                    break;
+                }
+                if (status == LXP_OK && matched != 0U)
+                    status = put_matching_events(evidence.event_list,
+                        evidence.global_sequence, topic, topic_length, true,
+                        writer, &written, &matched);
+            }
+            if (status == LXP_OK) next_sequence = evidence.global_sequence + 1U;
+        }
+        (void)lxp_arena_reset(arena, mark);
+        if (written >= limit) break;
+    }
+    if (status != LXP_OK) return status;
+    if (next_sequence > head) return LXP_FATAL_INVARIANT;
+    json_format(writer, "],\"next_sequence\":%llu}",
+                (unsigned long long)next_sequence);
+    return writer->status;
+}
+
+static lxp_result parse_program_events_request(
+    const char *suffix, uint8_t topic[PROGRAM_EVENTS_TOPIC_MAX_BYTES],
+    size_t *topic_length, uint64_t *from_sequence, size_t *limit)
+{
+    const char *sequence_text;
+    const char *limit_text;
+    char number[21];
+    uint64_t parsed_limit;
+    size_t hex_length;
+    size_t index;
+    sequence_text = strchr(suffix, '/');
+    if (sequence_text == NULL) return LXP_ERR_NON_CANONICAL;
+    limit_text = strchr(sequence_text + 1U, '/');
+    if (limit_text == NULL || strchr(limit_text + 1U, '/') != NULL)
+        return LXP_ERR_NON_CANONICAL;
+    hex_length = (size_t)(sequence_text - suffix);
+    if (hex_length == 0U || (hex_length & 1U) != 0U ||
+        hex_length > 2U * PROGRAM_EVENTS_TOPIC_MAX_BYTES)
+        return LXP_ERR_NON_CANONICAL;
+    for (index = 0U; index < hex_length; index += 2U) {
+        int high = hex_nibble(suffix[index]);
+        int low = hex_nibble(suffix[index + 1U]);
+        if (high < 0 || low < 0 ||
+            (suffix[index] >= 'A' && suffix[index] <= 'F') ||
+            (suffix[index + 1U] >= 'A' && suffix[index + 1U] <= 'F'))
+            return LXP_ERR_NON_CANONICAL;
+        topic[index / 2U] = (uint8_t)((unsigned int)high << 4U |
+                                      (unsigned int)low);
+    }
+    *topic_length = hex_length / 2U;
+    if ((size_t)(limit_text - sequence_text - 1) >= sizeof(number))
+        return LXP_ERR_NON_CANONICAL;
+    (void)memcpy(number, sequence_text + 1U,
+                 (size_t)(limit_text - sequence_text - 1));
+    number[limit_text - sequence_text - 1] = '\0';
+    if (parse_u64(number, from_sequence) != LXP_OK ||
+        parse_u64(limit_text + 1U, &parsed_limit) != LXP_OK ||
+        parsed_limit == 0U || parsed_limit > PROGRAM_EVENTS_MAX_LIMIT)
+        return LXP_ERR_NON_CANONICAL;
+    *limit = (size_t)parsed_limit;
     return LXP_OK;
 }
 
@@ -686,6 +882,20 @@ static lxp_result route_inner(lxp_daemon_protocol_owner *owner,
     if (strncmp(path, program_prefix, sizeof(program_prefix) - 1U) == 0) {
         const char *suffix = path + sizeof(program_prefix) - 1U;
         static const char idempotency_prefix[] = "receipts/by-idempotency/";
+        static const char events_prefix[] = "events/";
+        if (strncmp(suffix, events_prefix, sizeof(events_prefix) - 1U) == 0) {
+            uint8_t topic[PROGRAM_EVENTS_TOPIC_MAX_BYTES];
+            size_t topic_length = 0U;
+            uint64_t from_sequence = 0U;
+            size_t limit = 0U;
+            lxp_result status = parse_program_events_request(
+                suffix + sizeof(events_prefix) - 1U, topic, &topic_length,
+                &from_sequence, &limit);
+            return status == LXP_OK ?
+                program_events_route(owner, topic, topic_length,
+                                     from_sequence, limit, arena, writer) :
+                status;
+        }
         if (strncmp(suffix, idempotency_prefix, sizeof(idempotency_prefix) - 1U) == 0) {
             const char *key_text = suffix + sizeof(idempotency_prefix) - 1U;
             uint8_t key[32];

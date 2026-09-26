@@ -2581,14 +2581,15 @@ static lxp_result publish_canonical_batch_view(
     else if (status == LXP_OK) {
     for (i = 0U; status == LXP_OK && i < activity_count; ++i)
         if (status == LXP_OK)
-            status = lxp_daemon_receipt_authority_append_artifacts(
+            status = lxp_daemon_receipt_authority_append_event_list(
                 &process->receipt_authority,
                 receipts[i].bytes, receipts[i].length,
                 canonical_header.bytes, canonical_header.length,
                 header_signature, &receipt_proofs[i],
                 arena,
                 decoded_receipts[i].program_outcome.terminal_payload,
-                decoded_receipts[i].program_outcome.call_graph_payload);
+                decoded_receipts[i].program_outcome.call_graph_payload,
+                decoded_receipts[i].program_outcome.event_envelope_payload);
     if (status == LXP_OK && maintenance.length != 0U) {
         status = lxp_daemon_receipt_authority_append_maintenance(
             &process->receipt_authority, maintenance.bytes, maintenance.length,
@@ -2754,6 +2755,8 @@ static lxp_result install_pending_receipts(
             pending[index].receipt_proof = view->receipt_proofs[index];
             pending[index].terminal_payload = view->terminal_payloads[index];
             pending[index].call_graph = view->call_graphs[index];
+            pending[index].event_list = view->event_lists == NULL ?
+                (lxp_byte_span){NULL, 0U} : view->event_lists[index];
             (void)memcpy(pending[index].header_signature,
                          view->header_signature, 64U);
             (void)memcpy(pending[index].idempotency_key,
@@ -2872,6 +2875,9 @@ static void run_postcommit(postcommit_job *job,
         if (status == LXP_OK) {
             receipts[index].program_outcome.terminal_payload = view->terminal_payloads[index];
             receipts[index].program_outcome.call_graph_payload = view->call_graphs[index];
+            receipts[index].program_outcome.event_envelope_payload =
+                view->event_lists == NULL ? (lxp_byte_span){NULL, 0U} :
+                view->event_lists[index];
         }
     }
     if (status == LXP_OK)
@@ -3376,6 +3382,7 @@ static lxp_result commit_prepared_batch_wal(
     lxp_daemon_batch_wal_input input;
     lxp_byte_span terminal_payloads[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_byte_span call_graphs[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
+    lxp_byte_span event_lists[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     const lxp_kernel_batch_boundary *base;
     const lxp_kernel_batch_boundary *settled;
     availability_store_job availability_job;
@@ -3491,9 +3498,11 @@ static lxp_result commit_prepared_batch_wal(
     for (i = 0U; i < count; ++i) {
         terminal_payloads[i] = decoded_receipts[i].program_outcome.terminal_payload;
         call_graphs[i] = decoded_receipts[i].program_outcome.call_graph_payload;
+        event_lists[i] = decoded_receipts[i].program_outcome.event_envelope_payload;
     }
     input.terminal_payloads = terminal_payloads;
     input.call_graphs = call_graphs;
+    input.event_lists = event_lists;
     input.receipt_proofs = proofs;
     input.maintenance = maintenance;
     input.state_diff = process->prepared_availability_body.state_diff;
@@ -4284,13 +4293,14 @@ static lxp_result recover_prepared_batch_wal(
             view->canonical_header.length);
     for (i = 0U; status == LXP_OK && i < view->count; ++i) {
         if (view->terminal_payloads != NULL && view->call_graphs != NULL)
-            status = lxp_daemon_receipt_authority_append_artifacts(
+            status = lxp_daemon_receipt_authority_append_event_list(
                 &process->receipt_authority,
                 view->receipts[i].bytes, view->receipts[i].length,
                 view->canonical_header.bytes, view->canonical_header.length,
                 view->header_signature, &view->receipt_proofs[i],
                 &process->owner_scratch, view->terminal_payloads[i],
-                view->call_graphs[i]);
+                view->call_graphs[i], view->event_lists == NULL ?
+                    (lxp_byte_span){NULL, 0U} : view->event_lists[i]);
         else
             status = lxp_daemon_receipt_authority_append(
                 &process->receipt_authority,

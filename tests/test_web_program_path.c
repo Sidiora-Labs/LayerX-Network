@@ -676,6 +676,9 @@ static int web_program_path(const char *wasm_path, bool genesis_fee_account)
                                  listed_hash) == LXP_OK &&
                    memcmp(listed_hash, entry->value + 2U, 32U) == 0);
     }
+#ifdef LXP_TEST_WEB_REQUEST_OBSERVER
+    PATH_CHECK(LXP_TEST_WEB_REQUEST_OBSERVER(&receipt) == 0);
+#endif
 
     /* The same request id again is refused while it is pending. */
     PATH_CHECK(path_call(&chain, program_id, capabilities, length, calldata,
@@ -869,7 +872,10 @@ static int web_program_path(const char *wasm_path, bool genesis_fee_account)
     return 0;
 }
 
-int main(int argc, char **argv)
+#ifndef LXP_TEST_WEB_PROGRAM_PATH_MAIN
+#define LXP_TEST_WEB_PROGRAM_PATH_MAIN main
+#endif
+int LXP_TEST_WEB_PROGRAM_PATH_MAIN(int argc, char **argv)
 {
     if (argc != 2) {
         (void)fprintf(stderr, "usage: %s web-reader.wasm\n", argv[0]);

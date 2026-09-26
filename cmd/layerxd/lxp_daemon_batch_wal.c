@@ -34,13 +34,15 @@ enum {
     WAL_VERSION = 2,
     WAL_MAINTENANCE_VERSION = 3,
     WAL_AVAILABILITY_VERSION = 4,
+    WAL_EVENT_LIST_VERSION = 5,
     WAL_FIXED_BYTES = 762,
     WAL_PROOF_BYTES = 1033,
     WAL_DIGEST_BYTES = 32,
     WAL_ITEM_OVERHEAD_MAX = LXP_DAEMON_BATCH_WAL_MAX_ITEMS *
         (12 + WAL_PROOF_BYTES),
+    WAL_EVENT_LIST_OVERHEAD_MAX = LXP_DAEMON_BATCH_WAL_MAX_ITEMS * 4,
     WAL_MAX_BYTES = LXP_MAX_BATCH_BODY_BYTES + WAL_FIXED_BYTES +
-        WAL_DIGEST_BYTES + WAL_ITEM_OVERHEAD_MAX
+        WAL_DIGEST_BYTES + WAL_ITEM_OVERHEAD_MAX + WAL_EVENT_LIST_OVERHEAD_MAX
 };
 
 static const uint8_t wal_magic[8] = {'L','X','P','B','W','A','L','1'};
@@ -70,6 +72,7 @@ struct lxp_daemon_batch_wal_record {
     lxp_byte_span events[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
     lxp_byte_span terminal_payloads[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
     lxp_byte_span call_graphs[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
+    lxp_byte_span event_lists[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
     lxp_merkle_proof proofs[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
     uint8_t *owned;
     size_t owned_length;
@@ -147,6 +150,12 @@ static void put_u32(uint8_t *p, uint32_t v) { p[0]=(uint8_t)(v>>24); p[1]=(uint8
 static uint16_t get_u16(const uint8_t *p) { return (uint16_t)(((uint16_t)p[0]<<8)|p[1]); }
 static uint32_t get_u32(const uint8_t *p) { return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3]; }
 static uint64_t get_u64(const uint8_t *p) { uint64_t v=0U; size_t i; for(i=0;i<8U;++i)v=(v<<8)|p[i]; return v; }
+
+static uint16_t record_version(const lxp_daemon_batch_wal_record *record)
+{
+    return record->owned == NULL ? (uint16_t)WAL_EVENT_LIST_VERSION :
+        get_u16(record->owned + 8U);
+}
 
 static bool add_size(size_t *total, size_t value)
 {
@@ -276,7 +285,8 @@ static lxp_result validate_canonical_items(
         if (status == LXP_OK && in->terminal_payloads != NULL &&
             in->call_graphs != NULL)
             status = lxp_receipt_bind_program_artifacts(
-                &receipt, in->terminal_payloads[i], in->call_graphs[i], (lxp_byte_span){NULL, 0U});
+                &receipt, in->terminal_payloads[i], in->call_graphs[i],
+                in->event_lists == NULL ? (lxp_byte_span){NULL, 0U} : in->event_lists[i]);
         if(status==LXP_OK)status=lxp_arena_init(&arena,scratch,WAL_MAX_BYTES);
         if(status==LXP_OK)status=lxp_activity_encode(&activity,&arena,&reencoded);
         if(status==LXP_OK &&
@@ -430,6 +440,7 @@ static lxp_result validate_input(const lxp_daemon_batch_wal_input *in, bool lega
     if (in==NULL || in->count==0U || in->count>LXP_DAEMON_BATCH_WAL_MAX_ITEMS ||
         in->activities==NULL || in->receipts==NULL || in->events==NULL ||
         ((in->terminal_payloads == NULL) != (in->call_graphs == NULL)) ||
+        (in->event_lists != NULL && in->terminal_payloads == NULL) ||
         in->receipt_proofs==NULL || in->canonical_header.bytes==NULL ||
         in->canonical_header.length!=LXP_BATCH_HEADER_ENCODED_SIZE ||
         in->protocol_version==0U || in->network_id==0U || in->epoch==0U ||
@@ -472,12 +483,13 @@ static lxp_result validate_input(const lxp_daemon_batch_wal_input *in, bool lega
     for (i=0U;i<in->count;++i) {
         uint8_t leaf[32];
         const lxp_merkle_proof *proof=&in->receipt_proofs[i];
-        const lxp_byte_span spans[5] = {
+        const lxp_byte_span spans[6] = {
             in->activities[i], in->receipts[i], in->events[i],
             in->terminal_payloads == NULL ? (lxp_byte_span){NULL, 0U} : in->terminal_payloads[i],
-            in->call_graphs == NULL ? (lxp_byte_span){NULL, 0U} : in->call_graphs[i]};
+            in->call_graphs == NULL ? (lxp_byte_span){NULL, 0U} : in->call_graphs[i],
+            in->event_lists == NULL ? (lxp_byte_span){NULL, 0U} : in->event_lists[i]};
         size_t span_index;
-        for (span_index = 0U; span_index < 5U; ++span_index) {
+        for (span_index = 0U; span_index < 6U; ++span_index) {
             if ((spans[span_index].length != 0U && spans[span_index].bytes == NULL) ||
                 spans[span_index].length > LXP_MAX_BATCH_BODY_BYTES - payload_bytes)
                 return LXP_ERR_LENGTH_LIMIT;
@@ -545,34 +557,44 @@ static lxp_result validate_input(const lxp_daemon_batch_wal_input *in, bool lega
 
 static lxp_result encode_record(const lxp_daemon_batch_wal_input *in,
                                 lxp_daemon_batch_wal_state state,
+                                uint16_t version,
                                 uint8_t **encoded, size_t *encoded_length)
 {
     size_t length=WAL_FIXED_BYTES+WAL_DIGEST_BYTES, body_length=0U;
     size_t offset=0U, i, j;
     uint8_t *bytes, digest[32];
-    const uint16_t version = WAL_AVAILABILITY_VERSION;
     lxp_result status=validate_input(in, false);
     if (status!=LXP_OK || (state!=LXP_DAEMON_BATCH_WAL_PREPARED &&
         state!=LXP_DAEMON_BATCH_WAL_ABORTED &&
         state!=LXP_DAEMON_BATCH_WAL_COMMITTED)) return status;
-    if ((in->terminal_payloads == NULL) != (in->call_graphs == NULL))
+    if ((in->terminal_payloads == NULL) != (in->call_graphs == NULL) ||
+        (version != WAL_AVAILABILITY_VERSION && version != WAL_EVENT_LIST_VERSION) ||
+        (version < WAL_EVENT_LIST_VERSION && in->event_lists != NULL))
         return LXP_ERR_NON_CANONICAL;
     for(i=0U;i<in->count;++i) {
         size_t terminal_length = in->terminal_payloads == NULL ? 0U :
             in->terminal_payloads[i].length;
         size_t graph_length = in->call_graphs == NULL ? 0U :
             in->call_graphs[i].length;
+        size_t event_list_length = in->event_lists == NULL ? 0U :
+            in->event_lists[i].length;
         if (terminal_length > LXP_MAX_ACTIVITY_BYTES ||
             graph_length > LXP_MAX_ACTIVITY_BYTES ||
+            event_list_length > LXP_PROGRAM_EVENT_LIST_MAX_BYTES ||
             !add_size(&length, version >= WAL_VERSION ? 8U : 0U) ||
+            !add_size(&length, version >= WAL_EVENT_LIST_VERSION ? 4U : 0U) ||
             !add_size(&length, terminal_length) ||
             !add_size(&length, graph_length) ||
+            !add_size(&length, event_list_length) ||
             terminal_length > LXP_MAX_BATCH_BODY_BYTES - body_length)
             return LXP_ERR_LENGTH_LIMIT;
         body_length += terminal_length;
         if (graph_length > LXP_MAX_BATCH_BODY_BYTES - body_length)
             return LXP_ERR_LENGTH_LIMIT;
         body_length += graph_length;
+        if (event_list_length > LXP_MAX_BATCH_BODY_BYTES - body_length)
+            return LXP_ERR_LENGTH_LIMIT;
+        body_length += event_list_length;
         if(body_length>SIZE_MAX-in->activities[i].length ||
            body_length+in->activities[i].length>
                LXP_MAX_BATCH_BODY_BYTES)
@@ -597,7 +619,7 @@ static lxp_result encode_record(const lxp_daemon_batch_wal_input *in,
     if (version >= WAL_MAINTENANCE_VERSION &&
         (!add_size(&length, 4U + WAL_PROOF_BYTES) ||
          !add_size(&length, in->maintenance.length))) return LXP_ERR_LENGTH_LIMIT;
-    if (version == WAL_AVAILABILITY_VERSION) {
+    if (version >= WAL_AVAILABILITY_VERSION) {
         if (in->state_diff.length > LXP_MAX_BATCH_BODY_BYTES - body_length)
             return LXP_ERR_LENGTH_LIMIT;
         body_length += in->state_diff.length;
@@ -650,6 +672,12 @@ static lxp_result encode_record(const lxp_daemon_batch_wal_input *in,
             put_u32(bytes+offset,(uint32_t)graph.length); offset+=4U;
             if (graph.length != 0U) COPY(graph.bytes,graph.length);
         }
+        if (version >= WAL_EVENT_LIST_VERSION) {
+            lxp_byte_span event_list = in->event_lists == NULL ?
+                (lxp_byte_span){NULL, 0U} : in->event_lists[i];
+            put_u32(bytes+offset,(uint32_t)event_list.length); offset+=4U;
+            if (event_list.length != 0U) COPY(event_list.bytes,event_list.length);
+        }
         put_u32(bytes+offset,in->receipt_proofs[i].leaf_index); offset+=4U;
         put_u32(bytes+offset,in->receipt_proofs[i].leaf_count); offset+=4U;
         bytes[offset++]=in->receipt_proofs[i].depth;
@@ -664,7 +692,7 @@ static lxp_result encode_record(const lxp_daemon_batch_wal_input *in,
         for (j = 0U; j < LXP_MERKLE_MAX_DEPTH; ++j)
             COPY(in->maintenance_proof.siblings[j], 32U);
     }
-    if (version == WAL_AVAILABILITY_VERSION) {
+    if (version >= WAL_AVAILABILITY_VERSION) {
         put_u32(bytes + offset, (uint32_t)in->state_diff.length); offset += 4U;
         COPY(in->state_diff.bytes, in->state_diff.length);
         put_u32(bytes + offset, (uint32_t)in->recovery_metadata.length); offset += 4U;
@@ -919,7 +947,8 @@ lxp_result lxp_daemon_batch_wal_write_prepared(const char *directory,
     uint8_t *bytes=NULL; size_t length=0U; bool grouped=false;
     lxp_result status;
     if(digest==NULL)return LXP_ERR_NON_CANONICAL;
-    status=encode_record(input,LXP_DAEMON_BATCH_WAL_PREPARED,&bytes,&length);
+    status=encode_record(input,LXP_DAEMON_BATCH_WAL_PREPARED,
+                         WAL_EVENT_LIST_VERSION,&bytes,&length);
     if(status==LXP_OK)status=group_slots_ready(directory,&grouped);
     if(status==LXP_OK && grouped)
         status=durable_group_write(directory,
@@ -946,7 +975,7 @@ static lxp_result write_prepared_record(
     if (digest == NULL || record == NULL) return LXP_ERR_NON_CANONICAL;
     *record = NULL;
     status = encode_record(input, LXP_DAEMON_BATCH_WAL_PREPARED,
-                           &encoded, &encoded_length);
+                           WAL_EVENT_LIST_VERSION, &encoded, &encoded_length);
     if (status == LXP_OK) status = group_slots_ready(directory, &grouped);
     if (status == LXP_OK && grouped) {
         slot = (uint8_t)((input->batch_number - 1U) & 1U);
@@ -1217,7 +1246,7 @@ static lxp_result decode_record(uint8_t *bytes,size_t length,
     if(bytes==NULL||out==NULL)
         return LXP_ERR_NON_CANONICAL;
     *out=NULL;
-    if(memcmp(bytes,wal_magic,8U)!=0 || (get_u16(bytes+8U)!=1U && get_u16(bytes+8U)!=WAL_VERSION && get_u16(bytes+8U)!=WAL_MAINTENANCE_VERSION && get_u16(bytes+8U)!=WAL_AVAILABILITY_VERSION) ||
+    if(memcmp(bytes,wal_magic,8U)!=0 || (get_u16(bytes+8U)!=1U && get_u16(bytes+8U)!=WAL_VERSION && get_u16(bytes+8U)!=WAL_MAINTENANCE_VERSION && get_u16(bytes+8U)!=WAL_AVAILABILITY_VERSION && get_u16(bytes+8U)!=WAL_EVENT_LIST_VERSION) ||
        bytes[11U]!=0U ||
        get_u64(bytes+12U)!=(uint64_t)length ||
        wal_digest(bytes,length-32U,digest)!=LXP_OK ||
@@ -1285,6 +1314,20 @@ static lxp_result decode_record(uint8_t *bytes,size_t length,
                 offset += artifact_length;
             }
         }
+        if (get_u16(r->owned + 8U) >= WAL_EVENT_LIST_VERSION) {
+            uint32_t event_list_length;
+            if (length - 32U - offset < 4U) {
+                status = LXP_ERR_LOG_TRUNCATED; goto fail;
+            }
+            event_list_length = get_u32(r->owned + offset); offset += 4U;
+            if (event_list_length > LXP_PROGRAM_EVENT_LIST_MAX_BYTES ||
+                event_list_length > length - 32U - offset) {
+                status = LXP_ERR_LENGTH_LIMIT; goto fail;
+            }
+            r->event_lists[i] = (lxp_byte_span){
+                r->owned + offset, event_list_length};
+            offset += event_list_length;
+        }
         if(length-32U-offset<WAL_PROOF_BYTES){status=LXP_ERR_LOG_TRUNCATED;goto fail;}
         r->proofs[i].leaf_index=get_u32(r->owned+offset);offset+=4U;r->proofs[i].leaf_count=get_u32(r->owned+offset);offset+=4U;r->proofs[i].depth=r->owned[offset++];
         for(j=0U;j<LXP_MERKLE_MAX_DEPTH;++j){(void)memcpy(r->proofs[i].siblings[j],r->owned+offset,32U);offset+=32U;}
@@ -1309,7 +1352,7 @@ static lxp_result decode_record(uint8_t *bytes,size_t length,
             offset += 32U;
         }
     }
-    if (get_u16(r->owned + 8U) == WAL_AVAILABILITY_VERSION) {
+    if (get_u16(r->owned + 8U) >= WAL_AVAILABILITY_VERSION) {
         lxp_byte_span *fields[2] = {&r->view.state_diff, &r->view.recovery_metadata};
         for (i = 0U; i < 2U; ++i) {
             uint32_t field_length;
@@ -1330,6 +1373,8 @@ static lxp_result decode_record(uint8_t *bytes,size_t length,
         r->view.terminal_payloads = r->terminal_payloads;
         r->view.call_graphs = r->call_graphs;
     }
+    if (get_u16(r->owned + 8U) >= WAL_EVENT_LIST_VERSION)
+        r->view.event_lists = r->event_lists;
     if (!input_validated)
         status=validate_input(&r->view, get_u16(r->owned + 8U) < WAL_AVAILABILITY_VERSION);
     if(status!=LXP_OK)goto fail;
@@ -1473,7 +1518,8 @@ lxp_result lxp_daemon_batch_wal_transition(const char *directory,
         record->state = state;
         return LXP_OK;
     }
-    status=encode_record(&record->view,state,&bytes,&length);
+    status=encode_record(&record->view,state,record_version(record),
+                         &bytes,&length);
     if(status==LXP_OK)status=durable_replace(
         directory,bytes,length,false,record->owned,record->owned_length);
     if(status==LXP_OK)record->state=state;
@@ -1555,6 +1601,7 @@ lxp_result lxp_daemon_batch_wal_retire(const char *directory,
         if (status == LXP_OK) memcpy(expected, record->owned, expected_length);
     } else {
         status=encode_record(&record->view,record->state,
+                             record_version(record),
                              &expected,&expected_length);
     }
     if(status==LXP_OK)status=paths(directory,final);

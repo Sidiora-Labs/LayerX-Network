@@ -251,7 +251,7 @@
     - Extend lxp_receipt_bind_program_artifacts in src/protocol/lxp_receipt.c so a bound artifact set whose event list's SHA-256 differs from the call outcome event's event_envelope_digest is refused, and cover the accepting and the refusing case in tests/protocol/lxp_test_receipts.c.
     - In tests/test_web_program_path.c read the web request record back from the outcome's event list after the reference program's request call, check the list hashes to the outcome's digest, and check the record's payload hashes to the pending request's payload hash.
     - _Requirements: 11.2_
-  - [ ] 2.27 Persist the event list in the node's receipt authority log and serve program events by topic and sequence
+  - [x] 2.27 Persist the event list in the node's receipt authority log and serve program events by topic and sequence
     - Carry the event list as a third artifact span through the batch WAL in cmd/layerxd/lxp_daemon_batch_wal.c and the pending receipt collection and artifact append in cmd/layerxd/lxp_daemon_process.c, and append it to the receipt authority log as a record format 3 in cmd/layerxd/lxp_daemon_receipt_authority.c with the authority record bound raised to hold it; records the recovery and replica paths append without artifacts decode exactly as before.
     - Serve GET /v1/programs/events/<topic-hex>/<from_sequence>/<limit> from route_inner in cmd/layerxd/lxp_daemon_protocol.c, placed before the program identifier parse: scan the authority log from the sequence, decode each record's event list, and answer the events whose topic matches as an object with events, each carrying sequence, program_id, topic and data, and next_sequence, in the shape of interop/crates/x-websearch/tests/fixtures/kernel/watch.json; sequence is the activity's global sequence, only successful outcomes contribute, a record without an event list contributes nothing, and next_sequence never passes the durable head.
     - Cover storing, binding and the route in tests/daemon/lxp_test_program_artifacts.c with the reference program's request: the page holds the web request event with its raw bytes, a topic that matches nothing answers an empty page, and a sequence past the head answers an empty page whose next_sequence is the head.
@@ -274,10 +274,14 @@
     - Give the span the lifetime of the other artifact spans: copy it wherever lxp_program_outcome is copied and release it wherever the outcome's artifacts are released, and cover a copied outcome whose list still binds in tests/protocol/lxp_test_receipts.c.
     - Run the verify_cmd once; at the passing revision record tasks 2.26, 2.29 and 2.23 done with the same evidence and close observations 2.26.1, 2.29.1, 2.23.1 and 2.2.2 naming it.
     - _Requirements: 11.2_
-  - [ ] 2.32 Serve the availability harness's bond and registry at the anchor address and qualify the agent workspace tests
+  - [ ] 2.32 Serve the availability harness's bond and registry at the anchor address and qualify the agent workspace tests — **Implemented - qualification pending**
     - The daemon accepts a settlement contract and a checkpoint registry only at the layerxAnchor precompile address, and that refusal stays exactly as it is (observation 2.16.1); change tests/daemon/availability-settlement.py so the bond and registry calls the daemon makes at the anchor address reach the GuarantorBond and CheckpointRegistry it deploys on its anvil chain - installing the code of one contract that serves both interfaces at the anchor address through anvil's code-setting method, or whichever placement the anchor's ABI in the repository supports - and have tests/daemon/program-admission.sh export the anchor address for both variables under --availability-batches, keeping every other harness step unchanged.
     - Keep the layerx-agentd native daemon tests reading the harness's ready file as they do, adjusting only what the address change requires inside agent/crates/layerx-agentd; never relax, ignore, skip or delete a test.
     - Run the verify_cmd once; at the passing revision record task 2.16 done with the same evidence and close observation 2.16.1 naming it.
+    - _Requirements: 9.1_
+  - [ ] 2.33 Find why the finalized receipt read is unavailable after finality registration and qualify the agent workspace tests
+    - Diagnose observation 2.32.1: with the harness's contracts served at the anchor address, the daemon registers batch 1's finality, but the route's read of the finalized receipt in agent/crates/layerx-agentd/tests/native_reads_daemon.rs returns NativeReadError::Unavailable; surface the underlying error the route folds into Unavailable in agent/crates/layerx-agentd/src/read/native.rs (its reconnect or preparation_state path) in the test's panic message or a log the harness keeps, then fix the cause where it lives - in the route, in the harness's sequence of registrations and waits, or in the daemon's answer - keeping every daemon refusal and every assertion exactly as strong.
+    - Run the verify_cmd once; at the passing revision record tasks 2.32 and 2.16 done with the same evidence and close observations 2.16.1 and 2.32.1 naming it.
     - _Requirements: 9.1_
 
 ## Wave 3 - One Run, Recorded
@@ -296,7 +300,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17", "1.18"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23", "2.24", "2.25", "2.26", "2.27", "2.28", "2.29", "2.30", "2.31", "2.32"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23", "2.24", "2.25", "2.26", "2.27", "2.28", "2.29", "2.30", "2.31", "2.32", "2.33"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }
