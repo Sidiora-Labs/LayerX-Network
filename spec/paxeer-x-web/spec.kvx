@@ -630,7 +630,7 @@ reqs = ["14.1","14.2","14.3"]
 title = "Dry-run the sidecar loop against anvil and local sidecars and record it"
 status = "pending"
 wave = 2
-requires = ["1.6","2.1","2.3","2.10","2.14","2.17"]
+requires = ["1.6","2.1","2.3","2.10","2.14","2.17","2.24"]
 do_1 = "Write interop/deploy/x-websearch/tests/dry-run-check.sh starting anvil, a real loopback web server serving committed pages and three x-websearch processes with run-local attestor keys and allow_loopback set, and deploying contracts/src/xweb/XWebConsumer.sol to anvil."
 do_2 = "Fetch the same page through the three sidecars, assert the digests are identical and the signatures are valid and ascending over the origin-1 preimage, assert the submitter's fulfil calldata decodes against precompiles/xweb/abi.json, and deliver the consumer's callback on anvil from the impersonated precompile address with the attested response and the bounded gas, asserting the consumer's stored result."
 do_3 = "Record the exchange as interop/deploy/x-websearch/tests/fixtures/dry-run.json, replayable without the nodes, carrying no key material, no endpoint but the loopback ones the run started and no date or hostname; stop with a message naming a missing tool rather than skipping a step."
@@ -891,15 +891,17 @@ touches = ["include/layerx/lxp_module.h","src/protocol/lxp_genesis.c","src/proto
 reqs = ["11.1","11.3"]
 
 [task.2.19]
-title = "Align the kernel test's attestor keys with the intake fixture's signers and qualify the program request path"
+title = "Re-sign the observation activity fixture with keys the tests hold and qualify the program request path"
 status = "pending"
 wave = 2
-requires = ["2.2"]
-do_1 = "Make the three attestor keys interop/crates/x-websearch/tests/kernel.rs derives the keys that signed tests/fixtures/web/observation-activity.hex, deriving them from the same seeds tests/test_web_program_path.c uses for its attestors; the registered-signer assertion stays exactly as written and the C test and the fixture are not changed."
-do_2 = "Run task 2.2's verify_cmd once on the result; on exit 0 record task 2.2 done with that revision, command, exit code and log, and close observation 2.2.1 naming the revision."
-verify_cmd = "timeout 20m sh -c 'make test-web-program-path && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test kernel'"
+requires = ["2.2","2.24"]
+do_1 = "The three signatures in tests/fixtures/web/observation-activity.hex come from keys no test holds, so no sidecar test can reproduce its bytes; re-record the fixture through a recorder in interop/crates/x-websearch/tests/kernel.rs, enabled by an environment variable in the shape of X_WEBSEARCH_RECORD_EXCHANGE, that signs the same origin-2 digest with the attestor keys derived from the scalars 1, 2 and 3 that tests/test_web_program_path.c holds, in ascending signer order, and writes the fixture; the recorder is a test path, never a production one."
+do_2 = "Pin the new signer addresses and signatures in the shared attestation vectors of tests/modules/test_web_intake.c and wherever tests/network/test_web_adapter.c names a signer, keeping every existing assertion, the unregistered signer and the ascending-order and threshold cases exactly as strong as they are; the digest they sign does not change."
+do_3 = "Make the kernel test derive its registered attestors from the same three scalars, so the_observation_activity_equals_the_kernel_adapter_fixture compares the sidecar's bytes with a fixture signed by keys the test holds; the assertion stays exactly as written."
+do_4 = "Run task 2.2's verify_cmd once on the result; on exit 0 record task 2.2 done with that revision, command, exit code and log, and close observations 2.2.1 and 2.19.1 naming the revision."
+verify_cmd = "timeout 20m sh -c 'make test-web-intake test-web-adapter && make test-web-program-path && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test kernel'"
 symbols = ["the_observation_activity_equals_the_kernel_adapter_fixture"]
-touches = ["interop/crates/x-websearch/tests/kernel.rs","interop/crates/x-websearch/tests/fixtures/kernel"]
+touches = ["tests/fixtures/web","tests/modules/test_web_intake.c","tests/network/test_web_adapter.c","interop/crates/x-websearch/tests/kernel.rs","interop/crates/x-websearch/tests/fixtures/kernel"]
 reqs = ["11.4"]
 
 [task.2.20]
@@ -929,7 +931,7 @@ reqs = ["11.3"]
 
 [task.2.22]
 title = "Teach the program lint ABI v4 and lint the web-reader build"
-status = "pending"
+status = "done"
 wave = 2
 requires = ["2.2"]
 do_1 = "In programs/sdk/rust/lint/src/lib.rs make lint_artifact_for_abi and lint_project_for_abi accept layerx_programs_runtime::ABI_V3_VERSION and ABI_V4_VERSION with the host function set each version exports, refusing an import outside that set exactly as the v2 path does, and keep the unsupported-version refusal for anything above v4."
@@ -938,6 +940,10 @@ verify_cmd = "timeout 20m sh -c 'cd programs && cargo test --locked -p layerx-pr
 symbols = ["lint_artifact_for_abi"]
 touches = ["programs/sdk/rust/lint/src/lib.rs","programs/sdk/rust/lint/src/main.rs","programs/sdk/rust/lint/tests","programs/sdk/rust/examples/web-reader/build.sh"]
 reqs = ["11.2"]
+revision = "a570f44efec8e5c7e8eb14eecf4ded1ffcae9d9b"
+command = "timeout 20m sh -c 'cd programs && cargo test --locked -p layerx-program-lint && cd .. && make programs-reference-web-reader'"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.2.23]
 title = "Let the prepare pass stage module values so a program's first paying call creates the web fee account"
@@ -951,11 +957,24 @@ symbols = ["lxp_kernel_prepare_activity"]
 touches = ["src/protocol/lxp_kernel.c","src/protocol/lxp_module_ctx.c","tests/protocol/lxp_test_kernel.c","tests/protocol/lxp_test_module_ctx.c","tests/test_web_program_path.c"]
 reqs = ["11.1"]
 
+[task.2.24]
+title = "Canonicalise JSON numbers as ECMAScript does so the shared vectors agree"
+status = "pending"
+wave = 2
+requires = ["2.17"]
+do_1 = "Make the sidecar's api canonicaliser produce, for every JSON number, the ECMAScript Number::toString digits of the correctly rounded IEEE 754 double the literal denotes, as RFC 8785 requires: parse the literal to the nearest double, enabling serde_json's float_roundtrip feature for the crate if its default parse is not correctly rounded for long literals, and print the shortest digit string that round-trips, choosing the closest when several do; the vector file stays as written."
+do_2 = "Add a unit test in interop/crates/x-websearch/tests/api.rs that parses the literal 123456789012345678901234 and asserts both the double's bits and the printed digits against modules/xweb/types/testdata/api-vectors.json, beside the existing vector test."
+do_3 = "Run task 2.17's verify_cmd once on the result, then task 2.14's build command and verify_cmd once each; on exit 0 record tasks 2.17 and 2.14 done with that revision, their commands, exit codes and logs, and close observations 2.17.1, 2.14.1 and 2.14.2 naming the revision."
+verify_cmd = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test api --test attest --test canonical --test content'"
+symbols = ["es_number"]
+touches = ["interop/Cargo.lock","interop/crates/x-websearch/Cargo.toml","interop/crates/x-websearch/src/api.rs","interop/crates/x-websearch/tests/api.rs"]
+reqs = ["17.3","17.6"]
+
 [task.3.1]
 title = "Run the xweb workflow's legs once on the merged revision and record the evidence"
 status = "pending"
 wave = 3
-requires = ["1.1","1.2","1.3","1.4","1.5","1.6","1.7","1.8","1.9","1.10","1.11","1.12","1.13","1.14","1.15","1.16","1.17","1.18","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12","2.13","2.14","2.15","2.16","2.17","2.18","2.19","2.20","2.21","2.22","2.23"]
+requires = ["1.1","1.2","1.3","1.4","1.5","1.6","1.7","1.8","1.9","1.10","1.11","1.12","1.13","1.14","1.15","1.16","1.17","1.18","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12","2.13","2.14","2.15","2.16","2.17","2.18","2.19","2.20","2.21","2.22","2.23","2.24"]
 do_1 = "On the revision that merges waves 1 and 2, run the workflow's legs once, in order - the x-websearch crate, modules/xweb with precompiles/xweb, the Foundry consumer tests, the kernel web make targets with the runtime web_read test, and the SDK and MCP tests - writing each leg's output to its own log under build/xweb-gates/."
 do_2 = "Append one gate record per leg to spec/paxeer-x-web/qualification.kvx carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code and the log path, written only from a command that actually ran."
 do_3 = "Append one observation per failure the run exposes that belongs to no task in this feature; do not investigate it further and do not rerun it. Rerun nothing that already passed at this revision and write no gate record for a command that did not run."

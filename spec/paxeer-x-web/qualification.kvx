@@ -345,6 +345,7 @@ symbol = "layerx-program-lint"
 observed = "The program lint does not know ABI v4, which web_read needs, so the web-reader build cannot pass through the lint step the escrow reference uses."
 assumption = "The lint gains ABI v4 from its owner, after which the web-reader build adds the lint step."
 severity = "suspect"
+closed = "Task 2.22 taught the lint the v3 and v4 host function sets and added the lint step to the web-reader build.sh; the lint crate tests and make programs-reference-web-reader passed in its verify_cmd at revision a570f44efec8e5c7e8eb14eecf4ded1ffcae9d9b."
 
 [observation.2.17.1]
 task = "2.17"
@@ -353,3 +354,19 @@ symbol = "es_number"
 observed = "Clippy passes and nine of ten api tests pass, but after two repair cycles pointers_select_and_canonicalise_as_the_vectors_pin still writes 123456789012345678901234 as 1.2345678901234569e+23 where the vector pins 1.2345678901234568e+23 (.logs/verify.log, exit 101), so the attest, canonical and content tests and task 2.14's gates never ran."
 assumption = "The vector stays as written; es_number is corrected to pick the closest digits at the shortest length and the verify_cmd reruns unchanged."
 severity = "blocker"
+
+[observation.2.19.1]
+task = "2.19"
+file = "interop/crates/x-websearch/tests/kernel.rs"
+symbol = "the_observation_activity_equals_the_kernel_adapter_fixture"
+observed = "The three signatures in tests/fixtures/web/observation-activity.hex recover to 0x957e1e3b0fce62061853544c13e02cceba82ba8b, 0xb417ffcf7bc5996e2a0677ba25033da7e90c4fe2 and 0xc2bce316fab52b8263d3c679f36a6bb453242784, the signer vectors pinned in tests/modules/test_web_intake.c, while tests/test_web_program_path.c holds only the scalars 1, 2 and 3 (0x7e5f4552091a69125d5dfcb7b8c2659029395bdf, 0x2b5ad5c4795c026514f8317c7a215e218dccd6cf, 0x6813eb9362372eef6200f3b1dbc3f819671cba69) and none of the derivations the web tests use (a scalar, a 0x3c or 0x5e first byte with an index last byte, or a keccak label) yields them; separately interop/crates/x-websearch/src/kernel.rs builds Answer without its level field, so the crate's library does not compile and no build or verify_cmd ran."
+assumption = "The kernel test takes its registered set from the intake test's signer vectors or the fixture is re-signed by its owner with keys a test holds, and KernelAttestor::attest sets the level, after which the verify_cmd runs unchanged."
+severity = "blocker"
+
+[observation.2.22.1]
+task = "2.22"
+file = "programs/crates/layerx-programs-runtime/src/execute.rs"
+symbol = "execute_authorized_v2_with_budget"
+observed = "The lint crate builds, but cargo clippy -p layerx-program-lint --all-targets -- -D warnings also lints the path dependency layerx-programs-runtime and stops on a pre-existing too_many_arguments (8/7) there (.logs/build.log, exit 101); the file is outside this task's touches."
+assumption = "The runtime's owner resolves the finding; the lint crate itself is qualified by its verify_cmd."
+severity = "note"

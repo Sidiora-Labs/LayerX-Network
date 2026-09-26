@@ -211,9 +211,11 @@
     - Extend tests/protocol/lxp_test_dispatch.c so both web activities resolve and dispatch and an activity of module 12 is still unknown, extend tests/protocol/lxp_test_kernel.c for the raised bound in genesis and handover, and change tests/test_web_program_path.c to deliver the observation activity through kernel dispatch rather than by calling intake directly, keeping every existing assertion.
     - Close observations 1.7.1 and 2.2.3 naming the revision.
     - _Requirements: 11.1, 11.3_
-  - [ ] 2.19 Align the kernel test's attestor keys with the intake fixture's signers and qualify the program request path
-    - Make the three attestor keys interop/crates/x-websearch/tests/kernel.rs derives the keys that signed tests/fixtures/web/observation-activity.hex, deriving them from the same seeds tests/test_web_program_path.c uses for its attestors; the registered-signer assertion stays exactly as written and the C test and the fixture are not changed.
-    - Run task 2.2's verify_cmd once on the result; on exit 0 record task 2.2 done with that revision, command, exit code and log, and close observation 2.2.1 naming the revision.
+  - [ ] 2.19 Re-sign the observation activity fixture with keys the tests hold and qualify the program request path
+    - The three signatures in tests/fixtures/web/observation-activity.hex come from keys no test holds, so no sidecar test can reproduce its bytes; re-record the fixture through a recorder in interop/crates/x-websearch/tests/kernel.rs, enabled by an environment variable in the shape of X_WEBSEARCH_RECORD_EXCHANGE, that signs the same origin-2 digest with the attestor keys derived from the scalars 1, 2 and 3 that tests/test_web_program_path.c holds, in ascending signer order, and writes the fixture; the recorder is a test path, never a production one.
+    - Pin the new signer addresses and signatures in the shared attestation vectors of tests/modules/test_web_intake.c and wherever tests/network/test_web_adapter.c names a signer, keeping every existing assertion, the unregistered signer and the ascending-order and threshold cases exactly as strong as they are; the digest they sign does not change.
+    - Make the kernel test derive its registered attestors from the same three scalars, so the_observation_activity_equals_the_kernel_adapter_fixture compares the sidecar's bytes with a fixture signed by keys the test holds; the assertion stays exactly as written.
+    - Run task 2.2's verify_cmd once on the result; on exit 0 record task 2.2 done with that revision, command, exit code and log, and close observations 2.2.1 and 2.19.1 naming the revision.
     - _Requirements: 11.4_
   - [ ] 2.20 Wire the kernel relay into the sidecar binary and scope the signature exchange by program
     - In interop/crates/x-websearch/src/config.rs add the kernel relay settings, the gateway endpoint, the poll interval and the program topics to watch, validated the way the existing fields are; in src/main.rs start KernelRelay beside the attest loop when they are set and stop it on the same shutdown signal; in src/server.rs expose the relay's peer signature exchange beside the existing peer endpoint.
@@ -224,7 +226,7 @@
     - In platform/hosted/gateway/src/rpc.rs add the method lx_getProgramEvents taking a topic, a start sequence and a limit and answering events that carry sequence, program_id, topic and data, exactly the shape interop/crates/x-websearch/tests/fixtures/kernel/watch.json pins, backed by the program event store of src/modules/programs/event.c through the upstream read the gateway proxies; where the upstream surface has no topic-filtered, sequence-cursored program event read, add one beside the existing /v1/programs reads in the same service with its own test.
     - Cover the method in the gateway crate's tests against a recorded upstream exchange, asserting the request and response shapes of the sidecar fixture, the cursor advancing and the limit honoured, and extend platform/hosted/gateway/tests/local/events.rs so the local qualification run emits events from a deployed program and reads them back through the method; close observation 2.2.4 naming the revision.
     - _Requirements: 11.3_
-  - [ ] 2.22 Teach the program lint ABI v4 and lint the web-reader build
+  - [x] 2.22 Teach the program lint ABI v4 and lint the web-reader build
     - In programs/sdk/rust/lint/src/lib.rs make lint_artifact_for_abi and lint_project_for_abi accept layerx_programs_runtime::ABI_V3_VERSION and ABI_V4_VERSION with the host function set each version exports, refusing an import outside that set exactly as the v2 path does, and keep the unsupported-version refusal for anything above v4.
     - Add the lint step to programs/sdk/rust/examples/web-reader/build.sh in the shape of the escrow example's build.sh, and cover the v3 and v4 paths in the lint crate's tests with the web-reader artifact and a v4 artifact importing a host function outside the set; close observation 2.2.6 naming the revision.
     - _Requirements: 11.2_
@@ -232,6 +234,11 @@
     - In src/protocol/lxp_kernel.c make lxp_kernel_prepare_activity open a journal over its snapshot for the duration of a program call, so lxp_ctx_account_stage_module_value in src/protocol/lxp_module_ctx.c stages the way it does on the commit path, and discard that journal with the snapshot; the prepare pass changes no committed state.
     - Extend tests/protocol/lxp_test_module_ctx.c and tests/protocol/lxp_test_kernel.c for staging under prepare and its discard, and extend tests/test_web_program_path.c with a run whose genesis carries no web fee account and whose first paying call creates it, keeping the genesis-provisioned run as it is; close observation 2.2.2 naming the revision.
     - _Requirements: 11.1_
+  - [ ] 2.24 Canonicalise JSON numbers as ECMAScript does so the shared vectors agree
+    - Make the sidecar's api canonicaliser produce, for every JSON number, the ECMAScript Number::toString digits of the correctly rounded IEEE 754 double the literal denotes, as RFC 8785 requires: parse the literal to the nearest double, enabling serde_json's float_roundtrip feature for the crate if its default parse is not correctly rounded for long literals, and print the shortest digit string that round-trips, choosing the closest when several do; the vector file stays as written.
+    - Add a unit test in interop/crates/x-websearch/tests/api.rs that parses the literal 123456789012345678901234 and asserts both the double's bits and the printed digits against modules/xweb/types/testdata/api-vectors.json, beside the existing vector test.
+    - Run task 2.17's verify_cmd once on the result, then task 2.14's build command and verify_cmd once each; on exit 0 record tasks 2.17 and 2.14 done with that revision, their commands, exit codes and logs, and close observations 2.17.1, 2.14.1 and 2.14.2 naming the revision.
+    - _Requirements: 17.3, 17.6_
 
 ## Wave 3 - One Run, Recorded
 
@@ -249,7 +256,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17", "1.18"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23", "2.24"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }

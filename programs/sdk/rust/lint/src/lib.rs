@@ -14,7 +14,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use layerx_program_sdk::{CALL_ENTRY_EXPORT, CALL_RESERVE_EXPORT, MEMORY_EXPORT};
-use layerx_programs_runtime::{ValidationRefusal, WasmEngine};
+use layerx_programs_runtime::{
+    HostFunction, ValidationRefusal, WasmEngine, ABI_V1_VERSION, ABI_V2_VERSION, ABI_V3_VERSION,
+    ABI_V4_VERSION,
+};
 use wasmparser_nostd::{ExternalKind, Parser, Payload};
 
 const CLOCK_IMPORT_NAMES: &[&str] = &[
@@ -70,6 +73,32 @@ const FORBIDDEN_SOURCE_ITEMS: &[&str] = &[
 ];
 
 const FLOAT_TYPE_NAMES: &[&str] = &["f32", "f64"];
+
+/// Each host namespace with the ABI revision that introduced it and the exact
+/// host functions it exports. A revision admits its own namespace and every
+/// namespace an earlier revision introduced, and nothing else.
+const VERSIONED_HOST_NAMESPACES: [(&str, u16, &[HostFunction]); 4] = [
+    (
+        layerx_programs_runtime::ABI_V1_MODULE,
+        ABI_V1_VERSION,
+        &layerx_programs_runtime::HOST_FUNCTIONS,
+    ),
+    (
+        layerx_programs_runtime::ABI_V2_MODULE,
+        ABI_V2_VERSION,
+        &layerx_programs_runtime::ABI_V2_HOST_FUNCTIONS,
+    ),
+    (
+        layerx_programs_runtime::ABI_V3_MODULE,
+        ABI_V3_VERSION,
+        &layerx_programs_runtime::ABI_V3_HOST_FUNCTIONS,
+    ),
+    (
+        layerx_programs_runtime::ABI_V4_MODULE,
+        ABI_V4_VERSION,
+        &layerx_programs_runtime::ABI_V4_HOST_FUNCTIONS,
+    ),
+];
 
 /// A named determinism rule a program violated.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -415,28 +444,35 @@ fn compare_function_tables(
 /// Lints one compiled program artifact.
 #[must_use]
 pub fn lint_artifact(wasm: &[u8]) -> Vec<DeterminismViolation> {
-    let mut violations = import_and_export_violations(wasm, false);
-    violations.extend(engine_violations(wasm, false));
-    violations
+    lint_supported_artifact(wasm, ABI_V1_VERSION)
 }
 
 /// Lints an explicitly candidate-qualified compiled program artifact.
 #[must_use]
 pub fn lint_candidate_artifact(wasm: &[u8]) -> Vec<DeterminismViolation> {
-    let mut violations = import_and_export_violations(wasm, true);
-    violations.extend(engine_violations(wasm, true));
-    violations
+    lint_supported_artifact(wasm, ABI_V2_VERSION)
 }
 
 /// Lints one artifact against the explicitly recorded ABI revision.
 #[must_use]
 pub fn lint_artifact_for_abi(wasm: &[u8], abi_version: u16) -> Vec<DeterminismViolation> {
     match abi_version {
-        layerx_programs_runtime::ABI_V1_VERSION => lint_artifact(wasm),
-        layerx_programs_runtime::ABI_V2_VERSION => lint_candidate_artifact(wasm),
-        _ => vec![DeterminismViolation::RejectedByEngine {
-            reason: format!("unsupported LayerX ABI version {abi_version}"),
-        }],
+        ABI_V1_VERSION | ABI_V2_VERSION | ABI_V3_VERSION | ABI_V4_VERSION => {
+            lint_supported_artifact(wasm, abi_version)
+        }
+        _ => vec![unsupported_abi_version(abi_version)],
+    }
+}
+
+fn lint_supported_artifact(wasm: &[u8], abi_version: u16) -> Vec<DeterminismViolation> {
+    let mut violations = import_and_export_violations(wasm, abi_version);
+    violations.extend(engine_violations(wasm, abi_version));
+    violations
+}
+
+fn unsupported_abi_version(abi_version: u16) -> DeterminismViolation {
+    DeterminismViolation::RejectedByEngine {
+        reason: format!("unsupported LayerX ABI version {abi_version}"),
     }
 }
 
@@ -540,16 +576,17 @@ pub fn discover_artifact(project: &Path) -> Result<PathBuf, DeterminismViolation
     }
 }
 
-fn permitted_import(import_module: &str, import_name: &str, candidate: bool) -> bool {
-    (import_module == layerx_programs_runtime::ABI_MODULE
-        && layerx_programs_runtime::HOST_FUNCTIONS
+fn permitted_import(abi_version: u16, import_module: &str, import_name: &str) -> bool {
+    (ABI_V1_VERSION..=ABI_V4_VERSION).contains(&abi_version)
+        && VERSIONED_HOST_NAMESPACES
             .iter()
-            .any(|function| function.name == import_name))
-        || (candidate
-            && import_module == layerx_programs_runtime::abi::response::CANDIDATE_ABI_MODULE
-            && layerx_programs_runtime::ABI_V2_HOST_FUNCTIONS
-                .iter()
-                .any(|function| function.name == import_name))
+            .any(|(namespace, introduced, functions)| {
+                *introduced <= abi_version
+                    && *namespace == import_module
+                    && functions
+                        .iter()
+                        .any(|function| function.name == import_name)
+            })
 }
 
 fn classify_import(import_module: &str, import_name: &str) -> DeterminismViolation {
@@ -571,7 +608,7 @@ fn classify_import(import_module: &str, import_name: &str) -> DeterminismViolati
     }
 }
 
-fn import_and_export_violations(wasm: &[u8], candidate: bool) -> Vec<DeterminismViolation> {
+fn import_and_export_violations(wasm: &[u8], abi_version: u16) -> Vec<DeterminismViolation> {
     let mut violations = Vec::new();
     let mut memory = false;
     let mut entrypoint = false;
@@ -591,7 +628,7 @@ fn import_and_export_violations(wasm: &[u8], candidate: bool) -> Vec<Determinism
                 for entry in reader {
                     match entry {
                         Ok(import) => {
-                            if !permitted_import(import.module, import.name, candidate) {
+                            if !permitted_import(abi_version, import.module, import.name) {
                                 violations.push(classify_import(import.module, import.name));
                             }
                         }
@@ -645,7 +682,7 @@ fn import_and_export_violations(wasm: &[u8], candidate: bool) -> Vec<Determinism
     violations
 }
 
-fn engine_violations(wasm: &[u8], candidate: bool) -> Vec<DeterminismViolation> {
+fn engine_violations(wasm: &[u8], abi_version: u16) -> Vec<DeterminismViolation> {
     let engine = match WasmEngine::declared() {
         Ok(engine) => engine,
         Err(error) => {
@@ -654,10 +691,12 @@ fn engine_violations(wasm: &[u8], candidate: bool) -> Vec<DeterminismViolation> 
             }]
         }
     };
-    let validated = if candidate {
-        engine.validate_candidate_v2(wasm)
-    } else {
-        engine.validate(wasm)
+    let validated = match abi_version {
+        ABI_V1_VERSION => engine.validate(wasm),
+        ABI_V2_VERSION => engine.validate_candidate_v2(wasm),
+        ABI_V3_VERSION => engine.validate_v3(wasm),
+        ABI_V4_VERSION => engine.validate_v4(wasm),
+        _ => return vec![unsupported_abi_version(abi_version)],
     };
     match validated {
         Ok(_) => Vec::new(),
@@ -895,9 +934,30 @@ mod abi_surface_tests {
 
     #[test]
     fn candidate_imports_require_explicit_revision_and_exact_declaration() {
-        assert!(!permitted_import("layerx_v2", "refusal_write", false));
-        assert!(permitted_import("layerx_v2", "refusal_write", true));
-        assert!(!permitted_import("layerx_v2", "undeclared", true));
+        assert!(!permitted_import(1, "layerx_v2", "refusal_write"));
+        assert!(permitted_import(2, "layerx_v2", "refusal_write"));
+        assert!(!permitted_import(2, "layerx_v2", "undeclared"));
+    }
+
+    #[test]
+    fn each_revision_admits_exactly_its_own_and_earlier_namespaces() {
+        for version in 1..=4 {
+            assert!(permitted_import(version, "layerx_v1", "event_emit"));
+            assert!(!permitted_import(version, "layerx_v1", "web_read"));
+        }
+        assert!(!permitted_import(2, "layerx_v3", "oracle_read"));
+        assert!(permitted_import(3, "layerx_v3", "oracle_read"));
+        assert!(permitted_import(3, "layerx_v2", "hash"));
+        assert!(!permitted_import(3, "layerx_v4", "web_read"));
+        assert!(!permitted_import(3, "layerx_v3", "web_read"));
+        assert!(permitted_import(4, "layerx_v4", "web_read"));
+        assert!(permitted_import(4, "layerx_v3", "oracle_read"));
+        assert!(permitted_import(4, "layerx_v2", "response_write"));
+        assert!(!permitted_import(4, "layerx_v4", "oracle_read"));
+        assert!(!permitted_import(4, "layerx_v4", "web_fetch"));
+        assert!(!permitted_import(4, "layerx_v5", "web_read"));
+        assert!(!permitted_import(5, "layerx_v1", "event_emit"));
+        assert!(!permitted_import(0, "layerx_v1", "event_emit"));
     }
 }
 
