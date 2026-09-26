@@ -650,7 +650,11 @@ reqs = ["9.1", "13.1", "13.2"]
 
 [task.2.17]
 title = "Bring the evm module's genesis export and consensus version tests to the fee-token state"
-status = "pending"
+status = "done"
+revision = "75ea3b3a5185d104cd8d43b6be976b512fa5d9f3"
+command = "timeout 20m sh -c 'go test -count=1 ./modules/evm/'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.4","2.9"]
 do_1 = "In modules/evm/module_test.go extend the expected export JSON of TestModuleExportGenesis with the five fee-token parameters task 2.4 added, in the order and with the exact default values types.DefaultParams carries (allowed_fee_denoms, max_fee_token_spread, fee_token_enabled, fee_token_distribution, max_fee_token_rate_age), keeping the assertion an exact comparison of the whole exported string."

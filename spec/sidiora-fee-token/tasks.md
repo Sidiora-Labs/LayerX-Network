@@ -168,7 +168,7 @@
     - In precompiles/setup_test.go make TestFeeTokenRegistration build the custom precompile set at the fee-token upgrade name node/upgrades.go declares and require the fee-token entry there with exactly one version keyed by that name, and require the set built below that upgrade to carry no fee-token entry, in the shape TestXWebRegistration asserts for xweb; every other assertion of the test stays as written (observation 2.14.1).
     - Close observation 2.14.1 naming the revision at which the precompiles package tests pass.
     - _Requirements: 9.1, 13.1, 13.2_
-  - [ ] 2.17 Bring the evm module's genesis export and consensus version tests to the fee-token state
+  - [x] 2.17 Bring the evm module's genesis export and consensus version tests to the fee-token state
     - In modules/evm/module_test.go extend the expected export JSON of TestModuleExportGenesis with the five fee-token parameters task 2.4 added, in the order and with the exact default values types.DefaultParams carries (allowed_fee_denoms, max_fee_token_spread, fee_token_enabled, fee_token_distribution, max_fee_token_rate_age), keeping the assertion an exact comparison of the whole exported string.
     - Set the value TestConsensusVersion expects to the consensus version modules/evm/module.go reports after the raise task 2.9 made, keeping the equality assertion; change no production file.
     - Run the verify_cmd once and record it; the aggregate gate of task 3.1 is rerun on the merged revision by that task, not here.
