@@ -136,7 +136,7 @@
     - Drive the refusals end to end in the same file: a fee preference set while the switch is off, a transaction from an account whose Sidiora balance cannot cover the fee, and a block in which the oracle reports no rate for the pair.
     - Use real keepers, real messages and real blocks throughout; add no fake keeper, no stubbed oracle reading that bypasses the keeper and no hand-written balance mutation that the block did not perform.
     - _Requirements: 13.4, 13.5_
-  - [ ] 2.11 Write the page that explains Sidiora and its two gas paths
+  - [x] 2.11 Write the page that explains Sidiora and its two gas paths
     - Add docs/site/docs/protocol/sidiora.md describing Sidiora as the second official coin of Paxeer X Network: the symbol SID, its six decimals, its approximate supply of 458.86 million, the address it lives at, that the bridge is its only minter and burner, and that its proxy administration sits with governance behind a timelock.
     - Describe both ways to pay gas with it - the sponsored path with its relayer quote, its deadline and its maximum, and the native path with the per-account preference, the parameters and the oracle pricing - and say plainly which of the two is available without a chain upgrade.
     - Name the governance surface: each parameter, what each of its validators refuses, where collected fees go under each option, and that every change to them is a proposal.

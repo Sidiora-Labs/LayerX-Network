@@ -430,3 +430,16 @@ task = "2.9"; file = "modules/evm/keeper/abci.go"; symbol = "EndBlock"
 observed = "Task 2.8 routes fee tokens out of the fee collector, so the per-transaction coinbase credit state.AddBalance writes in the selected fee denom still has no sweep, which the assumption recorded in observation.2.6.2 expected 2.8 to supply."
 assumption = "The coinbase sweep belongs to the fee-collection surface whose file list includes abci.go, not to this upgrade-gating task; the fee-token parameter defaults this migration writes keep the path off until governance enables it."
 severity = "suspect"
+
+[observation.2.11.1]
+task = "2.11"
+file = "spec/sidiora-fee-token/spec.kvx"
+observed = "Requirement 14 acceptance criterion 2 and this task step 2 name oracle pricing for the native path, but the oracle precompile returns a retired error and the fee path reads a governed rate bounded by a block age."
+assumption = "The page documents the governed rate and its unavailable, invalid and stale refusals; the requirement and the task text stay unchanged pending an authorized reconciliation."
+severity = "note"
+
+[observation.2.11.2]
+task = "2.11"; file = "spec/sidiora-fee-token/spec.kvx"; symbol = "req.14.ac_2"
+observed = "Supplement to observation.2.11.1: the oracle clause of req 14.2 and task.2.11.do_2 cannot be documented as written while the precompile is retired, so the page describes the governed rate instead and the requirement stays unmet."
+assumption = "The completion record reports the strict docs build that ran and passed, not the unmet clause; the clause is a blocker on the requirement text that only an owner revision of req 14.2 and task.2.11.do_2 clears."
+severity = "blocker"
