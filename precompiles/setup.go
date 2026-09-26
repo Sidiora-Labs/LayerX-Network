@@ -27,6 +27,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/precompiles/staking"
 	"github.com/sidiora-labs/paxeer-network/precompiles/utils"
 	"github.com/sidiora-labs/paxeer-network/precompiles/wasmd"
+	"github.com/sidiora-labs/paxeer-network/precompiles/xweb"
 )
 
 var SetupMtx = &sync.Mutex{}
@@ -72,6 +73,7 @@ func GetCustomPrecompiles(
 		ecommon.HexToAddress(layerxexchange.ExchangeAddress):     layerxexchange.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(layerxbridge.BridgeAddress):         layerxbridge.GetVersioned(latestUpgrade, keepers),
 		ecommon.HexToAddress(launchpad.LaunchpadAddress):         launchpad.GetVersioned(latestUpgrade, keepers),
+		ecommon.HexToAddress(xweb.XWebAddress):                   xweb.GetVersioned(latestUpgrade, keepers),
 	}
 }
 
@@ -182,6 +184,11 @@ func InitializePrecompiles(
 		feetokenp = feetoken.NewPrecompileWithKeeper(nil)
 	}
 
+	xwebp, err := xweb.NewPrecompile(keepers)
+	if err != nil {
+		return err
+	}
+
 	PrecompileNamesToInfo[feetokenp.GetName()] = PrecompileInfo{ABI: feetokenp.GetABI(), Address: feetokenp.Address()}
 	PrecompileNamesToInfo[bankp.GetName()] = PrecompileInfo{ABI: bankp.GetABI(), Address: bankp.Address()}
 	PrecompileNamesToInfo[wasmdp.GetName()] = PrecompileInfo{ABI: wasmdp.GetABI(), Address: wasmdp.Address()}
@@ -201,6 +208,7 @@ func InitializePrecompiles(
 	PrecompileNamesToInfo[layerxexchangep.GetName()] = PrecompileInfo{ABI: layerxexchangep.GetABI(), Address: layerxexchangep.Address()}
 	PrecompileNamesToInfo[layerxbridgep.GetName()] = PrecompileInfo{ABI: layerxbridgep.GetABI(), Address: layerxbridgep.Address()}
 	PrecompileNamesToInfo[launchpadp.GetName()] = PrecompileInfo{ABI: launchpadp.GetABI(), Address: launchpadp.Address()}
+	PrecompileNamesToInfo[xwebp.GetName()] = PrecompileInfo{ABI: xwebp.GetABI(), Address: xwebp.Address()}
 
 	if !dryRun {
 		addPrecompileToVM(feetokenp)
@@ -222,6 +230,7 @@ func InitializePrecompiles(
 		addPrecompileToVM(layerxexchangep)
 		addPrecompileToVM(layerxbridgep)
 		addPrecompileToVM(launchpadp)
+		addPrecompileToVM(xwebp)
 		Initialized = true
 	}
 	return nil

@@ -45,3 +45,35 @@ symbol = "lx_web_root"
 observed = "The web root is computed from committed observations, but include/layerx/lx_batch.h is outside the task touches, so no batch header field carries it and the new activity ids are not yet routed by kernel dispatch."
 assumption = "Binding the web root into the batch header and routing LX_WEB_OBSERVATION_ACTIVITY and LX_WEB_ATTESTOR_SET_ACTIVITY is a later integration change owned by the feature."
 severity = "suspect"
+
+[observation.1.6.1]
+task = "1.6"
+file = "contracts/test/CW1155ERC1155PointerTest.t.sol"
+symbol = "MockAddr"
+observed = "forge compiles the whole contracts tree despite --match-path, and MockAddr in CW1155ERC1155PointerTest.t.sol and CW721ERC721PointerTest.t.sol does not implement the LayerX binding methods of IAddr, so compilation fails (Error 3656) before XWebConsumer.t.sol runs; the Go legs and xweb-forge-libs.sh passed."
+assumption = "The stale mocks predate this task and sit outside its touches; updating them belongs to the addr precompile owner, after which the verify_cmd reruns unchanged."
+severity = "blocker"
+
+[observation.1.6.2]
+task = "1.6"
+file = "precompiles/utils/expected_keepers.go"
+symbol = "XWebKeepers"
+observed = "XWebK is declared on a separate XWebKeepers interface with an EmptyKeepers method, not on utils.Keepers, because node.PrecompileKeepers is outside this task and would stop compiling."
+assumption = "The precompile type-asserts XWebKeepers and refuses every call with a reason until the application's keepers implement XWebK."
+severity = "assumption"
+
+[observation.1.6.3]
+task = "1.6"
+file = "precompiles/setup.go"
+symbol = "GetCustomPrecompiles"
+observed = "Registering beside feetoken puts 0x0000000000000000000000000000000000001019 into the latest custom precompiles and the vm maps of any binary built from this tree, not only after the v6.8 upgrade."
+assumption = "It refuses every call until the keeper is wired; gating it on the upgrade is outside this task."
+severity = "suspect"
+
+[observation.1.6.4]
+task = "1.6"
+file = "contracts/test/XWebConsumer.t.sol"
+symbol = "test_InterfaceMatchesThePrecompileABI"
+observed = "Foundry's default fs_permissions do not let the suite read precompiles/xweb/abi.json and the precompile does not exist under Foundry, so selectors are checked against literal signatures and request is answered with vm.mockCall."
+assumption = "precompiles/xweb/xweb_test.go pins every abi.json method and event signature to those literals and XWeb.sol to IXWeb.sol byte for byte."
+severity = "note"

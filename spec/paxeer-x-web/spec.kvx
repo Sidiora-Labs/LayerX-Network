@@ -325,7 +325,11 @@ log_path = ".logs/verify.log"
 
 [task.1.6]
 title = "Write the xweb precompile, its Solidity interface and the reference consumer"
-status = "pending"
+status = "implemented"
+revision = "4e18d087a1708364ba03f08b1d2bfc3410f87c13"
+command = "timeout 20m sh -c 'go test -count=1 ./precompiles/xweb/... ./precompiles/ && bash tools/ci/xweb-forge-libs.sh && FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague --match-path contracts/test/XWebConsumer.t.sol -vvv'"
+exit_code = 1
+log_path = ".logs/verify.log"
 wave = 1
 requires = ["1.5"]
 do_1 = "Write precompiles/xweb/XWeb.sol and abi.json with request, fulfil, refund and the views, xweb.go at 0x0000000000000000000000000000000000001019 calling the modules/xweb keeper for each method, refusing a wrong fee and a state change in a read-only call, and after a fulfilment calling onXWebResponse(uint64,bytes32,uint32,bytes) on the requester with gas bounded by the request's callback gas and the module maximum, recording a revert or out-of-gas without undoing the fulfilment."

@@ -18,6 +18,7 @@ import (
 	layerxcustodykeeper "github.com/sidiora-labs/paxeer-network/modules/layerxcustody/keeper"
 	layerxexchangekeeper "github.com/sidiora-labs/paxeer-network/modules/layerxexchange/keeper"
 	oracletypes "github.com/sidiora-labs/paxeer-network/modules/oracle/types"
+	xwebkeeper "github.com/sidiora-labs/paxeer-network/modules/xweb/keeper"
 	"github.com/sidiora-labs/paxeer-network/sdk/client"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	authtypes "github.com/sidiora-labs/paxeer-network/sdk/x/auth/types"
@@ -53,6 +54,12 @@ type Keepers interface {
 	LaunchpadK() *launchpadkeeper.Keeper
 }
 
+// XWebKeepers is implemented by keepers that carry the xweb keeper. The xweb
+// precompile refuses every call when the application's keepers do not.
+type XWebKeepers interface {
+	XWebK() *xwebkeeper.Keeper
+}
+
 type EmptyKeepers struct{}
 
 func (ek *EmptyKeepers) BankK() BankKeeper                 { return nil }
@@ -83,6 +90,9 @@ func (ek *EmptyKeepers) LayerXBridgeK() *layerxbridgekeeper.Keeper {
 	return nil
 }
 func (ek *EmptyKeepers) LaunchpadK() *launchpadkeeper.Keeper {
+	return nil
+}
+func (ek *EmptyKeepers) XWebK() *xwebkeeper.Keeper {
 	return nil
 }
 
