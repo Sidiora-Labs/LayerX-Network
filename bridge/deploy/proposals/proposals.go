@@ -2,9 +2,11 @@
 // that open that chain on Paxeer X Network: the chain registration, the shared
 // attestor set and one cap per asset.
 //
-// The bodies are the bridge module's own message types, marshalled from
+// The bodies are the bridge module's own generated message types from
 // modules/layerxbridge/types, which this package imports and never modifies,
-// so a body cannot drift from what the keeper accepts. Nothing here reaches a
+// each written as the protobuf JSON of a message packed under its type URL -
+// the form a governance proposal or a transaction carries its messages in - so
+// a body cannot drift from what the keeper accepts. Nothing here reaches a
 // network: the generator reads committed files and writes JSON.
 package proposals
 
@@ -23,6 +25,8 @@ import (
 	"github.com/sidiora-labs/paxeer-network/bridge/deploy/chainconfig"
 	"github.com/sidiora-labs/paxeer-network/bridge/vectors"
 	"github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
+	"github.com/sidiora-labs/paxeer-network/sdk/codec"
+	cdctypes "github.com/sidiora-labs/paxeer-network/sdk/codec/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 )
 
@@ -79,6 +83,16 @@ const (
 )
 
 var sidioraAssetID = mustAddress20(types.SidioraRemoteAddress)
+
+// messageCodec packs and unpacks the module's messages under their type URLs,
+// resolved against the module's own interface registration.
+var messageCodec = newMessageCodec()
+
+func newMessageCodec() *codec.ProtoCodec {
+	registry := cdctypes.NewInterfaceRegistry()
+	types.RegisterInterfaces(registry)
+	return codec.NewProtoCodec(registry)
+}
 
 // SidioraAssetID is the asset id the chain fixes for Sidiora: the remote
 // address EnsureSidioraDenom registers against the module's usid denom, and so
@@ -192,8 +206,8 @@ func (c ChainConfig) isNative(asset Asset) bool {
 	return strings.EqualFold(strings.TrimSpace(asset.Address), EVMNativeAddress)
 }
 
-// File is one generated body: the name it is written under and the JSON the
-// module's own message type marshalled to.
+// File is one generated body: the name it is written under and the JSON of
+// the module's own message packed under its type URL.
 type File struct {
 	Name string
 	Body []byte
@@ -376,17 +390,18 @@ func SetCaps(cfg ChainConfig) ([]types.MsgSetCap, error) {
 // is created, so a bundle that cannot be marshalled leaves nothing behind.
 func (b Bundle) Files() ([]File, error) {
 	files := make([]File, 0, 2+len(b.Caps))
-	register, err := marshalBody(b.Register)
+	register, err := marshalBody(&b.Register)
 	if err != nil {
 		return nil, err
 	}
 	files = append(files, File{Name: registerChainFile, Body: register})
-	attestors, err := marshalBody(b.Attestors)
+	attestors, err := marshalBody(&b.Attestors)
 	if err != nil {
 		return nil, err
 	}
 	files = append(files, File{Name: setAttestorsFile, Body: attestors})
-	for i, msg := range b.Caps {
+	for i := range b.Caps {
+		msg := &b.Caps[i]
 		body, err := marshalBody(msg)
 		if err != nil {
 			return nil, err
@@ -516,7 +531,7 @@ func Run(args []string, report io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if expected, err = marshalBody(readback); err != nil {
+		if expected, err = marshalJSON(readback); err != nil {
 			return err
 		}
 		readbackF = filepath.Clean(*readbackPath)
@@ -771,12 +786,39 @@ func ReadbackOf(cfg *chainconfig.ChainConfig, bundle Bundle) (Readback, error) {
 	return out, nil
 }
 
-func marshalBody(body any) ([]byte, error) {
+// marshalJSON writes a document that is not a module message, such as the
+// read-back expectation, as indented JSON.
+func marshalJSON(body any) ([]byte, error) {
 	raw, err := json.MarshalIndent(body, "", "  ")
 	if err != nil {
 		return nil, err
 	}
 	return append(raw, '\n'), nil
+}
+
+// marshalBody writes msg as the protobuf JSON of an Any: its type URL under
+// "@type" beside the message's own fields.
+func marshalBody(msg sdk.Msg) ([]byte, error) {
+	raw, err := messageCodec.MarshalInterfaceJSON(msg)
+	if err != nil {
+		return nil, err
+	}
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, raw, "", "  "); err != nil {
+		return nil, err
+	}
+	indented.WriteByte('\n')
+	return indented.Bytes(), nil
+}
+
+// DecodeBody reads one body back into the module message its type URL names,
+// with unknown fields forbidden.
+func DecodeBody(body []byte) (sdk.Msg, error) {
+	var msg sdk.Msg
+	if err := messageCodec.UnmarshalInterfaceJSON(body, &msg); err != nil {
+		return nil, err
+	}
+	return msg, nil
 }
 
 // isPlaceholder reports whether every byte is the same non-zero byte. The

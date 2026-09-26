@@ -6,11 +6,14 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/sidiora-labs/paxeer-network/modules/layerxbridge"
 	"github.com/sidiora-labs/paxeer-network/modules/layerxbridge/keeper"
 	bridgetestutil "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/testutil"
 	"github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
 	app "github.com/sidiora-labs/paxeer-network/node"
+	"github.com/sidiora-labs/paxeer-network/sdk/baseapp"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	"github.com/sidiora-labs/paxeer-network/sdk/types/module"
 	"github.com/stretchr/testify/require"
 )
 
@@ -149,6 +152,129 @@ func TestGovernanceMessagesRequireTheAuthority(t *testing.T) {
 	require.True(t, s.k.IsPaused(s.ctx))
 	require.NoError(t, s.k.Unpause(s.ctx, types.MsgUnpause{Authority: authority}))
 	require.False(t, s.k.IsPaused(s.ctx))
+}
+
+// router is a real message service router serving the module's Msg service
+// over the suite's keeper, registered by the module itself against the
+// application's interface registry.
+func (s *suite) router() *baseapp.MsgServiceRouter {
+	s.t.Helper()
+	router := baseapp.NewMsgServiceRouter()
+	router.SetInterfaceRegistry(s.app.InterfaceRegistry())
+	layerxbridge.NewAppModule(s.k).RegisterServices(
+		module.NewConfigurator(s.app.AppCodec(), router, baseapp.NewGRPCQueryRouter()))
+	return router
+}
+
+// route carries msg the way a transaction does - packed into an Any under its
+// type URL, encoded and decoded by the application's codec - and executes the
+// decoded message through the router.
+func (s *suite) route(router *baseapp.MsgServiceRouter, msg sdk.Msg) error {
+	s.t.Helper()
+	encoded, err := s.app.AppCodec().MarshalInterface(msg)
+	require.NoError(s.t, err)
+	var decoded sdk.Msg
+	require.NoError(s.t, s.app.AppCodec().UnmarshalInterface(encoded, &decoded))
+	require.Equal(s.t, sdk.MsgTypeURL(msg), sdk.MsgTypeURL(decoded))
+	reencoded, err := s.app.AppCodec().MarshalInterface(decoded)
+	require.NoError(s.t, err)
+	require.Equal(s.t, encoded, reencoded, "the decoded message differs from the one sent")
+	handler := router.Handler(decoded)
+	require.NotNil(s.t, handler, "no route for %s", sdk.MsgTypeURL(decoded))
+	_, err = handler(s.ctx, decoded)
+	return err
+}
+
+func governanceMessages(from string, set types.AttestorSet) []sdk.Msg {
+	return []sdk.Msg{
+		&types.MsgRegisterChain{Authority: from,
+			Chain: types.Chain{ChainID: chainID, Vault: vault, FinalityDepth: 64, Enabled: true}},
+		&types.MsgSetAttestors{Authority: from, Set: set},
+		&types.MsgSetCap{Authority: from, ChainID: chainID, Asset: asset,
+			MaxInFlight: sdk.NewInt(1500), MaxPerTx: sdk.NewInt(1000)},
+		&types.MsgPause{Authority: from},
+		&types.MsgUnpause{Authority: from},
+	}
+}
+
+func TestMsgServiceRoutesEveryGovernanceMessageToTheKeeper(t *testing.T) {
+	s := newSuite(t, false)
+	router := s.router()
+	messages := governanceMessages(authority, bridgetestutil.Set(s.attestors, 1_000_000, 2))
+	wantTypeURLs := []string{
+		"/paxprotocol.paxchain.layerxbridge.MsgRegisterChain",
+		"/paxprotocol.paxchain.layerxbridge.MsgSetAttestors",
+		"/paxprotocol.paxchain.layerxbridge.MsgSetCap",
+		"/paxprotocol.paxchain.layerxbridge.MsgPause",
+		"/paxprotocol.paxchain.layerxbridge.MsgUnpause",
+	}
+	authorityAccount, err := sdk.AccAddressFromBech32(authority)
+	require.NoError(t, err)
+	for i, msg := range messages {
+		require.Equal(t, wantTypeURLs[i], sdk.MsgTypeURL(msg))
+		require.NotNil(t, s.app.MsgServiceRouter().Handler(msg), "the application routes no %s", wantTypeURLs[i])
+		require.Equal(t, []sdk.AccAddress{authorityAccount}, msg.GetSigners())
+		legacy, ok := msg.(interface {
+			Route() string
+			GetSignBytes() []byte
+		})
+		require.True(t, ok)
+		require.Equal(t, types.RouterKey, legacy.Route())
+		require.Contains(t, string(legacy.GetSignBytes()), "layerxbridge/"+wantTypeURLs[i][len("/paxprotocol.paxchain.layerxbridge."):])
+	}
+
+	require.NoError(t, s.route(router, messages[0]))
+	chain, found := s.k.GetChain(s.ctx, chainID)
+	require.True(t, found)
+	require.Equal(t, messages[0].(*types.MsgRegisterChain).Chain, chain)
+
+	require.NoError(t, s.route(router, messages[1]))
+	set := s.k.GetAttestorSet(s.ctx)
+	want := messages[1].(*types.MsgSetAttestors).Set
+	require.Equal(t, want.Threshold, set.Threshold)
+	require.Len(t, set.Attestors, len(want.Attestors))
+	for i := range want.Attestors {
+		require.Equal(t, want.Attestors[i].Signer, set.Attestors[i].Signer)
+		require.True(t, want.Attestors[i].Bond.Equal(set.Attestors[i].Bond))
+	}
+
+	require.NoError(t, s.route(router, messages[2]))
+	record, found := s.k.GetAsset(s.ctx, chainID, asset)
+	require.True(t, found)
+	require.Equal(t, s.denom, record.Denom)
+	limit, found := s.k.GetCap(s.ctx, s.denom)
+	require.True(t, found)
+	require.True(t, limit.MaxInFlight.Equal(sdk.NewInt(1500)))
+	require.True(t, limit.MaxPerTx.Equal(sdk.NewInt(1000)))
+
+	require.NoError(t, s.route(router, messages[3]))
+	require.True(t, s.k.IsPaused(s.ctx))
+	require.NoError(t, s.route(router, messages[4]))
+	require.False(t, s.k.IsPaused(s.ctx))
+
+	in := deposit(1, 10)
+	minted, err := s.k.BridgeIn(s.ctx, in, s.signed(in, s.attestors[0], s.attestors[1]))
+	require.NoError(t, err)
+	require.Equal(t, s.denom, minted.Denom)
+	require.True(t, sdk.NewInt(10).Equal(s.balance(recipient)))
+}
+
+func TestMsgServiceRefusesAWrongAuthority(t *testing.T) {
+	s := newSuite(t, false)
+	router := s.router()
+	stranger := sdk.AccAddress(make([]byte, 20)).String()
+	for _, msg := range governanceMessages(stranger, bridgetestutil.Set(s.attestors, 1, 2)) {
+		require.ErrorIs(t, s.route(router, msg), types.ErrUnauthorized, sdk.MsgTypeURL(msg))
+	}
+	for _, msg := range governanceMessages("not-a-bech32-account", bridgetestutil.Set(s.attestors, 1, 2)) {
+		require.Empty(t, msg.GetSigners(), sdk.MsgTypeURL(msg))
+		require.ErrorIs(t, s.route(router, msg), types.ErrUnauthorized, sdk.MsgTypeURL(msg))
+	}
+	require.Equal(t, *types.DefaultGenesis(), s.k.ExportGenesis(s.ctx), "a refused message changed the state")
+
+	require.NoError(t, s.route(router, &types.MsgPause{Authority: authority}))
+	require.ErrorIs(t, s.route(router, &types.MsgUnpause{Authority: stranger}), types.ErrUnauthorized)
+	require.True(t, s.k.IsPaused(s.ctx))
 }
 
 func TestBridgeInMintsAtThreshold(t *testing.T) {

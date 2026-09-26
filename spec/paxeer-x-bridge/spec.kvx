@@ -536,7 +536,11 @@ status = "pending"
 
 [task.2.9]
 title = "Expose the bridge module's messages to governance"
-status = "pending"
+status = "done"
+revision = "1310ba291ac3007b786278dc1116f31f56bda6f4"
+command = "timeout 20m sh -c 'go build ./modules/layerxbridge/... ./bridge/deploy/... && go test -count=1 ./modules/layerxbridge/... ./bridge/deploy/proposals/...'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["1.5"]
 do_1 = "Define api/layerxbridge/tx.proto with a Msg service carrying RegisterChain, SetAttestors, SetCap, Pause and Unpause, field for field the messages modules/layerxbridge/types/msgs.go holds today, each with the governance authority as its signer, and generate the Go code into modules/layerxbridge/types with the repository's proto generation the way modules/tokenfactory and modules/layerxexchange are generated; keep the generated messages as the one definition and delete the hand-written duplicates."

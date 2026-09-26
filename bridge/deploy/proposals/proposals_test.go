@@ -16,6 +16,8 @@ import (
 	"github.com/sidiora-labs/paxeer-network/bridge/deploy/chainconfig"
 	"github.com/sidiora-labs/paxeer-network/bridge/vectors"
 	"github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
+	"github.com/sidiora-labs/paxeer-network/sdk/codec"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 )
 
 const (
@@ -49,10 +51,40 @@ func generate(t *testing.T, configPath string) Bundle {
 	return bundle
 }
 
-// decodeStrict decodes one emitted body back into the module's own message
-// type with unknown fields forbidden, so a body that carries a field the
+// decodeStrict decodes one emitted body back into the module's own generated
+// message through the type URL the body carries, with unknown fields
+// forbidden, so a body that names another message or carries a field the
 // keeper does not know fails the test rather than reaching governance.
-func decodeStrict[T any](t *testing.T, name string, body []byte) T {
+func decodeStrict[T any, P interface {
+	*T
+	sdk.Msg
+}](t *testing.T, name string, body []byte) T {
+	t.Helper()
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("%s is not a JSON object: %v\n%s", name, err, body)
+	}
+	var typeURL string
+	if err := json.Unmarshal(envelope["@type"], &typeURL); err != nil {
+		t.Fatalf("%s carries no type URL: %v\n%s", name, err, body)
+	}
+	if want := sdk.MsgTypeURL(P(new(T))); typeURL != want {
+		t.Fatalf("%s carries the type URL %q, want %q", name, typeURL, want)
+	}
+	msg, err := DecodeBody(body)
+	if err != nil {
+		t.Fatalf("decoding %s back into %s: %v\n%s", name, typeURL, err, body)
+	}
+	typed, ok := msg.(P)
+	if !ok {
+		t.Fatalf("%s decoded into %T, want %T", name, msg, P(nil))
+	}
+	return *typed
+}
+
+// decodeJSONStrict decodes a document that is not a module message with
+// unknown fields forbidden.
+func decodeJSONStrict[T any](t *testing.T, name string, body []byte) T {
 	t.Helper()
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
@@ -64,6 +96,23 @@ func decodeStrict[T any](t *testing.T, name string, body []byte) T {
 		t.Fatalf("%s carries more than one JSON document", name)
 	}
 	return out
+}
+
+// sameMessage requires two messages to be equal field for field: their
+// protobuf encodings, which cover every field, are byte for byte the same.
+func sameMessage(t *testing.T, name string, want, got codec.ProtoMarshaler) {
+	t.Helper()
+	wantBytes, err := messageCodec.Marshal(want)
+	if err != nil {
+		t.Fatalf("encoding the generated %T: %v", want, err)
+	}
+	gotBytes, err := messageCodec.Marshal(got)
+	if err != nil {
+		t.Fatalf("encoding the decoded %s: %v", name, err)
+	}
+	if !bytes.Equal(wantBytes, gotBytes) {
+		t.Fatalf("%s decodes to %v, the generator built %v", name, got, want)
+	}
 }
 
 func fieldError(t *testing.T, err error) *FieldError {
@@ -209,6 +258,62 @@ func TestSolanaBodiesCarryTheNativeCapFirstAndSidiora(t *testing.T) {
 	}
 	if got, want := files[3].Name, "03-set-cap-02-"+strings.TrimPrefix(SidioraAssetID().Hex(), "0x")+".json"; got != want {
 		t.Fatalf("the Sidiora body is %s, want %s", got, want)
+	}
+}
+
+func TestDecodedBodiesEqualTheGeneratedMessagesFieldForField(t *testing.T) {
+	for _, path := range []string{ethereumPath, solanaPath} {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			bundle := generate(t, path)
+			files, err := bundle.Files()
+			if err != nil {
+				t.Fatalf("marshalling the bundle: %v", err)
+			}
+			if len(files) != 2+len(bundle.Caps) {
+				t.Fatalf("%d bodies for %d caps", len(files), len(bundle.Caps))
+			}
+			register := decodeStrict[types.MsgRegisterChain](t, files[0].Name, files[0].Body)
+			sameMessage(t, files[0].Name, &bundle.Register, &register)
+			attestors := decodeStrict[types.MsgSetAttestors](t, files[1].Name, files[1].Body)
+			sameMessage(t, files[1].Name, &bundle.Attestors, &attestors)
+			for i := range bundle.Caps {
+				file := files[2+i]
+				decoded := decodeStrict[types.MsgSetCap](t, file.Name, file.Body)
+				sameMessage(t, file.Name, &bundle.Caps[i], &decoded)
+			}
+		})
+	}
+}
+
+func TestBodiesWithAnUnknownFieldAreRefused(t *testing.T) {
+	files, err := generate(t, ethereumPath).Files()
+	if err != nil {
+		t.Fatalf("marshalling the bundle: %v", err)
+	}
+	for _, testCase := range []struct {
+		name string
+		body []byte
+		from string
+		to   string
+	}{
+		{"message", files[0].Body, `"authority":`, `"surplus": true, "authority":`},
+		{"chain", files[0].Body, `"chain_id":`, `"surplus": true, "chain_id":`},
+		{"attestor set", files[1].Body, `"threshold":`, `"surplus": true, "threshold":`},
+		{"cap", files[2].Body, `"max_per_tx":`, `"surplus": true, "max_per_tx":`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if !bytes.Contains(testCase.body, []byte(testCase.from)) {
+				t.Fatalf("the body carries no %s\n%s", testCase.from, testCase.body)
+			}
+			body := bytes.Replace(testCase.body, []byte(testCase.from), []byte(testCase.to), 1)
+			if _, err := DecodeBody(body); err == nil {
+				t.Fatalf("a body with an unknown field was decoded\n%s", body)
+			}
+		})
+	}
+	unknownType := bytes.Replace(files[0].Body, []byte("MsgRegisterChain"), []byte("MsgRegisterChainV2"), 1)
+	if _, err := DecodeBody(unknownType); err == nil {
+		t.Fatal("a body naming a message the module does not define was decoded")
 	}
 }
 
@@ -727,7 +832,7 @@ func TestRunWritesTheReadbackBesideTheBodies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the read-back expectation: %v", err)
 	}
-	readback := decodeStrict[Readback](t, readbackPath, raw)
+	readback := decodeJSONStrict[Readback](t, readbackPath, raw)
 	if readback.Chain != "solana" || len(readback.Assets) != 2 || readback.Assets[1].Denom != types.SidioraDenom() {
 		t.Fatalf("the read-back expectation on disk is %+v", readback)
 	}

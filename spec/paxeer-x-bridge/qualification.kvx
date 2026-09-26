@@ -123,6 +123,7 @@ symbol = "RegisterServices"
 observed = "The bridge module registers no Msg service, route or transaction command, so the MsgRegisterChain, MsgSetAttestors and MsgSetCap bodies the proposals generator writes have no in-tree path that executes them."
 assumption = "The runbook states that the holder of the bridge authority submits the bodies through the path that authority executes with, and does not name a command the tree lacks."
 severity = "suspect"
+closed = "Task 2.9 generated the Msg service from api/layerxbridge/tx.proto, registered it in RegisterInterfaces and RegisterServices and writes every body under its type URL; the verify_cmd passed at revision 1310ba291ac3007b786278dc1116f31f56bda6f4, and the governance proposal path is observation 2.9.1."
 
 [observation.2.2.1]
 task = "2.2"
@@ -195,3 +196,11 @@ symbol = "PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE"
 observed = "A first deployment with no PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE deploys under the program keypair the build leaves in the run's temporary directory, which is removed on exit, while the rerun with a filled solana.program_id requires that keypair."
 assumption = "Out of this task's scope; the operator supplies a program keypair on the first deployment, and keeping or requiring it belongs to the script's owner."
 severity = "note"
+
+[observation.2.9.1]
+task = "2.9"
+file = "node/app.go"
+symbol = "govRouter"
+observed = "The chain's governance module executes only proposal content routed through govRouter, which has no layerxbridge route, so a body whose authority is the gov module account is routed by the Msg service but no submit-proposal can carry it; a body signed by an account set as the bridge authority executes today."
+assumption = "Carrying the bodies through submit-proposal needs a governance route for the module in node/app.go, which this task does not own; the bodies already carry the type URLs such a route would read."
+severity = "blocker"
