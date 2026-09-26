@@ -95,7 +95,7 @@
     - Carry no date, hostname, IP address, internal URL, credential, agent or branch name on any page, name the product Paxeer X Network throughout, and use no link but https://paxeer.app and paths under github.com/Sidiora-Labs/Paxeer-X-Network.
     - Write bridge/deploy/tests/docs-check.sh asserting every link in the bridge documentation is in that allowlist, every repository path a page names exists, and no page carries a date, host, IP address or credential pattern.
     - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.5_
-  - [ ] 2.6 Dry-run the EVM deployment against anvil and record it
+  - [x] 2.6 Dry-run the EVM deployment against anvil and record it
     - Write bridge/deploy/tests/evm-dry-run-check.sh starting anvil, writing a run-local configuration whose placeholder owner and attestors are replaced by that run's own generated local values, and deploying the vault with bridge/deploy/deploy-evm-chain.sh against it.
     - Set the attestors and every cap the configuration declares, make a token deposit and a native deposit, release each against real attestor signatures over the real outbound preimage, and assert the deployment record the script wrote names the address, the code hash and the block the node reports.
     - Run bridge/deploy/checklist.sh against the local deployment and assert every check passes, with the native coin checked first.

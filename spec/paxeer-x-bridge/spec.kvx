@@ -482,7 +482,11 @@ reqs = ["12.1","12.2","12.3","12.4","12.5"]
 
 [task.2.6]
 title = "Dry-run the EVM deployment against anvil and record it"
-status = "pending"
+status = "done"
+revision = "1310ba291ac3007b786278dc1116f31f56bda6f4"
+command = "timeout 20m sh -c 'bash bridge/deploy/tests/evm-dry-run-check.sh'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["1.1","1.4","2.4"]
 do_1 = "Write bridge/deploy/tests/evm-dry-run-check.sh starting anvil, writing a run-local configuration whose placeholder owner and attestors are replaced by that run's own generated local values, and deploying the vault with bridge/deploy/deploy-evm-chain.sh against it."
