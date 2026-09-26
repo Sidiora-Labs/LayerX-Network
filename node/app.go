@@ -149,6 +149,7 @@ import (
 	evmkeeper "github.com/sidiora-labs/paxeer-network/modules/evm/keeper"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/querier"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/replay"
+	evmstate "github.com/sidiora-labs/paxeer-network/modules/evm/state"
 	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	launchpadmodule "github.com/sidiora-labs/paxeer-network/modules/launchpad"
 	launchpadkeeper "github.com/sidiora-labs/paxeer-network/modules/launchpad/keeper"
@@ -2142,7 +2143,40 @@ func (app *App) executeEVMTxWithGigaExecutor(ctx sdk.Context, msg *evmtypes.MsgE
 		effectiveGasPrice.Set(ethTx.GasFeeCap())
 	}
 	gasFee := new(big.Int).Mul(new(big.Int).SetUint64(ethTx.Gas()), effectiveGasPrice)
-	stateDB.SubBalance(sender, uint256.MustFromBig(gasFee), tracing.BalanceDecreaseGasBuy)
+	var execStateDB vm.StateDB = stateDB
+	var feeTokenStateDB *gigaFeeTokenStateDB
+	if charge := validation.feeTokenCharge; charge != nil {
+		// A fee-token payer is pre-charged in its fee denom at the governed rate,
+		// rounded up, and the charge is recorded the way the V2 ante path records it.
+		converted, err := evmkeeper.ConvertFeeToDenom(sdk.NewIntFromBigInt(gasFee), charge.Rate, true)
+		if err == nil && !converted.IsZero() {
+			err = app.GigaBankKeeper.SubUnlockedCoins(stateDB.Ctx(), paxAddr, sdk.NewCoins(sdk.NewCoin(charge.Denom, converted)), true)
+		}
+		if err == nil {
+			err = app.EvmKeeper.SetAnteFeeTokenCharge(stateDB.Ctx(), ethTx.Hash(), charge)
+		}
+		if err != nil {
+			codespace, code, log := sdkerrors.ABCIInfo(err, false)
+			return &abci.ExecTxResult{
+				Codespace: codespace,
+				Code:      code,
+				GasWanted: int64(ethTx.Gas()), //nolint:gosec
+				Log:       log,
+			}, nil
+		}
+		feeCollector, _ := app.GigaEvmKeeper.GetFeeCollectorAddress(ctx)
+		feeTokenStateDB = &gigaFeeTokenStateDB{
+			DBImpl:          stateDB,
+			bank:            app.GigaBankKeeper,
+			charge:          *charge,
+			payer:           paxAddr,
+			coinbaseEvmAddr: feeCollector,
+			coinbase:        gigaevmstate.GetCoinbaseAddress(ctx.TxIndex()),
+		}
+		execStateDB = feeTokenStateDB
+	} else {
+		stateDB.SubBalance(sender, uint256.MustFromBig(gasFee), tracing.BalanceDecreaseGasBuy)
+	}
 
 	// Get gas pool (mutated per tx, cannot be cached)
 	gp := app.GigaEvmKeeper.GetGasPool()
@@ -2152,7 +2186,7 @@ func (app *App) executeEVMTxWithGigaExecutor(ctx sdk.Context, msg *evmtypes.MsgE
 	cfg := cache.chainConfig
 
 	// Create Giga executor VM
-	gigaExecutor := gigaexecutor.NewGethExecutor(blockCtx, stateDB, cfg, vm.Config{}, gigaprecompiles.AllCustomPrecompilesFailFast)
+	gigaExecutor := gigaexecutor.NewGethExecutor(blockCtx, execStateDB, cfg, vm.Config{}, gigaprecompiles.AllCustomPrecompilesFailFast)
 
 	// Execute with feeAlreadyCharged=true — matching V2's msg_server behavior
 	execResult, execErr := gigaExecutor.ExecuteTransactionFeeCharged(ethTx, sender, cache.baseFee, &gp)
@@ -2224,6 +2258,13 @@ func (app *App) executeEVMTxWithGigaExecutor(ctx sdk.Context, msg *evmtypes.MsgE
 	// Return the error to the caller so it can handle accordingly (e.g., fallback to standard execution)
 	if execResult.Err != nil && gigautils.ShouldExecutionAbort(execResult.Err) {
 		return nil, execResult.Err
+	}
+
+	if feeTokenStateDB != nil && feeTokenStateDB.err != nil {
+		return &abci.ExecTxResult{
+			Code: 1,
+			Log:  fmt.Sprintf("failed to finalize state: %v", feeTokenStateDB.err),
+		}, nil
 	}
 
 	// Finalize state changes — captures surplus (fee deduction + execution balance changes)
@@ -3093,6 +3134,9 @@ type gigaValidationResult struct {
 	bumpNonce    bool               // true if tx nonce matches expected nonce
 	currentNonce uint64             // the expected nonce at time of validation
 	baseFee      *big.Int           // the base fee used for validation
+	// feeTokenCharge is the payer's fee denom and the governed rate its gas is
+	// charged at, or nil when the gas is charged in the network coin.
+	feeTokenCharge *evmstate.FeeTokenCharge
 }
 
 // validateGigaEVMTx validates an EVM tx for fee, nonce, and stateless checks.
@@ -3147,6 +3191,34 @@ func (app *App) validateGigaEVMTx(
 			bumpNonce:    bumpNonce,
 			currentNonce: currentNonce,
 			baseFee:      baseFee,
+		}
+	}
+
+	// Fee-token charge (matches V2's EVMFeeCheckDecorator): with the fee-token
+	// switch on and the payer preferring a fee denom, the gas is priced in that
+	// denom at the governed rate and an unusable rate refuses the transaction.
+	feeTokenCharge, err := app.EvmKeeper.GetFeeTokenCharge(ctx.WithGasMeter(sdk.NewInfiniteGasMeterWithMultiplier(ctx)), sender)
+	if err != nil {
+		return refuseGigaEVMTx(err, bumpNonce, currentNonce, baseFee)
+	}
+	if feeTokenCharge != nil {
+		effectiveGasPrice := new(big.Int).Add(new(big.Int).Set(ethTx.GasTipCap()), baseFee)
+		if effectiveGasPrice.Cmp(ethTx.GasFeeCap()) > 0 {
+			effectiveGasPrice.Set(ethTx.GasFeeCap())
+		}
+		fee := new(big.Int).Mul(new(big.Int).SetUint64(ethTx.Gas()), effectiveGasPrice)
+		if fee.Sign() < 0 || fee.BitLen() > 256 {
+			return refuseGigaEVMTx(evmkeeper.ErrFeeTokenOverflow, bumpNonce, currentNonce, baseFee)
+		}
+		converted, err := evmkeeper.ConvertFeeToDenom(sdk.NewIntFromBigInt(fee), feeTokenCharge.Rate, true)
+		if err != nil {
+			return refuseGigaEVMTx(err, bumpNonce, currentNonce, baseFee)
+		}
+		if app.gigaSpendableFeeDenom(ctx, paxAddr, feeTokenCharge.Denom).LT(converted) {
+			return refuseGigaEVMTx(sdkerrors.Wrapf(sdkerrors.ErrInsufficientFunds, "insufficient %s for gas", feeTokenCharge.Denom), bumpNonce, currentNonce, baseFee)
+		}
+		if app.GigaEvmKeeper.GetBalance(ctx, paxAddr).Cmp(ethTx.Value()) < 0 {
+			return refuseGigaEVMTx(sdkerrors.Wrap(sdkerrors.ErrInsufficientFunds, "insufficient network coin for value"), bumpNonce, currentNonce, baseFee)
 		}
 	}
 
@@ -3291,6 +3363,17 @@ func (app *App) validateGigaEVMTx(
 		senderBalance = new(big.Int).Add(senderBalance, castBalance)
 	}
 
+	// A fee-token payer's buying power is its fee denom converted back at the
+	// governed rate, rounded down (matches the V2 state DB's balance before BuyGas).
+	if feeTokenCharge != nil {
+		amount := app.gigaSpendableFeeDenom(ctx, paxAddr, feeTokenCharge.Denom)
+		wei, err := evmkeeper.ConvertFeeFromDenom(amount, feeTokenCharge.Rate, false)
+		if err != nil {
+			return refuseGigaEVMTx(err, bumpNonce, currentNonce, baseFee)
+		}
+		senderBalance = new(big.Int).Add(senderBalance, wei.BigInt())
+	}
+
 	if senderBalance.Cmp(balanceCheck) < 0 {
 		return gigaValidationResult{
 			err: &abci.ExecTxResult{
@@ -3305,11 +3388,80 @@ func (app *App) validateGigaEVMTx(
 
 	// All checks passed
 	return gigaValidationResult{
-		err:          nil,
+		err:            nil,
+		bumpNonce:      bumpNonce,
+		currentNonce:   currentNonce,
+		baseFee:        baseFee,
+		feeTokenCharge: feeTokenCharge,
+	}
+}
+
+// gigaSpendableFeeDenom is the payer's unlocked balance in denom; the giga
+// bank keeper's SpendableCoins reports the network coin only.
+func (app *App) gigaSpendableFeeDenom(ctx sdk.Context, addr sdk.AccAddress, denom string) sdk.Int {
+	spendable := app.GigaBankKeeper.GetBalance(ctx, addr, denom).Amount.Sub(app.GigaBankKeeper.LockedCoins(ctx, addr).AmountOf(denom))
+	if spendable.IsNegative() {
+		return sdk.ZeroInt()
+	}
+	return spendable
+}
+
+// refuseGigaEVMTx reports err with the codespace, code and log the V2 deliver
+// path reports for the same error.
+func refuseGigaEVMTx(err error, bumpNonce bool, currentNonce uint64, baseFee *big.Int) gigaValidationResult {
+	codespace, code, log := sdkerrors.ABCIInfo(err, false)
+	return gigaValidationResult{
+		err: &abci.ExecTxResult{
+			Codespace: codespace,
+			Code:      code,
+			Log:       log,
+		},
 		bumpNonce:    bumpNonce,
 		currentNonce: currentNonce,
 		baseFee:      baseFee,
 	}
+}
+
+// gigaFeeTokenStateDB routes the gas a giga transaction returns to its payer
+// and the fee its coinbase collects into the payer's fee denom at the rate the
+// pre-charge used, the way the V2 state DB does for a recorded fee-token charge.
+// Every other balance change reaches the embedded state DB unchanged.
+type gigaFeeTokenStateDB struct {
+	*gigaevmstate.DBImpl
+	bank            *gigabankkeeper.BaseKeeper
+	charge          evmstate.FeeTokenCharge
+	payer           sdk.AccAddress
+	coinbaseEvmAddr common.Address
+	coinbase        sdk.AccAddress
+	err             error
+}
+
+func (s *gigaFeeTokenStateDB) AddBalance(evmAddr common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
+	if evmAddr == s.charge.Payer && reason == tracing.BalanceIncreaseGasReturn {
+		s.credit(s.payer, amount, true)
+		return *gigaevmstate.ZeroInt
+	}
+	if evmAddr == s.coinbaseEvmAddr && reason == tracing.BalanceIncreaseRewardTransactionFee {
+		// The coinbase credit floors so the refund and the reward together never exceed the ceilinged debit.
+		s.credit(s.coinbase, amount, false)
+		return *gigaevmstate.ZeroInt
+	}
+	return s.DBImpl.AddBalance(evmAddr, amount, reason)
+}
+
+func (s *gigaFeeTokenStateDB) credit(addr sdk.AccAddress, amount *uint256.Int, roundUp bool) {
+	if s.err != nil {
+		return
+	}
+	converted, err := evmkeeper.ConvertFeeToDenom(sdk.NewIntFromBigInt(amount.ToBig()), s.charge.Rate, roundUp)
+	if err != nil {
+		s.err = err
+		return
+	}
+	if converted.IsZero() {
+		return
+	}
+	s.err = s.bank.AddCoins(s.Ctx(), addr, sdk.NewCoins(sdk.NewCoin(s.charge.Denom, converted)), true)
 }
 
 func init() {

@@ -527,6 +527,10 @@ revision = "d215b7185417b10b9050b5dc5dcabe60ed4aadbd"
 command = "timeout 20m sh -c 'go test -count=1 -run SidioraFee ./tests/chain/'"
 exit_code = 1
 log_path = ".logs/verify.log"
+implemented_revision = "007b27c8ec5210ec9344e966db6bbc8c4caf3999"
+implemented_command = "timeout 20m sh -c 'go test -count=1 -run SidioraFee ./tests/chain/'"
+implemented_exit_code = 1
+implemented_log_path = ".logs/verify-2.10.log"
 wave = 2
 requires = ["2.9"]
 do_1 = "Add testutil/processblock/msgs/feetoken.go building the messages this proof needs in the shape testutil/processblock/msgs/bank.go builds its own: an attested Sidiora bridge in, a fee-preference set through the precompile, and a transaction sent by an account whose preference is Sidiora."
@@ -584,7 +588,11 @@ status = "pending"
 
 [task.2.13]
 title = "Charge the fee-token path on the block execution path"
-status = "pending"
+status = "done"
+revision = "007b27c8ec5210ec9344e966db6bbc8c4caf3999"
+command = "timeout 20m sh -c 'go test -count=1 -run FeeToken ./node/ && go test -count=1 ./modules/evm/keeper/...'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.6","2.9","2.12"]
 do_1 = "In node/app.go make validateGigaEVMTx and executeEVMTxWithGigaExecutor consult the x/evm keeper's GetFeeTokenCharge when the fee-token switch is on and the payer's preference is a fee denom: check the balance in that denom at the governed rate instead of the network coin, refuse a short balance and an unusable rate with the errors the ante path returns, pre-charge and refund in that denom at the recorded rate, and record the charge the way SetAnteFeeTokenCharge does so the message server applies it; with the switch off, and for every block below the upgrade height, the path stays exactly what it is today (observations 2.6.3 and 2.10.1)."

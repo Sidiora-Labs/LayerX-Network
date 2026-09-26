@@ -380,6 +380,7 @@ task = "2.6"; file = "node/app.go"
 observed = "executeEVMTxWithGigaExecutor pre-charges gas through a separate StateDB and bypasses the EVM fee-token ante charge and its recorded refund rate."
 assumption = "The separate execution path requires its own fee-token integration before network-wide activation."
 severity = "note"
+closed = "Task 2.13 at 007b27c8ec5210ec9344e966db6bbc8c4caf3999 charges, refunds and records the fee-token charge in executeEVMTxWithGigaExecutor, proven by the FeeToken block tests at exit 0."
 
 [observation.2.7.1]
 revision = "pending"
@@ -469,3 +470,9 @@ task = "2.10"; file = "tests/chain/sidiora_fee_test.go"; symbol = "TestSidioraFe
 observed = "Requirement 13.5 names a block in which the oracle reports no rate, but the oracle pair was retired in favour of a governed rate with a maximum age."
 assumption = "The missing-rate case is proven as a governed rate older than max_fee_token_rate_age, which is the only way the current chain reports no usable rate."
 severity = "note"
+
+[observation.2.13.1]
+revision = "007b27c8ec5210ec9344e966db6bbc8c4caf3999"; command = "timeout 20m sh -c 'go test -count=1 -run SidioraFee ./tests/chain/'"; exit_code = 1
+log_path = ".logs/verify-2.10.log"
+observed = "The processblock harness delivers EVM transactions through the V2 DeliverTx path, whose EvmCheckAndChargeFees in node/ante/evm_checktx.go charges the network coin, so the giga-path fee-token charge is not reached and observation 2.10.1 stays open."
+assumption = "Charging the fee token in EvmCheckAndChargeFees lies outside this task's files; the SidioraFee assertions stay intact and task 2.10 remains implemented."
