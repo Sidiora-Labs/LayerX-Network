@@ -279,6 +279,10 @@
     - Keep the layerx-agentd native daemon tests reading the harness's ready file as they do, adjusting only what the address change requires inside agent/crates/layerx-agentd; never relax, ignore, skip or delete a test.
     - Run the verify_cmd once; at the passing revision record task 2.16 done with the same evidence and close observation 2.16.1 naming it.
     - _Requirements: 9.1_
+  - [ ] 2.33 Find why the finalized receipt read is unavailable after finality registration and qualify the agent workspace tests
+    - Diagnose observation 2.32.1: with the harness's contracts served at the anchor address, the daemon registers batch 1's finality, but the route's read of the finalized receipt in agent/crates/layerx-agentd/tests/native_reads_daemon.rs returns NativeReadError::Unavailable; surface the underlying error the route folds into Unavailable in agent/crates/layerx-agentd/src/read/native.rs (its reconnect or preparation_state path) in the test's panic message or a log the harness keeps, then fix the cause where it lives - in the route, in the harness's sequence of registrations and waits, or in the daemon's answer - keeping every daemon refusal and every assertion exactly as strong.
+    - Run the verify_cmd once; at the passing revision record tasks 2.32 and 2.16 done with the same evidence and close observations 2.16.1 and 2.32.1 naming it.
+    - _Requirements: 9.1_
 
 ## Wave 3 - One Run, Recorded
 
@@ -296,7 +300,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17", "1.18"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23", "2.24", "2.25", "2.26", "2.27", "2.28", "2.29", "2.30", "2.31", "2.32"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23", "2.24", "2.25", "2.26", "2.27", "2.28", "2.29", "2.30", "2.31", "2.32", "2.33"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }
