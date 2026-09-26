@@ -319,6 +319,8 @@ pub enum SubmissionStatus {
     Pending,
     Reverted,
     Dropped,
+    /// The transaction a completion names: it is final and awaits nothing.
+    Landed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -399,6 +401,41 @@ impl Item {
     #[must_use]
     pub fn transactions(&self) -> usize {
         self.submissions.len() + self.releases.len()
+    }
+
+    /// Marks the transaction `completion` names as landed. A completion that
+    /// names a transaction this item never submitted is refused; one that
+    /// names none marks nothing.
+    fn land(&mut self, item: &str, completion: &Completion) -> Result<(), JournalError> {
+        let status = match *completion {
+            Completion::AlreadyBridged => return Ok(()),
+            Completion::Included { tx_hash, .. } => self
+                .submissions
+                .iter_mut()
+                .rev()
+                .find(|submission| submission.tx_hash == tx_hash)
+                .map(|submission| &mut submission.status)
+                .ok_or_else(|| {
+                    JournalError::Conflict(format!(
+                        "{item} never submitted {}",
+                        hex::prefixed(&tx_hash)
+                    ))
+                })?,
+            Completion::Released { signature, .. } => self
+                .releases
+                .iter_mut()
+                .rev()
+                .find(|release| release.signature == signature)
+                .map(|release| &mut release.status)
+                .ok_or_else(|| {
+                    JournalError::Conflict(format!(
+                        "{item} never submitted release {}",
+                        hex::prefixed(&signature)
+                    ))
+                })?,
+        };
+        *status = SubmissionStatus::Landed;
+        Ok(())
     }
 }
 
@@ -499,6 +536,7 @@ impl State {
                 if record.completion.is_some() {
                     return Err(JournalError::Conflict(format!("{item} completed twice")));
                 }
+                record.land(item, completion)?;
                 record.completion = Some(*completion);
             }
             Entry::Refused { item, reason } => {
@@ -950,6 +988,261 @@ mod tests {
         assert_eq!(item.releases[1].raw, vec![1, 0x52]);
         assert_eq!(item.pending_release(), None);
         assert!(!item.is_open());
+    }
+
+    fn submitted(tx_hash: u8, nonce: u64) -> Entry {
+        Entry::Submitted {
+            item: observation().key(),
+            submitter: [0xb1; 20],
+            nonce,
+            tx_hash: [tx_hash; 32],
+            raw: vec![2, tx_hash],
+        }
+    }
+
+    fn included(tx_hash: u8) -> Entry {
+        Entry::Completed {
+            item: observation().key(),
+            completion: Completion::Included {
+                tx_hash: [tx_hash; 32],
+                block_number: 112,
+            },
+        }
+    }
+
+    fn observed_deposit(journal: &mut Journal) {
+        append(
+            journal,
+            &Entry::Observed {
+                item: observation().key(),
+                observation: observation(),
+            },
+        );
+    }
+
+    #[test]
+    fn an_included_completion_lands_its_submission_and_replays_to_the_same_state() {
+        let path = directory("included").join("journal.jsonl");
+        let key = observation().key();
+        let before = {
+            let mut journal = open(&path);
+            observed_deposit(&mut journal);
+            append(&mut journal, &submitted(0xcc, 5));
+            append(
+                &mut journal,
+                &Entry::Dropped {
+                    item: key.clone(),
+                    tx_hash: [0xcc; 32],
+                },
+            );
+            append(&mut journal, &submitted(0xcd, 6));
+            assert_eq!(
+                journal.state().items[&key]
+                    .pending()
+                    .map(|submission| submission.tx_hash),
+                Some([0xcd; 32])
+            );
+            append(&mut journal, &included(0xcd));
+            journal.state().clone()
+        };
+        let reopened = open(&path);
+        assert_eq!(reopened.state(), &before);
+        let item = &reopened.state().items[&key];
+        assert_eq!(item.pending(), None);
+        assert_eq!(item.pending_release(), None);
+        assert_eq!(item.submissions[0].status, SubmissionStatus::Dropped);
+        assert_eq!(item.submissions[1].status, SubmissionStatus::Landed);
+        assert_eq!(
+            item.completion,
+            Some(Completion::Included {
+                tx_hash: [0xcd; 32],
+                block_number: 112,
+            })
+        );
+        assert!(!item.is_open());
+    }
+
+    #[test]
+    fn an_already_bridged_completion_marks_no_submission() {
+        let path = directory("already-bridged").join("journal.jsonl");
+        let key = observation().key();
+        let mut journal = open(&path);
+        observed_deposit(&mut journal);
+        append(&mut journal, &submitted(0xcc, 5));
+        append(
+            &mut journal,
+            &Entry::Completed {
+                item: key.clone(),
+                completion: Completion::AlreadyBridged,
+            },
+        );
+        let item = &journal.state().items[&key];
+        assert_eq!(item.submissions[0].status, SubmissionStatus::Pending);
+        assert!(!item.is_open());
+        assert_eq!(open(&path).state(), journal.state());
+    }
+
+    #[test]
+    fn a_completion_naming_a_transaction_never_submitted_is_refused() {
+        let path = directory("unknown-completion").join("journal.jsonl");
+        let key = observation().key();
+        let mut journal = open(&path);
+        observed_deposit(&mut journal);
+        refused(&mut journal, &included(0xcc));
+        append(&mut journal, &submitted(0xcc, 5));
+        let refusal = journal.append(&included(0xee));
+        assert!(
+            matches!(&refusal, Err(JournalError::Conflict(detail)) if detail.contains(&key)),
+            "{refusal:?}"
+        );
+        refused(
+            &mut journal,
+            &Entry::Completed {
+                item: key.clone(),
+                completion: Completion::Released {
+                    signature: [0xcc; 64],
+                    slot: 1300,
+                },
+            },
+        );
+        let item = &journal.state().items[&key];
+        assert!(item.is_open());
+        assert_eq!(item.submissions[0].status, SubmissionStatus::Pending);
+        let lines = fs::read_to_string(&path)
+            .unwrap_or_default()
+            .lines()
+            .count();
+        assert_eq!(lines, 2, "refused completions are never written");
+        assert_eq!(open(&path).state(), journal.state());
+    }
+
+    #[test]
+    fn a_release_completion_naming_a_release_never_submitted_is_refused() {
+        let path = directory("unknown-release").join("journal.jsonl");
+        let mut journal = open(&path);
+        let burn = Observation::outbound(
+            &OutboundAttestation {
+                chain_id: 91_600_046_870_081,
+                vault: [0x33; 20],
+                paxeer_tx_hash: [0x6f; 32],
+                paxeer_nonce: 11,
+                recipient: [0xfb; 20],
+                asset: [0x21; 20],
+                amount: [0x01; 32],
+            },
+            Position {
+                block_number: 28,
+                block_hash: [0x1c; 32],
+            },
+        );
+        let burn_key = burn.key();
+        append(
+            &mut journal,
+            &Entry::Observed {
+                item: burn_key.clone(),
+                observation: burn,
+            },
+        );
+        append(
+            &mut journal,
+            &Entry::RecipientResolved {
+                item: burn_key.clone(),
+                key: [0x59; 32],
+            },
+        );
+        append(
+            &mut journal,
+            &Entry::ReleaseSubmitted {
+                item: burn_key.clone(),
+                fee_payer: [0xfe; 32],
+                signature: [0x51; 64],
+                last_valid_block_height: 2000,
+                raw: vec![1, 0x51],
+            },
+        );
+        let refusal = journal.append(&Entry::Completed {
+            item: burn_key.clone(),
+            completion: Completion::Released {
+                signature: [0x52; 64],
+                slot: 1300,
+            },
+        });
+        assert!(
+            matches!(&refusal, Err(JournalError::Conflict(detail)) if detail.contains(&burn_key)),
+            "{refusal:?}"
+        );
+        let burn_item = &journal.state().items[&burn_key];
+        assert!(burn_item.is_open());
+        assert_eq!(
+            burn_item.pending_release().map(|release| release.signature),
+            Some([0x51; 64])
+        );
+        let lines = fs::read_to_string(&path)
+            .unwrap_or_default()
+            .lines()
+            .count();
+        assert_eq!(lines, 3, "refused completions are never written");
+        assert_eq!(open(&path).state(), journal.state());
+    }
+
+    #[test]
+    fn a_journal_written_before_landed_existed_replays_its_completion_as_landed() {
+        let path = directory("earlier-format").join("journal.jsonl");
+        let key = observation().key();
+        let bytes = |byte: &str, length: usize| format!("0x{}", byte.repeat(length));
+        let written = [
+            format!(
+                "{{\"kind\":\"observed\",\"item\":\"{key}\",\"observation\":{{\"direction\":\"inbound\",\"chain_id\":1,\"vault\":\"{}\",\"tx_hash\":\"{}\",\"log_index\":3,\"recipient\":\"{}\",\"asset\":\"{}\",\"amount\":\"{}\",\"position\":{{\"block_number\":100,\"block_hash\":\"{}\"}}}}}}",
+                bytes("11", 20),
+                bytes("aa", 32),
+                bytes("55", 32),
+                bytes("44", 20),
+                bytes("01", 32),
+                bytes("bb", 32),
+            ),
+            format!(
+                "{{\"kind\":\"signed\",\"item\":\"{key}\",\"signature\":\"{}\"}}",
+                bytes("1b", 65)
+            ),
+            format!(
+                "{{\"kind\":\"submitted\",\"item\":\"{key}\",\"submitter\":\"{}\",\"nonce\":5,\"tx_hash\":\"{}\",\"raw\":\"0x02cc\"}}",
+                bytes("b1", 20),
+                bytes("cc", 32),
+            ),
+            format!(
+                "{{\"kind\":\"completed\",\"item\":\"{key}\",\"completion\":{{\"outcome\":\"included\",\"tx_hash\":\"{}\",\"block_number\":112}}}}",
+                bytes("cc", 32)
+            ),
+        ];
+        let text = written.join("\n") + "\n";
+        fs::write(&path, &text).unwrap_or_else(|error| panic!("write: {error}"));
+        let replayed = open(&path);
+        let item = &replayed.state().items[&key];
+        assert_eq!(item.submissions.len(), 1);
+        assert_eq!(item.submissions[0].status, SubmissionStatus::Landed);
+        assert_eq!(item.pending(), None);
+        assert!(!item.is_open());
+
+        let rewritten = directory("earlier-format-rewritten").join("journal.jsonl");
+        {
+            let mut journal = open(&rewritten);
+            observed_deposit(&mut journal);
+            append(
+                &mut journal,
+                &Entry::Signed {
+                    item: key.clone(),
+                    signature: [0x1b; 65],
+                },
+            );
+            append(&mut journal, &submitted(0xcc, 5));
+            append(&mut journal, &included(0xcc));
+            assert_eq!(journal.state(), replayed.state());
+        }
+        assert_eq!(
+            fs::read_to_string(&rewritten).unwrap_or_default(),
+            text,
+            "the journal lines are written exactly as before"
+        );
     }
 
     #[test]
