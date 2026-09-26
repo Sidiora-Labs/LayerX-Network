@@ -235,7 +235,7 @@
     - Extend test/SidioraProxyGovernance.t.sol to assert that the scheduled operation's data equals upgradeToAndCall(implementation, initialize()) byte for byte, that no caller-supplied bytes can reach the schedule, and that executing the operation after the delay leaves the replacement initialized so a second initialize reverts.
     - Close observation 2.2.5 in spec/sidiora-fee-token/qualification.kvx naming the revision at which the verify_cmd passes.
     - _Requirements: 6.2, 7.3, 7.5_
-  - [ ] 4.8 Assert the account signature fails after a chain id change
+  - [x] 4.8 Assert the account signature fails after a chain id change
     - In contracts/test/BatchCallAndSponsorTest.t.sol extend testDigestsBindEveryQuoteFieldAndChain, or add a case beside it, signing a sponsored batch at one chain id, switching the chain id with vm.chainId, and asserting executeSponsored reverts with the account-signature error as well as the quote-signature error, leaving every existing assertion as written.
     - Change no production contract; this is a test-only task and the test ratio is satisfied by the test file alone.
     - Close observation 2.3.1 in spec/sidiora-fee-token/qualification.kvx naming the revision at which the verify_cmd passes.
@@ -258,7 +258,7 @@
     - Extend modules/evm/keeper/params_test.go under the FeeTokenParams prefix with an update beyond the bound upward and downward refused, an update exactly at the bound accepted and a first rate accepted; extend modules/evm/gov_test.go under the FeeTokenRateBound prefix with the handler refusing a beyond-bound proposal and leaving the stored rate unchanged, and node/app_feetoken_test.go under the FeeTokenRateBound prefix asserting the application routes parameter changes through it.
     - Close observation 2.6.1 in spec/sidiora-fee-token/qualification.kvx naming the revision at which the verify_cmd passes.
     - _Requirements: 8.6, 10.2_
-  - [ ] 4.12 Regenerate the evm parameters with the pinned protobuf pipeline
+  - [ ] 4.12 Regenerate the evm parameters with the pinned protobuf pipeline — **Implemented - qualification pending**
     - Run scripts/protoc.sh, which pins buf v1.58.0, keep its output for modules/evm/types/params.pb.go and revert every other file it rewrites; stage the regenerated file so the verify_cmd's second generation is compared against it.
     - Hand-edit no generated file. If buf or the gocosmos plugin cannot be built or run on the machine, append one observation to spec/sidiora-fee-token/qualification.kvx with the revision, command, exit code, log path, what was observed and what is assumed, and leave the task implemented-not-qualified rather than editing the file.
     - Change no test and no production file: the generated file carries no behaviour of its own, and modules/evm/types tests read it through the hand-written parameter code.
@@ -269,6 +269,10 @@
     - Append one gate record per leg that ran to spec/sidiora-fee-token/qualification.kvx under gate.4.13, carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code and the log path, written only from a command that actually ran.
     - Append one observation per failure the run exposes that belongs to no task in this feature, do not investigate or rerun it, rerun nothing that already passed at this revision, and deploy nothing.
     - _Requirements: 15.1, 15.2, 15.3, 15.4_
+  - [ ] 4.14 Reconcile the fee-token rate accessor with the generated parameters and qualify the regeneration
+    - The pinned pipeline emits no GetRate getter for the fee-token rate field, while modules/evm/types/params_test.go calls one that only the earlier hand edit provided; regenerate modules/evm/types/params.pb.go through scripts/protoc.sh and commit it exactly as emitted, and if any non-test code calls GetRate provide that accessor in the hand-written modules/evm/types/params.go, otherwise make the test read the field directly; no assertion changes.
+    - Run task 4.12's verify_cmd once; on exit 0 record task 4.12 done with that revision, command, exit code and log, and close observations 2.8.1 and 4.12.1 naming the revision.
+    - _Requirements: 8.1, 8.5_
 
 ## Task Dependency Graph
 
@@ -278,7 +282,7 @@
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"] },
     { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17"] },
     { "id": 3,  "tasks": ["3.1"] },
-    { "id": 4,  "tasks": ["4.1", "4.2", "4.3", "4.4", "4.5", "4.6", "4.7", "4.8", "4.9", "4.10", "4.11", "4.12", "4.13"] }
+    { "id": 4,  "tasks": ["4.1", "4.2", "4.3", "4.4", "4.5", "4.6", "4.7", "4.8", "4.9", "4.10", "4.11", "4.12", "4.13", "4.14"] }
   ]
 }
 ```

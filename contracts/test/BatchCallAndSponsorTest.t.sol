@@ -571,6 +571,26 @@ contract BatchCallAndSponsorTest is Test {
         assertNotEq(account.quoteDigest(quote), digest);
     }
 
+    function testChainIdChangeInvalidatesBothSignatures() public {
+        BatchCallAndSponsor.Call[] memory calls = _calls();
+        BatchCallAndSponsor.Quote memory quote = _quote();
+        bytes memory auth = _sign(accountKey, account.sponsoredBatchDigest(calls, quote));
+        bytes memory relayer = _sign(sponsorKey, account.quoteDigest(quote));
+        vm.chainId(block.chainid + 1);
+        vm.prank(sponsor);
+        vm.expectRevert(BatchCallAndSponsor.InvalidAccountSignature.selector);
+        account.executeSponsored(calls, quote, auth, relayer);
+        auth = _sign(accountKey, account.sponsoredBatchDigest(calls, quote));
+        vm.prank(sponsor);
+        vm.expectRevert(BatchCallAndSponsor.InvalidRelayerSignature.selector);
+        account.executeSponsored(calls, quote, auth, relayer);
+        assertEq(account.nonce(), 0);
+        assertFalse(account.usedQuoteNonces(sponsor, quote.quoteNonce));
+        assertEq(token.balanceOf(recipient), 0);
+        assertEq(token.balanceOf(sponsor), 0);
+        assertEq(token.balanceOf(address(account)), 10_000_000);
+    }
+
     function testSharedQuoteAndBatchDigestVector() public {
         vm.chainId(1325);
         address vectorAccount = 0x1111111111111111111111111111111111111111;
