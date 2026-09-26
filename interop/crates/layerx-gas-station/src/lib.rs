@@ -1,3 +1,30 @@
+//! Paxeer X Network sponsored submission library.
+//!
+//! Pass the JSON configuration file path to `StationConfig::load`. Fields are
+//! `chain_id`, `endpoints`, `paymaster`, `token`, `decimals`, `sid_denom`,
+//! `pax_denom`, `max_rate_age`, `spread_bps`, `margin_bps`, `per_account_limit`,
+//! `per_interval_limit`, `per_quote_limit`, `interval_seconds`, `balance_floor`,
+//! and `relayer_key_env`. Amount limits use SID base units; the balance floor
+//! uses PAX base units. The configured `relayer_key_env` names the signing
+//! environment variable, conventionally `PAXEER_RELAYER_KEY`.
+//!
+//! Supply a governed `PriceSource` to `GasStation`; the retired oracle cannot
+//! supply rates. The paymaster also requires a governed rate before live use.
+//! The caller opens a journal path such as `state/sponsorship.jsonl` and passes
+//! it to the station. Each JSON line is `quoted`, `prepared`, or `completed`,
+//! keyed by sponsor and quote nonce. Quotes persist reservations and signatures;
+//! prepared entries persist the transaction nonce, hash and exact signed bytes;
+//! completion records contain consumed, included or reverted outcomes. No key,
+//! endpoint or credential is serialized. Entries are flushed and synced before
+//! publication or broadcast. Exclusive locking prevents simultaneous writers;
+//! corrupt or torn lines fail closed. Restart replays policy reservations and
+//! rebroadcasts the saved bytes. Reservations remain conservative after settlement.
+
+pub mod journal;
+pub mod rpc;
+pub mod station;
+pub mod tx;
+pub use station::GasStation;
 pub mod config;
 pub mod policy;
 pub mod price;
@@ -95,13 +122,13 @@ impl<S: QuoteSigner> Station<S> {
             request.account,
             &quote,
         );
+        self.policy
+            .reserve(request.account, amount, request.gas_cost, balance, now)
+            .map_err(QuoteError::Policy)?;
         let signature = self
             .signer
             .sign_digest(digest)
             .map_err(QuoteError::Signer)?;
-        self.policy
-            .reserve(request.account, amount, request.gas_cost, balance, now)
-            .map_err(QuoteError::Policy)?;
         Ok(SignedQuote {
             quote,
             digest,

@@ -768,6 +768,7 @@ name = "layerx-gas-station"
 version = "0.1.0"
 dependencies = [
  "k256",
+ "native-tls",
  "serde",
  "serde_json",
  "sha3",
