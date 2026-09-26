@@ -1,9 +1,10 @@
 use serde_json::Value;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use x_websearch::config::{
-    AssetSymbol, Config, ConfigError, PaymentConfig, Refusal, DEFAULT_DRAW_FEE_LIMIT,
-    MAX_CONFIG_BYTES,
+    AssetSymbol, Config, ConfigError, PaymentConfig, Refusal, DEFAULT_CRAWL_INTERVAL_SECONDS,
+    DEFAULT_DRAW_FEE_LIMIT, MAX_CONFIG_BYTES, MAX_CRAWL_INTERVAL_SECONDS,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -609,5 +610,62 @@ fn malformed_payment_settings_are_refused_naming_the_field(
         Config::parse(&value.to_string()).err(),
         Some(refusal("payment.receiver_key", Refusal::KeyMaterial))
     );
+    Ok(())
+}
+
+#[test]
+fn an_absent_crawl_interval_defaults_to_nine_hundred_seconds(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let valid = valid_json()?;
+    assert!(valid.get("crawl_interval_seconds").is_none());
+    let config = Config::parse(&valid.to_string())?;
+    assert_eq!(DEFAULT_CRAWL_INTERVAL_SECONDS, 900);
+    assert_eq!(config.crawl_interval_seconds, 900);
+    assert_eq!(config.crawl_interval(), Duration::from_secs(900));
+    Ok(())
+}
+
+#[test]
+fn a_crawl_interval_from_one_second_to_one_day_is_accepted(
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(MAX_CRAWL_INTERVAL_SECONDS, 86_400);
+    for seconds in [1_u64, 60, 900, 3_600, 86_399, 86_400] {
+        let mut value = valid_json()?;
+        value["crawl_interval_seconds"] = serde_json::json!(seconds);
+        let config = Config::parse(&value.to_string())?;
+        assert_eq!(config.crawl_interval_seconds, seconds);
+        assert_eq!(config.crawl_interval(), Duration::from_secs(seconds));
+    }
+    Ok(())
+}
+
+#[test]
+fn a_crawl_interval_of_zero_above_one_day_or_not_a_whole_number_is_refused_naming_the_field(
+) -> Result<(), Box<dyn std::error::Error>> {
+    for setting in [
+        serde_json::json!(0),
+        serde_json::json!(86_401),
+        serde_json::json!(u64::MAX),
+        serde_json::json!(-1),
+        serde_json::json!(1.5),
+        serde_json::json!("900"),
+        serde_json::json!(true),
+        serde_json::json!([900]),
+        serde_json::json!({ "seconds": 900 }),
+        Value::Null,
+    ] {
+        let mut value = valid_json()?;
+        value["crawl_interval_seconds"] = setting.clone();
+        let error = Config::parse(&value.to_string()).err();
+        assert_eq!(
+            error,
+            Some(refusal("crawl_interval_seconds", Refusal::Invalid)),
+            "crawl_interval_seconds = {setting}"
+        );
+        assert_eq!(
+            error.map(|error| error.to_string()),
+            Some("configuration refused: crawl_interval_seconds is invalid".to_owned())
+        );
+    }
     Ok(())
 }

@@ -710,7 +710,11 @@ reqs = ["16.1","16.2"]
 
 [task.2.8]
 title = "Configure the crawl interval and stop the sidecar cleanly"
-status = "pending"
+status = "done"
+revision = "c4662b1a14cda1ceba7fe41c60a4a386a375bd80"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test config --test binary --test crawl'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["1.13","2.1","2.10"]
 do_1 = "Add crawl_interval_seconds to the configuration in interop/crates/x-websearch/src/config.rs with a documented default of 900 when absent, refusing zero and any value above 86400 by naming the field, and make the crawler in src/crawl.rs and the binary in src/main.rs schedule cycles from it instead of the constant (observation 1.13.1)."

@@ -16,6 +16,11 @@ pub const MAX_PAGES_PER_CYCLE: u32 = 1_000_000;
 pub const MAX_DEPTH: u32 = 32;
 pub const MAX_POLITENESS_DELAY_MS: u64 = 3_600_000;
 pub const MAX_CONFIRMATIONS: u32 = 1_024;
+/// The time between the starts of two crawl cycles when
+/// `crawl_interval_seconds` is absent.
+pub const DEFAULT_CRAWL_INTERVAL_SECONDS: u64 = 900;
+/// The longest `crawl_interval_seconds` accepted: one day.
+pub const MAX_CRAWL_INTERVAL_SECONDS: u64 = 86_400;
 const MAX_PATH_BYTES: usize = 4_096;
 pub const MAX_DID_BYTES: usize = 255;
 
@@ -213,6 +218,10 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub seeds: Vec<String>,
     pub crawl: CrawlConfig,
+    /// `crawl_interval_seconds`: the time from the start of one crawl cycle
+    /// to the start of the next, from 1 to [`MAX_CRAWL_INTERVAL_SECONDS`].
+    /// Absent: [`DEFAULT_CRAWL_INTERVAL_SECONDS`].
+    pub crawl_interval_seconds: u64,
     pub fetch: FetchLimits,
     pub assets: [AssetConfig; 4],
     pub gateway: GatewayConfig,
@@ -239,6 +248,7 @@ impl Config {
         let fetch = fetch(&mut root)?;
         let seeds = seeds(&mut root, fetch.allow_loopback)?;
         let crawl = crawl(&mut root)?;
+        let crawl_interval_seconds = crawl_interval_seconds(&mut root)?;
         let assets = assets(&mut root)?;
         let gateway = gateway(&mut root)?;
         let payment = payment(&mut root)?;
@@ -251,6 +261,7 @@ impl Config {
             data_dir,
             seeds,
             crawl,
+            crawl_interval_seconds,
             fetch,
             assets,
             gateway,
@@ -265,6 +276,12 @@ impl Config {
     /// Refuses an unreadable or oversized file and every refusal of `parse`.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         load(path)
+    }
+
+    /// The time from the start of one crawl cycle to the start of the next.
+    #[must_use]
+    pub const fn crawl_interval(&self) -> Duration {
+        Duration::from_secs(self.crawl_interval_seconds)
     }
 
     #[must_use]
@@ -711,6 +728,16 @@ fn crawl(root: &mut Object) -> Result<CrawlConfig, ConfigError> {
         max_depth,
         politeness_delay_ms,
     })
+}
+
+fn crawl_interval_seconds(root: &mut Object) -> Result<u64, ConfigError> {
+    let Some((value, path)) = root.optional("crawl_interval_seconds")? else {
+        return Ok(DEFAULT_CRAWL_INTERVAL_SECONDS);
+    };
+    value
+        .as_u64()
+        .filter(|seconds| (1..=MAX_CRAWL_INTERVAL_SECONDS).contains(seconds))
+        .ok_or_else(|| ConfigError::new(path, Refusal::Invalid))
 }
 
 fn fetch(root: &mut Object) -> Result<FetchLimits, ConfigError> {

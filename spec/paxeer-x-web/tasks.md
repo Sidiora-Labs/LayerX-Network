@@ -153,7 +153,7 @@
     - Extend the path filters in .github/workflows/xweb-test.yml with every tree observation 1.11.1 names and every path tasks 1.12 to 1.15 and 2.1 to 2.6 touch that one of the workflow's legs exercises, so a change to any of them runs the legs; add no leg and change no command.
     - Extend tools/ci/xweb-workflow-check.sh to assert the widened list, keeping the rule that every filter names a path that exists or a path a task of this feature adds.
     - _Requirements: 16.1, 16.2_
-  - [ ] 2.8 Configure the crawl interval and stop the sidecar cleanly
+  - [x] 2.8 Configure the crawl interval and stop the sidecar cleanly
     - Add crawl_interval_seconds to the configuration in interop/crates/x-websearch/src/config.rs with a documented default of 900 when absent, refusing zero and any value above 86400 by naming the field, and make the crawler in src/crawl.rs and the binary in src/main.rs schedule cycles from it instead of the constant (observation 1.13.1).
     - Handle SIGTERM and SIGINT in src/main.rs through the signal-hook crate pinned in interop/Cargo.toml and declared in interop/crates/x-websearch/Cargo.toml, with no unsafe code: stop accepting connections, finish the requests in flight, commit the index and exit 0; keep the default action for every other signal.
     - Extend tests/config.rs for the new field and its refusals, tests/crawl.rs for a cycle scheduled from the configured interval, and tests/binary.rs so the clean-shutdown test asserts exit 0 on SIGTERM, a freed port and a reopened index with every page searchable; update tests/fixtures/binary as the configuration requires.

@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::canonical;
@@ -70,6 +70,44 @@ impl std::error::Error for CrawlError {}
 impl From<IndexError> for CrawlError {
     fn from(error: IndexError) -> Self {
         Self::Index(error)
+    }
+}
+
+/// A request to stop, shared between the threads of the sidecar. Once
+/// raised it stays raised, and every waiter wakes at once.
+#[derive(Clone, Debug, Default)]
+pub struct StopSignal {
+    state: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl StopSignal {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Raises the signal and wakes every thread waiting on it.
+    pub fn raise(&self) {
+        let (raised, wake) = &*self.state;
+        *raised.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        wake.notify_all();
+    }
+
+    #[must_use]
+    pub fn is_raised(&self) -> bool {
+        *self.state.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Waits until the signal is raised or `timeout` passes, and says
+    /// whether it was raised.
+    #[must_use]
+    pub fn wait_timeout(&self, timeout: Duration) -> bool {
+        let (raised, wake) = &*self.state;
+        let guard = raised.lock().unwrap_or_else(PoisonError::into_inner);
+        let (guard, _) = wake
+            .wait_timeout_while(guard, timeout, |raised| !*raised)
+            .unwrap_or_else(PoisonError::into_inner);
+        *guard
     }
 }
 
@@ -310,6 +348,39 @@ impl Crawler {
     /// # Errors
     /// Returns the error writing or committing the index.
     pub fn run_cycle(&mut self, seeds: &[String]) -> Result<CrawlReport, CrawlError> {
+        self.cycle(seeds, None)
+    }
+
+    /// Runs a cycle over the seeds at once and then one every `interval`,
+    /// measured from the start of one cycle to the start of the next, until
+    /// `stop` is raised. A cycle under way when `stop` is raised ends after
+    /// the page it is visiting, defers the rest and commits the index before
+    /// it is reported. Each cycle's result goes to `report`, and the number
+    /// of cycles run is returned.
+    pub fn run_every(
+        &mut self,
+        seeds: &[String],
+        interval: Duration,
+        stop: &StopSignal,
+        mut report: impl FnMut(Result<CrawlReport, CrawlError>),
+    ) -> u64 {
+        let mut cycles = 0;
+        while !stop.is_raised() {
+            let started = Instant::now();
+            report(self.cycle(seeds, Some(stop)));
+            cycles += 1;
+            if stop.wait_timeout(interval.saturating_sub(started.elapsed())) {
+                break;
+            }
+        }
+        cycles
+    }
+
+    fn cycle(
+        &mut self,
+        seeds: &[String],
+        stop: Option<&StopSignal>,
+    ) -> Result<CrawlReport, CrawlError> {
         let mut frontier = Frontier {
             queue: VecDeque::new(),
             seen: HashSet::new(),
@@ -321,7 +392,7 @@ impl Crawler {
         let mut report = CrawlReport::default();
         let mut visited = 0_u32;
         while let Some((url, depth)) = frontier.queue.pop_front() {
-            if visited >= self.budget.pages_per_cycle {
+            if visited >= self.budget.pages_per_cycle || stop.is_some_and(StopSignal::is_raised) {
                 report.deferred += 1 + frontier.queue.len();
                 break;
             }

@@ -130,6 +130,7 @@ symbol = "CRAWL_INTERVAL"
 observed = "The configuration has no crawl interval and no signal handling is reachable without a new crate (unsafe_code is denied and Cargo.toml is outside the touches), so cycles start every 900 seconds from a constant and SIGTERM ends the process by its default action."
 assumption = "The index commits per cycle and the content and payment stores write by rename, so termination leaves the data directory reopenable, which tests/binary.rs asserts; a configured interval and a graceful stop are feature-owned changes."
 severity = "note"
+closed = "Task 2.8 at c4662b1a14cda1ceba7fe41c60a4a386a375bd80 schedules crawl cycles from crawl_interval_seconds and stops on SIGTERM or SIGINT through signal-hook, serving the requests in flight and committing the index before exiting 0."
 
 [observation.1.8.1]
 task = "1.8"
