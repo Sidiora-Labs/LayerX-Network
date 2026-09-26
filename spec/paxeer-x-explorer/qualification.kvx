@@ -38,6 +38,22 @@ observed = "The Platform workspace step ran make beta-contract-check beta-ledger
 assumption = "Editing those symbols or touches entries would change the check's own input rather than satisfy it, and no change can satisfy them for a task whose instruction is to leave both scripts intact, so the conflict is recorded here for an owner ruling and the task is recorded done by hand from its passing verify_cmd rather than forced past the graph checks."
 severity = "note"
 
+[observation.1.6.1]
+task = "1.6"
+file = "tests/fixtures/custody/daemon-credit-receipt/activity"
+symbol = "actual_daemon_terminal_requires_the_complete_maintained_transition"
+observed = "Every maintained-transition and terminal assertion verifies; the case then fails in prepare::disclose with Decode(MalformedPayload) because the fixture activity carries a 427-byte LXDC2 credit while decode_native_custody_credit requires the LXDC3 head and its LXLB1 light bundle, and this fixture set was never rebuilt when the credit consumers moved onto the light credit."
+assumption = "Rebuilding it needs a signed LXDC3 credit for this actor, a re-signed activity and a re-signed batch with its proofs, none of which this repository can produce, and the fixture is outside this task's touches; accepting LXDC2 again would weaken production credit verification."
+severity = "blocker"
+
+[observation.1.6.2]
+task = "1.6"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs"
+symbol = "node_storage_environment"
+observed = "The confirmed-creation budget case never reached its assertions because the harness pinned the settlement contract and the checkpoint registry to placeholder addresses while lxp_daemon_finality_authority_init_pins requires both to be the canonical Paxeer anchor, so layerxd exited with result -3 at the finality authority bootstrap stage."
+assumption = "The harness support module the named test compiles into is repaired to the canonical anchor although the file is not in this task's touches list, because the case cannot run at all otherwise and no assertion or bound changes."
+severity = "note"
+
 [observation.2.1.1]
 task = "2.1"
 file = "spec/paxeer-x-explorer/spec.kvx"

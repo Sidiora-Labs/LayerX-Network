@@ -31,6 +31,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const LNI_FRAME_BYTES: usize = 1_212_416;
 const LOG_BYTES: u64 = 64 * 1024 * 1024;
+const PAXEER_ANCHOR_ADDRESS: &str = "0x0000000000000000000000000000000000001014";
 const MODULE_GOVERNANCE: u16 = 7;
 const METERING_AUTHORITY_GENESIS: u8 = 1;
 static FIXTURE_LOCK: Mutex<()> = Mutex::new(());
@@ -1225,11 +1226,11 @@ fn node_storage_environment(
     node_env.insert("LAYERX_NODE_PAXEER_RPC_PORT", free_port().to_string());
     node_env.insert(
         "LAYERX_NODE_SETTLEMENT_CONTRACT",
-        format!("0x{}", "11".repeat(20)),
+        PAXEER_ANCHOR_ADDRESS.to_owned(),
     );
     node_env.insert(
         "LAYERX_NODE_CHECKPOINT_REGISTRY",
-        format!("0x{}", "22".repeat(20)),
+        PAXEER_ANCHOR_ADDRESS.to_owned(),
     );
     node_env.insert(
         "LAYERX_NODE_CHECKPOINT_DIRECTORY",
