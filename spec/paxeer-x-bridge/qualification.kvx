@@ -106,3 +106,11 @@ symbol = "req.14.ac_1"
 observed = "Requirement 14.1 says the workflow SHALL carry no path filter other than bridge/** and interop/crates/layerx-bridge-relayer/**, and 14.4 says every path filter SHALL name a directory that exists, while task 1.6 do_1 requires the workflow file itself as a third filter; a workflow that changes its own legs without rerunning them would be the alternative, so the task followed do_1 and carries three filters, the third naming a file."
 assumption = "do_1 is the narrower and later instruction and the merge group carries no filter at all because GitHub applies none there, so bridge/deploy/tests/workflow-check.sh asserts the two directory globs as directories and the third filter as the workflow file by name rather than relaxing either check."
 severity = "note"
+
+[wave.1]
+revision = "4f2b24deb"
+command = "timeout 20m each: bash bridge/evm/bootstrap-libs.sh && forge test --root bridge/evm -vvv; cargo test --locked --manifest-path bridge/solana/Cargo.toml; go test -count=1 ./bridge/vectors/...; go test -count=1 ./bridge/deploy/chainconfig/... && bash bridge/deploy/tests/deploy-scripts-check.sh; go test -count=1 ./bridge/deploy/proposals/...; bash bridge/deploy/tests/workflow-check.sh"
+exit_codes = "lint 0; legs 1.1 0, 1.2 0, 1.3 0, 1.4 0, 1.5 0, 1.6 0"
+evidence = ".logs/wave1-union.log"
+observed = "All six wave-one verify legs and the spec lint (0 errors, 34 warnings for wave-two paths not yet created) pass on the merged feature revision; the public-text scan of the diff against main found three wording hits in spec/paxeer-x-bridge (spec.kvx lines 50 and 54, qualification.kvx line 67)."
+assumption = "The lint warnings name files wave-two tasks create and the three scan hits are spec wording left unedited here, so neither blocks the wave."
