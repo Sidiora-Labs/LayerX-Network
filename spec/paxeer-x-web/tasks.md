@@ -125,7 +125,7 @@
     - Write tests/test_web_program_path.c with the make target test-web-program-path running the reference program through request, payment, observation intake and web_read, and interop/crates/x-websearch/tests/kernel.rs asserting the sidecar's activity bytes equal tests/fixtures/web/observation-activity.hex and covering the watch against a recorded gateway exchange.
     - Route web observation intake through the programs module context so the committed answers live in the storage lx_web_committed_read reads (observation 1.8.2), and cover it in tests/test_web_program_path.c by reading an answer committed at intake back through web_read.
     - _Requirements: 11.1, 11.2, 11.3, 11.4_
-  - [ ] 2.3 Package the sidecar and add it to the node image
+  - [x] 2.3 Package the sidecar and add it to the node image
     - Write interop/deploy/x-websearch/Dockerfile building x-websearch from the interop workspace on pinned base images in the shape of interop/deploy/mirror/Dockerfile, running as a non-root user, and interop/deploy/x-websearch/x-websearch.service with a dedicated user, the three key-file environment variables and a hardened sandbox.
     - Write interop/deploy/x-websearch/config.example.json with placeholder asset ids, prices and trust inputs the loader refuses, allow_loopback false, and a note field stating the price rule of one tenth of a US cent per request at the time of configuration.
     - Add an x-websearch service to docker/docker-compose.yml beside the node services, and add a build stage to the root Dockerfile that builds x-websearch and copies it into the node image.

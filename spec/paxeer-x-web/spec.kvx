@@ -563,7 +563,7 @@ reqs = ["11.1","11.2","11.3","11.4"]
 
 [task.2.3]
 title = "Package the sidecar and add it to the node image"
-status = "pending"
+status = "done"
 wave = 2
 requires = ["1.1","1.4"]
 do_1 = "Write interop/deploy/x-websearch/Dockerfile building x-websearch from the interop workspace on pinned base images in the shape of interop/deploy/mirror/Dockerfile, running as a non-root user, and interop/deploy/x-websearch/x-websearch.service with a dedicated user, the three key-file environment variables and a hardened sandbox."
@@ -575,6 +575,10 @@ symbols = ["x-websearch.service","x-websearch-image"]
 touches = ["interop/deploy/x-websearch/Dockerfile","interop/deploy/x-websearch/x-websearch.service","interop/deploy/x-websearch/config.example.json","interop/deploy/x-websearch/tests/packaging-check.sh","docker/docker-compose.yml","Dockerfile"]
 tests = ["interop/deploy/x-websearch/tests/packaging-check.sh"]
 reqs = ["12.1","12.2","12.3"]
+revision = "a9171bc99760fe8d1709ace1bba34d3db5cf9db6"
+command = "timeout 20m sh -c 'bash interop/deploy/x-websearch/tests/packaging-check.sh'"
+exit_code = 0
+log_path = ".logs/verify.log"
 
 [task.2.4]
 title = "Write the v6.8 upgrade plan that wires xweb into the application"
