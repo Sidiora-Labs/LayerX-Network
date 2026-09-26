@@ -6,11 +6,14 @@ use std::time::Duration;
 use x_websearch::canonical::{content_digest, digest_hex, CanonicalContent, ContentKind};
 use x_websearch::content::ContentStore;
 use x_websearch::index::WebIndex;
+use x_websearch::payment::{hex as hex_of, system_clock, PaymentGate, PAYMENT_REQUIRED};
+use x_websearch::search::register;
 use x_websearch::search::{
     search, search_canonical_bytes, search_route, search_text, SearchError, SearchResult,
     MAX_QUERY_BYTES, MAX_RESULTS, SEARCH_MEDIA_TYPE,
 };
-use x_websearch::{Limits, Request, Route, RouteTable, Server};
+use x_websearch::server::RouteError;
+use x_websearch::{Config, KeyFiles, Limits, Request, Route, RouteTable, Server};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -288,6 +291,102 @@ fn the_search_route_answers_with_the_results_and_stores_their_canonical_bytes() 
             "{target}"
         );
     }
+    server.shutdown()?;
+    Ok(())
+}
+
+/// A payment gate over the committed configuration, its data under `dir`, and
+/// a receiver key drawn fresh from the operating system for this test only.
+fn gate(dir: &std::path::Path) -> Result<Arc<PaymentGate>, Box<dyn std::error::Error>> {
+    use std::io::Read as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/config/valid.json");
+    let mut config: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture)?)?;
+    config["data_dir"] = serde_json::json!(dir.join("data"));
+    let config = Config::parse(&config.to_string())?;
+    let mut secret = [0_u8; 32];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut secret)?;
+    let key = dir.join("receiver.key");
+    std::fs::write(&key, hex_of(&secret))?;
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600))?;
+    let files = KeyFiles {
+        attestor: None,
+        submitter: None,
+        receiver: key,
+    };
+    let receiver = files.load()?.receiver().clone();
+    Ok(Arc::new(PaymentGate::new(
+        &config,
+        &receiver,
+        x_websearch::conformance_suite()?,
+        system_clock,
+    )?))
+}
+
+/// The currencies of the offers a `PAYMENT-REQUIRED` header carries.
+fn offered(head: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    use base64::Engine as _;
+    let header = head
+        .split("\r\n")
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case(PAYMENT_REQUIRED)
+                .then(|| value.trim().to_owned())
+        })
+        .ok_or("no PAYMENT-REQUIRED header")?;
+    let required: serde_json::Value =
+        serde_json::from_slice(&base64::engine::general_purpose::STANDARD.decode(header)?)?;
+    Ok(required["accepts"]
+        .as_array()
+        .ok_or("no accepts")?
+        .iter()
+        .filter_map(|offer| offer.pointer("/extra/layerx/currency")?.as_str())
+        .map(str::to_owned)
+        .collect())
+}
+
+fn get_head(
+    address: SocketAddr,
+    target: &str,
+) -> Result<(u16, String), Box<dyn std::error::Error>> {
+    let mut stream = TcpStream::connect(address)?;
+    stream.write_all(format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").as_bytes())?;
+    stream.set_read_timeout(Some(Duration::from_secs(15)))?;
+    let mut bytes = Vec::new();
+    stream.read_to_end(&mut bytes)?;
+    let split = bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or("no header terminator")?;
+    let head = String::from_utf8(bytes[..split].to_vec())?;
+    let status = head.split(' ').nth(1).ok_or("no status")?.parse()?;
+    Ok((status, head))
+}
+
+#[test]
+fn the_search_route_is_registered_behind_the_payment_gate() -> TestResult {
+    let vector = vector()?;
+    let scratch = Scratch::new("gated")?;
+    let gate = gate(&scratch.0)?;
+    let index = Arc::new(indexed(&scratch, vector.documents.iter())?);
+    let store = Arc::new(ContentStore::open(&scratch.0, &[])?);
+    let mut routes = RouteTable::new();
+    register(&mut routes, &gate, &index, &store)?;
+    assert_eq!(
+        register(&mut routes, &gate, &index, &store),
+        Err(RouteError::AlreadySet)
+    );
+    let server = Server::bind("127.0.0.1:0".parse()?, Limits::default(), routes)?.spawn()?;
+
+    let (status, head) = get_head(server.local_addr(), "/search?q=harbour")?;
+    assert_eq!(status, 402);
+    assert_eq!(offered(&head)?, ["SID", "PAX", "USDC", "USDL"]);
+    assert_eq!(
+        store.get(&vector.digest)?,
+        None,
+        "an unpaid search releases nothing"
+    );
     server.shutdown()?;
     Ok(())
 }

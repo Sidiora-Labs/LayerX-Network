@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::canonical::{self, CanonicalContent};
 use crate::fetch::{self, Fetcher, HttpClient, Url};
+use crate::payment::PaymentGate;
 use crate::server::{Request, Response, Route, RouteError, RouteTable};
 
 /// The largest canonical encoding the store keeps or accepts from a peer.
@@ -18,12 +19,6 @@ pub const PEER_HEADER: &str = "X-Websearch-Peer";
 
 const PEER_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const PEER_TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// The payment gate a paid resource is served behind. It receives the request
-/// and the resource and decides whether and how the resource is released.
-pub trait PaymentHook: Send + Sync {
-    fn serve(&self, request: &Request, resource: &dyn Fn(&Request) -> Response) -> Response;
-}
 
 /// Canonical bytes stored under their digest in the data directory.
 pub struct ContentStore {
@@ -192,26 +187,23 @@ impl ContentStore {
     }
 }
 
-/// Registers `GET /fetch` and `GET /content/<digest>` behind the payment
-/// hook.
+/// Registers `GET /fetch` behind the payment gate and `GET /content/<digest>`
+/// unpaid.
 ///
 /// # Errors
 /// Refuses a route that already has a handler.
 pub fn register(
     routes: &mut RouteTable,
-    hook: &Arc<dyn PaymentHook>,
+    gate: &Arc<PaymentGate>,
     fetcher: &Arc<Fetcher>,
     store: &Arc<ContentStore>,
 ) -> Result<(), RouteError> {
-    let (fetch_hook, fetch_fetcher, fetch_store) =
-        (Arc::clone(hook), Arc::clone(fetcher), Arc::clone(store));
-    routes.set(Route::Fetch, move |request: &Request| {
-        fetch_hook.serve(request, &|request: &Request| {
-            fetch::fetch_route(&fetch_fetcher, &fetch_store, request)
-        })
+    let (fetch_fetcher, fetch_store) = (Arc::clone(fetcher), Arc::clone(store));
+    PaymentGate::install(gate, routes, Route::Fetch, move |request: &Request| {
+        fetch::fetch_route(&fetch_fetcher, &fetch_store, request)
     })?;
-    let (content_hook, content_store) = (Arc::clone(hook), Arc::clone(store));
+    let content_store = Arc::clone(store);
     routes.set(Route::Content, move |request: &Request| {
-        content_hook.serve(request, &|request: &Request| content_store.handle(request))
+        content_store.handle(request)
     })
 }

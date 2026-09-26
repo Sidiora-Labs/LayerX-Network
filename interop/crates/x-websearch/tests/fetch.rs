@@ -12,7 +12,7 @@ use x_websearch::canonical::{
 };
 use x_websearch::config::{FetchLimits, BODY_LIMIT_BYTES};
 use x_websearch::content::ContentStore;
-use x_websearch::extract::{extract, html_text, ExtractError, Extracted};
+use x_websearch::extract::{extract, html_text, parse_content_type, ExtractError, Extracted};
 use x_websearch::fetch::{destination_permitted, fetch_route, FetchError, Fetcher, Url};
 use x_websearch::robots::Robots;
 use x_websearch::{Limits, Request, Route, RouteTable, RunningServer, Server};
@@ -329,6 +329,18 @@ fn committed_pages_extract_to_the_committed_text_and_digest() -> TestResult {
         assert_eq!(page.url, url);
         assert_eq!(page.final_url, url);
         assert_eq!(
+            page.body,
+            std::fs::read(site_dir().join(vector.path.trim_start_matches('/')))?,
+            "{}",
+            vector.path
+        );
+        assert_eq!(
+            page.charset,
+            parse_content_type(&vector.content_type)?.1,
+            "{}",
+            vector.path
+        );
+        assert_eq!(
             page.canonical,
             canonical_bytes(
                 ContentKind::Fetch,
@@ -384,6 +396,16 @@ fn two_fetches_of_the_same_page_agree_on_the_digest() -> TestResult {
     let c = three.fetch(&third.url("/index.html"))?;
     assert_eq!(a.text, b.text);
     assert_eq!(a.text, c.text);
+    let body = std::fs::read(site_dir().join("index.html"))?;
+    assert_eq!((&a.body, &b.body, &c.body), (&body, &body, &body));
+    assert_eq!(
+        (
+            a.charset.as_deref(),
+            b.charset.as_deref(),
+            c.charset.as_deref()
+        ),
+        (None, Some("utf-8"), None)
+    );
     assert_eq!(
         (a.media_type.as_str(), c.media_type.as_str()),
         ("text/html", "text/html")

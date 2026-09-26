@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use crate::canonical;
 use crate::config::{CrawlConfig, MAX_DEPTH, MAX_PAGES_PER_CYCLE, MAX_POLITENESS_DELAY_MS};
-use crate::extract::{self, ExtractError};
-use crate::fetch::{FetchError, Fetcher, HttpClient, Url};
+use crate::extract;
+use crate::fetch::{FetchError, FetchedPage, Fetcher, Url};
 use crate::index::{IndexError, WebIndex, MAX_TITLE_BYTES};
 
 /// The most links taken from one page.
@@ -53,7 +53,6 @@ impl From<&CrawlConfig> for CrawlBudget {
 #[derive(Debug)]
 pub enum CrawlError {
     InvalidBudget,
-    Fetch(FetchError),
     Index(IndexError),
 }
 
@@ -61,7 +60,6 @@ impl std::fmt::Display for CrawlError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidBudget => f.write_str("invalid_crawl_budget"),
-            Self::Fetch(error) => error.fmt(f),
             Self::Index(error) => error.fmt(f),
         }
     }
@@ -80,7 +78,8 @@ impl From<IndexError> for CrawlError {
 pub enum PageOutcome {
     /// The page was indexed and `links` new URLs were queued from it.
     Indexed { links: usize },
-    /// The page was indexed but its links could not be read.
+    /// The page was indexed but its fetched markup could not be decoded
+    /// for links.
     IndexedWithoutLinks(FetchError),
     /// The fetch path refused the page; nothing was indexed.
     Refused(FetchError),
@@ -132,11 +131,11 @@ impl CrawlReport {
 }
 
 /// Walks the seed list breadth first through the fetch path, within the
-/// budget, and writes each page into the index.
+/// budget, and writes each page into the index. Each page is requested once:
+/// its links are read from the body the fetch path already admitted.
 pub struct Crawler {
     budget: CrawlBudget,
     fetcher: Arc<Fetcher>,
-    client: HttpClient,
     index: Arc<WebIndex>,
     last_request: HashMap<String, Instant>,
 }
@@ -279,8 +278,7 @@ pub fn links(html: &str) -> Vec<String> {
 
 impl Crawler {
     /// # Errors
-    /// Refuses a zero or out-of-range budget and a client that cannot be
-    /// built under the fetcher's limits.
+    /// Refuses a zero or out-of-range budget.
     pub fn new(
         budget: CrawlBudget,
         fetcher: Arc<Fetcher>,
@@ -289,12 +287,9 @@ impl Crawler {
         if !budget.valid() {
             return Err(CrawlError::InvalidBudget);
         }
-        let client =
-            HttpClient::new(fetcher.limits().connect_timeout()).map_err(CrawlError::Fetch)?;
         Ok(Self {
             budget,
             fetcher,
-            client,
             index,
             last_request: HashMap::new(),
         })
@@ -388,7 +383,7 @@ impl Crawler {
         if !follow || page.media_type != HTML {
             return Ok(PageOutcome::Indexed { links: 0 });
         }
-        match self.page_links(&page.final_url) {
+        match page_links(&page) {
             Ok(found) => {
                 let links = found
                     .into_iter()
@@ -399,41 +394,17 @@ impl Crawler {
             Err(error) => Ok(PageOutcome::IndexedWithoutLinks(error)),
         }
     }
+}
 
-    /// Reads the links of a page the fetch path has just admitted: the same
-    /// destination check and limits, the page's final URL, no redirects.
-    fn page_links(&mut self, final_url: &str) -> Result<Vec<String>, FetchError> {
-        let url = Url::parse(final_url)?;
-        let address = self.fetcher.destination(&url)?;
-        let limits = *self.fetcher.limits();
-        let body_limit = usize::try_from(limits.max_body_bytes).unwrap_or(usize::MAX);
-        self.wait_for(&url.host);
-        let response = self.client.get(
-            &url,
-            address,
-            Instant::now() + limits.total_timeout(),
-            body_limit,
-            &[("Accept", HTML)],
-        );
-        self.last_request.insert(url.host.clone(), Instant::now());
-        let response = response?;
-        if !(200..300).contains(&response.status) {
-            return Err(FetchError::Status(response.status));
-        }
-        let content_type = response
-            .header("content-type")
-            .ok_or(FetchError::Extract(ExtractError::MissingMediaType))?;
-        let (media_type, charset) =
-            extract::parse_content_type(content_type).map_err(FetchError::Extract)?;
-        if media_type != HTML {
-            return Err(FetchError::Extract(ExtractError::UnsupportedMediaType));
-        }
-        let html =
-            canonical::decode(&response.body, charset.as_deref()).map_err(FetchError::Canonical)?;
-        Ok(links(&html)
-            .iter()
-            .filter_map(|href| url.join(href).ok())
-            .map(|link| link.to_string())
-            .collect())
-    }
+/// The links of an HTML page the fetch path has just admitted, read from the
+/// body it fetched and resolved against the page's final URL.
+fn page_links(page: &FetchedPage) -> Result<Vec<String>, FetchError> {
+    let url = Url::parse(&page.final_url)?;
+    let html =
+        canonical::decode(&page.body, page.charset.as_deref()).map_err(FetchError::Canonical)?;
+    Ok(links(&html)
+        .iter()
+        .filter_map(|href| url.join(href).ok())
+        .map(|link| link.to_string())
+        .collect())
 }

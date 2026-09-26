@@ -117,3 +117,12 @@ symbol = "Crawler::page_links"
 observed = "Fetcher::fetch returns only the canonical text, so the crawler reads an HTML page's links with a second GET of the admitted final URL under the same destination check, limits and politeness delay; src/main.rs does not yet start the crawler or register /search, and /search is registered through the content module's PaymentHook because PaymentGate is not on the feature branch."
 assumption = "Exposing the fetched body from fetch.rs, wiring the crawl loop and routes into main.rs and binding /search to PaymentGate are integration changes owned by the feature, outside this task's touches."
 severity = "note"
+closed = "Task 1.13 returns the raw body from Fetcher::fetch, reads links from it, starts the crawler and installs /search and /fetch behind PaymentGate in src/main.rs."
+
+[observation.1.13.1]
+task = "1.13"
+file = "interop/crates/x-websearch/src/main.rs"
+symbol = "CRAWL_INTERVAL"
+observed = "The configuration has no crawl interval and no signal handling is reachable without a new crate (unsafe_code is denied and Cargo.toml is outside the touches), so cycles start every 900 seconds from a constant and SIGTERM ends the process by its default action."
+assumption = "The index commits per cycle and the content and payment stores write by rename, so termination leaves the data directory reopenable, which tests/binary.rs asserts; a configured interval and a graceful stop are feature-owned changes."
+severity = "note"

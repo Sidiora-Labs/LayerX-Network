@@ -4,8 +4,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use x_websearch::canonical::{canonical_bytes, content_digest, digest_hex, ContentKind};
-use x_websearch::content::{ContentStore, PEER_HEADER};
-use x_websearch::{Limits, Request, Response, Route, RouteTable, RunningServer, Server};
+use x_websearch::content::{self, ContentStore, PEER_HEADER};
+use x_websearch::fetch::Fetcher;
+use x_websearch::payment::{hex, system_clock, PaymentGate, PAYMENT_REQUIRED};
+use x_websearch::server::RouteError;
+use x_websearch::{
+    Config, KeyFiles, Limits, Request, Response, Route, RouteTable, RunningServer, Server,
+};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -242,5 +247,95 @@ fn the_store_refuses_non_canonical_bytes_and_drops_damaged_files() -> TestResult
             "{peer}"
         );
     }
+    Ok(())
+}
+
+/// A payment gate over the committed configuration, its data under `dir`, and
+/// a receiver key drawn fresh from the operating system for this test only.
+fn gate(dir: &std::path::Path) -> Result<Arc<PaymentGate>, Box<dyn std::error::Error>> {
+    use std::io::Read as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/config/valid.json");
+    let mut config: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture)?)?;
+    config["data_dir"] = serde_json::json!(dir.join("data"));
+    let config = Config::parse(&config.to_string())?;
+    let mut secret = [0_u8; 32];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut secret)?;
+    let key = dir.join("receiver.key");
+    std::fs::write(&key, hex(&secret))?;
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600))?;
+    let files = KeyFiles {
+        attestor: None,
+        submitter: None,
+        receiver: key,
+    };
+    let receiver = files.load()?.receiver().clone();
+    Ok(Arc::new(PaymentGate::new(
+        &config,
+        &receiver,
+        x_websearch::conformance_suite()?,
+        system_clock,
+    )?))
+}
+
+/// The currencies of the offers a `PAYMENT-REQUIRED` header carries.
+fn offered(head: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    use base64::Engine as _;
+    let header = head
+        .split("\r\n")
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case(PAYMENT_REQUIRED)
+                .then(|| value.trim().to_owned())
+        })
+        .ok_or("no PAYMENT-REQUIRED header")?;
+    let required: serde_json::Value =
+        serde_json::from_slice(&base64::engine::general_purpose::STANDARD.decode(header)?)?;
+    Ok(required["accepts"]
+        .as_array()
+        .ok_or("no accepts")?
+        .iter()
+        .filter_map(|offer| offer.pointer("/extra/layerx/currency")?.as_str())
+        .map(str::to_owned)
+        .collect())
+}
+
+#[test]
+fn content_is_served_unpaid_and_fetch_only_behind_the_payment_gate() -> TestResult {
+    let scratch = Scratch::new("gated")?;
+    let gate = gate(&scratch.0)?;
+    let store = Arc::new(ContentStore::open(&scratch.0, &[])?);
+    let fetcher = Arc::new(Fetcher::new(x_websearch::config::FetchLimits {
+        connect_timeout_ms: 3_000,
+        total_timeout_ms: 10_000,
+        max_body_bytes: x_websearch::config::BODY_LIMIT_BYTES,
+        max_redirects: 3,
+        allow_loopback: true,
+    })?);
+    let mut routes = RouteTable::new();
+    content::register(&mut routes, &gate, &fetcher, &store)?;
+    assert_eq!(
+        content::register(&mut routes, &gate, &fetcher, &store),
+        Err(RouteError::AlreadySet)
+    );
+    let server = serve(routes)?;
+    let bytes = page("served without payment")?;
+    let digest = store.put(&bytes)?;
+
+    let (status, head, body) = get(
+        server.local_addr(),
+        &format!("/content/{}", digest_hex(&digest)),
+        "",
+    )?;
+    assert_eq!((status, body), (200, bytes));
+    assert!(!head.to_ascii_uppercase().contains(PAYMENT_REQUIRED));
+
+    let target = format!("/fetch?url=http://{}/plain.txt", server.local_addr());
+    let (status, head, _) = get(server.local_addr(), &target, "")?;
+    assert_eq!(status, 402);
+    assert_eq!(offered(&head)?, ["SID", "PAX", "USDC", "USDL"]);
+    assert_eq!(std::fs::read_dir(store.directory())?.count(), 1);
+    server.shutdown()?;
     Ok(())
 }

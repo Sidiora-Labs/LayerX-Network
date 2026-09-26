@@ -715,7 +715,9 @@ impl HttpClient {
 }
 
 /// A fetched page: the requested URL, where it was finally read from, the
-/// canonical text and media type, the canonical bytes and their digest.
+/// canonical text and media type, the canonical bytes and their digest, and
+/// the raw body with the charset it declared, so a reader of the markup
+/// needs no second request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FetchedPage {
     pub url: String,
@@ -724,6 +726,8 @@ pub struct FetchedPage {
     pub text: String,
     pub canonical: Vec<u8>,
     pub digest: [u8; 32],
+    pub body: Vec<u8>,
+    pub charset: Option<String>,
 }
 
 /// Fetches pages under the configured limits, destination rules and
@@ -869,9 +873,14 @@ impl Fetcher {
             )?;
             match response.status {
                 200..=299 => {
-                    let extracted =
-                        extract::extract(response.header("content-type"), &response.body)
-                            .map_err(FetchError::Extract)?;
+                    let content_type = response.header("content-type");
+                    let extracted = extract::extract(content_type, &response.body)
+                        .map_err(FetchError::Extract)?;
+                    let charset = content_type
+                        .map(extract::parse_content_type)
+                        .transpose()
+                        .map_err(FetchError::Extract)?
+                        .and_then(|(_, charset)| charset);
                     let canonical = canonical::canonical_bytes(
                         ContentKind::Fetch,
                         url.as_bytes(),
@@ -889,6 +898,8 @@ impl Fetcher {
                         text: extracted.text,
                         digest: canonical::content_digest(&canonical),
                         canonical,
+                        body: response.body,
+                        charset,
                     });
                 }
                 status if redirect(status) => {

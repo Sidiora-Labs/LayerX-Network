@@ -11,8 +11,9 @@ use tantivy::tokenizer::TokenStream as _;
 use tantivy::{Score, TantivyDocument, Term};
 
 use crate::canonical::{self, CanonicalError, ContentKind};
-use crate::content::{ContentStore, PaymentHook};
+use crate::content::ContentStore;
 use crate::index::{IndexError, WebIndex};
+use crate::payment::PaymentGate;
 use crate::server::{QueryError, Request, Response, Route, RouteError, RouteTable};
 
 /// The most results a search returns.
@@ -272,20 +273,18 @@ pub fn search_route(index: &WebIndex, store: &ContentStore, request: &Request) -
     )
 }
 
-/// Registers `GET /search` behind the payment hook.
+/// Registers `GET /search` behind the payment gate.
 ///
 /// # Errors
 /// Refuses a route that already has a handler.
 pub fn register(
     routes: &mut RouteTable,
-    hook: &Arc<dyn PaymentHook>,
+    gate: &Arc<PaymentGate>,
     index: &Arc<WebIndex>,
     store: &Arc<ContentStore>,
 ) -> Result<(), RouteError> {
-    let (hook, index, store) = (Arc::clone(hook), Arc::clone(index), Arc::clone(store));
-    routes.set(Route::Search, move |request: &Request| {
-        hook.serve(request, &|request: &Request| {
-            search_route(&index, &store, request)
-        })
+    let (index, store) = (Arc::clone(index), Arc::clone(store));
+    PaymentGate::install(gate, routes, Route::Search, move |request: &Request| {
+        search_route(&index, &store, request)
     })
 }

@@ -237,7 +237,7 @@ fn a_crawl_walks_the_site_breadth_first_to_the_maximum_depth_under_robots_txt() 
     assert_eq!(site.count("/private/ledger.html"), 0);
     assert_eq!(site.count("/guides/deep/abyss.html"), 0);
     assert_eq!(site.count("/robots.txt"), 1);
-    assert_eq!(site.count("/index.html"), 2);
+    assert_eq!(site.count("/index.html"), 1);
     assert_eq!(site.count("/notes.txt"), 1);
     assert_eq!(site.count("/guides/deep/currents.html"), 1);
 
@@ -343,7 +343,6 @@ fn requests_to_one_host_are_spaced_by_the_politeness_delay() -> TestResult {
         paths,
         [
             "/index.html",
-            "/index.html",
             "/guides/tides.html",
             "/guides/boats.html",
             "/notes.txt",
@@ -353,7 +352,7 @@ fn requests_to_one_host_are_spaced_by_the_politeness_delay() -> TestResult {
         let gap = pair[1].1.duration_since(pair[0].1);
         assert!(gap >= delay, "{} after {}: {gap:?}", pair[1].0, pair[0].0);
     }
-    assert!(elapsed >= delay * 4);
+    assert!(elapsed >= delay * 3);
     Ok(())
 }
 
@@ -411,7 +410,40 @@ fn a_re_crawl_replaces_the_document_of_each_page() -> TestResult {
     let after = search(&index, "neaps")?;
     assert_eq!(after.len(), 1);
     assert_eq!(after[0].result.url, tides);
-    assert_eq!(site.count("/guides/tides.html"), 4);
+    assert_eq!(site.count("/guides/tides.html"), 2);
+    Ok(())
+}
+
+#[test]
+fn each_page_is_fetched_once_and_its_links_are_read_from_that_fetch() -> TestResult {
+    let scratch = Scratch::new("single")?;
+    let site = Site::start(&fixture_site(), "127.0.0.1")?;
+    let (mut crawler, index) = crawler(&scratch, budget(100, 100, 2, 1), true)?;
+    let report = crawler.run_cycle(&[site.url("/index.html")])?;
+
+    let fetched: Vec<String> = site
+        .requests()
+        .into_iter()
+        .map(|(path, _)| path)
+        .filter(|path| path != "/robots.txt")
+        .collect();
+    let admitted: Vec<String> = report
+        .pages
+        .iter()
+        .filter(|page| report.refusal(&page.url).is_none())
+        .map(|page| page.url.clone())
+        .collect();
+    let requested: Vec<String> = fetched.iter().map(|path| site.url(path)).collect();
+    assert_eq!(requested, admitted);
+    for path in &fetched {
+        assert_eq!(site.count(path), 1, "{path}");
+    }
+    assert_eq!(report.pages[0].outcome, PageOutcome::Indexed { links: 4 });
+    assert!(report
+        .pages
+        .iter()
+        .all(|page| !matches!(page.outcome, PageOutcome::IndexedWithoutLinks(_))));
+    assert_eq!(index.num_docs(), 6);
     Ok(())
 }
 
