@@ -2,28 +2,38 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use layerx_agentd::capability::CapabilityId;
+use layerx_agentd::budget::{BudgetLimiter, LimitConfig, LimitId, LimitScope};
+use layerx_agentd::capability::{Capability, CapabilityDimensions, CapabilityId, RateCeiling};
+use layerx_agentd::identity::{
+    register, CoreIdentity, IdentityError, IdentityResolver, ProtocolAuthority,
+};
 use layerx_agentd::policy::approval::{
     ApprovalContext, ApprovalRegistry, ApprovalState, ApproverId,
 };
-use layerx_agentd::session::SessionId;
-use layerx_agentd::store::TenantId;
+use layerx_agentd::prepare::PreparationLifecycle;
+use layerx_agentd::session::{open, OpenRequest, SessionId, SessionRegistry};
+use layerx_agentd::session_control::SessionControl;
+use layerx_agentd::store::{Store, TenantId};
 use layerx_mcp::approval::{approve, reject, ApprovalPolicy};
+use layerx_mcp::boundary::{AgentSurface, ProgramReads};
 use layerx_mcp::catalogue::{self, ArgumentError, WEB_TOOLS};
+use layerx_mcp::server::{Server, WebBoundary, WebRoute};
+use layerx_mcp::stdio::{Bound, Session};
 use layerx_mcp::tools::web::{
     canonical_bytes, content_digest, web_tool, Currency, ExactTerms, GrantTerms, Scheme,
     WebApproval, WebCall, WebConfig, WebContent, WebFetch, WebOperation, WebPayer, WebPayerError,
     WebResult, WebSearch, WebToolError,
 };
 use layerx_types::ids::Did;
+use layerx_types::verify::VerificationLevel;
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 use sha3::Keccak256;
@@ -31,6 +41,11 @@ use sha3::Keccak256;
 const NETWORK: &str = "layerx:1";
 const RECORDED_FETCH_URL: &str = "paxeer";
 const TAMPERED_PAYER: &str = "4aa4897f08c81fcd9b003dfb8f4a369a9ed828f91ab228e04b14e02f03727aaf";
+const ROUTED_FETCH_URL: &str = "https://paxeer.app/index.html";
+const OBSERVED_SEQUENCE: u64 = 50;
+const AGENT_BEARER: &str = "agent-bearer-0123456789abcdef0123456789abcdef";
+
+static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
 fn fixture(name: &str) -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -77,6 +92,7 @@ fn hex(bytes: &[u8]) -> String {
 struct Script {
     fetch_body: Option<Vec<u8>>,
     content: Option<(String, Vec<u8>)>,
+    served: Vec<(String, Vec<u8>)>,
     tamper_payer: bool,
     pending_first: bool,
     refuse_settlement: bool,
@@ -215,8 +231,9 @@ fn answer(mut stream: TcpStream, exchange: &[Value], script: &Script, signatures
     };
     let content = script
         .content
-        .as_ref()
-        .filter(|(target, _)| *target == incoming.target);
+        .iter()
+        .chain(script.served.iter())
+        .find(|(target, _)| *target == incoming.target);
     let target = if content.is_some() {
         format!("/fetch?url={RECORDED_FETCH_URL}")
     } else {
@@ -441,24 +458,23 @@ fn vectors() -> Vec<Value> {
 }
 
 fn fetch_body(tamper_text: bool) -> (Vec<u8>, [u8; 32]) {
+    fetch_answer(RECORDED_FETCH_URL, tamper_text)
+}
+
+fn fetch_answer(url: &str, tamper_text: bool) -> (Vec<u8>, [u8; 32]) {
     let vector = &vectors()[1];
     let media_type = text(vector, "/media_type");
     let page = text(vector, "/text");
-    let digest: [u8; 32] = Keccak256::digest(reference_canonical(
-        1,
-        RECORDED_FETCH_URL.as_bytes(),
-        media_type,
-        page,
-    ))
-    .into();
+    let digest: [u8; 32] =
+        Keccak256::digest(reference_canonical(1, url.as_bytes(), media_type, page)).into();
     let served = if tamper_text {
         format!("{page} altered")
     } else {
         page.to_owned()
     };
     let body = json!({
-        "url": RECORDED_FETCH_URL,
-        "final_url": RECORDED_FETCH_URL,
+        "url": url,
+        "final_url": url,
         "media_type": media_type,
         "digest": hex(&digest),
         "length": served.len(),
@@ -1013,4 +1029,425 @@ fn configuration_fails_closed_naming_the_field() {
         )),
         "pending_attempts"
     );
+}
+
+struct BoundaryIdentity(CoreIdentity);
+
+impl IdentityResolver for BoundaryIdentity {
+    fn resolve(&mut self, _did: &Did) -> Result<Option<CoreIdentity>, IdentityError> {
+        Ok(Some(self.0.clone()))
+    }
+}
+
+fn directory(label: &str) -> PathBuf {
+    let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "layerx-mcp-web-{label}-{}-{sequence}",
+        std::process::id()
+    ))
+}
+
+/// Replays the verified program balance route of the agent daemon on
+/// loopback, so the bound server reads its core sequence the ordinary way.
+fn agent_daemon() -> String {
+    let listener =
+        TcpListener::bind("127.0.0.1:0").unwrap_or_else(|error| panic!("agent listener: {error}"));
+    let endpoint = listener
+        .local_addr()
+        .unwrap_or_else(|error| panic!("agent address: {error}"))
+        .to_string();
+    thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let Some(incoming) = read_request(&stream) else {
+                continue;
+            };
+            let bearer = format!("Bearer {AGENT_BEARER}");
+            let authorized = header(&incoming, "Authorization") == Some(bearer.as_str());
+            let program = incoming
+                .target
+                .strip_prefix("/v1/programs/")
+                .and_then(|rest| rest.strip_suffix("/balances"));
+            let (status, body) = match program {
+                Some(program) if authorized => (
+                    200,
+                    json!({
+                        "program": program,
+                        "lifecycle": "active",
+                        "accounts": [],
+                        "freshness": {
+                            "observed_sequence": OBSERVED_SEQUENCE,
+                            "observed_at": 1,
+                            "receipt_digest": "33".repeat(32),
+                            "state_root": "44".repeat(32),
+                            "valid_through": 400,
+                        },
+                    }),
+                ),
+                Some(_) => (401, json!({"error": "unauthorized"})),
+                None => (404, json!({"error": "not_found"})),
+            };
+            respond(&mut stream, status, &[], body.to_string().as_bytes());
+        }
+    });
+    endpoint
+}
+
+/// A server bound to a daemon session whose agent is the recorded payer and
+/// whose scopes serve exactly the three web tools.
+fn bound_server(root: &Path) -> Server {
+    let tenant = TenantId::new("tenant-a").unwrap_or_else(|error| panic!("tenant: {error}"));
+    let capability = Capability::new(
+        CapabilityId([9; 32]),
+        tenant.clone(),
+        CapabilityDimensions {
+            activity_types: BTreeSet::from([7]),
+            counterparties: BTreeSet::from([[2; 32]]),
+            assets: BTreeSet::from([[3; 32]]),
+            amount_ceiling: 100,
+            rate_ceiling: RateCeiling {
+                maximum_uses: 2,
+                window_sequences: 10,
+            },
+            purposes: BTreeSet::from(["service-payment".to_owned()]),
+            expiry_sequence: 200,
+        },
+    )
+    .unwrap_or_else(|error| panic!("capability: {error:?}"));
+    let mut store =
+        Store::open(root.join("store")).unwrap_or_else(|error| panic!("store: {error}"));
+    capability
+        .persist(&mut store)
+        .unwrap_or_else(|error| panic!("capability persist: {error:?}"));
+    let agent = Did::new(payer_did().as_bytes()).unwrap_or_else(|error| panic!("DID: {error:?}"));
+    let mut resolver = BoundaryIdentity(CoreIdentity {
+        canonical_bytes: b"payer-identity".to_vec(),
+        head_sequence: 10,
+        revocation_sequence: 1,
+        verification_level: VerificationLevel::STATE_PROVEN,
+        frozen: false,
+        authorities: vec![ProtocolAuthority::CapabilityGrant(capability.id.0)],
+    });
+    let identity = register(&mut store, tenant.clone(), agent.clone(), &mut resolver)
+        .unwrap_or_else(|error| panic!("identity: {error:?}"));
+    let mut sessions = SessionRegistry::default();
+    let token = open(
+        &mut store,
+        &mut sessions,
+        &identity,
+        OpenRequest {
+            session_id: SessionId([7; 32]),
+            token_id: [8; 32],
+            tenant,
+            agent,
+            authority: ProtocolAuthority::CapabilityGrant(capability.id.0),
+            permitted_activity_types: BTreeSet::from([7]),
+            scopes: BTreeSet::from([
+                "write".to_owned(),
+                "write:web:search".to_owned(),
+                "write:web:fetch".to_owned(),
+                "write:web:content".to_owned(),
+            ]),
+            expiry_sequence: 150,
+            opening_client: "mcp".to_owned(),
+            policy_version: "policy-v1".to_owned(),
+        },
+        OBSERVED_SEQUENCE,
+    )
+    .unwrap_or_else(|error| panic!("session: {error:?}"));
+    let budgets = BudgetLimiter::new(vec![LimitConfig {
+        id: LimitId([9; 16]),
+        name: "mcp-limit".to_owned(),
+        scope: LimitScope::Tenant([1; 32]),
+        ceiling: 1_000,
+        consumed: 0,
+    }])
+    .unwrap_or_else(|error| panic!("limiter: {error:?}"));
+    let control = SessionControl::new(
+        Arc::new(Mutex::new(store)),
+        sessions,
+        Arc::new(PreparationLifecycle::default()),
+        Arc::new(budgets),
+    );
+    Server::bind(
+        control,
+        token.credential(),
+        capability.id,
+        OBSERVED_SEQUENCE,
+        root,
+    )
+    .unwrap_or_else(|error| panic!("bind: {error:?}"))
+}
+
+fn web_session(
+    replay: &Replay,
+    approvals: &Arc<ApprovalRegistry>,
+    threshold: u128,
+    root: &Path,
+) -> Session<WebBoundary<ProgramReads>> {
+    let server = bound_server(root);
+    let surface = AgentSurface::new(
+        &agent_daemon(),
+        AGENT_BEARER.to_owned(),
+        &"55".repeat(32),
+        Duration::from_secs(5),
+    )
+    .unwrap_or_else(|error| panic!("agent surface: {error:?}"));
+    let route = WebRoute::new(
+        config(replay, sequencer_key()),
+        Arc::clone(approvals),
+        ApprovalPolicy {
+            amount_threshold: threshold,
+        },
+        Box::new(RecordedPayer::new()),
+    );
+    let boundary = server
+        .route_web(ProgramReads::new(surface), route)
+        .unwrap_or_else(|error| panic!("route: {error:?}"));
+    Session::new(Bound::Full(Box::new(server)), boundary)
+}
+
+fn rpc(session: &mut Session<WebBoundary<ProgramReads>>, request: &Value) -> Value {
+    session
+        .handle(&request.to_string())
+        .unwrap_or_else(|| panic!("no answer to {request}"))
+}
+
+fn call(session: &mut Session<WebBoundary<ProgramReads>>, name: &str, arguments: &Value) -> Value {
+    let answer = rpc(
+        session,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        }),
+    );
+    answer
+        .get("result")
+        .cloned()
+        .unwrap_or_else(|| panic!("tools/call {name}: {answer}"))
+}
+
+fn search_arguments() -> Value {
+    json!({
+        "query": "paxeer",
+        "currency": "SID",
+        "scheme": "metered",
+        "idempotency_key": hex(&metered_key()),
+    })
+}
+
+fn paid(result: &Value, tool: &str) -> Value {
+    assert_eq!(result["isError"], false, "{tool}: {result}");
+    let structured = &result["structuredContent"];
+    assert_eq!(structured["tool"], tool);
+    let evidence = structured["result"].clone();
+    assert_eq!(evidence["_meta"]["layerx/output"], "untrusted", "{tool}");
+    assert_eq!(evidence["untrusted"], true);
+    assert_eq!(evidence["tool"], tool);
+    assert_eq!(
+        evidence["settlement"]["verificationLevel"],
+        "sequencer-signed"
+    );
+    let rendered = result["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{tool} text content"));
+    assert!(
+        rendered.contains("\"layerx/output\": \"untrusted\""),
+        "{tool}"
+    );
+    evidence
+}
+
+fn refusal(result: &Value) -> String {
+    assert_eq!(result["isError"], true, "{result}");
+    result["structuredContent"]["refusal"]
+        .as_str()
+        .unwrap_or_else(|| panic!("refusal text: {result}"))
+        .to_owned()
+}
+
+fn assert_web_listing(session: &mut Session<WebBoundary<ProgramReads>>) {
+    let listed = rpc(
+        session,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+    );
+    let tools = listed["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools/list: {listed}"));
+    let names: Vec<&str> = tools
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert_eq!(names, ["web.search", "web.fetch", "web.content"]);
+    for tool in tools {
+        assert_eq!(tool["_meta"]["layerx/output"], "untrusted");
+        assert_eq!(tool["annotations"]["readOnlyHint"], false);
+        assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+    }
+}
+
+fn assert_unpaid_refusals(session: &mut Session<WebBoundary<ProgramReads>>, replay: &Replay) {
+    let unserved = rpc(
+        session,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "wallet.send", "arguments": {}},
+        }),
+    );
+    assert_eq!(unserved["error"]["code"], -32602);
+    let local = call(
+        session,
+        "web.fetch",
+        &json!({
+            "url": "file:///etc/passwd",
+            "currency": "USDC",
+            "scheme": "exact",
+            "idempotency_key": "5a".repeat(32),
+        }),
+    );
+    assert!(refusal(&local).contains("url"));
+    assert_eq!(local["structuredContent"]["stage"], "arguments");
+    assert_eq!(replay.signatures(), 0);
+}
+
+#[test]
+fn a_bound_server_lists_and_pays_the_web_tools_through_tools_call() {
+    let (fetch, fetch_digest) = fetch_answer(ROUTED_FETCH_URL, false);
+    let vector = &vectors()[2];
+    let content_digest_hex = text(vector, "/digest").to_owned();
+    let canonical = reference_canonical(
+        1,
+        text(vector, "/payload").as_bytes(),
+        text(vector, "/media_type"),
+        text(vector, "/text"),
+    );
+    let replay = Replay::start(Script {
+        served: vec![
+            (
+                "/fetch?url=https%3A%2F%2Fpaxeer.app%2Findex.html".to_owned(),
+                fetch,
+            ),
+            (format!("/content/{content_digest_hex}"), canonical),
+        ],
+        ..Script::default()
+    });
+    let approvals = Arc::new(ApprovalRegistry::default());
+    let root = directory("routed");
+    let mut session = web_session(&replay, &approvals, u128::MAX, &root);
+
+    assert_web_listing(&mut session);
+    assert_unpaid_refusals(&mut session, &replay);
+
+    let search = paid(
+        &call(&mut session, "web.search", &search_arguments()),
+        "web.search",
+    );
+    assert_eq!(
+        search["settlement"]["receiptDigest"],
+        "54c4a7b999f9e107c0dd700f98dd39de2987a060a5e4b5c6e1bc324fd71e0fa5"
+    );
+    assert_eq!(search["settlement"]["amount"], "3114");
+    assert_eq!(search["content"]["results"], json!([]));
+    assert_eq!(replay.signatures(), 1);
+
+    let fetched = paid(
+        &call(
+            &mut session,
+            "web.fetch",
+            &json!({
+                "url": ROUTED_FETCH_URL,
+                "currency": "USDC",
+                "scheme": "exact",
+                "idempotency_key": "5a".repeat(32),
+            }),
+        ),
+        "web.fetch",
+    );
+    assert_eq!(
+        fetched["settlement"]["receiptDigest"],
+        "5088d0659995e37111051d23861b813c29d221021f5b6043831e9f191ca0fc36"
+    );
+    assert_eq!(fetched["content"]["url"], ROUTED_FETCH_URL);
+    assert_eq!(fetched["content"]["digest"], hex(&fetch_digest));
+    assert_eq!(fetched["content"]["text"], text(&vectors()[1], "/text"));
+    assert_eq!(replay.signatures(), 2);
+
+    let stored = paid(
+        &call(
+            &mut session,
+            "web.content",
+            &json!({
+                "digest": content_digest_hex,
+                "currency": "USDC",
+                "scheme": "exact",
+                "idempotency_key": "5b".repeat(32),
+            }),
+        ),
+        "web.content",
+    );
+    assert_eq!(stored["content"]["digest"], content_digest_hex);
+    assert_eq!(stored["content"]["media_type"], "application/json");
+    assert_eq!(stored["content"]["text"], text(vector, "/text"));
+    assert_eq!(replay.signatures(), 3);
+
+    for key in [metered_key(), [0x5a; 32], [0x5b; 32]] {
+        assert!(approvals
+            .ticket(key)
+            .unwrap_or_else(|error| panic!("ticket: {error:?}"))
+            .is_none());
+    }
+    assert_eq!(session.bound().audit_entries(), 6);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_held_web_spend_through_tools_call_is_never_paid_until_approved() {
+    let replay = Replay::start(Script::default());
+    let approvals = Arc::new(ApprovalRegistry::default());
+    let root = directory("held");
+    let mut session = web_session(&replay, &approvals, 0, &root);
+
+    let held = call(&mut session, "web.search", &search_arguments());
+    let detail = refusal(&held);
+    assert!(
+        detail.contains(&format!(
+            "held for approval under hold {}",
+            hex(&metered_key())
+        )),
+        "{detail}"
+    );
+    assert_eq!(held["structuredContent"]["stage"], "daemon");
+    assert_eq!(held["structuredContent"]["state"], "refused");
+    assert_eq!(replay.signatures(), 0);
+    let ticket = approvals
+        .ticket(metered_key())
+        .unwrap_or_else(|error| panic!("ticket: {error:?}"))
+        .unwrap_or_else(|| panic!("the spend was not held"));
+    assert_eq!(ticket.state, ApprovalState::AwaitingApproval);
+    assert_eq!(ticket.disclosure.amounts.values()[0].amount.0, 3114);
+    assert_eq!(ticket.disclosure.actor.as_str(), payer_did());
+
+    let pending = call(&mut session, "web.search", &search_arguments());
+    assert!(refusal(&pending).contains("still awaiting approval"));
+    assert_eq!(replay.signatures(), 0);
+
+    let approver = ApproverId::new("operator").unwrap_or_else(|error| panic!("{error:?}"));
+    approve(
+        &approvals,
+        ticket.hold_id,
+        approver,
+        &ticket.disclosure,
+        OBSERVED_SEQUENCE + 1,
+    )
+    .unwrap_or_else(|error| panic!("approve: {error:?}"));
+    let released = paid(
+        &call(&mut session, "web.search", &search_arguments()),
+        "web.search",
+    );
+    assert_eq!(released["settlement"]["amount"], "3114");
+    assert_eq!(replay.signatures(), 1);
+    let _ = std::fs::remove_dir_all(root);
 }

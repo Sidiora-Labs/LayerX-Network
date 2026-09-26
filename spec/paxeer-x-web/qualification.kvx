@@ -191,6 +191,7 @@ symbol = "TOOL_CATALOGUE"
 observed = "The web tools are described, validated and listed through catalogue::WEB_TOOLS and web_surface, but server.rs, which routes tools/list and tools/call for a bound server, is outside this task's touches."
 assumption = "A later task adds the web tools to the bound server's routing with a configured sidecar endpoint and payer."
 severity = "assumption"
+closed = "Task 1.16 lists catalogue::WEB_TOOLS for a bound server and routes their tools/call through Server::route_web, which pays over tools/web.rs behind the approval registry with every result marked layerx/output untrusted; tests/web.rs drives it through tools/list and tools/call at revision 4b2d4fade89e09b9e3882635e96fe1c259f79f02."
 
 [observation.1.10.3]
 task = "1.10"

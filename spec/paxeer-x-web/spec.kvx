@@ -608,7 +608,11 @@ reqs = ["4.1","4.2","9.4"]
 
 [task.1.16]
 title = "Route the web tools through the MCP server"
-status = "pending"
+status = "done"
+revision = "4b2d4fade89e09b9e3882635e96fe1c259f79f02"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path agent/Cargo.toml -p layerx-mcp --test web'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 1
 requires = ["1.10"]
 do_1 = "In agent/crates/layerx-mcp/src/server.rs list catalogue::WEB_TOOLS in tools/list and route their tools/call through tools/web.rs behind the same approval boundary the other paid tools use, carrying the layerx/output untrusted marker on every result (observation 1.10.2); change no other tool's routing."

@@ -2,19 +2,29 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::fmt::Write as _;
 use std::path::Path;
+use std::sync::Arc;
 
 use layerx_agentd::audit::{AuditError, Log};
 use layerx_agentd::capability::{Capability, CapabilityError, CapabilityId};
 use layerx_agentd::identity::ProtocolAuthority;
+use layerx_agentd::policy::approval::{ApprovalContext, ApprovalRegistry};
 use layerx_agentd::session::{SessionCredential, SessionError, SessionId, SessionRecord};
 use layerx_agentd::session_control::{OperationPermit, SessionControl, SessionControlError};
 use layerx_agentd::store::TenantId;
 use layerx_agentd::tenant::{AuthorizationError, ObjectOwner, Operation, Surface};
 use layerx_types::ids::Did;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::approval::ApprovalPolicy;
+use crate::boundary::{BoundaryRefusal, ToolBoundary};
+use crate::catalogue::{self, WEB_TOOLS};
 pub use crate::readonly::ReadOnly;
+use crate::tools::web::{
+    web_tool, WebApproval, WebCall, WebConfig, WebPayer, WebPayerError, WebToolError,
+};
 
 const MAX_ARGUMENT_BYTES: usize = 1_048_576;
 const MAX_TOOL_NAME_BYTES: usize = 128;
@@ -215,6 +225,7 @@ pub struct ScopeBinding {
     capability_id: CapabilityId,
     scopes: BTreeSet<String>,
     generation: u64,
+    policy_version: String,
 }
 
 impl fmt::Debug for ScopeBinding {
@@ -227,6 +238,7 @@ impl fmt::Debug for ScopeBinding {
             .field("capability_id", &self.capability_id)
             .field("scopes", &self.scopes)
             .field("generation", &self.generation)
+            .field("policy_version", &self.policy_version)
             .field("credential", &"[REDACTED]")
             .finish()
     }
@@ -270,6 +282,7 @@ impl ScopeBinding {
             .filter(|scope| {
                 TOOL_CATALOGUE
                     .iter()
+                    .chain(WEB_TOOLS.iter())
                     .any(|tool| tool.required_scope == scope.as_str())
             })
             .cloned()
@@ -284,6 +297,7 @@ impl ScopeBinding {
             capability_id: capability.id,
             scopes,
             generation: session.generation,
+            policy_version: session.request.policy_version.clone(),
         })
     }
 
@@ -463,6 +477,7 @@ impl Server {
         let binding = ScopeBinding::derive(session, &capability, core_sequence)?;
         let tools = TOOL_CATALOGUE
             .iter()
+            .chain(WEB_TOOLS.iter())
             .filter(|tool| {
                 binding.scopes.contains(tool.required_scope)
                     && (mode == DeploymentMode::Full || tool.kind == ToolKind::Read)
@@ -673,6 +688,46 @@ impl Server {
         self.audit.entries()
     }
 
+    /// Routes the paid web tools this binding serves through `tools/web.rs` in front of the
+    /// daemon boundary every other tool keeps using. The approval context is derived from this
+    /// binding, so a web spend is held, approved and audited against the bound tenant, agent,
+    /// session, capability and policy version.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a read-only server or a binding that serves no web tool, and a route whose payer
+    /// is not the bound agent.
+    pub fn route_web<B: ToolBoundary>(
+        &self,
+        inner: B,
+        route: WebRoute,
+    ) -> Result<WebBoundary<B>, ServerError> {
+        if self.mode != DeploymentMode::Full
+            || !self
+                .tools
+                .iter()
+                .any(|tool| catalogue::untrusted_output(tool.name))
+        {
+            return Err(ServerError::ToolAbsent);
+        }
+        if route.config.payer_did().as_bytes() != self.binding.agent.as_bytes() {
+            return Err(ServerError::CapabilityMismatch);
+        }
+        Ok(WebBoundary {
+            inner,
+            context: ApprovalContext {
+                tenant: self.binding.tenant.clone(),
+                agent: self.binding.agent.clone(),
+                session: self.binding.session_id,
+                capability: self.binding.capability_id,
+                policy_version: self.binding.policy_version.clone(),
+                request_id: [0; 32],
+            },
+            route,
+            observed: None,
+        })
+    }
+
     fn authorize_tool(
         &self,
         core_sequence: u64,
@@ -706,12 +761,175 @@ fn tool_operation(name: &str) -> Option<Operation> {
         "activity.prepare" | "activity.disclose" => Some(Operation::Prepare),
         "activity.sign" => Some(Operation::Sign),
         "activity.submit" | "wallet.send" | "token.create" | "token.mint" | "token.transfer"
-        | "grant.issue" | "grant.draw" => Some(Operation::Submit),
+        | "grant.issue" | "grant.draw" | "web.search" | "web.fetch" | "web.content" => {
+            Some(Operation::Submit)
+        }
         "activity.track" => Some(Operation::Track),
         "faucet.request" => Some(Operation::FaucetClaim),
         "activity.wait" => Some(Operation::Wait),
         _ => None,
     }
+}
+
+/// The configured x-websearch sidecar, the payer's signing boundary and the approval registry
+/// and threshold every web spend passes through.
+pub struct WebRoute {
+    config: WebConfig,
+    approvals: Arc<ApprovalRegistry>,
+    policy: ApprovalPolicy,
+    payer: Box<dyn WebPayer>,
+}
+
+impl WebRoute {
+    #[must_use]
+    pub fn new(
+        config: WebConfig,
+        approvals: Arc<ApprovalRegistry>,
+        policy: ApprovalPolicy,
+        payer: Box<dyn WebPayer>,
+    ) -> Self {
+        Self {
+            config,
+            approvals,
+            policy,
+            payer,
+        }
+    }
+}
+
+/// The boundary a bound server serves when its web tools are routed: web calls pay the
+/// sidecar through `tools/web.rs`, every other tool reaches the daemon boundary unchanged.
+pub struct WebBoundary<B: ToolBoundary> {
+    inner: B,
+    route: WebRoute,
+    context: ApprovalContext,
+    observed: Option<u64>,
+}
+
+impl<B: ToolBoundary> WebBoundary<B> {
+    fn web(&mut self, tool: ToolDefinition, arguments: &Value) -> Result<Value, BoundaryRefusal> {
+        let call = WebCall::from_arguments(tool.name, arguments)
+            .map_err(|error| BoundaryRefusal::Malformed(error.detail()))?;
+        let current_sequence = self.observed.ok_or_else(|| {
+            BoundaryRefusal::Malformed("no core sequence was observed for the web spend".to_owned())
+        })?;
+        let WebRoute {
+            config,
+            approvals,
+            policy,
+            payer,
+        } = &mut self.route;
+        let approval = WebApproval {
+            registry: approvals.as_ref(),
+            policy: *policy,
+            context: self.context.clone(),
+            current_sequence,
+        };
+        let outcome = web_tool(config, &call, &approval, payer.as_mut())
+            .map_err(|error| web_refusal(&error))?;
+        let mut evidence = outcome.evidence();
+        if let Some(fields) = evidence.as_object_mut() {
+            fields.insert("_meta".to_owned(), json!({"layerx/output": "untrusted"}));
+        }
+        Ok(evidence)
+    }
+}
+
+impl<B: ToolBoundary> ToolBoundary for WebBoundary<B> {
+    fn execute(
+        &mut self,
+        tool: ToolDefinition,
+        arguments: &Value,
+    ) -> Result<Value, BoundaryRefusal> {
+        if catalogue::untrusted_output(tool.name) {
+            self.web(tool, arguments)
+        } else {
+            self.inner.execute(tool, arguments)
+        }
+    }
+
+    fn observed_sequence(&mut self) -> Result<u64, BoundaryRefusal> {
+        let sequence = self.inner.observed_sequence()?;
+        self.observed = Some(sequence);
+        Ok(sequence)
+    }
+}
+
+/// Renders a web refusal without echoing sidecar-supplied text. A refusal whose payment may
+/// already have reached the sidecar is reported as an unknown effect.
+fn web_refusal(error: &WebToolError) -> BoundaryRefusal {
+    let refused = BoundaryRefusal::Malformed;
+    match error {
+        WebToolError::Configuration(field) => {
+            refused(format!("the web route configuration refuses {field}"))
+        }
+        WebToolError::Transport => {
+            BoundaryRefusal::Unavailable("the web sidecar is unreachable".to_owned())
+        }
+        WebToolError::Status(status) => {
+            BoundaryRefusal::Unavailable(format!("the web sidecar answered with status {status}"))
+        }
+        WebToolError::SettlementPending => {
+            BoundaryRefusal::Unavailable("the web settlement is still pending".to_owned())
+        }
+        WebToolError::Payer(WebPayerError::Unavailable) => {
+            BoundaryRefusal::Unavailable("the web payer is unavailable".to_owned())
+        }
+        WebToolError::Payer(WebPayerError::Refused) => {
+            refused("the web payer refused the spend".to_owned())
+        }
+        WebToolError::Protocol(what) => {
+            refused(format!("the web sidecar answered outside 402LXP at {what}"))
+        }
+        WebToolError::OfferUnavailable => refused(
+            "the web sidecar offers no price in the requested currency and scheme".to_owned(),
+        ),
+        WebToolError::OfferMismatch(field) => {
+            refused(format!("the web offer does not bind the {field}"))
+        }
+        WebToolError::ApprovalRequired(ticket) => refused(format!(
+            "the web spend is held for approval under hold {}",
+            hex(&ticket.hold_id)
+        )),
+        WebToolError::ApprovalPending(ticket) => refused(format!(
+            "the web spend is still awaiting approval under hold {}",
+            hex(&ticket.hold_id)
+        )),
+        WebToolError::ApprovalRefused(state) => {
+            refused(format!("the web spend approval is {state:?}"))
+        }
+        WebToolError::ApprovalChanged => {
+            refused("the web spend differs from the disclosure under approval".to_owned())
+        }
+        WebToolError::Approval(_) => {
+            refused("the approval boundary refused the web spend".to_owned())
+        }
+        WebToolError::PaymentArtifact(what) => {
+            refused(format!("the payer {what} does not bind the web offer"))
+        }
+        WebToolError::Payment(_) => refused("the 402LXP payment could not be built".to_owned()),
+        WebToolError::PaymentRejected(_) => {
+            refused("the web sidecar rejected the payment".to_owned())
+        }
+        WebToolError::SettlementRefused(_) => refused("the web settlement was refused".to_owned()),
+        WebToolError::SettlementUnverified => {
+            refused("the web settlement receipt does not verify under the sequencer key".to_owned())
+        }
+        WebToolError::SettlementMismatch => {
+            refused("the web settlement does not pay the offer from this payer".to_owned())
+        }
+        WebToolError::DigestMismatch => refused("the web content digest does not match".to_owned()),
+        WebToolError::ContentMalformed(what) => {
+            refused(format!("the web {what} answer is malformed"))
+        }
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().fold(String::new(), |mut output, byte| {
+        let _ = write!(output, "{byte:02x}");
+        output
+    })
 }
 
 #[derive(Debug)]
