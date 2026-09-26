@@ -921,7 +921,16 @@ DEPOSITOR_SOL=$(ata "$DEPOSITOR" "$WRAPPED_SOL_MINT")
 DEPOSITOR_SID=$(ata "$DEPOSITOR" "$SIDIORA_MINT")
 RECIPIENT_SOL=$(ata "$RECIPIENT" "$WRAPPED_SOL_MINT")
 RECIPIENT_SID=$(ata "$RECIPIENT" "$SIDIORA_MINT")
-spl "wrap SOL for the depositor" wrap "$WRAPPED_SOL" "$WORK/keys/depositor.json"
+# The depositor's wrapped SOL account is opened at the publisher's expense and
+# then holds exactly the SOL the depositor moves into it, so the wrapped amount
+# is not reduced by the account's rent.
+spl "open the depositor's wrapped SOL account" create-account "$WRAPPED_SOL_MINT" --owner "$DEPOSITOR"
+cli solana transfer --keypair "$WORK/keys/depositor.json" "$DEPOSITOR_SOL" "$WRAPPED_SOL" \
+    > "$WORK/wrap.log" 2>&1 || {
+    sed -e 's/^/    /' "$WORK/wrap.log" >&2
+    fail "the depositor's SOL was not moved into its wrapped SOL account"
+}
+spl "wrap SOL for the depositor" sync-native --address "$DEPOSITOR_SOL"
 spl "open the depositor's Sidiora account" create-account "$SIDIORA_MINT" --owner "$DEPOSITOR"
 spl "mint the run's Sidiora to the depositor" mint "$SIDIORA_MINT" "$((SIDIORA_MINTED / 1000000))" "$DEPOSITOR_SID" \
     --mint-authority "$WORK/keys/sidiora-authority.json"
@@ -1061,7 +1070,6 @@ cat > "$GO_PACKAGE/paxeerside_test.go" << 'GO'
 package paxeerside
 
 import (
-	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1077,23 +1085,30 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/sidiora-labs/paxeer-network/bridge/deploy/proposals"
 	bridgetestutil "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/testutil"
 	"github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
 	app "github.com/sidiora-labs/paxeer-network/node"
 	"github.com/sidiora-labs/paxeer-network/precompiles/layerxbridge"
 )
 
-func decode(t *testing.T, path string, into interface{}) {
+// decode reads one generated body through the generator's own decoder, which
+// resolves its type URL and refuses a field the message does not define.
+func decode[M any](t *testing.T, path string) M {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("%s: %v", path, err)
 	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(into); err != nil {
+	msg, err := proposals.DecodeBody(raw)
+	if err != nil {
 		t.Fatalf("%s: %v", path, err)
 	}
+	typed, ok := msg.(*M)
+	if !ok {
+		t.Fatalf("%s decoded into %T, want %T", path, msg, (*M)(nil))
+	}
+	return *typed
 }
 
 func TestPaxeerSide(t *testing.T) {
@@ -1105,13 +1120,11 @@ func TestPaxeerSide(t *testing.T) {
 	k, ctx := bridgetestutil.NewKeeper(testApp, testApp.GetContextForDeliverTx([]byte{}))
 	k.InitGenesis(ctx, *types.DefaultGenesis())
 
-	var register types.MsgRegisterChain
-	decode(t, filepath.Join(bodies, "01-register-chain.json"), &register)
+	register := decode[types.MsgRegisterChain](t, filepath.Join(bodies, "01-register-chain.json"))
 	if err := k.RegisterChain(ctx, register); err != nil {
 		t.Fatalf("01-register-chain.json: %v", err)
 	}
-	var attestors types.MsgSetAttestors
-	decode(t, filepath.Join(bodies, "02-set-attestors.json"), &attestors)
+	attestors := decode[types.MsgSetAttestors](t, filepath.Join(bodies, "02-set-attestors.json"))
 	if err := k.SetAttestors(ctx, attestors); err != nil {
 		t.Fatalf("02-set-attestors.json: %v", err)
 	}
@@ -1128,8 +1141,7 @@ func TestPaxeerSide(t *testing.T) {
 	}
 	sort.Strings(caps)
 	for _, path := range caps {
-		var capBody types.MsgSetCap
-		decode(t, path, &capBody)
+		capBody := decode[types.MsgSetCap](t, path)
 		if err := k.SetCap(ctx, capBody); err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}

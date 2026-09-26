@@ -254,3 +254,19 @@ observed = "paxd tx gov submit-proposal builds only Text content from its flags 
 assumption = "The runbook says so in one sentence and names no invented command; a submit-proposal subcommand for the bridge proposal belongs to a chain change under node/ or modules/, which the freeze and this task's touches exclude."
 severity = "blocker"
 closed = "Task 2.14 mounted BridgeProposalHandler under paxd tx gov submit-proposal as layerxbridge-proposal, which decodes 04-proposal-open-chain.json or 05-proposal-sidiora-cap.json through the application codec into the BridgeProposal content, and section 6 of the runbook shows it; the verify_cmd passed at revision 3a9dda2bcae645e1f9a070cc21495dd834395036."
+
+[observation.2.7.2]
+task = "2.7"
+file = "bridge/deploy/deploy-solana-program.sh"
+symbol = "initialise"
+observed = "With platform tools v1.56 the program builds and deploys on solana-test-validator 3.0.10, and one run initialised and registered both assets, but a later run had the admin client's initialise refused with 'Unsupported program id' right after the deploy was rooted, so no fixture was recorded."
+assumption = "The program is not yet usable by the slot the initialise lands in, which is intermittent; waiting for the deployed program to become executable before the initialise step belongs to the deploy script and was not changed within this run's repair cycles."
+severity = "blocker"
+
+[observation.2.7.3]
+task = "2.6"
+file = "bridge/deploy/tests/evm-dry-run-check.sh"
+symbol = "TestPaxeerSide"
+observed = "The Solana dry run's Paxeer side refused 01-register-chain.json with 'unknown field \"@type\"' because the generator now writes each body under its type URL, and it now reads the bodies through proposals.DecodeBody; the EVM dry run's Paxeer side still decodes them with a plain JSON decoder that disallows unknown fields."
+assumption = "Not run here; the EVM dry run is expected to stop the same way until it reads the bodies through proposals.DecodeBody."
+severity = "suspect"
