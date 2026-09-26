@@ -172,6 +172,71 @@ static const lxp_module_kv_entry *path_committed(const lxp_kernel *kernel,
     return NULL;
 }
 
+static uint32_t path_read_u32(const uint8_t *bytes)
+{
+    return ((uint32_t)bytes[0] << 24U) | ((uint32_t)bytes[1] << 16U) |
+           ((uint32_t)bytes[2] << 8U) | (uint32_t)bytes[3];
+}
+
+/* Reads the web request record back from the call's full event list after
+ * checking the list hashes to the call outcome event's envelope digest. */
+static int path_event_list_request(const lxp_receipt *receipt,
+                                   uint64_t *request_id, uint8_t *kind,
+                                   lxp_byte_span *payload)
+{
+    static const uint8_t domain[] = "LayerX/programs/events/v1";
+    const lxp_byte_span list =
+        receipt->program_outcome.event_envelope_payload;
+    const uint8_t *digest = NULL;
+    uint8_t list_root[32];
+    size_t cursor = sizeof(domain);
+    size_t found = 0U;
+    size_t index;
+    uint32_t count;
+    PATH_CHECK(list.bytes != NULL && list.length >= sizeof(domain) + 4U);
+    for (index = 0U; index < receipt->effects.count; ++index) {
+        const lxp_effect *effect = &receipt->effects.effects[index];
+        if (effect->module_id != LXP_MODULE_PROGRAMS ||
+            effect->kind != LXP_EFFECT_EVENT ||
+            effect->event_type != LX_PROGRAMS_EVENT_CALL_OUTCOME)
+            continue;
+        PATH_CHECK(digest == NULL && effect->body_length == 255U);
+        digest = effect->body + effect->body_length - 32U;
+    }
+    PATH_CHECK(digest != NULL);
+    PATH_CHECK(lxp_hash_sha256(list.bytes, list.length, list_root) == LXP_OK &&
+               memcmp(list_root, digest, 32U) == 0);
+    PATH_CHECK(memcmp(list.bytes, domain, sizeof(domain)) == 0);
+    count = path_read_u32(list.bytes + cursor);
+    cursor += 4U;
+    for (index = 0U; index < count; ++index) {
+        uint32_t topic_length;
+        uint32_t data_length;
+        const uint8_t *topic;
+        PATH_CHECK(list.length - cursor >= 32U + 32U + 8U + 1U + 4U);
+        cursor += 32U + 32U + 8U + 1U;
+        topic_length = path_read_u32(list.bytes + cursor);
+        cursor += 4U;
+        PATH_CHECK(list.length - cursor >= (size_t)topic_length + 4U);
+        topic = list.bytes + cursor;
+        cursor += topic_length;
+        data_length = path_read_u32(list.bytes + cursor);
+        cursor += 4U;
+        PATH_CHECK(list.length - cursor >= data_length);
+        if (topic_length == LX_WEB_REQUEST_TOPIC_BYTES &&
+            memcmp(topic, LX_WEB_REQUEST_TOPIC,
+                   LX_WEB_REQUEST_TOPIC_BYTES) == 0) {
+            PATH_CHECK(lx_web_request_record_decode(list.bytes + cursor,
+                                                    data_length, request_id,
+                                                    kind, payload) == LXP_OK);
+            ++found;
+        }
+        cursor += data_length;
+    }
+    PATH_CHECK(cursor == list.length && found == 1U);
+    return 0;
+}
+
 static lx_account *path_account(lx_account_registry *accounts,
                                 const uint8_t id[32])
 {
@@ -592,6 +657,25 @@ static int web_program_path(const char *wasm_path, bool genesis_fee_account)
     (void)memset(amount_be, 0, sizeof(amount_be));
     amount_be[15] = PATH_FEE;
     PATH_CHECK(memcmp(entry->value + 98U, amount_be, 16U) == 0);
+    {
+        /* The request call's full event list carries the record's raw bytes,
+         * and its payload hashes to the pending request's payload hash. */
+        uint64_t listed_request = 0U;
+        uint8_t listed_kind = 0U;
+        lxp_byte_span listed_payload = {NULL, 0U};
+        uint8_t listed_hash[32];
+        PATH_CHECK(path_event_list_request(&receipt, &listed_request,
+                                           &listed_kind,
+                                           &listed_payload) == 0);
+        PATH_CHECK(listed_request == path_request &&
+                   listed_kind == LX_WEB_KIND_FETCH &&
+                   listed_payload.length == PATH_PAYLOAD_BYTES &&
+                   memcmp(listed_payload.bytes, path_payload,
+                          PATH_PAYLOAD_BYTES) == 0);
+        PATH_CHECK(lxp_keccak256(listed_payload.bytes, listed_payload.length,
+                                 listed_hash) == LXP_OK &&
+                   memcmp(listed_hash, entry->value + 2U, 32U) == 0);
+    }
 
     /* The same request id again is refused while it is pending. */
     PATH_CHECK(path_call(&chain, program_id, capabilities, length, calldata,

@@ -283,7 +283,7 @@ static lxp_result decode_body(
                               evidence->canonical_receipt.length, true,
                               &receipt) != LXP_OK ||
             lxp_receipt_bind_program_artifacts(&receipt,
-                evidence->terminal_payload, evidence->call_graph) != LXP_OK)
+                evidence->terminal_payload, evidence->call_graph, (lxp_byte_span){NULL, 0U}) != LXP_OK)
             return LXP_ERR_LOG_CORRUPT;
     }
     return offset == length ? LXP_OK : LXP_ERR_LOG_CORRUPT;
@@ -463,7 +463,7 @@ static lxp_result append_authority(
         lxp_receipt ordinary;
         status = lxp_receipt_decode(canonical_receipt, receipt_length, true, &ordinary);
         if (status == LXP_OK)
-            status = lxp_receipt_bind_program_artifacts(&ordinary, terminal_payload, call_graph);
+            status = lxp_receipt_bind_program_artifacts(&ordinary, terminal_payload, call_graph, (lxp_byte_span){NULL, 0U});
     }
     if (status != LXP_OK) return status;
     evidence.format_version = format_version;

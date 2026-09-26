@@ -883,23 +883,23 @@ static int verify_retained_program_artifacts(const lxp_receipt *source)
         lxp_receipt_decode(encoded.bytes, encoded.length, true, &decoded) != LXP_OK ||
         decoded.program_outcome.terminal_payload.length != 0U ||
         decoded.program_outcome.call_graph_payload.length != 0U ||
-        lxp_receipt_bind_program_artifacts(&decoded, empty, empty) != LXP_ERR_NON_CANONICAL ||
-        lxp_receipt_bind_program_artifacts(&decoded, terminal, empty) != LXP_ERR_NON_CANONICAL ||
-        lxp_receipt_bind_program_artifacts(&decoded, terminal, graph) != LXP_OK)
+        lxp_receipt_bind_program_artifacts(&decoded, empty, empty, (lxp_byte_span){NULL, 0U}) != LXP_ERR_NON_CANONICAL ||
+        lxp_receipt_bind_program_artifacts(&decoded, terminal, empty, (lxp_byte_span){NULL, 0U}) != LXP_ERR_NON_CANONICAL ||
+        lxp_receipt_bind_program_artifacts(&decoded, terminal, graph, (lxp_byte_span){NULL, 0U}) != LXP_OK)
         return 1;
     terminal_bytes[0] ^= 1U;
-    if (lxp_receipt_bind_program_artifacts(&decoded, terminal, graph) != LXP_ERR_NON_CANONICAL)
+    if (lxp_receipt_bind_program_artifacts(&decoded, terminal, graph, (lxp_byte_span){NULL, 0U}) != LXP_ERR_NON_CANONICAL)
         return 1;
     terminal_bytes[0] ^= 1U;
     graph_bytes[0] ^= 1U;
-    if (lxp_receipt_bind_program_artifacts(&decoded, terminal, graph) != LXP_ERR_NON_CANONICAL)
+    if (lxp_receipt_bind_program_artifacts(&decoded, terminal, graph, (lxp_byte_span){NULL, 0U}) != LXP_ERR_NON_CANONICAL)
         return 1;
     graph_bytes[0] ^= 1U;
     --terminal.length;
-    if (lxp_receipt_bind_program_artifacts(&decoded, terminal, graph) != LXP_ERR_NON_CANONICAL)
+    if (lxp_receipt_bind_program_artifacts(&decoded, terminal, graph, (lxp_byte_span){NULL, 0U}) != LXP_ERR_NON_CANONICAL)
         return 1;
     ++terminal.length;
-    if (lxp_receipt_bind_program_artifacts(&decoded, terminal, graph) != LXP_OK ||
+    if (lxp_receipt_bind_program_artifacts(&decoded, terminal, graph, (lxp_byte_span){NULL, 0U}) != LXP_OK ||
         lxp_receipt_encode(&decoded, true, &arena, &rebound) != LXP_OK ||
         rebound.length != encoded.length ||
         memcmp(rebound.bytes, encoded.bytes, encoded.length) != 0)
@@ -1979,10 +1979,10 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
         return artifact_fixture_failure(protocol_version, __LINE__);
     if (lxp_receipt_bind_program_artifacts(&first_call_receipt,
             first_call_receipt.program_outcome.terminal_payload,
-            first_call_receipt.program_outcome.call_graph_payload) != LXP_OK ||
+            first_call_receipt.program_outcome.call_graph_payload, (lxp_byte_span){NULL, 0U}) != LXP_OK ||
         lxp_receipt_bind_program_artifacts(&receipt,
             first_call_receipt.program_outcome.terminal_payload,
-            first_call_receipt.program_outcome.call_graph_payload) != LXP_ERR_NON_CANONICAL)
+            first_call_receipt.program_outcome.call_graph_payload, (lxp_byte_span){NULL, 0U}) != LXP_ERR_NON_CANONICAL)
         return artifact_fixture_failure(protocol_version, __LINE__);
     payload_length = upgrade_payload(payload, program_id, upgraded_hash,
                                      failure_wasm, failure_wasm_length,

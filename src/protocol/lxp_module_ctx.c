@@ -1573,6 +1573,22 @@ static lxp_result outcome_copy_artifacts(lxp_program_outcome *target,
         (void)memcpy(bytes, sources[index].bytes, sources[index].length);
         destinations[index]->bytes = bytes;
     }
+    /* The event list is side data outside every committed byte: a list the
+     * arena cannot hold is left unbound rather than changing the outcome. */
+    copy.event_envelope_payload = (lxp_byte_span){NULL, 0U};
+    if (source->event_envelope_payload.length != 0U &&
+        source->event_envelope_payload.bytes != NULL &&
+        source->event_envelope_payload.length <=
+            LXP_PROGRAM_EVENT_LIST_MAX_BYTES) {
+        void *bytes = NULL;
+        if (lxp_arena_alloc(arena, source->event_envelope_payload.length, 1U,
+                            &bytes) == LXP_OK) {
+            (void)memcpy(bytes, source->event_envelope_payload.bytes,
+                         source->event_envelope_payload.length);
+            copy.event_envelope_payload = (lxp_byte_span){
+                bytes, source->event_envelope_payload.length};
+        }
+    }
     *target = copy;
     return LXP_OK;
 }

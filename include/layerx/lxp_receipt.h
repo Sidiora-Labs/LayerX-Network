@@ -39,6 +39,7 @@ typedef enum lxp_program_terminal_kind {
 } lxp_program_terminal_kind;
 
 enum { LXP_PROGRAM_METERING_SCHEDULE_VERSION_V1 = 1 };
+enum { LXP_PROGRAM_EVENT_LIST_MAX_BYTES = 5 * LXP_MAX_ACTIVITY_BYTES };
 
 /* Receipt-native Programs outcome evidence.  These fields describe one
  * terminal runtime outcome; they are not a second receipt or a version alias. */
@@ -70,6 +71,9 @@ typedef struct lxp_program_outcome {
     lxp_byte_span terminal_payload;
     uint8_t transfer_root[32];
     uint8_t applied_legs_digest[32];
+    /* Side data, never encoded: the call's full event list, bound by the
+     * call outcome event's event envelope digest. */
+    lxp_byte_span event_envelope_payload;
 } lxp_program_outcome;
 
 typedef struct lxp_receipt {
@@ -187,7 +191,7 @@ lxp_result lxp_receipt_bind_program_outcome(
 lxp_result lxp_program_empty_call_graph_root(uint8_t root[32]);
 lxp_result lxp_receipt_bind_program_artifacts(
     lxp_receipt *receipt, lxp_byte_span terminal_payload,
-    lxp_byte_span call_graph_payload);
+    lxp_byte_span call_graph_payload, lxp_byte_span event_envelope_payload);
 lxp_result lxp_program_outcome_validate(const lxp_program_outcome *outcome);
 lxp_result lxp_program_outcome_validate_for_protocol(
     const lxp_program_outcome *outcome, uint16_t protocol_version);

@@ -1,6 +1,7 @@
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_receipt.h"
+#include "layerx/programs.h"
 
 #include <openssl/evp.h>
 #include <stdint.h>
@@ -61,6 +62,86 @@ int main(void)
     receipt.result_code = LXP_ERR_AGREEMENT_STATE;
     if (lxp_receipt_verify(&receipt, public_key, &arena) !=
         LXP_ERR_BAD_SIGNATURE) return 1;
+    {
+        static const uint8_t event_domain[] = "LayerX/programs/events/v1";
+        static const uint8_t terminal[] = { 1U, 2U, 3U };
+        static const uint8_t graph[] = { 4U, 5U };
+        uint8_t event_list[sizeof(event_domain) + 4U] = { 0U };
+        uint8_t tampered[sizeof(event_list)];
+        lxp_effect outcome_event = { .module_id = LXP_MODULE_PROGRAMS,
+            .ordinal = 1U, .event_type = LX_PROGRAMS_EVENT_CALL_OUTCOME,
+            .kind = LXP_EFFECT_EVENT, .body_length = 255U,
+            .body = { 'L', 'X', 'M', 'O', 2U, 2U } };
+        lxp_effect_buffer program_effects;
+        lxp_program_outcome outcome;
+        lxp_receipt program;
+        lxp_receipt bound;
+        static uint8_t before_bytes[4096];
+        size_t before_length;
+        lxp_byte_span before;
+        lxp_byte_span after;
+        (void)memcpy(event_list, event_domain, sizeof(event_domain));
+        event_list[sizeof(event_list) - 1U] = 1U;
+        (void)memcpy(tampered, event_list, sizeof(event_list));
+        tampered[sizeof(tampered) - 1U] = 2U;
+        (void)memset(&program, 0, sizeof(program));
+        program.protocol_version = LXP_PROTOCOL_VERSION_LEGACY;
+        (void)memset(&outcome, 0, sizeof(outcome));
+        outcome.present = true;
+        outcome.encoding_version = 3U;
+        outcome.terminal_kind = LXP_PROGRAM_TERMINAL_SUCCESS;
+        outcome.result_code = LXP_OK;
+        outcome.runtime_version = 1U;
+        outcome.abi_version = 1U;
+        outcome.fee_schedule_version = 1U;
+        outcome.metering_schedule_version =
+            LXP_PROGRAM_METERING_SCHEDULE_VERSION_V1;
+        if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+            lxp_hash_sha256(event_list, sizeof(event_list),
+                            outcome_event.body + 255U - 32U) != LXP_OK ||
+            lxp_hash_sha256(terminal, sizeof(terminal),
+                            outcome.terminal_payload_root) != LXP_OK ||
+            lxp_hash_sha256(graph, sizeof(graph),
+                            outcome.call_graph_root) != LXP_OK ||
+            lxp_effect_buffer_init(&program_effects) != LXP_OK ||
+            lxp_effect_buffer_add(&program_effects, &outcome_event) != LXP_OK ||
+            lxp_receipt_build(&program, activity_id, 9U, previous, resulting,
+                              activity_root, LXP_OK, &program_effects,
+                              (lxp_u128){ 0U, 3U }, batch_id,
+                              LXP_MODULE_PROGRAMS, 1U, 1U) != LXP_OK ||
+            lxp_receipt_bind_program_outcome(&program, &outcome) != LXP_OK ||
+            lxp_receipt_encode(&program, false, &arena, &before) != LXP_OK ||
+            before.length > sizeof(before_bytes))
+            return 1;
+        (void)memcpy(before_bytes, before.bytes, before.length);
+        before_length = before.length;
+        /* The event list whose digest the call outcome event carries binds
+         * as side data and leaves the encoded receipt byte for byte. */
+        bound = program;
+        if (lxp_receipt_bind_program_artifacts(&bound,
+                (lxp_byte_span){ terminal, sizeof(terminal) },
+                (lxp_byte_span){ graph, sizeof(graph) },
+                (lxp_byte_span){ event_list, sizeof(event_list) }) != LXP_OK ||
+            bound.program_outcome.event_envelope_payload.bytes != event_list ||
+            bound.program_outcome.event_envelope_payload.length !=
+                sizeof(event_list) ||
+            lxp_arena_reset(&arena, 0U) != LXP_OK ||
+            lxp_receipt_encode(&bound, false, &arena, &after) != LXP_OK ||
+            after.length != before_length ||
+            memcmp(after.bytes, before_bytes, before_length) != 0)
+            return 1;
+        /* An event list the outcome's event envelope digest does not name
+         * is refused and binds nothing. */
+        bound = program;
+        if (lxp_receipt_bind_program_artifacts(&bound,
+                (lxp_byte_span){ terminal, sizeof(terminal) },
+                (lxp_byte_span){ graph, sizeof(graph) },
+                (lxp_byte_span){ tampered, sizeof(tampered) }) !=
+                LXP_ERR_NON_CANONICAL ||
+            bound.program_outcome.event_envelope_payload.length != 0U ||
+            bound.program_outcome.terminal_payload.length != 0U)
+            return 1;
+    }
     {
         static const uint8_t unchanged_supply[] = { 2U, 3U, 4U, 5U, 6U, 7U, 8U };
         lxp_receipt supply;

@@ -1402,6 +1402,9 @@ lxp_result layerx_programs_call_terminal_publish(uint64_t token)
     if (outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS)
         return lxp_ctx_bind_program_outcome(value->ctx, &outcome);
     (void)memcpy(outcome.transfer_root, value->terminal.transfer_root, 32U);
+    outcome.event_envelope_payload = (lxp_byte_span){
+        value->terminal.events, value->terminal.events_length
+    };
     status = web_request_record(value);
     if (status != LXP_OK) return status;
     event.program_id = value->program_id;
