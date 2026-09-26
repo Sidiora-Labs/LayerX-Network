@@ -338,7 +338,11 @@ reqs = ["3.1","3.2","3.3","3.4","3.5","3.6","3.7","10.1","10.2","10.3","10.4","1
 
 [task.1.5]
 title = "Generate the governance proposals from the configuration"
-status = "pending"
+status = "done"
+revision = "89f915bf726551dbc4e6defcc71e54996854f93b"
+command = "timeout 20m sh -c 'go test -count=1 ./bridge/deploy/proposals/...'"
+exit_code = 0
+log_path = "build/bridge-gates/task-1.5-verify.log"
 wave = 1
 requires = []
 do_1 = "Write bridge/deploy/proposals/proposals.go emitting, as JSON bodies marshalled from the real modules/layerxbridge/types messages it imports and does not modify, MsgRegisterChain carrying the chain id, the vault or vault-handle address and the finality depth, MsgSetAttestors carrying the attestor set and threshold, and one MsgSetCap per asset."

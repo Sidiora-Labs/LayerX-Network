@@ -1,0 +1,37 @@
+{
+  "name": "solana",
+  "chain_id": 91600046870081,
+  "native_symbol": "SOL",
+  "native_decimals": 9,
+  "rpc_endpoint_env": "PAXEER_BRIDGE_SOLANA_RPC_URL",
+  "governance_authority": "pax10d07y265gmmuvt4z0w9aw880jnsr700jxdwa9m",
+  "owner": "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
+  "vault": "0x933d35eb8a4cb086fbb20a2f727124f5b2051fdb",
+  "attestors": [
+    "0x1d4a7f3b6e2c95840b1f8d3e7a6c5049b28e1f37",
+    "0x3f81c2d5e40a9b76135c8e2f4d7a6b09e83f1c24",
+    "0x6b2e9d47a1c30f582d94e7b6a3c518fd20e94b76",
+    "0x9c58e1f3a7d24b60c8e5934f1a6d7b28e04c3f95",
+    "0xd27a4e9b16c38f50a3d7e284b95c1f60d8a34e7b"
+  ],
+  "threshold": 3,
+  "finality_depth": 32,
+  "program_id": "9a68uBCiHJoXsn7QoDkERdtLhpAjHVB4CbYnDugwgNTB",
+  "commitment": "finalized",
+  "assets": [
+    {
+      "address": "So11111111111111111111111111111111111111112",
+      "asset_id": "0xcf996523b5d068a26f0aa8a116602fe5033ee3a1",
+      "decimals": 9,
+      "max_per_tx": "500000000000",
+      "max_total": "20000000000000"
+    },
+    {
+      "address": "B8ykaAbUvJZY1kW1mePiBbmkU7x2QCkVskx3zybuYjiE",
+      "asset_id": "0x21f7b20a555199fa73A238B1a91FD0f549068fEe",
+      "decimals": 6,
+      "max_per_tx": "250000000000",
+      "max_total": "10000000000000"
+    }
+  ]
+}
