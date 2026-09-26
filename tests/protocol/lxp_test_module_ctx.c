@@ -1,4 +1,5 @@
 #include "layerx/lxp_kernel.h"
+#include "layerx/lxp_transfer.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -45,10 +46,19 @@ static lxp_result apply_transfer(lxp_kernel *kernel,
                                  const lxp_transfer_set *set,
                                  lxp_receipt *receipt)
 {
+    lxp_transfer_set_result result;
+    lxp_transfer_context context;
+    lxp_transfer_leg legs[LXP_MAX_TRANSFER_SET_LEGS];
+    lxp_result status;
     (void)kernel;
-    if (set->leg_count == 0U || set->legs[0].from == NULL ||
-        set->legs[0].to == NULL)
+    if (set->leg_count == 0U || set->leg_count > LXP_MAX_TRANSFER_SET_LEGS ||
+        set->legs[0].from == NULL || set->legs[0].to == NULL)
         return LXP_ERR_NON_CANONICAL;
+    context = set->context;
+    (void)memcpy(legs, set->legs, set->leg_count * sizeof(legs[0]));
+    status = lxp_apply_transfer_set(legs, set->leg_count, &context, &result);
+    if (status != LXP_OK) return status;
+    (void)memcpy(receipt->transfer_set_root, result.transfer_set_root, 32U);
     applied_set = *set;
     ++applied_count;
     receipt->module_id = set->context.origin_module_id;

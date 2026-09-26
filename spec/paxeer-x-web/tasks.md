@@ -261,7 +261,7 @@
     - List lx_getProgramEvents with its parameters and result shape in platform/hosted/gateway/openrpc.json, matching the method task 2.21 wrote in platform/hosted/gateway/src/rpc.rs.
     - Extend platform/hosted/gateway/tests/local/events.rs so the local qualification runs the reference web-reader program's request through a real node and core and reads the request event with its raw bytes through lx_getProgramEvents; close observation 2.21.2 naming the revision.
     - _Requirements: 11.2_
-  - [ ] 2.29 Restore the module context test after the web module registration and qualify the prepare pass staging
+  - [ ] 2.29 Restore the module context test after the web module registration and qualify the prepare pass staging — **Implemented - qualification pending**
     - test-module-ctx stops in its opening block, where lxp_ctx_emit_transfer_set returns LXP_FATAL_INVARIANT, on every revision since the web module was registered with the kernel; run the test once at that registration commit's parent to confirm the cause, then fix it where it lives, whether a bound or table in src/protocol/lxp_module_ctx.c or include/layerx/lxp_module.h that still assumes ten reserved modules or an expectation in the test that the registration made stale; every existing assertion stays exactly as strong.
     - Run task 2.23's verify_cmd once; on exit 0 record task 2.23 done with that revision, command, exit code and log, and close observations 2.2.2 and 2.23.1 naming the revision.
     - _Requirements: 11.1_
@@ -269,6 +269,16 @@
     - interop/crates/x-websearch/tests/attest.rs asserts the preimage vector file holds two vectors while task 2.13 added the third, evm-api-single; extend the_preimage_matches_every_pinned_vector to pin all three, checking the api vector's preimage exactly as the other two are checked, with no existing assertion weakened.
     - Run task 2.25's verify_cmd once; on exit 0 record tasks 2.25, 2.14, 2.17 and 2.24 done with that revision, command, exit code and log, and close observations 2.14.1, 2.14.2, 2.17.1, 2.24.1 and 2.25.1 naming the revision.
     - _Requirements: 17.3, 17.6_
+  - [ ] 2.31 Reconcile the bound event list with the call outcome's event envelope digest and qualify the web program path
+    - Diagnose observation 2.26.1: after the reference program's request call, the event list bound beside the receipt's artifacts does not hash to the call outcome event's event_envelope_digest; compare the bytes terminal_publish in src/modules/programs/call.c hashes with the span outcome_copy_artifacts in src/protocol/lxp_module_ctx.c copies and with what the pending batch copies in src/protocol/lxp_kernel.c carry, which were noted not to deep-copy the span, and fix the cause where it lives so the bound list is byte-identical to the hashed list, keeping the SHA-256 in terminal_publish as the single digest source and the committed receipt and every consensus-visible byte exactly as they are.
+    - Give the span the lifetime of the other artifact spans: copy it wherever lxp_program_outcome is copied and release it wherever the outcome's artifacts are released, and cover a copied outcome whose list still binds in tests/protocol/lxp_test_receipts.c.
+    - Run the verify_cmd once; at the passing revision record tasks 2.26, 2.29 and 2.23 done with the same evidence and close observations 2.26.1, 2.29.1, 2.23.1 and 2.2.2 naming it.
+    - _Requirements: 11.2_
+  - [ ] 2.32 Serve the availability harness's bond and registry at the anchor address and qualify the agent workspace tests
+    - The daemon accepts a settlement contract and a checkpoint registry only at the layerxAnchor precompile address, and that refusal stays exactly as it is (observation 2.16.1); change tests/daemon/availability-settlement.py so the bond and registry calls the daemon makes at the anchor address reach the GuarantorBond and CheckpointRegistry it deploys on its anvil chain - installing the code of one contract that serves both interfaces at the anchor address through anvil's code-setting method, or whichever placement the anchor's ABI in the repository supports - and have tests/daemon/program-admission.sh export the anchor address for both variables under --availability-batches, keeping every other harness step unchanged.
+    - Keep the layerx-agentd native daemon tests reading the harness's ready file as they do, adjusting only what the address change requires inside agent/crates/layerx-agentd; never relax, ignore, skip or delete a test.
+    - Run the verify_cmd once; at the passing revision record task 2.16 done with the same evidence and close observation 2.16.1 naming it.
+    - _Requirements: 9.1_
 
 ## Wave 3 - One Run, Recorded
 
@@ -286,7 +296,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17", "1.18"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23", "2.24", "2.25", "2.26", "2.27", "2.28", "2.29", "2.30"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16", "2.17", "2.18", "2.19", "2.20", "2.21", "2.22", "2.23", "2.24", "2.25", "2.26", "2.27", "2.28", "2.29", "2.30", "2.31", "2.32"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }

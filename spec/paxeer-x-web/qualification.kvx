@@ -448,3 +448,11 @@ symbol = "real_daemon_availability_refusals"
 observed = "make agent-test exits 2 (.logs/verify.log) in layerx-agentd --test native_reads_daemon: the --availability-batches harness exports its anvil-deployed bond and registry as LAYERX_NODE_SETTLEMENT_CONTRACT and LAYERX_NODE_CHECKPOINT_REGISTRY, which layerxd now refuses unless both name the layerxAnchor precompile, so bootstrap finality authority fails with -3; budget_create and finality were repaired the same way inside agent/crates, and the harness and its availability-settlement.py lie outside this task."
 assumption = "The owner of the availability settlement harness serves the bond and registry calls at the anchor address, after which the verify_cmd reruns unchanged; nothing is relaxed."
 severity = "blocker"
+
+[observation.2.29.1]
+revision = "5ff0d17cdd3ba8c027e226701689b1b573afaefe"
+command = "timeout 20m sh -c 'make test-module-ctx test-kernel && make test-web-program-path'"
+exit_code = 2
+log_path = ".logs/verify.log"
+observed = "test-module-ctx failed identically at the registration commit's parent, because its transfer capability fixture predates the ledger balance check in emit_transfer_set and moved no balances; with the fixture applying the set through lxp_apply_transfer_set, test-module-ctx and test-kernel pass, and test-web-program-path fails only at the event list checks of lines 207 and 667 recorded in observation 2.26.1."
+assumption = "Once observation 2.26.1 is resolved this verify_cmd reruns unchanged and records tasks 2.29 and 2.23 done."
