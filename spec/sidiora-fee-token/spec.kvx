@@ -760,7 +760,11 @@ log_path = ".logs/verify.log"
 
 [task.4.5]
 title = "Accept the registered Sidiora denom in bridge genesis"
-status = "pending"
+status = "done"
+revision = "ecebaa2f51cecadf1de6ca104b4609548e1c72a9"
+command = "timeout 20m sh -c 'go test -count=1 ./modules/layerxbridge/...'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 4
 requires = []
 do_1 = "In modules/layerxbridge/types/genesis.go make GenesisState.Validate accept an asset whose denom is SidioraDenom() exactly when its (chain, asset) pair is the pair RegisterSidioraPair records - Sidiora's remote address on the chain that message accepts - and keep requiring every other asset's denom to equal Denom(chainID, asset), with the duplicate, cap and in-flight checks unchanged."

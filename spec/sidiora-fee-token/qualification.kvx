@@ -76,6 +76,7 @@ command = "cat modules/layerxbridge/types/genesis.go"; exit_code = 0
 log_path = ".logs/scope-conflict.log"
 observed = "GenesisState.Validate requires every asset denom to equal the existing chain-derived Denom, which rejects the required Sidiora subdenom; the validator is outside task 2.1 touches."
 assumption = "The genesis compatibility change requires separately authorized scope; this task leaves the existing assertion intact."
+closed = "Verified over ecebaa2f51cecadf1de6ca104b4609548e1c72a9, GenesisState.Validate accepts the usid denom exactly for the Sidiora pair RegisterSidioraPair records and the derived denom for every other pair, and a registered Sidiora state exports, validates and imports unchanged."
 
 [observation.2.1.2]
 revision = "974fcd706f687617f9b4a1e3aa6e2d0b85981143"
@@ -244,6 +245,7 @@ symbol = "GenesisState.Validate"
 observed = "Review comment 4107758215 identifies the Sidiora genesis export/import conflict already recorded in observation.2.1.1; the validator is outside task 2.2 touches."
 assumption = "The recorded conflict requires separately authorized validator work; it is not reinvestigated here and the existing validation remains intact."
 severity = "blocker"
+closed = "Verified over ecebaa2f51cecadf1de6ca104b4609548e1c72a9, GenesisState.Validate accepts the usid denom exactly for the Sidiora pair RegisterSidioraPair records and the derived denom for every other pair, and a registered Sidiora state exports, validates and imports unchanged."
 
 [observation.1.6.1]
 revision = "17c8ed319f18cbe5a003614c4ee082c2c3c0b122"
