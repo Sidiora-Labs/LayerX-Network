@@ -291,6 +291,7 @@ symbol = "respond"
 observed = "The build passes and the library passes clippy, but after two repair cycles clippy on tests/api.rs still stops on too_many_lines in the envelope vector test and two cloned_ref_to_slice_refs findings (.logs/build.log, exit 101), and the loopback API's last repair left an unknown credential answered 404 where the no-envelope call test expects 401, so the verify_cmd never ran."
 assumption = "Nothing is relaxed; the envelope test splits in two, the roots pass through std::slice::from_ref, respond answers 401 without a known credential, and the build and verify_cmd rerun unchanged."
 severity = "blocker"
+closed = "At 5ff0d17cdd3ba8c027e226701689b1b573afaefe the attest test pins all three preimage vectors including evm-api-single, and the api, attest, canonical and content tests pass with clippy clean (.logs/verify.log, exit 0)"
 
 [observation.2.14.2]
 task = "2.14"
@@ -299,6 +300,7 @@ symbol = "ContentKind"
 observed = "ContentKind knows only fetch and search and ContentStore::put refuses any other kind byte, so an api answer's kind 3 canonical bytes are computed and signed in api.rs but not stored, and GET /content/<digest> cannot serve an api answer."
 assumption = "Api answers stay out of the content store until canonical.rs, outside this task's touches, learns kind 3."
 severity = "note"
+closed = "At 5ff0d17cdd3ba8c027e226701689b1b573afaefe the attest test pins all three preimage vectors including evm-api-single, and the api, attest, canonical and content tests pass with clippy clean (.logs/verify.log, exit 0)"
 
 [observation.2.2.1]
 task = "2.2"
@@ -360,6 +362,7 @@ symbol = "es_number"
 observed = "Clippy passes and nine of ten api tests pass, but after two repair cycles pointers_select_and_canonicalise_as_the_vectors_pin still writes 123456789012345678901234 as 1.2345678901234569e+23 where the vector pins 1.2345678901234568e+23 (.logs/verify.log, exit 101), so the attest, canonical and content tests and task 2.14's gates never ran."
 assumption = "The vector stays as written; es_number is corrected to pick the closest digits at the shortest length and the verify_cmd reruns unchanged."
 severity = "blocker"
+closed = "At 5ff0d17cdd3ba8c027e226701689b1b573afaefe the attest test pins all three preimage vectors including evm-api-single, and the api, attest, canonical and content tests pass with clippy clean (.logs/verify.log, exit 0)"
 
 [observation.2.19.1]
 task = "2.19"
@@ -385,6 +388,7 @@ symbol = "es_number"
 observed = "At 3d0d603b7fb281f775567b2ddaae568f726f47b0 the parse of 123456789012345678901234 is already correctly rounded (str::parse, not serde_json; bits 0x44ba249b1f10a06d, exact 123456789012345685803008) and es_number prints 1.2345678901234569e+23, which ECMAScript Number::toString, Go strconv and Python also print (.logs/number-check.log); 1.2345678901234568e+23 also round-trips but lies 5803008 from the double against 4196992, so the vector pins non-ECMAScript digits, and modules/xweb/types/testdata/api-vectors.json holds no number vector."
 assumption = "Neither the code nor the vector is changed; the vector's 1.2345678901234568e+23 needs correcting to 1.2345678901234569e+23 by whoever owns it, after which the verify_cmd runs unchanged."
 severity = "blocker"
+closed = "At 5ff0d17cdd3ba8c027e226701689b1b573afaefe the attest test pins all three preimage vectors including evm-api-single, and the api, attest, canonical and content tests pass with clippy clean (.logs/verify.log, exit 0)"
 
 [observation.2.24.2]
 task = "2.24"
@@ -427,6 +431,7 @@ symbol = "the_preimage_matches_every_pinned_vector"
 observed = "At a43f796c08960b6ed5aff6a9988c57094cff082f clippy is clean and all eleven api tests pass with the corrected vector, but the attest test pins two preimage vectors where modules/xweb/types/testdata/preimage-vectors.json now holds three (evm-api-single, added by task 2.13), so it fails (.logs/verify.log, exit 101) and the canonical and content tests did not run."
 assumption = "Both files lie outside this task; the attest test's owner extends it to the third vector without relaxing it, after which the verify_cmd runs unchanged."
 severity = "blocker"
+closed = "At 5ff0d17cdd3ba8c027e226701689b1b573afaefe the attest test pins all three preimage vectors including evm-api-single, and the api, attest, canonical and content tests pass with clippy clean (.logs/verify.log, exit 0)"
 
 [observation.2.26.1]
 revision = "a43f796c08960b6ed5aff6a9988c57094cff082f"

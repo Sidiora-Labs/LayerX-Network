@@ -813,7 +813,11 @@ reqs = ["17.1","17.2","17.4","17.5","17.6"]
 
 [task.2.14]
 title = "Perform api requests in the sidecar with envelopes, selectors and the single level"
-status = "implemented"
+status = "done"
+revision = "5ff0d17cdd3ba8c027e226701689b1b573afaefe"
+command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test api --test attest --test canonical --test content'"
+exit_code = 0
+log_path = ".logs/verify.log"
 implemented_revision = "ccf8fa472d567a842a86a404324a761341609817"
 implemented_command = "cargo build --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets && cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings"
 implemented_exit_code = 101
@@ -864,7 +868,11 @@ reqs = ["9.1"]
 
 [task.2.17]
 title = "Qualify the sidecar api request path and serve api answers from the content store"
-status = "implemented"
+status = "done"
+revision = "5ff0d17cdd3ba8c027e226701689b1b573afaefe"
+command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test api --test attest --test canonical --test content'"
+exit_code = 0
+log_path = ".logs/verify.log"
 implemented_revision = "51d893a47bdf520fb33ead4b0a1ea02197fc1f60"
 implemented_command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test api --test attest --test canonical --test content'"
 implemented_exit_code = 101
@@ -985,7 +993,11 @@ reqs = ["11.1"]
 
 [task.2.24]
 title = "Canonicalise JSON numbers as ECMAScript does so the shared vectors agree"
-status = "implemented"
+status = "done"
+revision = "5ff0d17cdd3ba8c027e226701689b1b573afaefe"
+command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test api --test attest --test canonical --test content'"
+exit_code = 0
+log_path = ".logs/verify.log"
 implemented_revision = "3d0d603b7fb281f775567b2ddaae568f726f47b0"
 implemented_command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test api --test attest --test canonical --test content'"
 implemented_exit_code = 101
@@ -1002,7 +1014,11 @@ reqs = ["17.3","17.6"]
 
 [task.2.25]
 title = "Correct the select vector's number digits and qualify the api request path"
-status = "implemented"
+status = "done"
+revision = "5ff0d17cdd3ba8c027e226701689b1b573afaefe"
+command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test api --test attest --test canonical --test content'"
+exit_code = 0
+log_path = ".logs/verify.log"
 implemented_revision = "a43f796c08960b6ed5aff6a9988c57094cff082f"
 implemented_command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test api --test attest --test canonical --test content'"
 implemented_exit_code = 101
@@ -1074,7 +1090,11 @@ reqs = ["11.1"]
 
 [task.2.30]
 title = "Pin the api preimage vector in the attestation test and qualify the api request path"
-status = "pending"
+status = "done"
+revision = "5ff0d17cdd3ba8c027e226701689b1b573afaefe"
+command = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test api --test attest --test canonical --test content'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.13","2.25"]
 do_1 = "interop/crates/x-websearch/tests/attest.rs asserts the preimage vector file holds two vectors while task 2.13 added the third, evm-api-single; extend the_preimage_matches_every_pinned_vector to pin all three, checking the api vector's preimage exactly as the other two are checked, with no existing assertion weakened."
