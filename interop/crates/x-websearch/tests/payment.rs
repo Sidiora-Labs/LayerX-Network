@@ -11,13 +11,26 @@ use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use ed25519_dalek::{Signer as _, SigningKey};
+use layerx_crypto::payments::{Grant, Payment};
 use layerx_interop_gateway::adapter::{AdapterId, ConformanceSuite};
+use layerx_proof::merkle::leaf_hash;
+use layerx_wire::encode::Encoder;
+use layerx_wire::hash::{receipt_digest, Domain};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
+use x_websearch::assets::{AcceptedAsset, AcceptedAssets};
+use x_websearch::canonical::{canonical_bytes, content_digest, digest_hex, ContentKind};
+use x_websearch::config::AssetSymbol;
+use x_websearch::content::ContentStore;
+use x_websearch::crawl::title_of;
+use x_websearch::index::WebIndex;
 use x_websearch::payment::{
-    hex, PaymentGate, EXACT, METERED, PAYER_DID, PAYMENT_REQUIRED, PAYMENT_RESPONSE,
-    PAYMENT_SIGNATURE,
+    account_id, hex, purpose_hash, receiver_did, sign_draw, wallet_account, DrawRequest,
+    PaymentGate, EXACT, METERED, PAYER_DID, PAYMENT_REQUIRED, PAYMENT_RESPONSE, PAYMENT_SIGNATURE,
+    PROTOCOL_VERSION,
 };
+use x_websearch::search::search_route;
 use x_websearch::{
     Config, KeyFiles, Limits, Request, Response, Route, RouteTable, RunningServer, Server,
 };
@@ -269,19 +282,38 @@ impl Harness {
             fixed_clock,
         )?);
         let served = Arc::new(AtomicUsize::new(0));
-        let mut routes = RouteTable::new();
-        for route in [Route::Search, Route::Fetch, Route::Content] {
-            let counter = Arc::clone(&served);
-            PaymentGate::install(&gate, &mut routes, route, move |request: &Request| {
-                counter.fetch_add(1, Ordering::SeqCst);
-                Response::json(
-                    200,
-                    json!({ "path": request.path, "results": [] })
-                        .to_string()
-                        .into_bytes(),
-                )
-            })?;
+        let data = scratch.join("data");
+        let store = Arc::new(ContentStore::open(&data, &[])?);
+        let index = Arc::new(WebIndex::open(&data)?);
+        let pages = vectors()?;
+        for page in &pages {
+            index.put(&page.payload, &page.title(), &page.text)?;
         }
+        index.commit()?;
+        let mut routes = RouteTable::new();
+        let (counter, search_store) = (Arc::clone(&served), Arc::clone(&store));
+        PaymentGate::install(
+            &gate,
+            &mut routes,
+            Route::Search,
+            move |request: &Request| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                search_route(&index, &search_store, request)
+            },
+        )?;
+        let (counter, fetch_store) = (Arc::clone(&served), Arc::clone(&store));
+        PaymentGate::install(
+            &gate,
+            &mut routes,
+            Route::Fetch,
+            move |request: &Request| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                fetch_page(&pages, &fetch_store, request)
+            },
+        )?;
+        routes.set(Route::Content, move |request: &Request| {
+            store.handle(request)
+        })?;
         let running = Server::bind("127.0.0.1:0".parse()?, Limits::default(), routes)?.spawn()?;
         Ok(Self {
             server: Some(running),
@@ -394,10 +426,109 @@ fn encode(value: &Value) -> String {
 }
 
 fn receive_key(label: &str) -> String {
+    hex(&receive_key_bytes(label))
+}
+
+fn receive_key_bytes(label: &str) -> [u8; 32] {
+    labelled("x-websearch-test/receive/", label)
+}
+
+fn labelled(domain: &str, label: &str) -> [u8; 32] {
     let mut digest = Sha256::new();
-    digest.update(b"x-websearch-test/receive/");
+    digest.update(domain.as_bytes());
     digest.update(label.as_bytes());
-    hex(&digest.finalize())
+    digest.finalize().into()
+}
+
+/// One page of `content-vectors.json`.
+#[derive(Clone)]
+struct Page {
+    payload: String,
+    media_type: String,
+    text: String,
+    digest: String,
+}
+
+impl Page {
+    /// The title the crawler indexes: the first line of an HTML page's text.
+    fn title(&self) -> String {
+        if self.media_type == "text/html" {
+            title_of(&self.text)
+        } else {
+            String::new()
+        }
+    }
+}
+
+fn vectors() -> Outcome<Vec<Page>> {
+    let recorded = read_json(&fixtures().join("content-vectors.json"))?;
+    recorded
+        .get("vectors")
+        .and_then(Value::as_array)
+        .ok_or_else(|| fail("content vectors"))?
+        .iter()
+        .map(|vector| {
+            Ok(Page {
+                payload: text(vector, "/payload")?.to_owned(),
+                media_type: text(vector, "/media_type")?.to_owned(),
+                text: text(vector, "/text")?.to_owned(),
+                digest: text(vector, "/digest")?.to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// The `/fetch` resource over the committed pages: the page recorded at the
+/// requested URL, or the first page's text served at it, answered in the
+/// fetch route's shape after its canonical bytes are written to the store.
+fn fetch_page(pages: &[Page], store: &ContentStore, request: &Request) -> Response {
+    let Ok(Some(url)) = request.query_param("url") else {
+        return Response::error(400, "missing_url");
+    };
+    let Some(page) = pages
+        .iter()
+        .find(|page| page.payload == url)
+        .or_else(|| pages.first())
+    else {
+        return Response::error(500, "no_pages");
+    };
+    let Ok(canonical) = canonical_bytes(
+        ContentKind::Fetch,
+        url.as_bytes(),
+        &page.media_type,
+        &page.text,
+    ) else {
+        return Response::error(500, "canonical");
+    };
+    let Ok(digest) = store.put(&canonical) else {
+        return Response::error(500, "content_store_error");
+    };
+    Response::json(
+        200,
+        json!({
+            "url": url,
+            "final_url": url,
+            "media_type": page.media_type,
+            "digest": digest_hex(&digest),
+            "length": page.text.len(),
+            "text": page.text,
+        })
+        .to_string()
+        .into_bytes(),
+    )
+}
+
+/// A query value as `encodeURIComponent` and `quote(safe='')` write it.
+fn percent(text: &str) -> String {
+    let mut encoded = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
+            encoded.push(char::from(byte));
+        } else {
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+    }
+    encoded
 }
 
 fn metered_payload(grant: &str, label: &str) -> Value {
@@ -408,6 +539,7 @@ struct Reply {
     status: u16,
     headers: Vec<(String, String)>,
     body: Value,
+    raw: Vec<u8>,
 }
 
 impl Reply {
@@ -427,11 +559,13 @@ impl Reply {
             .filter_map(|line| line.split_once(": "))
             .map(|(name, value)| (name.to_owned(), value.to_owned()))
             .collect();
-        let body = serde_json::from_slice(&bytes[end + 4..]).unwrap_or(Value::Null);
+        let raw = bytes[end + 4..].to_vec();
+        let body = serde_json::from_slice(&raw).unwrap_or(Value::Null);
         Ok(Self {
             status,
             headers,
             body,
+            raw,
         })
     }
 
@@ -485,9 +619,56 @@ fn metered_draws_settle_in_each_asset() -> Outcome {
         assert_settled(&reply)?;
         let response = reply.decoded(PAYMENT_RESPONSE)?;
         assert_eq!(response.get("network"), Some(&json!("layerx:1")));
+        assert_eq!(
+            response.pointer("/extensions/layerx/purposeHash"),
+            Some(&json!(hex(&purpose_hash(&receiver_public_key()?))))
+        );
+        let asset = accepted(currency)?;
+        let payer = account_id(&wallet_account(harness.payer()?, &asset))
+            .ok_or_else(|| fail("payer account"))?;
+        assert_eq!(response.get("payer"), Some(&json!(hex(&payer))));
+        assert_eq!(reply.body.get("query"), Some(&json!(currency)));
     }
     assert_eq!(harness.served(), 4);
     assert_eq!(harness.gateway.calls("lx_sendActivity"), 4);
+    Ok(())
+}
+
+#[test]
+fn pax_is_paid_into_the_main_accounts_and_every_other_asset_into_its_own() -> Outcome {
+    let harness = Harness::start("accounts", &["refusals.json"])?;
+    let payer = harness.payer()?;
+    let receiver = receiver_did(&receiver_public_key()?);
+    let offers = harness
+        .get("/search?q=accounts", &[(PAYER_DID, payer)])?
+        .decoded(PAYMENT_REQUIRED)?;
+    let offers = offers
+        .get("accepts")
+        .and_then(Value::as_array)
+        .ok_or_else(|| fail("offers"))?;
+    for offer in offers {
+        let currency = text(offer, "/extra/layerx/currency")?;
+        let asset = accepted(currency)?;
+        let (receiver_account, payer_account) = if currency == "PAX" {
+            (
+                format!("agent:{receiver}:main"),
+                format!("agent:{payer}:main"),
+            )
+        } else {
+            (
+                format!("agent:{receiver}:asset:{}", asset.id_hex()),
+                format!("agent:{payer}:asset:{}", asset.id_hex()),
+            )
+        };
+        assert_eq!(text(offer, "/extra/layerx/account")?, receiver_account);
+        let pay_to = account_id(&receiver_account).ok_or_else(|| fail("payee"))?;
+        assert_eq!(text(offer, "/payTo")?, hex(&pay_to));
+        if text(offer, "/scheme")? == METERED {
+            let drawn = account_id(&payer_account).ok_or_else(|| fail("payer"))?;
+            assert_eq!(text(offer, "/extra/layerx/payer")?, hex(&drawn));
+        }
+    }
+    assert_eq!(offers.len(), 8);
     Ok(())
 }
 
@@ -502,6 +683,9 @@ fn exact_receipts_settle_in_each_asset() -> Outcome {
             .ok_or_else(|| fail("payment"))?;
         let reply = harness.exact(&format!("/fetch?url={currency}"), currency, &payment)?;
         assert_settled(&reply)?;
+        let response = reply.decoded(PAYMENT_RESPONSE)?;
+        assert_eq!(response.pointer("/extensions/layerx/purposeHash"), None);
+        assert_eq!(reply.body.get("url"), Some(&json!(currency)));
     }
     assert_eq!(harness.served(), 4);
     assert_eq!(harness.gateway.calls("lx_getReceipt"), 4);
@@ -748,6 +932,529 @@ fn exact_receipts_that_do_not_pay_this_request_are_refused() -> Outcome {
     Ok(())
 }
 
+fn receiver_secret() -> Outcome<SigningKey> {
+    let secret: [u8; 32] = x_websearch::payment::unhex(RECEIVER_SECRET)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| fail("receiver secret"))?;
+    Ok(SigningKey::from_bytes(&secret))
+}
+
+fn receiver_public_key() -> Outcome<[u8; 32]> {
+    Ok(receiver_secret()?.verifying_key().to_bytes())
+}
+
+fn accepted(currency: &str) -> Outcome<AcceptedAsset> {
+    let config = Config::parse(&read_json(&fixtures().join("config/valid.json"))?.to_string())?;
+    let assets = AcceptedAssets::new(&config.assets).map_err(|error| fail(format!("{error:?}")))?;
+    assets
+        .all()
+        .iter()
+        .find(|asset| asset.symbol.code() == currency)
+        .copied()
+        .ok_or_else(|| fail(format!("no {currency} asset")))
+}
+
+fn wire<T, E: std::fmt::Debug>(result: Result<T, E>) -> Outcome<T> {
+    result.map_err(|error| fail(format!("{error:?}")))
+}
+
+/// The deterministic test keys the gateway recording is signed with. Only
+/// their public halves and signatures reach the fixtures.
+fn test_key(label: &str) -> SigningKey {
+    SigningKey::from_bytes(&labelled("x-websearch-test/key/", label))
+}
+
+/// One asset movement a recorded receipt attests.
+struct Movement<'a> {
+    label: &'a str,
+    operation: u8,
+    activity_id: [u8; 32],
+    asset: &'a AcceptedAsset,
+    amount: u128,
+    from: [u8; 32],
+    to: [u8; 32],
+}
+
+fn encode_receipt(movement: &Movement<'_>, signature: Option<[u8; 64]>) -> Outcome<Vec<u8>> {
+    let root = |field: &str| {
+        labelled(
+            "x-websearch-test/receipt/",
+            &format!("{}/{field}", movement.label),
+        )
+    };
+    let amount = movement.amount;
+    let mut encoder = Encoder::new(4_096);
+    wire(encoder.structure_header_version(0x5201, PROTOCOL_VERSION))?;
+    wire(encoder.u16(PROTOCOL_VERSION))?;
+    wire(encoder.bytes(&movement.activity_id, 32))?;
+    wire(encoder.u64(9))?;
+    wire(encoder.bytes(&root("previous-state"), 32))?;
+    wire(encoder.bytes(&root("resulting-state"), 32))?;
+    wire(encoder.bytes(&root("activity"), 32))?;
+    wire(encoder.i32(0))?;
+    wire(encoder.sequence_length(0, 512))?;
+    wire(encoder.u128(1))?;
+    wire(encoder.bytes(&root("batch"), 32))?;
+    wire(encoder.u16(1))?;
+    wire(encoder.u32(1))?;
+    wire(encoder.u32(1))?;
+    wire(encoder.u8(movement.operation))?;
+    wire(encoder.bytes(&movement.asset.asset_id, 32))?;
+    wire(encoder.u128(amount))?;
+    wire(encoder.bytes(&movement.from, 32))?;
+    wire(encoder.u128(amount * 100))?;
+    wire(encoder.u128(amount * 99))?;
+    wire(encoder.u64(1))?;
+    wire(encoder.bytes(&movement.to, 32))?;
+    wire(encoder.u128(amount))?;
+    wire(encoder.u128(amount * 2))?;
+    wire(encoder.bytes(&root("transfer-set"), 32))?;
+    wire(encoder.bytes(&root("authorization"), 32))?;
+    wire(encoder.bytes(&root("context"), 32))?;
+    wire(encoder.u64(1_000))?;
+    wire(encoder.u8(u8::from(signature.is_some())))?;
+    if let Some(signature) = signature {
+        wire(encoder.bytes(&signature, 64))?;
+    }
+    Ok(encoder.finish())
+}
+
+/// The canonical receipt `sequencer` signs for `movement`.
+fn signed_receipt(movement: &Movement<'_>, sequencer: &SigningKey) -> Outcome<Vec<u8>> {
+    let digest = wire(receipt_digest(&encode_receipt(movement, None)?))?;
+    encode_receipt(movement, Some(sequencer.sign(&digest).to_bytes()))
+}
+
+fn exact_payment(receipt: &[u8]) -> Outcome<Value> {
+    Ok(json!({
+        "receipt": STANDARD.encode(receipt),
+        "receiptDigest": hex(&wire(leaf_hash(receipt))?),
+        "verificationLevel": "sequencer-signed",
+    }))
+}
+
+/// What a payer-signed grant binds besides its signer.
+struct GrantTerms {
+    from: [u8; 32],
+    recipient: [u8; 32],
+    asset: [u8; 32],
+    per_draw_maximum: u128,
+    allowance: u128,
+    window_length: u64,
+    expiration: u64,
+    purpose: [u8; 32],
+}
+
+fn signed_grant(payer: &SigningKey, terms: &GrantTerms, actor: &str) -> Outcome<(Grant, String)> {
+    let recurring = terms.window_length != 0;
+    let mut body = Vec::with_capacity(250);
+    body.extend_from_slice(&terms.from);
+    body.extend_from_slice(&terms.recipient);
+    body.extend_from_slice(&terms.asset);
+    body.extend_from_slice(&terms.per_draw_maximum.to_be_bytes());
+    body.extend_from_slice(&terms.allowance.to_be_bytes());
+    body.push(u8::from(recurring));
+    body.extend_from_slice(&terms.window_length.to_be_bytes());
+    body.extend_from_slice(&terms.expiration.to_be_bytes());
+    body.extend_from_slice(&terms.purpose);
+    body.push(0);
+    body.extend_from_slice(&[0; 32]);
+    body.extend_from_slice(&0_u64.to_be_bytes());
+    body.extend_from_slice(&payer.verifying_key().to_bytes());
+    let mut id = Sha256::new();
+    id.update(Domain::AuthorityHash.tag());
+    id.update(b"LXP:GRANT:v1");
+    id.update(&body);
+    let id: [u8; 32] = id.finalize().into();
+    let grant = Grant {
+        id,
+        from: terms.from,
+        recipient: terms.recipient,
+        asset: terms.asset,
+        per_draw_maximum: terms.per_draw_maximum,
+        allowance: terms.allowance,
+        recurring,
+        window_length: terms.window_length,
+        expiration: terms.expiration,
+        purpose_hash: terms.purpose,
+        has_reference: false,
+        reference_hash: [0; 32],
+        revocation_sequence: 0,
+        public_key: payer.verifying_key().to_bytes(),
+        signature: payer.sign(&id).to_bytes(),
+    };
+    let encoded = wire(Payment::IssueGrant(grant.clone()).encode(actor.as_bytes()))?;
+    Ok((grant, hex(&encoded)))
+}
+
+fn rules(list: &[Value]) -> Value {
+    json!({ "endpoints": { "gateway": { "*": list } } })
+}
+
+fn identity_rule(did: &str, sequence: u64, once: bool) -> Value {
+    let mut rule = json!({
+        "method": "lx_getSequence",
+        "params": [did, "identity"],
+        "result": {
+            "did": did,
+            "next_sequence": sequence.to_string(),
+            "verification": "authenticated_node_snapshot",
+        },
+    });
+    if once {
+        rule["once"] = json!(true);
+    }
+    rule
+}
+
+fn account_rule(account: &[u8; 32]) -> Value {
+    json!({
+        "method": "lx_getSequence",
+        "params": [hex(account)],
+        "result": { "id": hex(account), "next_sequence": RECEIVER_SEQUENCE.to_string() },
+    })
+}
+
+fn send_rule(activity: &[u8], answer: (&str, Value)) -> Value {
+    let (kind, value) = answer;
+    let mut rule = json!({ "method": "lx_sendActivity", "params": [hex(activity), "executed"] });
+    rule[kind] = value;
+    rule
+}
+
+fn completed(activity_id: &[u8; 32], receipt: &[u8]) -> Value {
+    json!({ "activity_id": hex(activity_id), "receipt": hex(receipt), "state": "completed" })
+}
+
+const RECEIVER_SEQUENCE: u64 = 3;
+const IDENTITY_SEQUENCE: u64 = 7;
+const GRANT_EXPIRATION: u64 = NOW_MS / 1_000 + 86_400;
+
+/// The gateway recording, rebuilt from the real draw signer, grant codec and
+/// receipt encoding under the deterministic test keys.
+#[allow(clippy::too_many_lines)]
+fn gateway_recording() -> Outcome<Vec<(&'static str, Value)>> {
+    let receiver = receiver_secret()?;
+    let receiver_did = receiver_did(&receiver.verifying_key().to_bytes());
+    let purpose = purpose_hash(&receiver.verifying_key().to_bytes());
+    let sequencer = test_key("sequencer");
+    let untrusted = test_key("untrusted-sequencer");
+    let payer = test_key("payer");
+    let payer_did = x_websearch::payment::receiver_did(&payer.verifying_key().to_bytes());
+    let account = |did: &str, asset: &AcceptedAsset| {
+        account_id(&wallet_account(did, asset)).ok_or_else(|| fail("account"))
+    };
+    let other_did = format!("did:layerx:{}", "22".repeat(32));
+    let draw = |grant: &Grant, asset: &AcceptedAsset, identity: u64, label: &str| {
+        wire(sign_draw(
+            &receiver,
+            &DrawRequest {
+                grant,
+                amount: asset.price,
+                receiver_sequence: RECEIVER_SEQUENCE,
+                identity_sequence: identity,
+                idempotency_key: receive_key_bytes(label),
+                network_id: 1,
+                now_ms: NOW_MS,
+            },
+        ))
+    };
+    let terms = |asset: &AcceptedAsset| -> Outcome<GrantTerms> {
+        Ok(GrantTerms {
+            from: account(&payer_did, asset)?,
+            recipient: account(&receiver_did, asset)?,
+            asset: asset.asset_id,
+            per_draw_maximum: asset.price * 10,
+            allowance: asset.price * 10_000,
+            window_length: 0,
+            expiration: GRANT_EXPIRATION,
+            purpose,
+        })
+    };
+
+    let mut grants = serde_json::Map::new();
+    let mut exact = serde_json::Map::new();
+    let mut metered_identity = Vec::new();
+    let mut metered_accounts = Vec::new();
+    let mut metered_sends = Vec::new();
+    let mut exact_rules = Vec::new();
+    for (position, currency) in (0_u64..).zip(CURRENCIES) {
+        let asset = accepted(currency)?;
+        let (grant, encoded) = signed_grant(&payer, &terms(&asset)?, &receiver_did)?;
+        grants.insert(currency.to_owned(), json!(encoded));
+        let label = format!("metered-{currency}");
+        let signed = draw(&grant, &asset, IDENTITY_SEQUENCE + position, &label)?;
+        let pay_to = account(&receiver_did, &asset)?;
+        let receipt = signed_receipt(
+            &Movement {
+                label: &label,
+                operation: 6,
+                activity_id: signed.activity_id,
+                asset: &asset,
+                amount: asset.price,
+                from: account(&payer_did, &asset)?,
+                to: pay_to,
+            },
+            &sequencer,
+        )?;
+        let mut result = completed(&signed.activity_id, &receipt);
+        result["commitment"] = json!("executed");
+        metered_identity.push(identity_rule(
+            &receiver_did,
+            IDENTITY_SEQUENCE + position,
+            true,
+        ));
+        metered_accounts.push(account_rule(&pay_to));
+        metered_sends.push(send_rule(&signed.canonical, ("result", result)));
+
+        let label = format!("exact-{currency}");
+        let activity_id = labelled("x-websearch-test/activity/", &label);
+        let receipt = signed_receipt(
+            &Movement {
+                label: &label,
+                operation: 5,
+                activity_id,
+                asset: &asset,
+                amount: asset.price,
+                from: account(&payer_did, &asset)?,
+                to: pay_to,
+            },
+            &sequencer,
+        )?;
+        exact.insert(currency.to_owned(), exact_payment(&receipt)?);
+        exact_rules.push(json!({
+            "method": "lx_getReceipt",
+            "params": [hex(&activity_id)],
+            "result": completed(&activity_id, &receipt),
+        }));
+    }
+    let mut metered_rules = Vec::new();
+    for (identity, account) in metered_identity.into_iter().zip(metered_accounts) {
+        metered_rules.push(identity);
+        metered_rules.push(account);
+    }
+    metered_rules.extend(metered_sends);
+
+    let sid = accepted("SID")?;
+    let sid_receiver = account(&receiver_did, &sid)?;
+    let sid_payer = account(&payer_did, &sid)?;
+    let sid_exact =
+        |label: &str, to: [u8; 32], signer: &SigningKey| -> Outcome<(Value, [u8; 32])> {
+            let activity_id = labelled("x-websearch-test/activity/", label);
+            let receipt = signed_receipt(
+                &Movement {
+                    label,
+                    operation: 5,
+                    activity_id,
+                    asset: &sid,
+                    amount: sid.price,
+                    from: sid_payer,
+                    to,
+                },
+                signer,
+            )?;
+            Ok((exact_payment(&receipt)?, activity_id))
+        };
+    let other_payee = account(&other_did, &sid)?;
+    let (other_payment, _) = sid_exact("exact-other-payee", other_payee, &sequencer)?;
+    let (unknown_payment, unknown_activity) = sid_exact("exact-unknown", sid_receiver, &sequencer)?;
+    let (untrusted_payment, _) = sid_exact("exact-untrusted", sid_receiver, &untrusted)?;
+    exact_rules.push(json!({
+        "method": "lx_getReceipt",
+        "params": [hex(&unknown_activity)],
+        "error": { "code": -32004, "message": "unknown activity" },
+    }));
+
+    let refused = |edit: &dyn Fn(&mut GrantTerms)| -> Outcome<String> {
+        let mut refused = terms(&sid)?;
+        edit(&mut refused);
+        Ok(signed_grant(&payer, &refused, &receiver_did)?.1)
+    };
+    let refused_grants = json!({
+        "expired": refused(&|terms| terms.expiration = NOW_MS / 1_000 - 1)?,
+        "lowLimit": refused(&|terms| {
+            terms.per_draw_maximum = sid.price - 1;
+            terms.allowance = (sid.price - 1) * 1_000;
+        })?,
+        "otherPurpose": refused(&|terms| {
+            terms.purpose = labelled("x-websearch-test/purpose/", "other");
+        })?,
+        "otherRecipient": refused(&|terms| terms.recipient = other_payee)?,
+        "recurring": refused(&|terms| terms.window_length = 3_600)?,
+    });
+
+    let (sid_grant, _) = signed_grant(&payer, &terms(&sid)?, &receiver_did)?;
+    let sid_movement = |label: &'static str, activity_id: [u8; 32], amount: u128| Movement {
+        label,
+        operation: 6,
+        activity_id,
+        asset: &sid,
+        amount,
+        from: sid_payer,
+        to: sid_receiver,
+    };
+    let pending = draw(&sid_grant, &sid, IDENTITY_SEQUENCE, "pending-SID")?;
+    let pending_receipt = signed_receipt(
+        &sid_movement("pending-SID", pending.activity_id, sid.price),
+        &sequencer,
+    )?;
+    let pending_id = hex(&pending.activity_id);
+    let pending_rules = vec![
+        identity_rule(&receiver_did, IDENTITY_SEQUENCE, false),
+        account_rule(&sid_receiver),
+        send_rule(
+            &pending.canonical,
+            (
+                "error",
+                json!({
+                    "code": -32001,
+                    "data": { "activity_id": pending_id, "state": "pending" },
+                    "message": "activity pending",
+                }),
+            ),
+        ),
+        json!({
+            "method": "lx_getActivityStatus",
+            "once": true,
+            "params": [pending_id],
+            "result": { "activity_id": pending_id, "state": "pending" },
+        }),
+        json!({
+            "method": "lx_getActivityStatus",
+            "params": [pending_id],
+            "result": { "activity_id": pending_id, "state": "completed" },
+        }),
+        json!({
+            "method": "lx_getReceipt",
+            "params": [pending_id],
+            "result": completed(&pending.activity_id, &pending_receipt),
+        }),
+    ];
+
+    let refusal = |label: &str| draw(&sid_grant, &sid, IDENTITY_SEQUENCE, label);
+    let other_receipt = refusal("refused-other-receipt")?;
+    let untrusted_draw = refusal("refused-untrusted")?;
+    let failed = refusal("refused-failed")?;
+    let other_activity = refusal("refused-other-activity")?;
+    let amount = refusal("refused-amount")?;
+    let elsewhere = labelled("x-websearch-test/activity/", "elsewhere");
+    let refusal_rules = vec![
+        identity_rule(&receiver_did, IDENTITY_SEQUENCE, false),
+        account_rule(&sid_receiver),
+        send_rule(
+            &other_receipt.canonical,
+            (
+                "result",
+                completed(
+                    &other_receipt.activity_id,
+                    &signed_receipt(
+                        &sid_movement(
+                            "refused-other-receipt",
+                            other_activity.activity_id,
+                            sid.price,
+                        ),
+                        &sequencer,
+                    )?,
+                ),
+            ),
+        ),
+        send_rule(
+            &untrusted_draw.canonical,
+            (
+                "result",
+                completed(
+                    &untrusted_draw.activity_id,
+                    &signed_receipt(
+                        &sid_movement("refused-untrusted", untrusted_draw.activity_id, sid.price),
+                        &untrusted,
+                    )?,
+                ),
+            ),
+        ),
+        send_rule(
+            &failed.canonical,
+            (
+                "result",
+                json!({ "activity_id": hex(&failed.activity_id), "state": "failed" }),
+            ),
+        ),
+        send_rule(
+            &other_activity.canonical,
+            (
+                "result",
+                completed(
+                    &elsewhere,
+                    &signed_receipt(
+                        &sid_movement("refused-other-activity", elsewhere, sid.price),
+                        &sequencer,
+                    )?,
+                ),
+            ),
+        ),
+        send_rule(
+            &amount.canonical,
+            (
+                "result",
+                completed(
+                    &amount.activity_id,
+                    &signed_receipt(
+                        &sid_movement("refused-amount", amount.activity_id, sid.price + 1),
+                        &sequencer,
+                    )?,
+                ),
+            ),
+        ),
+    ];
+
+    let buyer = json!({
+        "exact": exact,
+        "grants": grants,
+        "payerDid": payer_did,
+        "refusedExact": {
+            "otherPayee": other_payment,
+            "unknown": unknown_payment,
+            "untrusted": untrusted_payment,
+        },
+        "refusedGrants": refused_grants,
+        "sequencerPublicKey": hex(&sequencer.verifying_key().to_bytes()),
+    });
+    Ok(vec![
+        ("buyer.json", buyer),
+        ("exact.json", rules(&exact_rules)),
+        ("metered.json", rules(&metered_rules)),
+        ("pending.json", rules(&pending_rules)),
+        ("refusals.json", rules(&refusal_rules)),
+    ])
+}
+
+fn pretty(value: &Value) -> Outcome<String> {
+    Ok(format!("{}\n", serde_json::to_string_pretty(value)?))
+}
+
+#[test]
+fn the_gateway_recording_is_reproduced_by_the_real_signers() -> Outcome {
+    let recording = gateway_recording()?;
+    let recorded = std::env::var_os(RECORD_VARIABLE).is_some();
+    for (name, value) in &recording {
+        let path = fixtures().join("gateway").join(name);
+        if recorded {
+            std::fs::write(&path, pretty(value)?)?;
+        }
+        assert_eq!(std::fs::read_to_string(&path)?, pretty(value)?, "{name}");
+    }
+    let text =
+        serde_json::to_string(&recording.iter().map(|(_, value)| value).collect::<Vec<_>>())?;
+    for secret in [
+        hex(&test_key("sequencer").to_bytes()),
+        hex(&test_key("untrusted-sequencer").to_bytes()),
+        hex(&test_key("payer").to_bytes()),
+        RECEIVER_SECRET.to_owned(),
+    ] {
+        assert!(!text.contains(&secret));
+    }
+    Ok(())
+}
+
 fn exchange_entry(target: &str, headers: &[(&str, &str)], reply: &Reply) -> Outcome<Value> {
     let mut request = serde_json::Map::new();
     for (name, value) in headers {
@@ -767,58 +1474,101 @@ fn exchange_entry(target: &str, headers: &[(&str, &str)], reply: &Reply) -> Outc
     if let Some(retry) = reply.header("Retry-After") {
         response.insert("Retry-After".to_owned(), json!(retry));
     }
+    let mut answer = json!({ "status": reply.status, "headers": response });
+    if reply.body.is_null() {
+        answer["bodyBase64"] = json!(STANDARD.encode(&reply.raw));
+    } else {
+        answer["body"] = reply.body.clone();
+    }
     Ok(json!({
         "request": { "method": "GET", "target": target, "headers": request },
-        "response": { "status": reply.status, "headers": response, "body": reply.body },
+        "response": answer,
     }))
 }
+
+/// The page each asset's exact fetch is recorded for.
+const FETCHED: [(&str, usize); 4] = [("SID", 0), ("PAX", 1), ("USDC", 2), ("USDL", 3)];
 
 #[test]
 fn the_client_exchange_matches_the_recording() -> Outcome {
     let harness = Harness::start("client", &["metered.json", "exact.json"])?;
+    let pages = vectors()?;
     let payer = harness.payer()?.to_owned();
     let grant = harness.grant("/grants/SID")?;
-    let exact = harness
-        .buyer
-        .pointer("/exact/USDC")
-        .cloned()
-        .ok_or_else(|| fail("payment"))?;
+    let search = "/search?q=paxeer".to_owned();
     let metered = harness.signature(
-        "/search?q=paxeer",
+        &search,
         Some(&payer),
         METERED,
         "SID",
         &metered_payload(&grant, "metered-SID"),
     )?;
-    let exact = harness.signature("/fetch?url=paxeer", None, EXACT, "USDC", &exact)?;
-    let steps: [(&str, Vec<(&str, &str)>); 4] = [
-        ("/search?q=paxeer", vec![(PAYER_DID, payer.as_str())]),
+    let mut steps: Vec<(String, Vec<(&str, String)>)> = vec![
+        (search.clone(), vec![(PAYER_DID, payer.clone())]),
         (
-            "/search?q=paxeer",
-            vec![
-                (PAYER_DID, payer.as_str()),
-                (PAYMENT_SIGNATURE, metered.as_str()),
-            ],
-        ),
-        ("/fetch?url=paxeer", vec![]),
-        (
-            "/fetch?url=paxeer",
-            vec![(PAYMENT_SIGNATURE, exact.as_str())],
+            search,
+            vec![(PAYER_DID, payer.clone()), (PAYMENT_SIGNATURE, metered)],
         ),
     ];
+    for (currency, page) in FETCHED {
+        let target = format!("/fetch?url={}", percent(&pages[page].payload));
+        let payment = harness
+            .buyer
+            .pointer(&format!("/exact/{currency}"))
+            .cloned()
+            .ok_or_else(|| fail("payment"))?;
+        let signature = harness.signature(&target, None, EXACT, currency, &payment)?;
+        steps.push((target.clone(), vec![]));
+        steps.push((target, vec![(PAYMENT_SIGNATURE, signature)]));
+    }
+    steps.push((format!("/content/{}", pages[0].digest), vec![]));
     let mut exchange = Vec::new();
     for (target, headers) in &steps {
-        let reply = harness.get(target, headers)?;
-        exchange.push(exchange_entry(target, headers, &reply)?);
+        let headers: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(name, value)| (*name, value.as_str()))
+            .collect();
+        let reply = harness.get(target, &headers)?;
+        exchange.push(exchange_entry(target, &headers, &reply)?);
     }
-    assert_eq!(harness.served(), 2);
+    assert_eq!(harness.served(), 5);
+
+    let statuses: Vec<u64> = exchange
+        .iter()
+        .filter_map(|entry| entry.pointer("/response/status").and_then(Value::as_u64))
+        .collect();
+    assert_eq!(
+        statuses,
+        [402, 200, 402, 200, 402, 200, 402, 200, 402, 200, 200]
+    );
+    let settled = &exchange[1]["response"]["headers"][PAYMENT_RESPONSE];
+    assert_eq!(
+        settled.pointer("/extensions/layerx/purposeHash"),
+        Some(&json!(hex(&purpose_hash(&receiver_public_key()?))))
+    );
+    for (step, (currency, page)) in FETCHED.iter().enumerate() {
+        let paid = &exchange[3 + 2 * step]["response"];
+        let asset = accepted(currency)?;
+        assert_eq!(paid["headers"][PAYMENT_RESPONSE]["success"], true);
+        assert_eq!(
+            paid["headers"][PAYMENT_RESPONSE]["amount"],
+            asset.price.to_string()
+        );
+        assert_eq!(paid["body"]["url"], pages[*page].payload);
+        assert_eq!(paid["body"]["digest"], pages[*page].digest);
+    }
+    let stored = STANDARD.decode(text(&exchange[10], "/response/bodyBase64")?)?;
+    assert_eq!(digest_hex(&content_digest(&stored)), pages[0].digest);
+    let pax = accepted("PAX")?;
+    assert_eq!(pax.symbol, AssetSymbol::Pax);
+    let recording_text = serde_json::to_string(&exchange)?;
+    assert!(!recording_text.contains(&harness.address()?.to_string()));
+    assert!(!recording_text.contains(&harness.gateway.address.to_string()));
+
     let recorded = json!({ "exchange": exchange });
     let path = fixtures().join("client-exchange.json");
     if std::env::var_os(RECORD_VARIABLE).is_some() {
-        std::fs::write(
-            &path,
-            format!("{}\n", serde_json::to_string_pretty(&recorded)?),
-        )?;
+        std::fs::write(&path, pretty(&recorded)?)?;
     }
     assert_eq!(read_json(&path)?, recorded);
     Ok(())

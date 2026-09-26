@@ -22,7 +22,7 @@ import {
 type Json = Record<string, unknown>;
 interface Step {
   readonly request: { readonly method: string; readonly target: string; readonly headers: Json };
-  readonly response: { readonly status: number; readonly headers: Json; readonly body: unknown };
+  readonly response: { readonly status: number; readonly headers: Json; readonly body?: unknown; readonly bodyBase64?: string };
 }
 interface Vector { readonly payload: string; readonly media_type: string; readonly text: string; readonly digest: string }
 
@@ -43,10 +43,17 @@ const signature = (step: Step): Json => step.request.headers["PAYMENT-SIGNATURE"
 const payload = (step: Step): Json => signature(step)["payload"] as Json;
 const settlementOf = (step: Step): Json => step.response.headers["PAYMENT-RESPONSE"] as Json;
 
-assert.equal(exchange.length, 4);
-const [searchChallenge, searchPaid, fetchChallenge, fetchPaid] = exchange as [Step, Step, Step, Step];
-assert.equal(searchChallenge.request.target, "/search?q=paxeer");
-assert.equal(fetchPaid.request.target, "/fetch?url=paxeer");
+// The recording: a SID metered search, an exact fetch paid in each asset of one committed page, and the stored content.
+assert.equal(exchange.length, 11);
+const searchPaid = exchange[1]!;
+const fetchIndex = (currency: WebSearchCurrency): number => 3 + 2 * currencies.indexOf(currency);
+const fetchUrl = (currency: WebSearchCurrency): string => vectors[currencies.indexOf(currency)]!.payload;
+assert.equal(exchange[0]!.request.target, "/search?q=paxeer");
+for (const currency of currencies) {
+  assert.equal(exchange[fetchIndex(currency)]!.request.target, `/fetch?url=${encodeURIComponent(fetchUrl(currency))}`);
+}
+assert.equal(exchange[10]!.request.target, `/content/${vectors[0]!.digest}`);
+const usdcPaid = fetchIndex("USDC");
 
 function batchFacts(receipt: Uint8Array, sequencerPublicKey: string): AuthorizedReceiptBatch {
   const view = Buffer.from(receipt);
@@ -120,8 +127,9 @@ async function replay(steps: readonly Step[], content: ReadonlyMap<string, Uint8
     for (const [name, value] of Object.entries(step.response.headers)) {
       headers[name] = typeof value === "string" ? value : Buffer.from(JSON.stringify(value)).toString("base64");
     }
-    const body = JSON.stringify(step.response.body);
-    headers["content-length"] = Buffer.byteLength(body);
+    const body = step.response.bodyBase64 === undefined ? Buffer.from(JSON.stringify(step.response.body)) : Buffer.from(step.response.bodyBase64, "base64");
+    if (step.response.bodyBase64 !== undefined) headers["content-type"] = "application/octet-stream";
+    headers["content-length"] = body.length;
     response.writeHead(step.response.status, headers);
     response.end(body);
   });
@@ -158,20 +166,16 @@ async function refused(action: Promise<unknown>, code: string): Promise<void> {
   });
 }
 
-function fetchBody(url: string, vector: Vector, text = vector.text): Json {
-  const digest = contentDigest(webContentBytes({ kind: 1, payload: url, mediaType: vector.media_type, text: vector.text }));
-  return { url, final_url: url, media_type: vector.media_type, digest, length: Buffer.byteLength(text, "utf8"), text };
-}
-
 const meteredSid: WebSearchPayer = {
   did: payerDid,
   preferences: [{ currency: "SID", scheme: "metered" }],
   metered: async () => ({ grant: bytes(payload(searchPaid)["grant"] as string), idempotencyKey: payload(searchPaid)["idempotencyKey"] as string }),
 };
-const exactUsdc: WebSearchPayer = {
-  preferences: [{ currency: "USDC", scheme: "exact" }],
-  exact: async () => ({ receipt: base64(payload(fetchPaid)["receipt"] as string) }),
-};
+const exactIn = (currency: WebSearchCurrency): WebSearchPayer => ({
+  preferences: [{ currency, scheme: "exact" }],
+  exact: async () => ({ receipt: base64(payload(exchange[fetchIndex(currency)]!)["receipt"] as string) }),
+});
+const exactUsdc = exactIn("USDC");
 
 // The content digest of every committed vector.
 for (const vector of vectors) {
@@ -192,37 +196,59 @@ for (const currency of currencies) {
   assert.deepEqual(encodeGrant(decodePayerGrant(canonical)), canonical);
 }
 
-// USDC exact: the recorded exchange settles, the settlement verifies and the fetched text matches its digest.
-{
-  const steps = clone();
-  steps[3] = { ...steps[3]!, response: { ...steps[3]!.response, body: fetchBody("paxeer", vectors[0]!) } };
-  const sidecar = await replay(steps);
-  const fetched = await client(sidecar.endpoint, exactUsdc).fetch("paxeer");
-  assert.deepEqual(sidecar.served, [2, 3]);
-  assert.equal(fetched.text, vectors[0]!.text);
-  assert.equal(fetched.mediaType, vectors[0]!.media_type);
-  assert.equal(fetched.digest, (steps[3]!.response.body as Json)["digest"]);
-  const settlement = settlementOf(fetchPaid);
+// Exact in every asset, PAX into the main accounts: each recorded payment is byte-for-byte the client's, the settlement
+// verifies and the fetched text matches its digest.
+for (const [position, currency] of currencies.entries()) {
+  const paid = fetchIndex(currency);
+  const vector = vectors[position]!;
+  const sidecar = await replay(clone());
+  const fetched = await client(sidecar.endpoint, exactIn(currency)).fetch(vector.payload);
+  assert.deepEqual(sidecar.served, [paid - 1, paid]);
+  assert.deepEqual(sidecar.unrecorded, []);
+  assert.equal(fetched.url, vector.payload);
+  assert.equal(fetched.text, vector.text);
+  assert.equal(fetched.mediaType, vector.media_type);
+  assert.equal(fetched.digest, vector.digest);
+  const settlement = settlementOf(exchange[paid]!);
   assert.deepEqual(fetched.settlement, {
-    scheme: "exact", currency: "USDC", network: "layerx:1", asset: configured.USDC.asset_id, amount: configured.USDC.price,
+    scheme: "exact", currency, network: "layerx:1", asset: configured[currency].asset_id, amount: configured[currency].price,
     payer: settlement["payer"], receiptDigest: (settlement["extensions"] as { layerx: Json }).layerx["receiptDigest"], transaction: settlement["transaction"],
   });
   await sidecar.close();
 }
 
-// SID metered: the client's payment is byte-for-byte the recorded one and the sidecar settles it, but the recorded
-// settlement does not repeat the challenge's purposeHash, so the client refuses the resource.
+// SID metered: the client's payment is byte-for-byte the recorded one, the settlement repeats the challenge's
+// purposeHash and the search results are released.
 {
   const sidecar = await replay(clone());
-  await refused(client(sidecar.endpoint, meteredSid).search("paxeer"), "settlement-purpose-mismatch");
+  const found = await client(sidecar.endpoint, meteredSid).search("paxeer");
   assert.deepEqual(sidecar.served, [0, 1]);
   assert.deepEqual(sidecar.unrecorded, []);
+  assert.deepEqual(found.results, (searchPaid.response.body as Json)["results"]);
+  const settlement = settlementOf(searchPaid);
+  const layerx = (settlement["extensions"] as { layerx: Json }).layerx;
+  const offer = ((exchange[0]!.response.headers["PAYMENT-REQUIRED"] as Json)["accepts"] as Json[])
+    .find((candidate) => candidate["scheme"] === "metered" && ((candidate["extra"] as Json)["layerx"] as Json)["currency"] === "SID")!;
+  assert.equal(layerx["purposeHash"], ((offer["extra"] as Json)["layerx"] as Json)["purposeHash"]);
+  assert.deepEqual(found.settlement, {
+    scheme: "metered", currency: "SID", network: "layerx:1", asset: configured.SID.asset_id, amount: configured.SID.price,
+    payer: settlement["payer"], receiptDigest: layerx["receiptDigest"], transaction: settlement["transaction"],
+  });
+  await sidecar.close();
+}
+for (const purposeHash of [undefined, "44".repeat(32)]) {
+  const steps = clone();
+  const layerx = (settlementOf(steps[1]!)["extensions"] as { layerx: Json }).layerx;
+  if (purposeHash === undefined) delete layerx["purposeHash"]; else layerx["purposeHash"] = purposeHash;
+  const sidecar = await replay(steps);
+  await refused(client(sidecar.endpoint, meteredSid).search("paxeer"), "settlement-purpose-mismatch");
+  assert.deepEqual(sidecar.served, [0, 1]);
   await sidecar.close();
 }
 
 // Refused settlements release nothing to the caller.
 for (const [mutate, code] of [
-  [(settlement: Json) => { settlement["payer"] = settlementOf(searchPaid)["payer"]; }, "settlement-payer-mismatch"],
+  [(settlement: Json) => { settlement["payer"] = settlementOf(exchange[fetchIndex("SID")]!)["payer"]; }, "settlement-payer-mismatch"],
   [(settlement: Json) => { settlement["success"] = false; }, "settlement-mismatch"],
   [(settlement: Json) => { settlement["amount"] = "1"; }, "settlement-mismatch"],
   [(settlement: Json) => { settlement["transaction"] = `lxp:${"11".repeat(32)}`; }, "settlement-receipt-mismatch"],
@@ -233,79 +259,86 @@ for (const [mutate, code] of [
   }, "settlement-receipt-mismatch"],
 ] as const) {
   const steps = clone();
-  mutate(settlementOf(steps[3]!));
-  steps[3] = { ...steps[3]!, response: { ...steps[3]!.response, body: fetchBody("paxeer", vectors[0]!) } };
+  mutate(settlementOf(steps[usdcPaid]!));
   const sidecar = await replay(steps);
-  await refused(client(sidecar.endpoint, exactUsdc).fetch("paxeer"), code);
-  assert.deepEqual(sidecar.served, [2, 3]);
+  await refused(client(sidecar.endpoint, exactUsdc).fetch(fetchUrl("USDC")), code);
+  assert.deepEqual(sidecar.served, [usdcPaid - 1, usdcPaid]);
   await sidecar.close();
 }
 {
   const steps = clone();
-  delete steps[3]!.response.headers["PAYMENT-RESPONSE"];
+  delete steps[usdcPaid]!.response.headers["PAYMENT-RESPONSE"];
   const sidecar = await replay(steps);
-  await refused(client(sidecar.endpoint, exactUsdc).fetch("paxeer"), "missing-payment-response");
+  await refused(client(sidecar.endpoint, exactUsdc).fetch(fetchUrl("USDC")), "missing-payment-response");
   await sidecar.close();
 }
 
 // A receipt the configured sequencer key did not sign is never presented as payment.
 {
   const sidecar = await replay(clone());
-  await refused(client(sidecar.endpoint, exactUsdc, untrustedKey).fetch("paxeer"), "receipt-unverified");
-  assert.deepEqual(sidecar.served, [2]);
+  await refused(client(sidecar.endpoint, exactUsdc, untrustedKey).fetch(fetchUrl("USDC")), "receipt-unverified");
+  assert.deepEqual(sidecar.served, [usdcPaid - 1]);
   await sidecar.close();
 }
 
-// A fetched text or a stored content whose digest does not match is refused.
+// A fetched text or a stored content whose digest does not match is refused; the recorded content is served unpaid.
 {
   const steps = clone();
-  steps[3] = { ...steps[3]!, response: { ...steps[3]!.response, body: fetchBody("paxeer", vectors[0]!, `${vectors[0]!.text} altered`) } };
+  const body = steps[usdcPaid]!.response.body as Json;
+  body["text"] = `${body["text"] as string} altered`;
   const sidecar = await replay(steps);
-  await refused(client(sidecar.endpoint, exactUsdc).fetch("paxeer"), "content-digest-mismatch");
-  assert.deepEqual(sidecar.served, [2, 3]);
+  await refused(client(sidecar.endpoint, exactUsdc).fetch(fetchUrl("USDC")), "content-digest-mismatch");
+  assert.deepEqual(sidecar.served, [usdcPaid - 1, usdcPaid]);
   await sidecar.close();
 }
 {
-  const stored = new Map<string, Uint8Array>();
-  for (const vector of vectors) stored.set(`/content/${vector.digest}`, webContentBytes({ kind: 1, payload: vector.payload, mediaType: vector.media_type, text: vector.text }));
   const [first, second] = vectors as [Vector, Vector];
-  stored.set(`/content/${second.digest}`, stored.get(`/content/${first.digest}`)!);
-  const sidecar = await replay([], stored);
+  const recorded = base64(exchange[10]!.response.bodyBase64!);
+  assert.equal(contentDigest(recorded), first.digest);
+  const stored = new Map<string, Uint8Array>([[`/content/${second.digest}`, recorded]]);
+  const sidecar = await replay(clone(), stored);
   const content = await client(sidecar.endpoint, exactUsdc).content(first.digest);
+  assert.deepEqual(sidecar.served, [10]);
   assert.equal(content.digest, first.digest);
   assert.equal(content.content.text, first.text);
+  assert.equal(Buffer.from(content.content.payload).toString("utf8"), first.payload);
   assert.equal(content.settlement, null);
   await refused(client(sidecar.endpoint, exactUsdc).content(second.digest), "content-digest-mismatch");
   await refused(client(sidecar.endpoint, exactUsdc).content("zz"), "invalid-digest");
   await sidecar.close();
 }
 
-// Every recorded offer is checked against the configured asset, price, receiver account and payer before paying.
+// Every recorded offer is checked against the configured asset, price, receiver account and payer before paying:
+// PAX is paid from and into the main accounts, every other asset from and into its own.
 for (const currency of currencies) {
-  for (const scheme of ["metered", "exact"] as const) {
-    if (currency === "USDC" && scheme === "exact") continue;
-    const offers: WebSearchOffer[] = [];
-    const payer: WebSearchPayer = {
-      ...(scheme === "metered" ? { did: payerDid } : {}),
-      preferences: [{ currency, scheme }],
-      metered: async (offer) => { offers.push(offer); return { grant: bytes((buyer["grants"] as Json)[currency] as string), idempotencyKey: "22".repeat(32) }; },
-      exact: async (offer) => { offers.push(offer); return { receipt: base64((buyer["exact"] as Record<string, Json>)[currency]!["receipt"] as string) }; },
-    };
-    const sidecar = await replay(clone());
-    const action = scheme === "metered" ? client(sidecar.endpoint, payer).search("paxeer") : client(sidecar.endpoint, payer).fetch("paxeer");
-    if (currency === "PAX") {
-      await refused(action, "offer-account-mismatch");
-      assert.deepEqual(offers, []);
-    } else {
-      await refused(action, "payment-refused:unrecorded_request");
-      assert.equal(offers.length, 1);
-      assert.equal(offers[0]!.asset, configured[currency].asset_id);
-      assert.equal(offers[0]!.amount, configured[currency].price);
-      const sent = JSON.parse(Buffer.from((sidecar.unrecorded[0]!["headers"] as Json)["payment-signature"] as string, "base64").toString("utf8")) as Json;
-      assert.equal((sent["accepted"] as Json)["payTo"], offers[0]!.payTo);
-    }
-    await sidecar.close();
-  }
+  const offers: WebSearchOffer[] = [];
+  const payer: WebSearchPayer = {
+    did: payerDid,
+    preferences: [{ currency, scheme: "metered" }],
+    metered: async (offer) => { offers.push(offer); return { grant: bytes((buyer["grants"] as Json)[currency] as string), idempotencyKey: "22".repeat(32) }; },
+  };
+  const sidecar = await replay(clone());
+  await refused(client(sidecar.endpoint, payer).search("paxeer"), "payment-refused:unrecorded_request");
+  assert.equal(offers.length, 1);
+  const offer = offers[0]!;
+  assert.equal(offer.asset, configured[currency].asset_id);
+  assert.equal(offer.amount, configured[currency].price);
+  const suffix = currency === "PAX" ? ":main" : `:asset:${configured[currency].asset_id}`;
+  assert.ok(offer.account.endsWith(suffix), offer.account);
+  const sent = JSON.parse(Buffer.from((sidecar.unrecorded[0]!["headers"] as Json)["payment-signature"] as string, "base64").toString("utf8")) as Json;
+  assert.equal((sent["accepted"] as Json)["payTo"], offer.payTo);
+  await sidecar.close();
+}
+{
+  const steps = clone();
+  const paxExact = ((steps[fetchIndex("PAX") - 1]!.response.headers["PAYMENT-REQUIRED"] as Json)["accepts"] as Json[])
+    .find((offer) => offer["scheme"] === "exact" && ((offer["extra"] as Json)["layerx"] as Json)["currency"] === "PAX")!;
+  const layerx = (paxExact["extra"] as Json)["layerx"] as Json;
+  layerx["account"] = (layerx["account"] as string).replace(/:main$/, `:asset:${configured.PAX.asset_id}`);
+  const sidecar = await replay(steps);
+  await refused(client(sidecar.endpoint, exactIn("PAX")).fetch(fetchUrl("PAX")), "offer-account-mismatch");
+  assert.deepEqual(sidecar.unrecorded, []);
+  await sidecar.close();
 }
 
 // A grant for another purpose, a payer the offer does not name and an offer above the configured price are refused unpaid.
@@ -330,7 +363,7 @@ for (const currency of currencies) {
     assets: { SID: { assetId: configured.SID.asset_id, maxAmount: BigInt(configured.SID.price) - 1n } },
     payer: meteredSid, authority: async (receipt: Uint8Array) => batchFacts(receipt, trustedKey), protocolVersion: 3, now: () => 1_000_000_000n,
   }).search("paxeer"), "offer-price-exceeded");
-  await refused(client(sidecar.endpoint, { preferences: [{ currency: "SID", scheme: "metered" }] }).fetch("paxeer"), "no-acceptable-offer");
+  await refused(client(sidecar.endpoint, { preferences: [{ currency: "SID", scheme: "metered" }] }).fetch(fetchUrl("SID")), "no-acceptable-offer");
   assert.deepEqual(sidecar.served, [0, 2]);
   assert.deepEqual(tampered.unrecorded, []);
   await tampered.close();

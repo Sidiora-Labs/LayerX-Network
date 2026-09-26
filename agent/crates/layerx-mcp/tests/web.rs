@@ -39,7 +39,13 @@ use sha2::{Digest as _, Sha256};
 use sha3::Keccak256;
 
 const NETWORK: &str = "layerx:1";
-const RECORDED_FETCH_URL: &str = "paxeer";
+const RECORDED_FETCH_URL: &str = "https://paxeer.app/data.json";
+const RECORDED_FETCH_TARGET: &str = "/fetch?url=https%3A%2F%2Fpaxeer.app%2Fdata.json";
+const SEARCH_RECEIPT_DIGEST: &str =
+    "8d7d6aacef0e15991060d10b9228a7b2531262cde05c10e650f48fd9b4c9a4e1";
+const SEARCH_PAYER: &str = "bf7730f1c6b226001b40e138b2f0e3b7982245fe211fd17332d5cbe7c23cc967";
+const FETCH_RECEIPT_DIGEST: &str =
+    "289ac16ceaf47010c2eb38f5bf421132b688cc76f7d279a67776835f5a569576";
 const TAMPERED_PAYER: &str = "4aa4897f08c81fcd9b003dfb8f4a369a9ed828f91ab228e04b14e02f03727aaf";
 const ROUTED_FETCH_URL: &str = "https://paxeer.app/index.html";
 const OBSERVED_SEQUENCE: u64 = 50;
@@ -235,7 +241,7 @@ fn answer(mut stream: TcpStream, exchange: &[Value], script: &Script, signatures
         .chain(script.served.iter())
         .find(|(target, _)| *target == incoming.target);
     let target = if content.is_some() {
-        format!("/fetch?url={RECORDED_FETCH_URL}")
+        RECORDED_FETCH_TARGET.to_owned()
     } else {
         incoming.target.clone()
     };
@@ -457,12 +463,23 @@ fn vectors() -> Vec<Value> {
         .unwrap_or_else(|| panic!("content vectors"))
 }
 
+/// The search results the recorded metered search released.
+fn recorded_results() -> Value {
+    fixture("client-exchange.json")["exchange"][1]["response"]["body"]["results"].clone()
+}
+
 fn fetch_body(tamper_text: bool) -> (Vec<u8>, [u8; 32]) {
     fetch_answer(RECORDED_FETCH_URL, tamper_text)
 }
 
+/// The fetch answer for `url`: the committed page recorded at it, or the
+/// plain-text page served at it.
 fn fetch_answer(url: &str, tamper_text: bool) -> (Vec<u8>, [u8; 32]) {
-    let vector = &vectors()[1];
+    let pages = vectors();
+    let vector = pages
+        .iter()
+        .find(|vector| text(vector, "/payload") == url)
+        .unwrap_or(&pages[1]);
     let media_type = text(vector, "/media_type");
     let page = text(vector, "/text");
     let digest: [u8; 32] =
@@ -517,22 +534,15 @@ fn paid_metered_search_settles_and_releases_untrusted_results() {
     assert_eq!(payer.grants[0].amount, 3114);
     assert_eq!(payer.grants[0].idempotency_key, metered_key());
     let settlement = &outcome.settlement;
-    assert_eq!(
-        hex(&settlement.receipt_digest),
-        "54c4a7b999f9e107c0dd700f98dd39de2987a060a5e4b5c6e1bc324fd71e0fa5"
-    );
-    assert_eq!(
-        hex(&settlement.payer),
-        "f750fa06be3076a21a9b5ac018da732ee0ee18e42b9ffcb15b5dc3528ea65949"
-    );
+    assert_eq!(hex(&settlement.receipt_digest), SEARCH_RECEIPT_DIGEST);
+    assert_eq!(hex(&settlement.payer), SEARCH_PAYER);
     assert_eq!(settlement.amount, 3114);
-    assert_eq!(
-        outcome.result,
-        WebResult::Search {
-            opaque_results: Vec::new()
-        }
-    );
     let evidence = outcome.evidence();
+    assert_eq!(evidence["content"]["results"], recorded_results());
+    assert_eq!(
+        evidence["content"]["results"][0]["url"],
+        "https://paxeer.app/index.html"
+    );
     assert_eq!(evidence["untrusted"], true);
     assert_eq!(evidence["tool"], "web.search");
     assert_eq!(
@@ -541,7 +551,7 @@ fn paid_metered_search_settles_and_releases_untrusted_results() {
     );
     assert_eq!(
         evidence["settlement"]["transaction"],
-        "lxp:54c4a7b999f9e107c0dd700f98dd39de2987a060a5e4b5c6e1bc324fd71e0fa5"
+        format!("lxp:{SEARCH_RECEIPT_DIGEST}")
     );
     assert!(registry
         .ticket(metered_key())
@@ -551,11 +561,8 @@ fn paid_metered_search_settles_and_releases_untrusted_results() {
 
 #[test]
 fn paid_exact_fetch_settles_and_checks_the_content_digest() {
-    let (body, digest) = fetch_body(false);
-    let replay = Replay::start(Script {
-        fetch_body: Some(body),
-        ..Script::default()
-    });
+    let (_, digest) = fetch_body(false);
+    let replay = Replay::start(Script::default());
     let registry = ApprovalRegistry::default();
     let mut payer = RecordedPayer::new();
     let outcome = web_tool(
@@ -570,7 +577,7 @@ fn paid_exact_fetch_settles_and_checks_the_content_digest() {
     assert_eq!(payer.payments[0].amount, 1000);
     assert_eq!(
         hex(&outcome.settlement.receipt_digest),
-        "5088d0659995e37111051d23861b813c29d221021f5b6043831e9f191ca0fc36"
+        FETCH_RECEIPT_DIGEST
     );
     let WebResult::Fetch {
         digest: released,
@@ -582,9 +589,69 @@ fn paid_exact_fetch_settles_and_checks_the_content_digest() {
         panic!("fetch result");
     };
     assert_eq!(*released, digest);
-    assert_eq!(opaque_text, text(&vectors()[1], "/text"));
-    assert_eq!(media_type, "text/plain");
+    assert_eq!(hex(&digest), text(&vectors()[2], "/digest"));
+    assert_eq!(opaque_text, text(&vectors()[2], "/text"));
+    assert_eq!(media_type, "application/json");
     assert_eq!(outcome.evidence()["content"]["digest"], hex(&digest));
+}
+
+#[test]
+fn recorded_exact_fetches_settle_in_each_per_asset_currency() {
+    let exchange = fixture("client-exchange.json")["exchange"].clone();
+    let buyer = fixture("gateway/buyer.json");
+    for (position, currency, code, price) in [
+        (0, Currency::Sid, "SID", 3114),
+        (2, Currency::Usdc, "USDC", 1000),
+        (3, Currency::Usdl, "USDL", 1000),
+    ] {
+        let vector = &vectors()[position];
+        let replay = Replay::start(Script::default());
+        let registry = ApprovalRegistry::default();
+        let receipt = STANDARD
+            .decode(text(&buyer, &format!("/exact/{code}/receipt")))
+            .unwrap_or_else(|error| panic!("receipt: {error}"));
+        let mut payer = RecordedPayer::with_receipt(receipt);
+        let call = WebCall {
+            operation: WebOperation::Fetch(WebFetch {
+                url: text(vector, "/payload").to_owned(),
+            }),
+            currency,
+            scheme: Scheme::Exact,
+            idempotency_key: [0x5c; 32],
+        };
+        let outcome = web_tool(
+            &config(&replay, sequencer_key()),
+            &call,
+            &approval(&registry, u128::MAX),
+            &mut payer,
+        )
+        .unwrap_or_else(|error| panic!("{code} fetch: {error:?}"));
+        let paid = &exchange[3 + 2 * position]["response"]["headers"]["PAYMENT-RESPONSE"];
+        assert_eq!(payer.payments.len(), 1, "{code}");
+        assert_eq!(payer.payments[0].amount, price, "{code}");
+        assert_eq!(outcome.settlement.amount, price, "{code}");
+        assert_eq!(
+            hex(&outcome.settlement.receipt_digest),
+            text(paid, "/extensions/layerx/receiptDigest"),
+            "{code}"
+        );
+        assert_eq!(
+            hex(&outcome.settlement.payer),
+            text(paid, "/payer"),
+            "{code}"
+        );
+        let WebResult::Fetch {
+            digest,
+            opaque_text,
+            ..
+        } = &outcome.result
+        else {
+            panic!("{code} fetch result");
+        };
+        assert_eq!(hex(digest), text(vector, "/digest"), "{code}");
+        assert_eq!(opaque_text, text(vector, "/text"), "{code}");
+        assert_eq!(replay.signatures(), 1, "{code}");
+    }
 }
 
 #[test]
@@ -1345,12 +1412,9 @@ fn a_bound_server_lists_and_pays_the_web_tools_through_tools_call() {
         &call(&mut session, "web.search", &search_arguments()),
         "web.search",
     );
-    assert_eq!(
-        search["settlement"]["receiptDigest"],
-        "54c4a7b999f9e107c0dd700f98dd39de2987a060a5e4b5c6e1bc324fd71e0fa5"
-    );
+    assert_eq!(search["settlement"]["receiptDigest"], SEARCH_RECEIPT_DIGEST);
     assert_eq!(search["settlement"]["amount"], "3114");
-    assert_eq!(search["content"]["results"], json!([]));
+    assert_eq!(search["content"]["results"], recorded_results());
     assert_eq!(replay.signatures(), 1);
 
     let fetched = paid(
@@ -1366,13 +1430,11 @@ fn a_bound_server_lists_and_pays_the_web_tools_through_tools_call() {
         ),
         "web.fetch",
     );
-    assert_eq!(
-        fetched["settlement"]["receiptDigest"],
-        "5088d0659995e37111051d23861b813c29d221021f5b6043831e9f191ca0fc36"
-    );
+    assert_eq!(fetched["settlement"]["receiptDigest"], FETCH_RECEIPT_DIGEST);
     assert_eq!(fetched["content"]["url"], ROUTED_FETCH_URL);
     assert_eq!(fetched["content"]["digest"], hex(&fetch_digest));
-    assert_eq!(fetched["content"]["text"], text(&vectors()[1], "/text"));
+    assert_eq!(fetched["content"]["digest"], text(&vectors()[0], "/digest"));
+    assert_eq!(fetched["content"]["text"], text(&vectors()[0], "/text"));
     assert_eq!(replay.signatures(), 2);
 
     let stored = paid(

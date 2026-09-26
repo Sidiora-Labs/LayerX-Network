@@ -1,6 +1,8 @@
 //! Pay per request over 402LXP. Every paid route offers SID, PAX, USDC and
 //! USDL, each as a metered draw against the payer's grant and as an exact
-//! alternative, in `PAYMENT-REQUIRED`. A `PAYMENT-SIGNATURE` is settled
+//! alternative, in `PAYMENT-REQUIRED`. PAX is paid into the receiver's main
+//! account and drawn from the payer's; SID, USDC and USDL move between the
+//! per-asset accounts. A `PAYMENT-SIGNATURE` is settled
 //! through the `layerx-x402` seller: the receiver key signs the ordinal-6
 //! draw, the gateway executes it through `lx_sendActivity`, a pending result
 //! is recovered with `lx_getActivityStatus` or `lx_getReceipt`, and the
@@ -49,7 +51,7 @@ use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
 use crate::assets::{AcceptedAsset, AcceptedAssets, AssetRefusal};
-use crate::config::{Config, SequencerTrust};
+use crate::config::{AssetSymbol, Config, SequencerTrust};
 use crate::server::{Request, Response, Route, RouteError, RouteTable};
 
 pub const PAYMENT_REQUIRED: &str = "PAYMENT-REQUIRED";
@@ -151,6 +153,18 @@ pub fn receiver_did(public_key: &[u8; 32]) -> String {
 #[must_use]
 pub fn asset_account(did: &str, asset_id: &[u8; 32]) -> String {
     format!("agent:{did}:asset:{}", hex(asset_id))
+}
+
+/// The account `did` pays or is paid in `asset`: the main account
+/// `agent:<did>:main` for PAX, the kernel's native coin, and the per-asset
+/// account for SID, USDC and USDL.
+#[must_use]
+pub fn wallet_account(did: &str, asset: &AcceptedAsset) -> String {
+    if asset.symbol == AssetSymbol::Pax {
+        format!("agent:{did}:main")
+    } else {
+        asset_account(did, &asset.asset_id)
+    }
 }
 
 /// The account id of a reference under [`PROTOCOL_VERSION`].
@@ -680,7 +694,7 @@ impl PaymentGate {
         let did = receiver_did(&public_key);
         let mut accounts = [[0; 32]; 4];
         for (slot, asset) in accounts.iter_mut().zip(assets.all()) {
-            *slot = account_id(&asset_account(&did, &asset.asset_id)).ok_or(GateError::Adapter)?;
+            *slot = account_id(&wallet_account(&did, asset)).ok_or(GateError::Adapter)?;
         }
         let trace = TraceId::mint([0; 16]);
         let mut gateway = GatewayCore::new();
@@ -746,11 +760,11 @@ impl PaymentGate {
     ) -> PaymentRequirements {
         let mut layerx = json!({
             "commitment": COMMITMENT,
-            "account": asset_account(&self.receiver.did, &asset.asset_id),
+            "account": wallet_account(&self.receiver.did, asset),
             "currency": asset.symbol.code(),
         });
         if let (Some(payer), Some(terms)) = (payer, layerx.as_object_mut()) {
-            let payer = account_id(&asset_account(payer, &asset.asset_id)).map(|id| hex(&id));
+            let payer = account_id(&wallet_account(payer, asset)).map(|id| hex(&id));
             terms.insert("payer".to_owned(), json!(payer));
             terms.insert("purposeHash".to_owned(), json!(hex(&self.receiver.purpose)));
         }
@@ -1085,8 +1099,7 @@ impl Plane<'_> {
         let payer = self.payer.ok_or("payer_required")?;
         let (grant_bytes, receive_key) = metered_payload(&request.scheme_payload)?;
         let grant = decode_grant(&grant_bytes, &self.gate.receiver.did).ok_or("invalid_grant")?;
-        let payer_account =
-            account_id(&asset_account(payer, &asset.asset_id)).ok_or("payer_mismatch")?;
+        let payer_account = account_id(&wallet_account(payer, asset)).ok_or("payer_mismatch")?;
         check_grant(
             &grant,
             &payer_account,

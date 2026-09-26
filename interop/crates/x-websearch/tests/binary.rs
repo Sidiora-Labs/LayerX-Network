@@ -317,25 +317,44 @@ fn offers(head: &str) -> TestResult<Vec<Value>> {
     Ok(required["accepts"].as_array().ok_or("no accepts")?.clone())
 }
 
+/// Where an offer's account points: `main` for `agent:<did>:main`, and
+/// `asset:<id>` for a per-asset account.
+fn account_kind(account: &str) -> String {
+    if account.ends_with(":main") {
+        "main".to_owned()
+    } else {
+        account
+            .split_once(":asset:")
+            .map(|(_, asset)| format!("asset:{asset}"))
+            .unwrap_or_default()
+    }
+}
+
 fn assert_offers_every_asset(offers: &[Value], config: &Value, schemes: &[&str]) -> TestResult {
     let mut expected = Vec::new();
     for currency in CURRENCIES {
+        let asset_id = config["assets"][currency]["asset_id"]
+            .as_str()
+            .ok_or("asset id")?;
+        let account = if currency == "PAX" {
+            "main".to_owned()
+        } else {
+            format!("asset:{asset_id}")
+        };
         for scheme in schemes {
             expected.push((
                 (*scheme).to_owned(),
                 currency.to_owned(),
-                config["assets"][currency]["asset_id"]
-                    .as_str()
-                    .ok_or("asset id")?
-                    .to_owned(),
+                asset_id.to_owned(),
                 config["assets"][currency]["price"]
                     .as_str()
                     .ok_or("price")?
                     .to_owned(),
+                account.clone(),
             ));
         }
     }
-    let found: Vec<(String, String, String, String)> = offers
+    let found: Vec<(String, String, String, String, String)> = offers
         .iter()
         .map(|offer| {
             let field = |pointer: &str| {
@@ -350,6 +369,7 @@ fn assert_offers_every_asset(offers: &[Value], config: &Value, schemes: &[&str])
                 field("/extra/layerx/currency"),
                 field("/asset").trim_start_matches("0x").to_owned(),
                 field("/amount"),
+                account_kind(&field("/extra/layerx/account")),
             )
         })
         .collect();

@@ -58,7 +58,18 @@ TRUSTED_KEY = BUYER["sequencerPublicKey"]
 UNTRUSTED_KEY = CONFIG["gateway"]["sequencer_public_key"]
 PAYER_DID = BUYER["payerDid"]
 CURRENCIES = ("SID", "PAX", "USDC", "USDL")
-SEARCH_CHALLENGE, SEARCH_PAID, FETCH_CHALLENGE, FETCH_PAID = EXCHANGE
+SEARCH_PAID = EXCHANGE[1]
+
+
+def _fetch_index(currency: str) -> int:
+    return 3 + 2 * CURRENCIES.index(currency)
+
+
+def _fetch_url(currency: str) -> str:
+    return VECTORS[CURRENCIES.index(currency)]["payload"]
+
+
+USDC_PAID = _fetch_index("USDC")
 
 
 def _batch_facts(receipt: bytes, sequencer_public_key: str) -> AuthorizedReceiptBatch:
@@ -138,7 +149,12 @@ class _Replay:
                 step = steps[index]["response"]
                 headers = {"content-type": "application/json"}
                 headers.update({name: _header_value(value) for name, value in step["headers"].items()})
-                self._send(step["status"], headers, json.dumps(step["body"]).encode("utf-8"))
+                if "bodyBase64" in step:
+                    headers["content-type"] = "application/octet-stream"
+                    body = base64.b64decode(step["bodyBase64"])
+                else:
+                    body = json.dumps(step["body"]).encode("utf-8")
+                self._send(step["status"], headers, body)
 
             def _send(self, status: int, headers: dict[str, str], body: bytes) -> None:
                 self.send_response(status)
@@ -189,10 +205,14 @@ def _metered_sid() -> _Payer:
                   grant=lambda _: WebSearchMeteredPayment(bytes.fromhex(payload["grant"]), payload["idempotencyKey"]))
 
 
-def _exact_usdc() -> _Payer:
-    payload = FETCH_PAID["request"]["headers"]["PAYMENT-SIGNATURE"]["payload"]
-    return _Payer(preferences=(WebSearchPreference("USDC", "exact"),),
+def _exact_in(currency: str) -> _Payer:
+    payload = EXCHANGE[_fetch_index(currency)]["request"]["headers"]["PAYMENT-SIGNATURE"]["payload"]
+    return _Payer(preferences=(WebSearchPreference(currency, "exact"),),
                   receipt=lambda _: WebSearchExactPayment(base64.b64decode(payload["receipt"])))
+
+
+def _exact_usdc() -> _Payer:
+    return _exact_in("USDC")
 
 
 def _client(endpoint: str, payer: _Payer, key: str = TRUSTED_KEY, assets: dict[str, WebSearchAssetTerms] | None = None) -> WebSearchClient:
@@ -200,17 +220,6 @@ def _client(endpoint: str, payer: _Payer, key: str = TRUSTED_KEY, assets: dict[s
     return WebSearchClient(endpoint, "layerx:1", ASSETS["PAX"]["asset_id"], terms, payer,
                            lambda receipt, _: _batch_facts(receipt, key), LayerXSignatureVerifier(),
                            protocol_version=3, now=lambda: 1_000_000_000)
-
-
-def _fetch_body(url: str, vector: dict, text: str | None = None) -> dict:
-    digest = content_digest(web_content_bytes(1, url, vector["media_type"], vector["text"]))
-    body = vector["text"] if text is None else text
-    return {"url": url, "final_url": url, "media_type": vector["media_type"], "digest": digest, "length": len(body.encode("utf-8")), "text": body}
-
-
-def _with_fetch_body(steps: list[dict], body: dict) -> list[dict]:
-    steps[3]["response"]["body"] = body
-    return steps
 
 
 class WebSearchClientTest(unittest.TestCase):
@@ -234,25 +243,48 @@ class WebSearchClientTest(unittest.TestCase):
             canonical = bytes.fromhex(BUYER["grants"][currency])
             self.assertEqual(encode_grant(decode_payer_grant(canonical)), canonical)
 
-    def test_exact_usdc_fetch_settles(self) -> None:
-        steps = _with_fetch_body(copy.deepcopy(EXCHANGE), _fetch_body("paxeer", VECTORS[0]))
-        with _Replay(steps) as sidecar:
-            fetched = _client(sidecar.endpoint, _exact_usdc()).fetch("paxeer")
-            self.assertEqual(sidecar.served, [2, 3])
-        settlement = FETCH_PAID["response"]["headers"]["PAYMENT-RESPONSE"]
-        self.assertEqual(fetched.text, VECTORS[0]["text"])
-        self.assertEqual(fetched.digest, steps[3]["response"]["body"]["digest"])
-        assert fetched.settlement is not None
-        self.assertEqual(fetched.settlement.payer, settlement["payer"])
-        self.assertEqual(fetched.settlement.transaction, settlement["transaction"])
-        self.assertEqual(fetched.settlement.receipt_digest, settlement["extensions"]["layerx"]["receiptDigest"])
-        self.assertEqual((fetched.settlement.asset, fetched.settlement.amount), (ASSETS["USDC"]["asset_id"], ASSETS["USDC"]["price"]))
+    def test_exact_fetch_settles_in_every_asset(self) -> None:
+        for position, currency in enumerate(CURRENCIES):
+            paid = _fetch_index(currency)
+            vector = VECTORS[position]
+            with _Replay(copy.deepcopy(EXCHANGE)) as sidecar:
+                fetched = _client(sidecar.endpoint, _exact_in(currency)).fetch(vector["payload"])
+                self.assertEqual(sidecar.served, [paid - 1, paid])
+                self.assertEqual(sidecar.unrecorded, [])
+            settlement = EXCHANGE[paid]["response"]["headers"]["PAYMENT-RESPONSE"]
+            self.assertEqual((fetched.url, fetched.text, fetched.media_type, fetched.digest),
+                             (vector["payload"], vector["text"], vector["media_type"], vector["digest"]))
+            assert fetched.settlement is not None
+            self.assertEqual((fetched.settlement.scheme, fetched.settlement.currency, fetched.settlement.network), ("exact", currency, "layerx:1"))
+            self.assertEqual(fetched.settlement.payer, settlement["payer"])
+            self.assertEqual(fetched.settlement.transaction, settlement["transaction"])
+            self.assertEqual(fetched.settlement.receipt_digest, settlement["extensions"]["layerx"]["receiptDigest"])
+            self.assertEqual((fetched.settlement.asset, fetched.settlement.amount), (ASSETS[currency]["asset_id"], ASSETS[currency]["price"]))
 
-    def test_metered_sid_settlement_without_purpose_is_refused(self) -> None:
+    def test_metered_sid_settlement_repeats_the_purpose(self) -> None:
         with _Replay(copy.deepcopy(EXCHANGE)) as sidecar:
-            self._refused(lambda: _client(sidecar.endpoint, _metered_sid()).search("paxeer"), "settlement-purpose-mismatch")
+            found = _client(sidecar.endpoint, _metered_sid()).search("paxeer")
             self.assertEqual(sidecar.served, [0, 1])
             self.assertEqual(sidecar.unrecorded, [])
+        settlement = SEARCH_PAID["response"]["headers"]["PAYMENT-RESPONSE"]
+        offer = next(offer for offer in EXCHANGE[0]["response"]["headers"]["PAYMENT-REQUIRED"]["accepts"]
+                     if offer["scheme"] == "metered" and offer["extra"]["layerx"]["currency"] == "SID")
+        self.assertEqual(settlement["extensions"]["layerx"]["purposeHash"], offer["extra"]["layerx"]["purposeHash"])
+        self.assertEqual([(result.url, result.title, result.snippet) for result in found.results],
+                         [(result["url"], result["title"], result["snippet"]) for result in SEARCH_PAID["response"]["body"]["results"]])
+        assert found.settlement is not None
+        self.assertEqual((found.settlement.scheme, found.settlement.currency, found.settlement.payer, found.settlement.transaction),
+                         ("metered", "SID", settlement["payer"], settlement["transaction"]))
+        for purpose in (None, "44" * 32):
+            steps = copy.deepcopy(EXCHANGE)
+            layerx = steps[1]["response"]["headers"]["PAYMENT-RESPONSE"]["extensions"]["layerx"]
+            if purpose is None:
+                del layerx["purposeHash"]
+            else:
+                layerx["purposeHash"] = purpose
+            with _Replay(steps) as sidecar:
+                self._refused(lambda: _client(sidecar.endpoint, _metered_sid()).search("paxeer"), "settlement-purpose-mismatch")
+                self.assertEqual(sidecar.served, [0, 1])
 
     def test_refused_settlements(self) -> None:
         other = BUYER["exact"]["SID"]
@@ -261,66 +293,71 @@ class WebSearchClientTest(unittest.TestCase):
             settlement["extensions"] = {"layerx": {"receipt": other["receipt"], "receiptDigest": other["receiptDigest"], "verificationLevel": "sequencer-signed"}}
             settlement["transaction"] = f"lxp:{other['receiptDigest']}"
 
+        sid_payer = EXCHANGE[_fetch_index("SID")]["response"]["headers"]["PAYMENT-RESPONSE"]["payer"]
         cases: list[tuple[Callable[[dict], None], str]] = [
-            (lambda settlement: settlement.update(payer=SEARCH_PAID["response"]["headers"]["PAYMENT-RESPONSE"]["payer"]), "settlement-payer-mismatch"),
+            (lambda settlement: settlement.update(payer=sid_payer), "settlement-payer-mismatch"),
             (lambda settlement: settlement.update(success=False), "settlement-mismatch"),
             (lambda settlement: settlement.update(amount="1"), "settlement-mismatch"),
             (lambda settlement: settlement.update(transaction=f"lxp:{'11' * 32}"), "settlement-receipt-mismatch"),
             (swap, "settlement-receipt-mismatch"),
         ]
         for mutate, code in cases:
-            steps = _with_fetch_body(copy.deepcopy(EXCHANGE), _fetch_body("paxeer", VECTORS[0]))
-            mutate(steps[3]["response"]["headers"]["PAYMENT-RESPONSE"])
+            steps = copy.deepcopy(EXCHANGE)
+            mutate(steps[USDC_PAID]["response"]["headers"]["PAYMENT-RESPONSE"])
             with _Replay(steps) as sidecar:
-                self._refused(lambda: _client(sidecar.endpoint, _exact_usdc()).fetch("paxeer"), code)
-                self.assertEqual(sidecar.served, [2, 3])
+                self._refused(lambda: _client(sidecar.endpoint, _exact_usdc()).fetch(_fetch_url("USDC")), code)
+                self.assertEqual(sidecar.served, [USDC_PAID - 1, USDC_PAID])
         steps = copy.deepcopy(EXCHANGE)
-        del steps[3]["response"]["headers"]["PAYMENT-RESPONSE"]
+        del steps[USDC_PAID]["response"]["headers"]["PAYMENT-RESPONSE"]
         with _Replay(steps) as sidecar:
-            self._refused(lambda: _client(sidecar.endpoint, _exact_usdc()).fetch("paxeer"), "missing-payment-response")
+            self._refused(lambda: _client(sidecar.endpoint, _exact_usdc()).fetch(_fetch_url("USDC")), "missing-payment-response")
 
     def test_untrusted_sequencer_receipt_is_never_sent(self) -> None:
         with _Replay(copy.deepcopy(EXCHANGE)) as sidecar:
-            self._refused(lambda: _client(sidecar.endpoint, _exact_usdc(), UNTRUSTED_KEY).fetch("paxeer"), "receipt-unverified")
-            self.assertEqual(sidecar.served, [2])
+            self._refused(lambda: _client(sidecar.endpoint, _exact_usdc(), UNTRUSTED_KEY).fetch(_fetch_url("USDC")), "receipt-unverified")
+            self.assertEqual(sidecar.served, [USDC_PAID - 1])
 
     def test_digest_mismatches(self) -> None:
-        steps = _with_fetch_body(copy.deepcopy(EXCHANGE), _fetch_body("paxeer", VECTORS[0], VECTORS[0]["text"] + " altered"))
+        steps = copy.deepcopy(EXCHANGE)
+        steps[USDC_PAID]["response"]["body"]["text"] += " altered"
         with _Replay(steps) as sidecar:
-            self._refused(lambda: _client(sidecar.endpoint, _exact_usdc()).fetch("paxeer"), "content-digest-mismatch")
-            self.assertEqual(sidecar.served, [2, 3])
-        stored = {f"/content/{vector['digest']}": web_content_bytes(1, vector["payload"], vector["media_type"], vector["text"]) for vector in VECTORS}
+            self._refused(lambda: _client(sidecar.endpoint, _exact_usdc()).fetch(_fetch_url("USDC")), "content-digest-mismatch")
+            self.assertEqual(sidecar.served, [USDC_PAID - 1, USDC_PAID])
         first, second = VECTORS[0], VECTORS[1]
-        stored[f"/content/{second['digest']}"] = stored[f"/content/{first['digest']}"]
-        with _Replay([], stored) as sidecar:
+        recorded = base64.b64decode(EXCHANGE[10]["response"]["bodyBase64"])
+        self.assertEqual(content_digest(recorded), first["digest"])
+        with _Replay(copy.deepcopy(EXCHANGE), {f"/content/{second['digest']}": recorded}) as sidecar:
             content = _client(sidecar.endpoint, _exact_usdc()).content(first["digest"])
-            self.assertEqual((content.digest, content.content.text, content.settlement), (first["digest"], first["text"], None))
+            self.assertEqual(sidecar.served, [10])
+            self.assertEqual((content.digest, content.content.text, content.content.payload.decode(), content.settlement),
+                             (first["digest"], first["text"], first["payload"], None))
             self._refused(lambda: _client(sidecar.endpoint, _exact_usdc()).content(second["digest"]), "content-digest-mismatch")
             self._refused(lambda: _client(sidecar.endpoint, _exact_usdc()).content("zz"), "invalid-digest")
 
     def test_offers_are_checked_per_asset(self) -> None:
         for currency in CURRENCIES:
-            for scheme in ("metered", "exact"):
-                if currency == "USDC" and scheme == "exact":
-                    continue
-                payer = _Payer(
-                    preferences=(WebSearchPreference(currency, scheme),),
-                    did=PAYER_DID if scheme == "metered" else None,
-                    grant=lambda _, c=currency: WebSearchMeteredPayment(bytes.fromhex(BUYER["grants"][c]), "22" * 32),
-                    receipt=lambda _, c=currency: WebSearchExactPayment(base64.b64decode(BUYER["exact"][c]["receipt"])),
-                )
-                with _Replay(copy.deepcopy(EXCHANGE)) as sidecar:
-                    client = _client(sidecar.endpoint, payer)
-                    action = (lambda: client.search("paxeer")) if scheme == "metered" else (lambda: client.fetch("paxeer"))
-                    if currency == "PAX":
-                        self._refused(action, "offer-account-mismatch")
-                        self.assertEqual(payer.offers, [])
-                        continue
-                    self._refused(action, "payment-refused:unrecorded_request")
-                    self.assertEqual(len(payer.offers), 1)
-                    self.assertEqual((payer.offers[0].asset, payer.offers[0].amount), (ASSETS[currency]["asset_id"], ASSETS[currency]["price"]))
-                    sent = json.loads(base64.b64decode(sidecar.unrecorded[0]["payment-signature"]))
-                    self.assertEqual(sent["accepted"]["payTo"], payer.offers[0].pay_to)
+            payer = _Payer(
+                preferences=(WebSearchPreference(currency, "metered"),),
+                did=PAYER_DID,
+                grant=lambda _, c=currency: WebSearchMeteredPayment(bytes.fromhex(BUYER["grants"][c]), "22" * 32),
+            )
+            with _Replay(copy.deepcopy(EXCHANGE)) as sidecar:
+                client = _client(sidecar.endpoint, payer)
+                self._refused(lambda: client.search("paxeer"), "payment-refused:unrecorded_request")
+                self.assertEqual(len(payer.offers), 1)
+                offer = payer.offers[0]
+                self.assertEqual((offer.asset, offer.amount), (ASSETS[currency]["asset_id"], ASSETS[currency]["price"]))
+                suffix = ":main" if currency == "PAX" else f":asset:{ASSETS[currency]['asset_id']}"
+                self.assertTrue(offer.account.endswith(suffix), offer.account)
+                sent = json.loads(base64.b64decode(sidecar.unrecorded[0]["payment-signature"]))
+                self.assertEqual(sent["accepted"]["payTo"], offer.pay_to)
+        steps = copy.deepcopy(EXCHANGE)
+        offer = next(offer for offer in steps[_fetch_index("PAX") - 1]["response"]["headers"]["PAYMENT-REQUIRED"]["accepts"]
+                     if offer["scheme"] == "exact" and offer["extra"]["layerx"]["currency"] == "PAX")
+        offer["extra"]["layerx"]["account"] = offer["extra"]["layerx"]["account"].removesuffix(":main") + f":asset:{ASSETS['PAX']['asset_id']}"
+        with _Replay(steps) as sidecar:
+            self._refused(lambda: _client(sidecar.endpoint, _exact_in("PAX")).fetch(_fetch_url("PAX")), "offer-account-mismatch")
+            self.assertEqual(sidecar.unrecorded, [])
 
     def test_unpaid_refusals(self) -> None:
         payer = _metered_sid()
@@ -338,7 +375,7 @@ class WebSearchClientTest(unittest.TestCase):
         with _Replay(copy.deepcopy(EXCHANGE)) as sidecar:
             cheaper = {"SID": WebSearchAssetTerms(ASSETS["SID"]["asset_id"], int(ASSETS["SID"]["price"]) - 1)}
             self._refused(lambda: _client(sidecar.endpoint, _metered_sid(), assets=cheaper).search("paxeer"), "offer-price-exceeded")
-            self._refused(lambda: _client(sidecar.endpoint, _Payer(preferences=(WebSearchPreference("SID", "metered"),))).fetch("paxeer"), "no-acceptable-offer")
+            self._refused(lambda: _client(sidecar.endpoint, _Payer(preferences=(WebSearchPreference("SID", "metered"),))).fetch(_fetch_url("SID")), "no-acceptable-offer")
             self.assertEqual(sidecar.served, [0, 2])
         self._refused(lambda: _client("http://example.com", _exact_usdc()), "invalid-endpoint")
 

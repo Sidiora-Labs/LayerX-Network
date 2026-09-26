@@ -253,6 +253,7 @@ impl Seller {
         {
             return Err(X402Error::EvidenceMismatch);
         }
+        let purpose = grant_purpose(accepted)?;
         let status = gateway
             .settle_with_receipt(
                 principal,
@@ -267,15 +268,16 @@ impl Seller {
             return Err(X402Error::EvidenceMissing);
         };
         let digest_text = hex(&receipt_digest);
+        let mut layerx = json!({
+            "receipt": STANDARD.encode(&executed.canonical_receipt),
+            "receiptDigest": digest_text,
+            "verificationLevel": "sequencer-signed"
+        });
+        if let (Some(purpose), Some(terms)) = (purpose, layerx.as_object_mut()) {
+            terms.insert("purposeHash".to_owned(), Value::String(purpose));
+        }
         let mut extensions = BTreeMap::new();
-        extensions.insert(
-            "layerx".to_owned(),
-            json!({
-                "receipt": STANDARD.encode(&executed.canonical_receipt),
-                "receiptDigest": digest_text,
-                "verificationLevel": "sequencer-signed"
-            }),
-        );
+        extensions.insert("layerx".to_owned(), layerx);
         let response = SettlementResponse {
             success: true,
             error_reason: None,
@@ -293,6 +295,28 @@ impl Seller {
             receipt_digest,
         })
     }
+}
+
+/// The challenge's `purposeHash` a grant settlement repeats: `None` for an
+/// exact offer, the offer's 64 lowercase hexadecimal characters for a metered
+/// or subscription offer, and a refusal when a grant offer carries none.
+fn grant_purpose(accepted: &PaymentRequirements) -> Result<Option<String>, X402Error> {
+    if !matches!(accepted.scheme.as_str(), "metered" | "subscription") {
+        return Ok(None);
+    }
+    accepted
+        .extra
+        .as_ref()
+        .and_then(|extra| extra.pointer("/layerx/purposeHash"))
+        .and_then(Value::as_str)
+        .filter(|purpose| {
+            purpose.len() == 64
+                && purpose
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+        .map(|purpose| Some(purpose.to_owned()))
+        .ok_or(X402Error::ProfileMissing)
 }
 
 fn digest(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
