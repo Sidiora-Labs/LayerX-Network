@@ -1,0 +1,54 @@
+{
+  "vectors": [
+    {
+      "name": "two fields in pointer order",
+      "body": "{\"quote\":{\"asset\":\"SID\",\"amount\":\"3.114\"},\"decimals\":3,\"served\":17}",
+      "pointers": ["/decimals", "/quote/amount"],
+      "answer": "[3,\"3.114\"]"
+    },
+    {
+      "name": "the whole document in canonical form",
+      "body": "{\"numbers\": [333333333.33333329, 1E30, 4.50, 2e-3, 0.000000000000000000000000001], \"string\": \"\\u20ac$\\u000F\\u000aA'\\u0042\\u0022\\u005c\\\\\\\"\\/\", \"literals\": [null, true, false]}",
+      "pointers": [""],
+      "answer": "[{\"literals\":[null,true,false],\"numbers\":[333333333.3333333,1e+30,4.5,0.002,1e-27],\"string\":\"\u20ac$\\u000f\\nA'B\\\"\\\\\\\\\\\"/\"}]"
+    },
+    {
+      "name": "members sorted by utf-16 code units",
+      "body": "{\"\\u20ac\": \"Euro Sign\", \"\\r\": \"Carriage Return\", \"\\ufb33\": \"Hebrew Letter Dalet With Dagesh\", \"1\": \"One\", \"\\ud83d\\ude00\": \"Emoji: Grinning Face\", \"\\u0080\": \"Control\", \"\\u00f6\": \"Latin Small Letter O With Diaeresis\"}",
+      "pointers": [""],
+      "answer": "[{\"\\r\":\"Carriage Return\",\"1\":\"One\",\"\u0080\":\"Control\",\"\u00f6\":\"Latin Small Letter O With Diaeresis\",\"\u20ac\":\"Euro Sign\",\"\ud83d\ude00\":\"Emoji: Grinning Face\",\"\ufb33\":\"Hebrew Letter Dalet With Dagesh\"}]"
+    },
+    {
+      "name": "numbers in the ECMAScript form",
+      "body": "[0, -0, 1e21, 1e20, 1E-7, 0.000001, 123456789012345678901234, 999999999999999900000, 5e-324, 1.7976931348623157e308, 4.35, 100, -1.5e-9]",
+      "pointers": ["/0", "/1", "/2", "/3", "/4", "/5", "/6", "/7", "/8", "/9", "/10", "/11", "/12"],
+      "answer": "[0,0,1e+21,100000000000000000000,1e-7,0.000001,1.2345678901234568e+23,999999999999999900000,5e-324,1.7976931348623157e+308,4.35,100,-1.5e-9]"
+    },
+    {
+      "name": "escaped pointer tokens",
+      "body": "{\"a/b\": 1, \"m~n\": 2, \"\": {\"x\": [true]}}",
+      "pointers": ["/a~1b", "/m~0n", "//x/0"],
+      "answer": "[1,2,true]"
+    },
+    {
+      "name": "objects and arrays selected whole",
+      "body": "{\"list\": [{\"b\": 2, \"a\": [1, {\"z\": null, \"y\": \"\\u001f\"}]}], \"empty\": {}}",
+      "pointers": ["/list", "/empty"],
+      "answer": "[[{\"a\":[1,{\"y\":\"\\u001f\",\"z\":null}],\"b\":2}],{}]"
+    }
+  ],
+  "refusals": [
+    { "name": "not json", "body": "<html>quote</html>", "pointers": ["/quote"], "refuses": "response_not_json" },
+    { "name": "duplicate member", "body": "{\"a\": 1, \"a\": 2}", "pointers": ["/a"], "refuses": "response_not_json" },
+    { "name": "lone surrogate", "body": "[\"\\ud800\"]", "pointers": ["/0"], "refuses": "response_not_json" },
+    { "name": "control character in a string", "body": "[\"a\u0001b\"]", "pointers": ["/0"], "refuses": "response_not_json" },
+    { "name": "number beyond the double range", "body": "[1e400]", "pointers": ["/0"], "refuses": "response_not_json" },
+    { "name": "data after the value", "body": "{\"a\": 1} {}", "pointers": ["/a"], "refuses": "response_not_json" },
+    { "name": "leading zero number", "body": "[01]", "pointers": ["/0"], "refuses": "response_not_json" },
+    { "name": "missing member", "body": "{\"a\": 1}", "pointers": ["/a", "/nope"], "refuses": "pointer_unresolved" },
+    { "name": "index out of range", "body": "{\"list\": [1, 2]}", "pointers": ["/list/2"], "refuses": "pointer_unresolved" },
+    { "name": "index with a leading zero", "body": "{\"list\": [1, 2]}", "pointers": ["/list/01"], "refuses": "pointer_unresolved" },
+    { "name": "past the end index", "body": "{\"list\": [1, 2]}", "pointers": ["/list/-"], "refuses": "pointer_unresolved" },
+    { "name": "into a scalar", "body": "{\"a\": 1}", "pointers": ["/a/b"], "refuses": "pointer_unresolved" }
+  ]
+}

@@ -281,3 +281,19 @@ observed = "With v6.8 appended to node/tags that test still requires v6.7 to be 
 assumption = "Neither assertion is changed here; the owner of node/upgrades_test.go moves its latest-tag checks to v6.8 and storage/common/keys/store_keys.go gains XWebStoreKey = \"xweb\" in MemIAVLStoreKeys, after which the verify_cmd reruns unchanged."
 severity = "blocker"
 closed = "The upgrade tests now take v6.8 as the latest tag and LatestUpgrade with the v6.7 handler assertions unchanged, storage/common/keys names XWebStoreKey in MemIAVLStoreKeys, scripts/bump_version archived common and xweb into legacy/v68 with a diff-free second run, and the precompile test builds its unwired precompile from utils.EmptyKeepers now that the application wires the xweb keeper; the verify_cmd passed at revision c4662b1a14cda1ceba7fe41c60a4a386a375bd80."
+
+[observation.2.14.1]
+task = "2.14"
+file = "interop/crates/x-websearch/tests/api.rs"
+symbol = "respond"
+observed = "The build passes and the library passes clippy, but after two repair cycles clippy on tests/api.rs still stops on too_many_lines in the envelope vector test and two cloned_ref_to_slice_refs findings (.logs/build.log, exit 101), and the loopback API's last repair left an unknown credential answered 404 where the no-envelope call test expects 401, so the verify_cmd never ran."
+assumption = "Nothing is relaxed; the envelope test splits in two, the roots pass through std::slice::from_ref, respond answers 401 without a known credential, and the build and verify_cmd rerun unchanged."
+severity = "blocker"
+
+[observation.2.14.2]
+task = "2.14"
+file = "interop/crates/x-websearch/src/canonical.rs"
+symbol = "ContentKind"
+observed = "ContentKind knows only fetch and search and ContentStore::put refuses any other kind byte, so an api answer's kind 3 canonical bytes are computed and signed in api.rs but not stored, and GET /content/<digest> cannot serve an api answer."
+assumption = "Api answers stay out of the content store until canonical.rs, outside this task's touches, learns kind 3."
+severity = "note"

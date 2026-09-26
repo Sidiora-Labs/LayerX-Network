@@ -2848,6 +2848,7 @@ dependencies = [
  "layerx-wire",
  "layerx-x402",
  "native-tls",
+ "openssl",
  "serde",
  "serde_json",
  "sha2",

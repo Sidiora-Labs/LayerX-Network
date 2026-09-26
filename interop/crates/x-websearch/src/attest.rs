@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use k256::ecdsa::{RecoveryId, Signature, SigningKey, VerifyingKey};
 use serde_json::{json, Value};
 
+use crate::api::{self, ApiClient, ApiError, ApiPayload, KIND_API};
 use crate::content::{ContentStore, PEER_HEADER};
 use crate::fetch::{Fetcher, HttpClient, Url};
 use crate::index::WebIndex;
@@ -215,9 +216,9 @@ pub fn sign_digest(
     Ok(out)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AttestError {
-    /// The request kind is neither fetch nor search.
+    /// The request kind is neither fetch, search nor api.
     UnknownKind(u8),
     /// The payload is not UTF-8 text.
     Payload,
@@ -231,6 +232,11 @@ pub enum AttestError {
     TooLong,
     /// The digest could not be signed.
     Sign(SignatureError),
+    /// The api request was refused or its call failed.
+    Api(ApiError),
+    /// The api request names another attestor under the single level, so
+    /// this sidecar does not sign it.
+    NotNamed([u8; 20]),
 }
 
 impl std::fmt::Display for AttestError {
@@ -243,6 +249,12 @@ impl std::fmt::Display for AttestError {
             Self::Store => f.write_str("attestation refused: content store"),
             Self::TooLong => f.write_str("attestation refused: text longer than uint32"),
             Self::Sign(error) => write!(f, "attestation refused: {error}"),
+            Self::Api(error) => write!(f, "attestation refused: {error}"),
+            Self::NotNamed(named) => write!(
+                f,
+                "attestation refused: the single level names {}",
+                hex0x(named)
+            ),
         }
     }
 }
@@ -264,10 +276,36 @@ pub fn stored_response(text: &str) -> Result<(Vec<u8>, u32), AttestError> {
     Ok((text.as_bytes()[..end].to_vec(), full_length))
 }
 
+/// The stored response and the full length for an answer's bytes: a UTF-8
+/// answer is cut as [`stored_response`] cuts a text, any other answer at
+/// [`MAX_RESPONSE_BYTES`].
+///
+/// # Errors
+/// Refuses an answer longer than a uint32 length can carry.
+pub fn stored_answer(answer: &[u8]) -> Result<(Vec<u8>, u32), AttestError> {
+    if let Ok(text) = std::str::from_utf8(answer) {
+        return stored_response(text);
+    }
+    let full_length = u32::try_from(answer.len()).map_err(|_| AttestError::TooLong)?;
+    Ok((
+        answer[..answer.len().min(MAX_RESPONSE_BYTES)].to_vec(),
+        full_length,
+    ))
+}
+
+/// The level an answer is attested under: a majority of the registered set,
+/// or the one attestor an api request names.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Level {
+    Majority,
+    Single([u8; 20]),
+}
+
 /// This sidecar's signed answer to one request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Answer {
     pub attestation: Attestation,
+    pub level: Level,
     pub response: Vec<u8>,
     pub callback_gas: u64,
     pub timeout_height: u64,
@@ -297,8 +335,8 @@ impl Answer {
     }
 }
 
-/// Fetches or searches a request's payload independently and signs the
-/// origin-1 digest with the web-attestor key.
+/// Fetches, searches or calls a request's payload independently and signs
+/// the origin-1 digest with the web-attestor key.
 pub struct Attestor {
     key: SigningKey,
     signer: [u8; 20],
@@ -306,6 +344,7 @@ pub struct Attestor {
     fetcher: Arc<Fetcher>,
     index: Arc<WebIndex>,
     store: Arc<ContentStore>,
+    api_roots: Vec<native_tls::Certificate>,
 }
 
 impl Attestor {
@@ -324,7 +363,15 @@ impl Attestor {
             fetcher,
             index,
             store,
+            api_roots: Vec::new(),
         }
+    }
+
+    /// Trusts `roots` beside the system roots for api calls.
+    #[must_use]
+    pub fn with_api_roots(mut self, roots: Vec<native_tls::Certificate>) -> Self {
+        self.api_roots = roots;
+        self
     }
 
     /// The address this attestor signs as.
@@ -359,14 +406,39 @@ impl Attestor {
         Ok((digest, text))
     }
 
+    /// Performs an api request: the answer's digest, its stored response
+    /// and full length, and its level. Nothing of it is written to the
+    /// content store or the index.
+    fn api(&self, request: &WebRequest) -> Result<([u8; 32], Vec<u8>, u32, Level), AttestError> {
+        let payload = ApiPayload::decode(&request.payload).map_err(AttestError::Api)?;
+        let level = payload.attestation_level();
+        if let Level::Single(named) = level {
+            if named != self.signer {
+                return Err(AttestError::NotNamed(named));
+            }
+        }
+        let client =
+            ApiClient::new(Arc::clone(&self.fetcher), &self.api_roots).map_err(AttestError::Api)?;
+        let answer = api::answer(&client, &self.key, &request.payload, &payload)
+            .map_err(AttestError::Api)?;
+        let (response, full_length) = stored_answer(&answer.answer)?;
+        Ok((answer.digest, response, full_length, level))
+    }
+
     /// Answers one request: the content, the stored response and the
-    /// signature over the origin-1 digest.
+    /// signature over the origin-1 digest. An api request under the single
+    /// level is answered only by the attestor it names.
     ///
     /// # Errors
     /// Returns why the request could not be answered.
     pub fn attest(&self, request: &WebRequest) -> Result<Answer, AttestError> {
-        let (content_digest, text) = self.content(request)?;
-        let (response, full_length) = stored_response(&text)?;
+        let (content_digest, response, full_length, level) = if request.kind == KIND_API {
+            self.api(request)?
+        } else {
+            let (content_digest, text) = self.content(request)?;
+            let (response, full_length) = stored_response(&text)?;
+            (content_digest, response, full_length, Level::Majority)
+        };
         let attestation = Attestation::evm(
             self.chain_id,
             request,
@@ -378,6 +450,7 @@ impl Attestor {
         let signature = sign_digest(&self.key, &digest).map_err(AttestError::Sign)?;
         Ok(Answer {
             attestation,
+            level,
             response,
             callback_gas: request.callback_gas,
             timeout_height: request.timeout_height,
@@ -735,22 +808,34 @@ impl SignatureExchange {
     }
 
     /// The signatures for fulfil once at least the threshold of registered
-    /// signers agree with this sidecar's answer, ascending by signer.
+    /// signers agree with this sidecar's answer, ascending by signer. Under
+    /// the single level it is the one signature of the named attestor, while
+    /// that attestor is registered.
     #[must_use]
     pub fn ready(&self, request_id: u64, set: &AttestorSet) -> Option<Ready> {
         let answers = self.answers();
         let collected = answers.get(&request_id)?;
+        let answer = &collected.answer;
         let registered: Vec<([u8; 20], [u8; SIGNATURE_LENGTH])> = collected
             .signatures
             .iter()
             .filter(|(signer, _)| set.contains(signer))
+            .filter(|(signer, _)| match answer.level {
+                Level::Majority => true,
+                Level::Single(named) => **signer == named,
+            })
             .map(|(signer, signature)| (*signer, *signature))
             .collect();
-        let enough = u32::try_from(registered.len()).is_ok_and(|count| count >= set.threshold);
-        if set.threshold == 0 || !enough {
+        let enough = match answer.level {
+            Level::Majority => {
+                set.threshold != 0
+                    && u32::try_from(registered.len()).is_ok_and(|count| count >= set.threshold)
+            }
+            Level::Single(_) => registered.len() == 1,
+        };
+        if !enough {
             return None;
         }
-        let answer = &collected.answer;
         Some(Ready {
             request_id,
             response: answer.response.clone(),
