@@ -1,0 +1,29 @@
+[package]
+name = "x-websearch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "x-websearch"
+path = "src/main.rs"
+
+[dependencies]
+base64.workspace = true
+ed25519-dalek.workspace = true
+k256.workspace = true
+layerx-x402 = { path = "../layerx-x402" }
+native-tls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha3.workspace = true
+tantivy = "=0.26.2"
+unicode-normalization = "=0.1.25"
+zeroize.workspace = true
+
+[lints]
+workspace = true

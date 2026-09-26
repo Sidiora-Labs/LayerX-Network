@@ -7,7 +7,7 @@
 ## Wave 1 - Foundations
 
 - [ ] 1. Build the sidecar, the module and precompile, the kernel path, the clients and the workflow
-  - [ ] 1.1 Lay down the x-websearch crate, its configuration and its HTTP server
+  - [x] 1.1 Lay down the x-websearch crate, its configuration and its HTTP server
     - Create interop/crates/x-websearch as a member of interop/Cargo.toml under the workspace lints, with the binary x-websearch, declaring every dependency the feature's crate tasks use - serde, serde_json, sha3, k256, native-tls, tantivy, unicode-normalization and layerx-x402 - so interop/Cargo.lock changes once, here; add no axum, tokio or hyper.
     - Write src/config.rs decoding the JSON configuration with unknown fields refused: listen address, data directory, seed list, crawl budget, fetch limits with allow_loopback, the four assets with kernel asset ids and prices, gateway endpoint and sequencer trust inputs, EVM endpoint, chain id and confirmation depth, kernel network id and peer sidecars; refuse every missing or placeholder value naming the field, and refuse any key material in the file.
     - Write src/keys.rs loading the attestor, submitter and receiver keys only from the files X_WEBSEARCH_ATTESTOR_KEY_FILE, X_WEBSEARCH_SUBMITTER_KEY_FILE and X_WEBSEARCH_RECEIVER_KEY_FILE name, refusing two files holding the same key, and never formatting key material.

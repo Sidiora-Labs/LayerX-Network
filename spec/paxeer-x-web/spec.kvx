@@ -236,7 +236,11 @@ status = "pending"
 
 [task.1.1]
 title = "Lay down the x-websearch crate, its configuration and its HTTP server"
-status = "pending"
+status = "done"
+revision = "c3df0c451b32c6709af9cb33b0d55449beaad13e"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test config --test keys --test server'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 1
 requires = []
 do_1 = "Create interop/crates/x-websearch as a member of interop/Cargo.toml under the workspace lints, with the binary x-websearch, declaring every dependency the feature's crate tasks use - serde, serde_json, sha3, k256, native-tls, tantivy, unicode-normalization and layerx-x402 - so interop/Cargo.lock changes once, here; add no axum, tokio or hyper."
