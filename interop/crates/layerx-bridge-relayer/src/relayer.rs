@@ -9,6 +9,11 @@
 //! the Paxeer head minus its finality depth, sign the outbound digest, and
 //! submit `PaxeerXVault.release` on the burn's Ethereum chain.
 //!
+//! Inbound (Solana -> Paxeer), when a Solana entry is configured: follow the
+//! custody program's deposits up to the head at the configured commitment
+//! minus the slot finality depth (see [`crate::solana::observe`]) and submit
+//! each through the same `bridgeIn` path under the stream `in:<solana id>`.
+//!
 //! Idempotency across relayer instances: every submission is preceded by a
 //! read of the destination nullifier (`isNullified` on the precompile,
 //! `nullified` on the vault), and a transaction that reverts is classified by
@@ -38,6 +43,9 @@ use crate::hex;
 use crate::journal::{Completion, Entry, Journal, JournalError, Observation, Position, Submission};
 use crate::rpc::{JsonRpc, RpcFault};
 use crate::signer::{Attestor, KeyError, Submitter};
+use crate::solana::observe::{observe_deposits, Finding, SolanaSettings};
+use crate::solana::rpc::SolanaRpc;
+use crate::solana::SOLANA_CHAIN_ID;
 use crate::tx::{self, SignedTransaction};
 
 const MAX_BLOCK_RANGE: u64 = 10_000;
@@ -168,6 +176,28 @@ pub struct RelayerParts {
     pub max_submissions: u32,
 }
 
+/// The Solana custody program whose deposits are relayed to Paxeer.
+pub struct SolanaLink {
+    pub settings: SolanaSettings,
+    pub rpc: SolanaRpc,
+}
+
+/// Everything a relayer is built from: the Ethereum and Paxeer parts and, when
+/// configured, the Solana custody program.
+pub struct RelayerAssembly {
+    pub parts: RelayerParts,
+    pub solana: Option<SolanaLink>,
+}
+
+impl From<RelayerParts> for RelayerAssembly {
+    fn from(parts: RelayerParts) -> Self {
+        Self {
+            parts,
+            solana: None,
+        }
+    }
+}
+
 /// What one pass did.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct StepReport {
@@ -290,17 +320,21 @@ pub struct Relayer {
     journal: Journal,
     cosign: Option<CosignDirectory>,
     max_submissions: u32,
+    solana: Option<SolanaLink>,
 }
 
 impl Relayer {
     /// Validates the configuration against the live chains: every chain id
     /// answers as configured and every Ethereum chain is registered on Paxeer
-    /// with the configured vault and a finality depth no deeper than ours.
+    /// with the configured vault and a finality depth no deeper than ours; a
+    /// configured Solana custody program is registered the same way under
+    /// [`SOLANA_CHAIN_ID`].
     ///
     /// # Errors
     ///
     /// Refuses inconsistent configuration and unreachable or mismatched chains.
-    pub fn new(parts: RelayerParts) -> Result<Self, RelayerError> {
+    pub fn new(assembly: impl Into<RelayerAssembly>) -> Result<Self, RelayerError> {
+        let RelayerAssembly { parts, solana } = assembly.into();
         let RelayerParts {
             attestor,
             paxeer,
@@ -358,6 +392,34 @@ impl Relayer {
                 )));
             }
         }
+        if let Some(link) = &solana {
+            let settings = link.settings;
+            if settings.chain_id != SOLANA_CHAIN_ID || identifiers.contains(&settings.chain_id) {
+                return Err(RelayerError::Configuration(
+                    "solana must use its reserved chain id and no ethereum chain may".to_owned(),
+                ));
+            }
+            validate_range(settings.start_slot, settings.max_slot_range, "solana")?;
+            if settings.vault == [0; 20] || settings.program_id == [0; 32] {
+                return Err(RelayerError::Configuration(
+                    "solana has no vault or custody program".to_owned(),
+                ));
+            }
+            let registration = decode_get_chain(&eth_call(
+                paxeer.rpc.as_ref(),
+                &LAYERX_BRIDGE_PRECOMPILE,
+                &encode_get_chain(settings.chain_id),
+            )?)?;
+            if !registration.registered
+                || registration.vault != settings.vault
+                || registration.finality_depth > settings.finality_depth
+            {
+                return Err(RelayerError::Configuration(
+                    "solana is not registered on paxeer with this vault and finality depth"
+                        .to_owned(),
+                ));
+            }
+        }
         Ok(Self {
             attestor,
             paxeer,
@@ -365,6 +427,7 @@ impl Relayer {
             journal,
             cosign,
             max_submissions,
+            solana,
         })
     }
 
@@ -373,12 +436,16 @@ impl Relayer {
         &self.journal
     }
 
-    /// One pass of every loop: inbound for each chain, then outbound.
+    /// One pass of every loop: inbound for each chain, inbound from Solana
+    /// when configured, then outbound.
     pub fn tick(&mut self) -> Vec<(String, Result<StepReport, RelayerError>)> {
-        let mut results = Vec::with_capacity(self.chains.len() + 1);
+        let mut results = Vec::with_capacity(self.chains.len() + 2);
         for index in 0..self.chains.len() {
             let stream = inbound_stream(self.chains[index].settings.chain_id);
             results.push((stream, self.inbound_step(index)));
+        }
+        if self.solana.is_some() {
+            results.push((inbound_stream(SOLANA_CHAIN_ID), self.solana_step()));
         }
         results.push((OUTBOUND_STREAM.to_owned(), self.outbound_step()));
         results
@@ -408,6 +475,79 @@ impl Relayer {
             let progress = self.advance(&key)?;
             report.count(&progress);
         }
+        Ok(report)
+    }
+
+    /// Scans the Solana custody program for deposits at the configured depth,
+    /// journals every deposit whose logged record and receipt disagree as
+    /// refused, and advances every open Solana inbound item through the same
+    /// `bridgeIn` path the Ethereum chains use.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a relayer without a Solana entry, and returns the first RPC,
+    /// decoding, signing or journal failure; the pass is retried from the
+    /// journal on the next call.
+    pub fn solana_step(&mut self) -> Result<StepReport, RelayerError> {
+        let settings = self
+            .solana
+            .as_ref()
+            .ok_or_else(|| RelayerError::Configuration("solana is not configured".to_owned()))?
+            .settings;
+        let mut report = self.scan_solana()?;
+        let keys = self.open_items(|observation| {
+            matches!(observation, Observation::Inbound { chain_id, .. } if *chain_id == settings.chain_id)
+        });
+        for key in keys {
+            let progress = self.advance(&key)?;
+            report.count(&progress);
+        }
+        Ok(report)
+    }
+
+    fn scan_solana(&mut self) -> Result<StepReport, RelayerError> {
+        let mut report = StepReport::default();
+        let Some(link) = &self.solana else {
+            return Ok(report);
+        };
+        let settings = link.settings;
+        let stream = inbound_stream(settings.chain_id);
+        let head = link.rpc.get_slot(settings.commitment)?;
+        let Some(safe) = head.checked_sub(settings.finality_depth) else {
+            return Ok(report);
+        };
+        let Some((from, to)) =
+            self.scan_range(&stream, settings.start_slot, settings.max_slot_range, safe)
+        else {
+            return Ok(report);
+        };
+        let findings = observe_deposits(&link.rpc, &settings, from, to)?;
+        for finding in findings {
+            match finding {
+                Finding::Deposit(observation) => {
+                    if self.observe(observation)? {
+                        report.observed += 1;
+                    }
+                }
+                Finding::Refused {
+                    observation,
+                    reason,
+                } => {
+                    if self.observe(observation)? {
+                        report.observed += 1;
+                        self.journal.append(&Entry::Refused {
+                            item: observation.key(),
+                            reason,
+                        })?;
+                        report.refused += 1;
+                    }
+                }
+            }
+        }
+        self.journal.append(&Entry::Cursor {
+            stream,
+            next_block: to + 1,
+        })?;
         Ok(report)
     }
 

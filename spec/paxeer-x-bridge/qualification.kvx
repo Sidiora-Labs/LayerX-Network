@@ -123,6 +123,14 @@ observed = "The bridge module registers no Msg service, route or transaction com
 assumption = "The runbook states that the holder of the bridge authority submits the bodies through the path that authority executes with, and does not name a command the tree lacks."
 severity = "suspect"
 
+[observation.2.2.1]
+task = "2.2"
+file = "interop/crates/layerx-bridge-relayer/src/abi.rs"
+symbol = "cargo clippy -D warnings"
+observed = "cargo clippy --locked --manifest-path interop/Cargo.toml -p layerx-bridge-relayer --all-targets -- -D warnings exits 101 on five lints in code this task did not change (abi.rs:313 type_complexity, attestation.rs:1 doc_markdown, relayer.rs scan_inbound and scan_outbound single_match_else, rpc.rs:132 map_unwrap_or); the build passes and log .logs/build.log names them."
+assumption = "Pre-existing under the clippy 0.1.91 toolchain rather than introduced here, so they are left for the wave gate instead of being edited from this task."
+severity = "note"
+
 [wave.1]
 revision = "4f2b24deb"
 command = "timeout 20m each: bash bridge/evm/bootstrap-libs.sh && forge test --root bridge/evm -vvv; cargo test --locked --manifest-path bridge/solana/Cargo.toml; go test -count=1 ./bridge/vectors/...; go test -count=1 ./bridge/deploy/chainconfig/... && bash bridge/deploy/tests/deploy-scripts-check.sh; go test -count=1 ./bridge/deploy/proposals/...; bash bridge/deploy/tests/workflow-check.sh"

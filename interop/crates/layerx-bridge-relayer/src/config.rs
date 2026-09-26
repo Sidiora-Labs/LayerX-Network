@@ -1,7 +1,8 @@
 //! Relayer configuration: one JSON file naming the journal, the remote signer
 //! and its key handles, Paxeer, and every Ethereum chain with its vault,
-//! finality depth and RPC quorum. The file holds handles and public keys
-//! only; no private key is ever configured into this process.
+//! finality depth and RPC quorum, and optionally the Solana custody program.
+//! The file holds handles and public keys only; no private key is ever
+//! configured into this process.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -16,10 +17,14 @@ use crate::cosign::CosignDirectory;
 use crate::hex;
 use crate::journal::Journal;
 use crate::relayer::{
-    ChainLink, ChainSettings, GasPolicy, PaxeerLink, PaxeerSettings, RelayerError, RelayerParts,
+    ChainLink, ChainSettings, GasPolicy, PaxeerLink, PaxeerSettings, RelayerAssembly, RelayerError,
+    RelayerParts, SolanaLink,
 };
 use crate::rpc::PaxeerRpc;
 use crate::signer::{Attestor, Submitter, ALGORITHM};
+use crate::solana::observe::SolanaSettings;
+use crate::solana::rpc::{Commitment, SolanaRpc};
+use crate::solana::{base58_fixed, SOLANA_CHAIN_ID};
 
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
@@ -111,6 +116,81 @@ pub struct ChainConfig {
     pub gas: GasConfig,
 }
 
+/// The Solana custody program: what a `chains[]` entry carries, in slots,
+/// plus the program id and the commitment it is read at.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SolanaConfig {
+    /// The reserved Solana chain id, [`SOLANA_CHAIN_ID`].
+    pub chain_id: u64,
+    /// The handle of the program's vault-authority PDA, as Paxeer registers it.
+    #[serde(with = "hex::fixed_serde")]
+    pub vault: [u8; 20],
+    pub finality_depth: u64,
+    pub start_slot: u64,
+    pub max_slot_range: u64,
+    pub rpc: RpcQuorumConfig,
+    /// The ed25519 fee-payer key the remote signer holds; its public key is
+    /// the 32-byte Solana account key.
+    pub fee_payer: KeyHandleConfig,
+    /// The custody program id, base58.
+    pub program_id: String,
+    /// `confirmed` or `finalized`; `processed` is refused.
+    pub commitment: Commitment,
+}
+
+impl SolanaConfig {
+    /// The observer's settings.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a program id that is not a base58 32-byte key.
+    pub fn settings(&self) -> Result<SolanaSettings, RelayerError> {
+        Ok(SolanaSettings {
+            chain_id: self.chain_id,
+            vault: self.vault,
+            program_id: base58_fixed::<32>(&self.program_id)
+                .map_err(|_| invalid("solana program id is not a base58 32-byte key"))?,
+            finality_depth: self.finality_depth,
+            start_slot: self.start_slot,
+            max_slot_range: self.max_slot_range,
+            commitment: self.commitment,
+        })
+    }
+
+    fn validate(
+        &self,
+        attestor: &KeyHandleConfig,
+        chains: &[ChainConfig],
+    ) -> Result<(), RelayerError> {
+        if self.chain_id != SOLANA_CHAIN_ID
+            || chains.iter().any(|chain| chain.chain_id == SOLANA_CHAIN_ID)
+        {
+            return Err(invalid(format!(
+                "solana must use the reserved chain id {SOLANA_CHAIN_ID} and no ethereum chain may"
+            )));
+        }
+        if self.fee_payer.handle.is_empty() || self.fee_payer.public_key.len() != 32 {
+            return Err(invalid(
+                "the solana fee payer needs a handle and a 32-byte public key",
+            ));
+        }
+        if self.fee_payer.handle == attestor.handle {
+            return Err(invalid("the attestor key must not pay transaction fees"));
+        }
+        if self.vault == [0; 20] || self.finality_depth == 0 || self.max_slot_range == 0 {
+            return Err(invalid(
+                "solana needs a vault, a finality depth and a slot range",
+            ));
+        }
+        let settings = self.settings()?;
+        if settings.program_id == [0; 32] {
+            return Err(invalid("solana program id must not be the zero key"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RelayerConfig {
@@ -125,6 +205,10 @@ pub struct RelayerConfig {
     pub attestor: KeyHandleConfig,
     pub paxeer: PaxeerConfig,
     pub chains: Vec<ChainConfig>,
+    /// The Solana custody program; absent, the relayer relays the Ethereum
+    /// chains only.
+    #[serde(default)]
+    pub solana: Option<SolanaConfig>,
 }
 
 fn invalid(detail: impl Into<String>) -> RelayerError {
@@ -195,6 +279,9 @@ impl RelayerConfig {
         {
             return Err(invalid("the attestor key must not pay transaction fees"));
         }
+        if let Some(solana) = &self.solana {
+            solana.validate(&self.attestor, &self.chains)?;
+        }
         Ok(())
     }
 
@@ -257,7 +344,7 @@ impl RelayerConfig {
     /// # Errors
     ///
     /// Returns the first transport, signer or journal failure.
-    pub fn build(&self) -> Result<RelayerParts, RelayerError> {
+    pub fn build(&self) -> Result<RelayerAssembly, RelayerError> {
         self.validate()?;
         let attestor = Attestor::new(self.remote_signer(&self.attestor)?)
             .map_err(|error| invalid(format!("attestor: {error:?}")))?;
@@ -292,13 +379,26 @@ impl RelayerConfig {
                 )?,
             });
         }
-        Ok(RelayerParts {
-            attestor,
-            paxeer,
-            chains,
-            journal: Journal::open(&self.journal_path)?,
-            cosign: self.cosign_directory.clone().map(CosignDirectory::new),
-            max_submissions: self.max_submissions,
+        let solana = match &self.solana {
+            Some(solana) => Some(SolanaLink {
+                settings: solana.settings()?,
+                rpc: SolanaRpc::new(Box::new(
+                    RpcCluster::new(&solana.rpc)
+                        .map_err(|error| invalid(format!("solana rpc: {error:?}")))?,
+                )),
+            }),
+            None => None,
+        };
+        Ok(RelayerAssembly {
+            parts: RelayerParts {
+                attestor,
+                paxeer,
+                chains,
+                journal: Journal::open(&self.journal_path)?,
+                cosign: self.cosign_directory.clone().map(CosignDirectory::new),
+                max_submissions: self.max_submissions,
+            },
+            solana,
         })
     }
 }
@@ -358,6 +458,58 @@ mod tests {
         let mut config = example();
         config.paxeer.submitter.handle = config.attestor.handle.clone();
         assert!(config.validate().is_err());
+    }
+
+    const SOLANA: &str = r#""solana": {
+            "chain_id": 91600046870081,
+            "vault": "0x334121a65b47bd45c3f6381537d9180e98e445bc",
+            "finality_depth": 32, "start_slot": 1000, "max_slot_range": 500,
+            "rpc": {"endpoints": [], "quorum": 2, "connect_timeout_ms": 1000, "request_timeout_ms": 3000, "maximum_response_bytes": 1048576},
+            "fee_payer": {"handle": "bridge-solana-fees", "public_key": "0x3333333333333333333333333333333333333333333333333333333333333333"},
+            "program_id": "A7SZbByPYuHpunZ9pyMDMrhMYvK44ANT1AVqb8U1FpM9",
+            "commitment": "finalized"
+        },
+        "chains": ["#;
+
+    fn with_solana() -> RelayerConfig {
+        let text = EXAMPLE.replacen(r#""chains": ["#, SOLANA, 1);
+        serde_json::from_str(&text).unwrap_or_else(|error| panic!("solana example: {error}"))
+    }
+
+    #[test]
+    fn the_solana_entry_is_optional_and_validates_against_the_reserved_id() {
+        assert_eq!(example().solana, None);
+        let config = with_solana();
+        assert_eq!(config.validate(), Ok(()));
+        let solana = config
+            .solana
+            .as_ref()
+            .unwrap_or_else(|| panic!("solana entry"));
+        let settings = solana
+            .settings()
+            .unwrap_or_else(|error| panic!("settings: {error}"));
+        assert_eq!(settings.chain_id, SOLANA_CHAIN_ID);
+        assert_eq!(settings.commitment, Commitment::Finalized);
+        assert_eq!(settings.program_id[0], 0x87);
+
+        let mut wrong_id = with_solana();
+        if let Some(solana) = wrong_id.solana.as_mut() {
+            solana.chain_id = 101;
+        }
+        assert!(wrong_id.validate().is_err());
+
+        let mut paying_attestor = with_solana();
+        if let Some(solana) = paying_attestor.solana.as_mut() {
+            solana.fee_payer.handle = paying_attestor.attestor.handle.clone();
+        }
+        assert!(paying_attestor.validate().is_err());
+
+        let processed = EXAMPLE.replacen(
+            r#""chains": ["#,
+            &SOLANA.replace(r#""finalized""#, r#""processed""#),
+            1,
+        );
+        assert!(serde_json::from_str::<RelayerConfig>(&processed).is_err());
     }
 
     #[test]

@@ -1,6 +1,8 @@
 //! `LayerX` bridge relayer: carries `PaxeerXVault` deposits on Ethereum chains
 //! into `bridgeIn` on the Paxeer precompile at `0x…1016`, and Paxeer
-//! `BridgeOut` burns into `PaxeerXVault.release`.
+//! `BridgeOut` burns into `PaxeerXVault.release`. With a Solana entry
+//! configured it also carries deposits into the Solana custody program into
+//! `bridgeIn` (see [`solana`]).
 //!
 //! Each instance holds exactly one attestor key, behind the remote signer; no
 //! chain private key enters the process. Neither verifier aggregates
@@ -25,4 +27,5 @@ pub mod journal;
 pub mod relayer;
 pub mod rpc;
 pub mod signer;
+pub mod solana;
 pub mod tx;
