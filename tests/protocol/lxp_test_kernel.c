@@ -1,5 +1,9 @@
 #include "layerx/lxp_kernel.h"
 
+#include "layerx/lx_web.h"
+#include "layerx/lxp_genesis.h"
+#include "layerx/lxp_state_proof.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -256,6 +260,170 @@ static int capacity_checks(lxp_kernel *kernel, lxp_state_store *store,
     return 0;
 }
 
+static lxp_module_iface named_iface(uint16_t module_id, const char *name,
+                                    const uint32_t *types)
+{
+    lxp_module_iface iface = make_iface(1U, types, 1U);
+    iface.module_id = module_id;
+    iface.name = name;
+    return iface;
+}
+
+static uint32_t read_be(const uint8_t *bytes, size_t width)
+{
+    uint32_t value = 0U;
+    size_t i;
+    for (i = 0U; i < width; ++i) value = (value << 8U) | bytes[i];
+    return value;
+}
+
+/* Genesis names the web module through its enable flag: a manifest that sets
+ * it selects the web registration last, after every module below it, and the
+ * registered kernel resolves both web activities. */
+static int web_genesis_checks(void)
+{
+    static const uint8_t version_key[32] = "parameter-version";
+    static lxp_genesis_manifest manifest;
+    static lxp_kernel kernel;
+    static lxp_state_store store;
+    static lxp_state_journal journal;
+    lxp_genesis_module_plan plan;
+    const lxp_module_registration *registration;
+    uint8_t key[32];
+    uint8_t expected[32] = "module-enable:web";
+    uint64_t parameters = 1U;
+    if (lxp_genesis_module_enable_key(LXP_MODULE_WEB, key) != LXP_OK ||
+        memcmp(key, expected, 32U) != 0 ||
+        lxp_genesis_module_enable_key(LXP_MODULE_RESERVED_COUNT + 1U, key) !=
+            LXP_ERR_UNKNOWN_MODULE)
+        return 1;
+    (void)memset(&manifest, 0, sizeof(manifest));
+    manifest.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+    manifest.network_id = 42U;
+    manifest.genesis_timestamp_ms = UINT64_C(1700000000000);
+    manifest.parameters[0].module_id = LXP_MODULE_GOVERNANCE;
+    (void)memcpy(manifest.parameters[0].key, expected, 32U);
+    manifest.parameters[0].value[31] = 1U;
+    manifest.parameters[1].module_id = LXP_MODULE_GOVERNANCE;
+    (void)memcpy(manifest.parameters[1].key, version_key, 32U);
+    manifest.parameters[1].value[31] = 1U;
+    manifest.parameter_count = 2U;
+    manifest.guarantor_count = 1U;
+    manifest.guarantors[0].guarantor_id[0] = 1U;
+    manifest.guarantors[0].public_key[0] = 2U;
+    manifest.guarantors[0].public_key[32] = 3U;
+    if (lxp_genesis_module_plan_resolve(&manifest, &plan) != LXP_OK ||
+        plan.count < 2U || plan.modules[plan.count - 1U] != lx_web_module_iface())
+        return 1;
+    (void)memset(&journal, 0, sizeof(journal));
+    if (lxp_state_store_init(&store, 0U) != LXP_OK ||
+        lxp_kernel_create(&kernel, &store, &journal, &parameters, 0U) !=
+            LXP_OK ||
+        lxp_genesis_module_plan_register(&plan, &kernel) != LXP_OK ||
+        lxp_genesis_module_plan_matches(&plan, &kernel) != LXP_OK ||
+        lxp_kernel_module_for_activity(&kernel, LX_WEB_OBSERVATION_ACTIVITY, 0U,
+                                       &registration) != LXP_OK ||
+        registration->module_id != LXP_MODULE_WEB ||
+        lxp_kernel_module_for_activity(&kernel, LX_WEB_ATTESTOR_SET_ACTIVITY,
+                                       0U, &registration) != LXP_OK ||
+        registration->module_id != LXP_MODULE_WEB ||
+        lxp_state_store_destroy(&store) != LXP_OK)
+        return 1;
+    manifest.parameters[0].value[31] = 0U;
+    if (lxp_genesis_module_plan_resolve(&manifest, &plan) != LXP_OK ||
+        plan.modules[plan.count - 1U] == lx_web_module_iface())
+        return 1;
+    return 0;
+}
+
+/* The public handover genesis lists every registered module by id, so module
+ * 11 takes the last slot of the ordered table while module 12 is refused by
+ * registration, lookup and runtime binding alike. */
+static int web_handover_checks(void)
+{
+    static const uint32_t governance_types[] = { UINT32_C(0x00070001) };
+    static const uint32_t twelve_types[] = { UINT32_C(0x000C0001) };
+    static const uint8_t authority_key[32] = "handover-authority";
+    static lxp_kernel kernel;
+    static lxp_state_store store;
+    static lxp_state_journal journal;
+    static lx_web_store web;
+    static uint8_t arena_bytes[LXP_STATE_WITNESS_MAX_BYTES + 8192U];
+    lxp_module_iface governance = named_iface(LXP_MODULE_GOVERNANCE,
+                                              "governance", governance_types);
+    lxp_module_iface twelve = named_iface(LXP_MODULE_RESERVED_COUNT + 1U,
+                                          "twelve", twelve_types);
+    const lxp_module_registration *registration;
+    lxp_module_kv_entry *entry;
+    lxp_byte_span encoded;
+    lxp_arena arena;
+    uint8_t state_root[32];
+    const uint8_t *tail;
+    uint64_t parameters = 1U;
+    (void)memset(&journal, 0, sizeof(journal));
+    (void)memset(&web, 0, sizeof(web));
+    if (lxp_state_store_init(&store, 1U) != LXP_OK ||
+        lxp_kernel_create(&kernel, &store, &journal, &parameters, 0U) !=
+            LXP_OK ||
+        lxp_kernel_register_module(&kernel, lx_web_module_iface()) != LXP_OK ||
+        lxp_kernel_register_module(&kernel, &governance) != LXP_OK ||
+        lxp_kernel_register_module(&kernel, &twelve) !=
+            LXP_ERR_UNKNOWN_MODULE ||
+        lxp_kernel_module_by_id(&kernel, LXP_MODULE_RESERVED_COUNT + 1U, 0U,
+                                &registration) != LXP_ERR_UNKNOWN_MODULE ||
+        lxp_kernel_module_for_activity(&kernel, twelve_types[0], 0U,
+                                       &registration) !=
+            LXP_ERR_UNKNOWN_MODULE ||
+        lxp_kernel_module_by_id(&kernel, LXP_MODULE_WEB, 0U, &registration) !=
+            LXP_OK ||
+        lxp_kernel_bind_module_runtime(&kernel, LXP_MODULE_WEB, &web) !=
+            LXP_ERR_NON_CANONICAL)
+        return 1;
+    web.network_id = 42U;
+    if (lxp_kernel_bind_module_runtime(&kernel, LXP_MODULE_WEB, &web) !=
+            LXP_OK ||
+        kernel.module_runtime[LXP_MODULE_WEB] != &web ||
+        lxp_kernel_bind_module_runtime(&kernel,
+                                       LXP_MODULE_RESERVED_COUNT + 1U, &web) !=
+            LXP_ERR_NON_CANONICAL ||
+        lxp_kernel_set_epoch(&kernel, 1U) != LXP_OK)
+        return 1;
+    kernel.handover.enabled = true;
+    kernel.handover.network_id = 42U;
+    (void)memset(kernel.handover.governance_public_key, 0x42, 32U);
+    (void)memset(kernel.handover.genesis_authorization.public_key, 0x24, 32U);
+    entry = &kernel.module_kv[0];
+    (void)memset(entry, 0, sizeof(*entry));
+    entry->module_id = LXP_MODULE_GOVERNANCE;
+    entry->key_length = 32U;
+    (void)memcpy(entry->key, authority_key, 32U);
+    entry->value_length = 32U;
+    (void)memcpy(entry->value, kernel.handover.governance_public_key, 32U);
+    kernel.module_kv_count = 1U;
+    if (lxp_state_root(&kernel, state_root) != LXP_OK ||
+        lxp_genesis_receipt_state_root(42U, state_root,
+                                       kernel.current_state_root) != LXP_OK ||
+        lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
+        lxp_handover_genesis_trust_encode(&kernel, &arena, &encoded) !=
+            LXP_OK ||
+        encoded.length < 2U * (2U + 4U) + 3U * 4U + 4U)
+        return 1;
+    /* The module list closes the encoding: the count, governance then web in
+     * module order although web registered first. */
+    tail = encoded.bytes + encoded.length - (2U * (2U + 4U) + 3U * 4U + 4U);
+    if (read_be(tail, 4U) != 2U ||
+        read_be(tail + 4U, 2U) != LXP_MODULE_GOVERNANCE ||
+        read_be(tail + 6U, 4U) != 1U ||
+        read_be(tail + 10U, 4U) != governance_types[0] ||
+        read_be(tail + 14U, 2U) != LXP_MODULE_WEB ||
+        read_be(tail + 16U, 4U) != 2U ||
+        read_be(tail + 20U, 4U) != LX_WEB_OBSERVATION_ACTIVITY ||
+        read_be(tail + 24U, 4U) != LX_WEB_ATTESTOR_SET_ACTIVITY ||
+        lxp_state_store_destroy(&store) != LXP_OK)
+        return 1;
+    return 0;
+}
+
 int main(void)
 {
     static const uint32_t v1_types[] = { UINT32_C(0x00010001),
@@ -312,5 +480,6 @@ int main(void)
     if (transition_checks(&kernel, &store, &journal) != 0) return 1;
     if (capacity_checks(&kernel, &store, &journal) != 0) return 1;
     if (lxp_state_store_destroy(&store) != LXP_OK) return 1;
+    if (web_genesis_checks() != 0 || web_handover_checks() != 0) return 1;
     return 0;
 }

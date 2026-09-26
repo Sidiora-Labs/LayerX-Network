@@ -7,6 +7,7 @@
 #include "layerx/lx_escrow.h"
 #include "layerx/lx_stream.h"
 #include "layerx/lx_service.h"
+#include "layerx/lx_web.h"
 #include "layerx/lxp_maintenance.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
@@ -1132,8 +1133,19 @@ static lxp_result kernel_snapshot_payer_balance(
 
 static const char *const module_names[LXP_MODULE_RESERVED_COUNT] = {
     "asset", "escrow", "budget", "stream", "service", "perps",
-    "governance", "bridge", "programs", "spot"
+    "governance", "bridge", "programs", "spot", "web"
 };
+
+/* The module whose context an activity of a registration executes in. Web
+ * activities read the paid program requests and commit the answers web_read
+ * serves, both of which live in Programs module storage, so they run in the
+ * Programs module context. */
+static uint16_t registration_context_module(
+    const lxp_module_registration *registration)
+{
+    return registration->module_id == LXP_MODULE_WEB ?
+           (uint16_t)LXP_MODULE_PROGRAMS : registration->module_id;
+}
 
 static bool registration_active(const lxp_module_registration *registration,
                                 uint64_t epoch)
@@ -1408,6 +1420,12 @@ lxp_result lxp_kernel_bind_module_runtime(lxp_kernel *kernel,
                 kernel, programs_runtime->state_feed);
             if (status != LXP_OK) return status;
         }
+    } else if (module_id == LXP_MODULE_WEB) {
+        const lx_web_store *store = (const lx_web_store *)runtime;
+        if (store->network_id == 0U ||
+            store->pending_count > LX_WEB_PENDING_CAPACITY ||
+            store->committed_count > LX_WEB_STORE_CAPACITY)
+            return LXP_ERR_NON_CANONICAL;
     }
     kernel->module_runtime[module_id] = runtime;
     if (module_id == LXP_MODULE_PROGRAMS &&
@@ -2030,6 +2048,9 @@ lxp_result lxp_kernel_dispatch(const lxp_module_registration *registration,
     if (registration == NULL || ctx == NULL || activity == NULL ||
         authority == NULL || effects == NULL || module_result == NULL)
         return LXP_ERR_NON_CANONICAL;
+    if (registration->module_id == LXP_MODULE_WEB &&
+        ctx->module_id != registration_context_module(registration))
+        return LXP_ERR_CONTEXT_MISMATCH;
     if (ctx->module_id == LXP_MODULE_ASSET) {
         if (lxp_activity_module_id(activity->activity_type) != LXP_MODULE_ASSET)
             return LXP_ERR_UNKNOWN_ACTIVITY;
@@ -5822,7 +5843,7 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
     module_result = fee_policy.result_code;
     if (status == LXP_OK && fee_policy.apply_module_effects) {
         status = lxp_module_ctx_init(
-            &module_ctx, kernel, registration->module_id,
+            &module_ctx, kernel, registration_context_module(registration),
             execution->batch_timestamp_ms, execution->epoch,
             execution->global_sequence, execution->gas_limit,
             execution->arena, false);

@@ -21,7 +21,8 @@ use sha2::{Digest as _, Sha256};
 
 use crate::attest::{
     network_word, sign_digest, signer_address, stored_response, Answer, AttestError, Attestation,
-    AttestorSet, Ready, SignatureExchange, MAX_RESPONSE_BYTES, ORIGIN_PROGRAM, SIGNATURE_LENGTH,
+    AttestorSet, Level, Ready, SignatureExchange, MAX_RESPONSE_BYTES, ORIGIN_PROGRAM,
+    SIGNATURE_LENGTH,
 };
 use crate::content::ContentStore;
 use crate::fetch::Fetcher;
@@ -376,6 +377,7 @@ impl KernelAttestor {
         let signature = sign_digest(&self.key, &digest).map_err(AttestError::Sign)?;
         Ok(Answer {
             attestation,
+            level: Level::Majority,
             response,
             callback_gas: 0,
             timeout_height: u64::MAX,

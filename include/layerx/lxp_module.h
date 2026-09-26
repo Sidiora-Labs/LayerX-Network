@@ -22,7 +22,8 @@ enum {
     LXP_MODULE_BRIDGE = 8,
     LXP_MODULE_PROGRAMS = 9,
     LXP_MODULE_SPOT = 10,
-    LXP_MODULE_RESERVED_COUNT = 10,
+    LXP_MODULE_WEB = 11,
+    LXP_MODULE_RESERVED_COUNT = 11,
     LXP_MODULE_MAX_NAME = 31,
     LXP_MODULE_MAX_ACTIVITY_TYPES = 64
 };
@@ -94,6 +95,11 @@ typedef struct lxp_module_iface {
     lxp_module_release_fn release;
 } lxp_module_iface;
 #define lxp_module_iface lxp_module_iface
+
+/* The web module's registration. Its activities execute in the Programs
+ * module context, whose storage holds the paid program web requests, the
+ * answers web_read serves and the registered web attestor set. */
+const lxp_module_iface *lx_web_module_iface(void);
 
 lxp_result lxp_ctx_kv_get(lxp_module_ctx *ctx, const uint8_t *key,
                           size_t key_length, const uint8_t **value,
