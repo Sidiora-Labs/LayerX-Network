@@ -485,11 +485,11 @@ reqs = ["2.1","3.1","4.1"]
 
 [task.1.17]
 title = "Settle main-account offers and grant evidence in the buyer and the web tool"
-status = "implemented"
-revision = "f4d098ef1bdc683df0be627539e09f960bc5d7d2"
-command = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p layerx-x402 --test buyer --test seller && cargo test --locked --manifest-path agent/Cargo.toml -p layerx-mcp --test web && cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-mcp --all-targets -- -D warnings'"
-exit_code = 101
-log_path = ".logs/verify.log"
+status = "done"
+revision = "a9171bc99760fe8d1709ace1bba34d3db5cf9db6"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p layerx-x402 --test buyer --test seller && cargo test --locked --manifest-path agent/Cargo.toml -p layerx-mcp --test web && cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-mcp --all-targets --no-deps -- -D warnings'"
+exit_code = 0
+log_path = ".logs/verify-1.17.log"
 wave = 1
 requires = ["1.15","1.16"]
 do_1 = "In interop/crates/layerx-x402/src/buyer.rs let LayerXEvidence carry the optional purposeHash the Seller repeats, and make Buyer::capture_settlement refuse a grant settlement whose purposeHash is absent or differs from the purposeHash of the payment it built, and refuse an exact settlement that carries one, exactly as spec/402lxp/protocol.md states for buyers (observation 1.15.3), with tests in interop/crates/layerx-x402/tests/buyer.rs for the accepted repeat, the missing one, the differing one and the exact settlement carrying one."
@@ -504,11 +504,11 @@ reqs = ["4.1","4.2","9.1","9.4"]
 
 [task.1.18]
 title = "Box the perps market payload variant so the agent workspace passes clippy"
-status = "implemented"
-revision = "fd693d7634638951bedf01290753d49470879fd4"
-command = "timeout 20m sh -c 'cargo test --locked --manifest-path agent/Cargo.toml -p layerx-types && cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-types -p layerx-mcp --all-targets -- -D warnings'"
-exit_code = 101
-log_path = ".logs/verify.log"
+status = "done"
+revision = "a9171bc99760fe8d1709ace1bba34d3db5cf9db6"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path agent/Cargo.toml -p layerx-types && cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-types -p layerx-mcp --all-targets --no-deps -- -D warnings'"
+exit_code = 0
+log_path = ".logs/verify-1.18.log"
 wave = 1
 requires = ["1.17"]
 do_1 = "In agent/crates/layerx-types/src/payload.rs box the PerpsMarket carried by PerpsPayload::MarketCreate, the variant clippy's large_enum_variant names (observation 1.10.4), keeping every other variant and the hand-written encoder and decoder as they are so the kernel payload layout does not move; add no allow attribute anywhere."

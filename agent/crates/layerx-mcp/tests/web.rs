@@ -108,8 +108,19 @@ struct Script {
     repeated_purpose: Option<Value>,
     /// Challenge the content path with the recorded fetch offers.
     challenge_content: bool,
-    pending_first: bool,
-    refuse_settlement: bool,
+    settlement: Settlement,
+}
+
+/// How the replaying sidecar answers a paid request's settlement.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Settlement {
+    /// Answer with the recorded settlement.
+    #[default]
+    Recorded,
+    /// Answer the first signature with a pending 503, then the recording.
+    PendingFirst,
+    /// Refuse every signature.
+    Refused,
 }
 
 /// A loopback listener that answers exactly the recorded client exchange.
@@ -287,12 +298,12 @@ fn answer(mut stream: TcpStream, exchange: &[Value], script: &Script, signatures
     };
     if header(&incoming, "PAYMENT-SIGNATURE").is_some() {
         let count = signatures.fetch_add(1, Ordering::SeqCst) + 1;
-        if script.pending_first && count == 1 {
+        if script.settlement == Settlement::PendingFirst && count == 1 {
             let retry = [("Retry-After".to_owned(), "1".to_owned())];
             respond(&mut stream, 503, &retry, br#"{"error":"payment_pending"}"#);
             return;
         }
-        if script.refuse_settlement {
+        if script.settlement == Settlement::Refused {
             refuse(&mut stream, exchange, &target);
             return;
         }
@@ -992,7 +1003,7 @@ fn a_rejected_spend_is_refused_without_payment() {
 #[test]
 fn a_refused_settlement_releases_nothing() {
     let replay = Replay::start(Script {
-        refuse_settlement: true,
+        settlement: Settlement::Refused,
         ..Script::default()
     });
     let registry = ApprovalRegistry::default();
@@ -1048,7 +1059,7 @@ fn a_settlement_naming_another_payer_is_refused() {
 #[test]
 fn a_pending_settlement_is_retried_with_the_same_signature() {
     let replay = Replay::start(Script {
-        pending_first: true,
+        settlement: Settlement::PendingFirst,
         ..Script::default()
     });
     let registry = ApprovalRegistry::default();

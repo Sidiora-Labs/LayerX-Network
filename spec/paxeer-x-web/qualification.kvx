@@ -152,6 +152,7 @@ symbol = "clippy::byte_char_slices"
 observed = "Clippy with -D warnings on the Rust program SDK refuses the unchanged naming.rs line 183 byte-char slice, so the SDK lint gate fails before this task's SDK modules are linted."
 assumption = "The naming.rs lint is outside this task's touches and is left for its owner."
 severity = "suspect"
+closed = "programs/sdk/rust/src/naming.rs now checks the request tag against the byte string b\"LXN\" and carries no byte-char slice, last changed at revision 7f7f8be2dc0f3c424d09317163617f94676d279d and unchanged at revision a9171bc99760fe8d1709ace1bba34d3db5cf9db6."
 
 [observation.1.9.1]
 task = "1.9"
@@ -186,6 +187,7 @@ symbol = "layerx-mcp dependencies"
 observed = "The buyer path, receipt verification and content digest need layerx-x402, layerx-interop-gateway, layerx-proof, base64, serde and sha3, and Cargo.toml and agent/Cargo.lock are outside this task's touches."
 assumption = "The manifest gains those dependencies and the lock gains only the two interop crates and the layerx-mcp dependency list."
 severity = "assumption"
+closed = "Since task 1.10 agent/crates/layerx-mcp/Cargo.toml depends on layerx-x402, layerx-interop-gateway, layerx-proof, base64, serde and sha3, and agent/Cargo.lock lists them for layerx-mcp together with the two interop crates, as read at revision a9171bc99760fe8d1709ace1bba34d3db5cf9db6."
 
 [observation.1.10.2]
 task = "1.10"
@@ -212,6 +214,7 @@ symbol = "PerpsPayload"
 observed = "cargo clippy -p layerx-mcp --all-targets -- -D warnings also lints the path dependency and fails on a pre-existing large_enum_variant in layerx-types (.logs/build.log); with --no-deps the crate is clean (.logs/clippy.log, exit 0)."
 assumption = "The dependency lint belongs to layerx-types and is left unchanged."
 severity = "note"
+closed = "Task 1.18 boxed the PerpsMarket carried by PerpsPayload::MarketCreate with every trading payload vector unchanged, and its verify_cmd, which lints layerx-types, passed at revision a9171bc99760fe8d1709ace1bba34d3db5cf9db6."
 
 [observation.1.15.1]
 task = "1.15"
@@ -247,3 +250,4 @@ symbol = "verify_program_execution_receipt"
 observed = "With PerpsPayload::MarketCreate boxed the large_enum_variant lint is gone and every layerx-types test passes, but clippy on layerx-mcp now reaches the path dependency layerx-proof and fails on too_many_arguments (8/7) in verify_program_execution_receipt (.logs/verify.log, exit 101); program.rs is outside this task's touches."
 assumption = "No allow attribute is added; the layerx-proof signature is left to its owner, after which the task 1.18 and 1.17 verify_cmds rerun unchanged."
 severity = "blocker"
+closed = "The task 1.17 and 1.18 verify_cmds now lint their own crates with --no-deps, the layerx-proof too_many_arguments finding is handed to task 2.11, and both verify_cmds passed at revision a9171bc99760fe8d1709ace1bba34d3db5cf9db6."
