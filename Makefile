@@ -113,6 +113,9 @@ TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 	test-oracle-bounds \
 	test-oracle-root \
 	test-oracle-failclosed \
+	test-web-intake \
+	test-web-root \
+	test-web-adapter \
 	test-perps-market \
 	test-perps-book \
 	test-spot-book \
@@ -847,6 +850,40 @@ $(BUILD_DIR)/tests/test_oracle_halt: tests/modules/test_oracle_halt.c \
 test-oracle-failclosed: $(BUILD_DIR)/tests/test_oracle_halt
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_oracle_halt
 	sh tools/lx_oracle_adapter_isolation.sh
+
+$(BUILD_DIR)/tests/test_web_adapter: tests/network/test_web_adapter.c \
+		tests/fixtures/web/observation-activity.hex $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+test-web-adapter: $(BUILD_DIR)/tests/test_web_adapter
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_web_adapter
+	sh tools/lx_oracle_adapter_isolation.sh
+
+$(BUILD_DIR)/tests/test_web_intake: tests/modules/test_web_intake.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+test-web-intake: $(BUILD_DIR)/tests/test_web_intake
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_web_intake
+	tools/lxp_check_sole_writer.sh
+	sh tools/lx_oracle_adapter_isolation.sh
+
+$(BUILD_DIR)/tests/test_web_root: tests/sequencer/test_web_root.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+test-web-root: $(BUILD_DIR)/tests/test_web_root
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_web_root
 
 $(BUILD_DIR)/tests/test_perps_market: tests/modules/test_perps_market.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
@@ -3302,6 +3339,15 @@ interop-lint:
 	sh interop/tools/dependency-policy.sh
 	cargo deny --manifest-path $(INTEROP_MANIFEST) check advisories bans sources
 
+.PHONY: bridge-test-evm bridge-test-solana
+
+bridge-test-evm:
+	bash bridge/evm/bootstrap-libs.sh
+	forge test --root bridge/evm -vvv
+
+bridge-test-solana:
+	cargo test --locked --manifest-path bridge/solana/Cargo.toml
+
 PROGRAMS_CARGO ?= cargo
 PROGRAMS_TARGET_DIR := $(CURDIR)/programs/target
 PROGRAMS_WORKSPACE_CARGO = env CARGO_TARGET_DIR='$(PROGRAMS_TARGET_DIR)' $(PROGRAMS_CARGO)
@@ -3392,6 +3438,19 @@ $(BUILD_DIR)/tests/test_programs_oracle_read: tests/test_programs_oracle_read.c 
 test-programs-oracle-read: $(BUILD_DIR)/tests/test_programs_oracle_read
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_programs_oracle_read
 	tools/lxp_check_sole_writer.sh
+	sh tools/lx_oracle_adapter_isolation.sh
+
+$(BUILD_DIR)/tests/test_programs_web_read: tests/test_programs_web_read.c \
+		tests/programs/test_call_activity.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-programs-web-read
+test-programs-web-read: $(BUILD_DIR)/tests/test_programs_web_read
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_programs_web_read
 	sh tools/lx_oracle_adapter_isolation.sh
 
 .PHONY: programs-native-lifecycle-fixtures programs-check-native-lifecycle-fixtures

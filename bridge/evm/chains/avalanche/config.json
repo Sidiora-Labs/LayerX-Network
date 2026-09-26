@@ -1,0 +1,34 @@
+{
+  "chain": "avalanche",
+  "kind": "evm",
+  "chain_id": 43114,
+  "native": {
+    "symbol": "AVAX",
+    "decimals": 18
+  },
+  "environment": {
+    "rpc_url": "PAXEER_BRIDGE_AVALANCHE_RPC_URL",
+    "deploy_key": "PAXEER_BRIDGE_AVALANCHE_DEPLOY_KEY",
+    "explorer_key": "PAXEER_BRIDGE_AVALANCHE_EXPLORER_KEY"
+  },
+  "owner": "PLACEHOLDER:owner",
+  "attestors": [
+    "PLACEHOLDER:attestor-1",
+    "PLACEHOLDER:attestor-2",
+    "PLACEHOLDER:attestor-3",
+    "PLACEHOLDER:attestor-4",
+    "PLACEHOLDER:attestor-5"
+  ],
+  "threshold": 3,
+  "finality_depth": 12,
+  "assets": [
+    {
+      "symbol": "AVAX",
+      "address": "0x0000000000000000000000000000000000000000",
+      "asset_id": "0x0000000000000000000000000000000000000000",
+      "decimals": 18,
+      "per_tx_cap": "10000000000000000000000",
+      "total_cap": "200000000000000000000000"
+    }
+  ]
+}

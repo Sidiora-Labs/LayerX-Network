@@ -198,6 +198,18 @@ mod candidate_raw {
     }
 }
 
+mod v4_raw {
+    #[link(wasm_import_module = "layerx_v4")]
+    unsafe extern "C" {
+        pub(super) fn web_read(
+            request_pointer: i32,
+            request_length: i32,
+            output_pointer: i32,
+            output_capacity: i32,
+        ) -> i32;
+    }
+}
+
 mod v3_raw {
     #[link(wasm_import_module = "layerx_v3")]
     unsafe extern "C" {
@@ -735,4 +747,14 @@ pub(crate) fn storage_delete_shared(key: &[u8]) -> Result<i32, ProgramError> {
     };
     exact(status, 0)?;
     Ok(0)
+}
+
+pub(crate) fn web_read(request_id: u64, output: &mut [u8]) -> Result<Option<i32>, ProgramError> {
+    let request = request_id.to_le_bytes();
+    let status =
+        unsafe { v4_raw::web_read(pointer(&request)?, 8, pointer_mut(output)?, length(output)?) };
+    if status == crate::web::STATUS_ABSENT {
+        return Ok(None);
+    }
+    ProgramError::from_status(status).map(Some)
 }

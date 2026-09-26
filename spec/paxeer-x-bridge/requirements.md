@@ -43,6 +43,7 @@ The bridge is lock and release, both ways, everywhere. A foreign chain locks a d
 5. THE hyperevm configuration and page SHALL state that the deploying account must be switched to big blocks before a contract deployment will fit, and the deploy script SHALL refuse to deploy to hyperevm until the configuration records that acknowledgement.
 6. THE loader SHALL refuse an unknown field, a chain id that disagrees with the file's chain name, a native symbol or decimals that disagree with the chain, an empty or malformed environment variable name, a placeholder or zero owner, a placeholder, zero, duplicated or descending attestor, a threshold of zero or above the attestor count, a zero finality depth, an asset list whose first entry is not the native coin, a zero cap, and a Solana asset id that is neither the mint's derived handle nor Sidiora's fixed address, naming the file and the field in every refusal.
 7. GO tests SHALL load every committed configuration and assert it is accepted, and SHALL cover each refusal above against a configuration that differs from an accepted one in exactly that field.
+8. THE asset id 0x21f7b20a555199fa73A238B1a91FD0f549068fEe SHALL be accepted only for the Sidiora mint 5w3wVdJaESaJKyLmStM6Hv9UyUkmZ1b9DLQquAqqpump, and that mint SHALL be accepted only with that id; any other pairing SHALL be refused by the Solana program's asset registration, by the configuration validator and by the post-deploy checklist.
 
 ## Requirement 4: The Solana Custody Program
 
@@ -175,10 +176,10 @@ The bridge is lock and release, both ways, everywhere. A foreign chain locks a d
 
 ### Acceptance Criteria
 
-1. ONE workflow .github/workflows/bridge-test.yml SHALL run on pull requests and pushes touching bridge/** or interop/crates/layerx-bridge-relayer/**, and SHALL carry no other path filter.
+1. ONE workflow .github/workflows/bridge-test.yml SHALL run on pull requests and pushes touching bridge/**, interop/crates/layerx-bridge-relayer/** or .github/workflows/bridge-test.yml itself, and SHALL carry exactly those three path filters and no other.
 2. ITS jobs SHALL be forge test for bridge/evm after cloning the two pinned libraries, cargo test plus cargo build-sbf for bridge/solana, cargo test for the layerx-bridge-relayer crate, and the bridge/deploy tooling leg running that directory's Go packages and offline check scripts; every job name SHALL name what that job runs.
 3. NO job SHALL carry continue-on-error, no step SHALL claim a check it does not perform, and every action SHALL be pinned the way the repository's existing workflows pin theirs.
-4. A CHECK script SHALL parse the workflow, assert every path filter names a directory that exists, assert every job's command is one the repository can run from its root, and assert no continue-on-error is present.
+4. A CHECK script SHALL parse the workflow, assert the path filters are exactly bridge/**, interop/crates/layerx-bridge-relayer/** and the workflow file itself and that each names a directory or file that exists, assert every job's command is one the repository can run from its root, and assert no continue-on-error is present.
 
 ## Requirement 15: Wave Qualification and Recorded Evidence
 
@@ -187,7 +188,7 @@ The bridge is lock and release, both ways, everywhere. A foreign chain locks a d
 ### Acceptance Criteria
 
 1. THE workflow's four legs SHALL be run once, on the merged revision of the feature's waves, and never per task.
-2. THE run SHALL be recorded in spec/paxeer-x-bridge/qualification.kvx as gate records carrying the task, the requirements the gate qualifies, the revision, the exact command, the exit code and the log path, written only by having executed the command they name.
-3. ANY failure the run exposes that belongs to no task in this feature SHALL be recorded once as an observation with its revision, command, exit code, log path, one sentence of what was observed and one sentence of what is assumed, and SHALL NOT be chased.
+2. THE run SHALL be recorded in spec/paxeer-x-bridge/qualification.kvx as [gate.*] records carrying the task, the requirements the gate qualifies, the revision, the exact command, the exit code, the log path, the outcome and the evidence, written only by having executed the command they name.
+3. ANY failure the run exposes that belongs to no task in this feature SHALL be recorded once as an [observation.*] entry in the repository-wide shape spec/workflow.kvx [qualification_log] fixes - task, file, symbol, observed (one sentence), assumption (one sentence) and severity - and SHALL NOT be chased; the four evidence fields revision, command, exit code and log path belong only to task done records and [gate.*] records.
 4. NO gate record SHALL be written for a command that did not run, no gate that passed at the recorded revision SHALL be rerun to confirm it, and nothing SHALL be deployed: the deployment scripts and the generated proposals are left for their owner.
 

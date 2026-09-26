@@ -6,11 +6,18 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/sidiora-labs/paxeer-network/modules/layerxbridge"
 	"github.com/sidiora-labs/paxeer-network/modules/layerxbridge/keeper"
 	bridgetestutil "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/testutil"
 	"github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
 	app "github.com/sidiora-labs/paxeer-network/node"
+	"github.com/sidiora-labs/paxeer-network/sdk/baseapp"
+	cdctypes "github.com/sidiora-labs/paxeer-network/sdk/codec/types"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	sdkerrors "github.com/sidiora-labs/paxeer-network/sdk/types/errors"
+	"github.com/sidiora-labs/paxeer-network/sdk/types/module"
+	banktypes "github.com/sidiora-labs/paxeer-network/sdk/x/bank/types"
+	govtypes "github.com/sidiora-labs/paxeer-network/sdk/x/gov/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -149,6 +156,129 @@ func TestGovernanceMessagesRequireTheAuthority(t *testing.T) {
 	require.True(t, s.k.IsPaused(s.ctx))
 	require.NoError(t, s.k.Unpause(s.ctx, types.MsgUnpause{Authority: authority}))
 	require.False(t, s.k.IsPaused(s.ctx))
+}
+
+// router is a real message service router serving the module's Msg service
+// over the suite's keeper, registered by the module itself against the
+// application's interface registry.
+func (s *suite) router() *baseapp.MsgServiceRouter {
+	s.t.Helper()
+	router := baseapp.NewMsgServiceRouter()
+	router.SetInterfaceRegistry(s.app.InterfaceRegistry())
+	layerxbridge.NewAppModule(s.k).RegisterServices(
+		module.NewConfigurator(s.app.AppCodec(), router, baseapp.NewGRPCQueryRouter()))
+	return router
+}
+
+// route carries msg the way a transaction does - packed into an Any under its
+// type URL, encoded and decoded by the application's codec - and executes the
+// decoded message through the router.
+func (s *suite) route(router *baseapp.MsgServiceRouter, msg sdk.Msg) error {
+	s.t.Helper()
+	encoded, err := s.app.AppCodec().MarshalInterface(msg)
+	require.NoError(s.t, err)
+	var decoded sdk.Msg
+	require.NoError(s.t, s.app.AppCodec().UnmarshalInterface(encoded, &decoded))
+	require.Equal(s.t, sdk.MsgTypeURL(msg), sdk.MsgTypeURL(decoded))
+	reencoded, err := s.app.AppCodec().MarshalInterface(decoded)
+	require.NoError(s.t, err)
+	require.Equal(s.t, encoded, reencoded, "the decoded message differs from the one sent")
+	handler := router.Handler(decoded)
+	require.NotNil(s.t, handler, "no route for %s", sdk.MsgTypeURL(decoded))
+	_, err = handler(s.ctx, decoded)
+	return err
+}
+
+func governanceMessages(from string, set types.AttestorSet) []sdk.Msg {
+	return []sdk.Msg{
+		&types.MsgRegisterChain{Authority: from,
+			Chain: types.Chain{ChainID: chainID, Vault: vault, FinalityDepth: 64, Enabled: true}},
+		&types.MsgSetAttestors{Authority: from, Set: set},
+		&types.MsgSetCap{Authority: from, ChainID: chainID, Asset: asset,
+			MaxInFlight: sdk.NewInt(1500), MaxPerTx: sdk.NewInt(1000)},
+		&types.MsgPause{Authority: from},
+		&types.MsgUnpause{Authority: from},
+	}
+}
+
+func TestMsgServiceRoutesEveryGovernanceMessageToTheKeeper(t *testing.T) {
+	s := newSuite(t, false)
+	router := s.router()
+	messages := governanceMessages(authority, bridgetestutil.Set(s.attestors, 1_000_000, 2))
+	wantTypeURLs := []string{
+		"/paxprotocol.paxchain.layerxbridge.MsgRegisterChain",
+		"/paxprotocol.paxchain.layerxbridge.MsgSetAttestors",
+		"/paxprotocol.paxchain.layerxbridge.MsgSetCap",
+		"/paxprotocol.paxchain.layerxbridge.MsgPause",
+		"/paxprotocol.paxchain.layerxbridge.MsgUnpause",
+	}
+	authorityAccount, err := sdk.AccAddressFromBech32(authority)
+	require.NoError(t, err)
+	for i, msg := range messages {
+		require.Equal(t, wantTypeURLs[i], sdk.MsgTypeURL(msg))
+		require.NotNil(t, s.app.MsgServiceRouter().Handler(msg), "the application routes no %s", wantTypeURLs[i])
+		require.Equal(t, []sdk.AccAddress{authorityAccount}, msg.GetSigners())
+		legacy, ok := msg.(interface {
+			Route() string
+			GetSignBytes() []byte
+		})
+		require.True(t, ok)
+		require.Equal(t, types.RouterKey, legacy.Route())
+		require.Contains(t, string(legacy.GetSignBytes()), "layerxbridge/"+wantTypeURLs[i][len("/paxprotocol.paxchain.layerxbridge."):])
+	}
+
+	require.NoError(t, s.route(router, messages[0]))
+	chain, found := s.k.GetChain(s.ctx, chainID)
+	require.True(t, found)
+	require.Equal(t, messages[0].(*types.MsgRegisterChain).Chain, chain)
+
+	require.NoError(t, s.route(router, messages[1]))
+	set := s.k.GetAttestorSet(s.ctx)
+	want := messages[1].(*types.MsgSetAttestors).Set
+	require.Equal(t, want.Threshold, set.Threshold)
+	require.Len(t, set.Attestors, len(want.Attestors))
+	for i := range want.Attestors {
+		require.Equal(t, want.Attestors[i].Signer, set.Attestors[i].Signer)
+		require.True(t, want.Attestors[i].Bond.Equal(set.Attestors[i].Bond))
+	}
+
+	require.NoError(t, s.route(router, messages[2]))
+	record, found := s.k.GetAsset(s.ctx, chainID, asset)
+	require.True(t, found)
+	require.Equal(t, s.denom, record.Denom)
+	limit, found := s.k.GetCap(s.ctx, s.denom)
+	require.True(t, found)
+	require.True(t, limit.MaxInFlight.Equal(sdk.NewInt(1500)))
+	require.True(t, limit.MaxPerTx.Equal(sdk.NewInt(1000)))
+
+	require.NoError(t, s.route(router, messages[3]))
+	require.True(t, s.k.IsPaused(s.ctx))
+	require.NoError(t, s.route(router, messages[4]))
+	require.False(t, s.k.IsPaused(s.ctx))
+
+	in := deposit(1, 10)
+	minted, err := s.k.BridgeIn(s.ctx, in, s.signed(in, s.attestors[0], s.attestors[1]))
+	require.NoError(t, err)
+	require.Equal(t, s.denom, minted.Denom)
+	require.True(t, sdk.NewInt(10).Equal(s.balance(recipient)))
+}
+
+func TestMsgServiceRefusesAWrongAuthority(t *testing.T) {
+	s := newSuite(t, false)
+	router := s.router()
+	stranger := sdk.AccAddress(make([]byte, 20)).String()
+	for _, msg := range governanceMessages(stranger, bridgetestutil.Set(s.attestors, 1, 2)) {
+		require.ErrorIs(t, s.route(router, msg), types.ErrUnauthorized, sdk.MsgTypeURL(msg))
+	}
+	for _, msg := range governanceMessages("not-a-bech32-account", bridgetestutil.Set(s.attestors, 1, 2)) {
+		require.Empty(t, msg.GetSigners(), sdk.MsgTypeURL(msg))
+		require.ErrorIs(t, s.route(router, msg), types.ErrUnauthorized, sdk.MsgTypeURL(msg))
+	}
+	require.Equal(t, *types.DefaultGenesis(), s.k.ExportGenesis(s.ctx), "a refused message changed the state")
+
+	require.NoError(t, s.route(router, &types.MsgPause{Authority: authority}))
+	require.ErrorIs(t, s.route(router, &types.MsgUnpause{Authority: stranger}), types.ErrUnauthorized)
+	require.True(t, s.k.IsPaused(s.ctx))
 }
 
 func TestBridgeInMintsAtThreshold(t *testing.T) {
@@ -311,4 +441,150 @@ func TestGenesisRoundTrip(t *testing.T) {
 	fresh, ctx := bridgetestutil.NewKeeper(s.app, s.ctx)
 	fresh.InitGenesis(ctx, exported)
 	require.Equal(t, exported, fresh.ExportGenesis(ctx))
+}
+
+// submitted packs msgs into a BridgeProposal and carries it the way the
+// chain's submit-proposal transaction does - as the content of a
+// MsgSubmitProposal encoded and decoded by the application's codec - and
+// returns the content governance hands the proposal handler.
+func (s *suite) submitted(msgs ...sdk.Msg) (*govtypes.MsgSubmitProposal, govtypes.Content) {
+	s.t.Helper()
+	content, err := types.NewBridgeProposal("Open chain 1 on the bridge", "Registers chain 1, installs the attestor set and sets its cap.", msgs...)
+	require.NoError(s.t, err)
+	submit, err := govtypes.NewMsgSubmitProposal(content, sdk.NewCoins(), sdk.AccAddress(recipient.Bytes()))
+	require.NoError(s.t, err)
+	encoded, err := s.app.AppCodec().MarshalInterface(submit)
+	require.NoError(s.t, err)
+	var decoded sdk.Msg
+	require.NoError(s.t, s.app.AppCodec().UnmarshalInterface(encoded, &decoded))
+	carried, ok := decoded.(*govtypes.MsgSubmitProposal)
+	require.True(s.t, ok, "decoded a %T", decoded)
+	return carried, carried.GetContent()
+}
+
+func TestProposalHandlerExecutesEveryCarriedMessage(t *testing.T) {
+	s := newSuite(t, false)
+	messages := governanceMessages(authority, bridgetestutil.Set(s.attestors, 1_000_000, 2))
+	submit, content := s.submitted(messages...)
+	require.NoError(t, submit.ValidateBasic())
+	require.Equal(t, types.RouterKey, content.ProposalRoute())
+	require.Equal(t, types.ProposalTypeBridge, content.ProposalType())
+	proposal, ok := content.(*types.BridgeProposal)
+	require.True(t, ok, "the content decoded as %T", content)
+	carried, err := proposal.GetMessages()
+	require.NoError(t, err)
+	require.Len(t, carried, len(messages))
+	for i := range messages {
+		require.Equal(t, sdk.MsgTypeURL(messages[i]), sdk.MsgTypeURL(carried[i]))
+		require.Equal(t, messages[i].String(), carried[i].String(), "message %d changed on its way through governance", i)
+	}
+	signBytes := string(submit.GetSignBytes())
+	require.Contains(t, signBytes, "layerxbridge/BridgeProposal")
+	require.Contains(t, signBytes, "layerxbridge/MsgRegisterChain")
+	require.Contains(t, signBytes, "layerxbridge/MsgSetCap")
+
+	require.NoError(t, layerxbridge.NewProposalHandler(s.k)(s.ctx, content))
+	chain, found := s.k.GetChain(s.ctx, chainID)
+	require.True(t, found)
+	require.Equal(t, messages[0].(*types.MsgRegisterChain).Chain, chain)
+	set := s.k.GetAttestorSet(s.ctx)
+	require.Equal(t, uint32(2), set.Threshold)
+	require.Len(t, set.Attestors, len(s.attestors))
+	limit, found := s.k.GetCap(s.ctx, s.denom)
+	require.True(t, found)
+	require.True(t, limit.MaxInFlight.Equal(sdk.NewInt(1500)))
+	require.True(t, limit.MaxPerTx.Equal(sdk.NewInt(1000)))
+	require.False(t, s.k.IsPaused(s.ctx), "the proposal pauses and then unpauses, in order")
+	require.Len(t, s.events(types.EventChainRegistered), 1)
+	require.Len(t, s.events(types.EventPaused), 1)
+	require.Len(t, s.events(types.EventUnpaused), 1)
+
+	in := deposit(1, 10)
+	minted, err := s.k.BridgeIn(s.ctx, in, s.signed(in, s.attestors[0], s.attestors[1]))
+	require.NoError(t, err)
+	require.Equal(t, s.denom, minted.Denom)
+	require.True(t, sdk.NewInt(10).Equal(s.balance(recipient)))
+}
+
+func TestProposalHandlerRefusesAWrongAuthority(t *testing.T) {
+	s := newSuite(t, false)
+	handler := layerxbridge.NewProposalHandler(s.k)
+	set := bridgetestutil.Set(s.attestors, 1, 2)
+	stranger := sdk.AccAddress(make([]byte, 20)).String()
+	bridgeAccount := s.k.ModuleAddress().String()
+	for _, from := range []string{stranger, bridgeAccount} {
+		for i := range governanceMessages(authority, set) {
+			messages := governanceMessages(authority, set)
+			messages[i] = governanceMessages(from, set)[i]
+			submit, content := s.submitted(messages...)
+			require.ErrorIs(t, submit.ValidateBasic(), types.ErrUnauthorized, "message %d from %s", i, from)
+			require.ErrorIs(t, handler(s.ctx, content), types.ErrUnauthorized, "message %d from %s", i, from)
+		}
+	}
+	for _, msg := range governanceMessages("not-a-bech32-account", set) {
+		content := &types.BridgeProposal{Title: "t", Description: "d"}
+		packed, err := cdctypes.NewAnyWithValue(msg)
+		require.NoError(t, err)
+		content.Messages = append(content.Messages, packed)
+		require.ErrorIs(t, handler(s.ctx, content), types.ErrUnauthorized, sdk.MsgTypeURL(msg))
+	}
+
+	// The keeper applies a message only for the module's authority, so even a
+	// proposal for the governance module account is refused once the module's
+	// authority is another account.
+	params := s.k.GetParams(s.ctx)
+	params.Authority = bridgeAccount
+	require.NoError(t, s.k.SetParams(s.ctx, params))
+	_, content := s.submitted(&types.MsgPause{Authority: authority})
+	require.ErrorIs(t, handler(s.ctx, content), types.ErrUnauthorized)
+	require.False(t, s.k.IsPaused(s.ctx))
+	params.Authority = authority
+	require.NoError(t, s.k.SetParams(s.ctx, params))
+	require.Equal(t, *types.DefaultGenesis(), s.k.ExportGenesis(s.ctx), "a refused proposal changed the state")
+}
+
+func TestProposalHandlerRefusesAMalformedProposal(t *testing.T) {
+	s := newSuite(t, false)
+	handler := layerxbridge.NewProposalHandler(s.k)
+	chain := types.Chain{ChainID: chainID, Vault: vault, FinalityDepth: 64, Enabled: true}
+	register := &types.MsgRegisterChain{Authority: authority, Chain: chain}
+
+	require.ErrorIs(t, handler(s.ctx, govtypes.NewTextProposal("text", "a text proposal", false)), sdkerrors.ErrUnknownRequest)
+	require.ErrorIs(t, handler(s.ctx, &types.BridgeProposal{Title: "t", Description: "d"}), govtypes.ErrInvalidProposalContent,
+		"a proposal carrying no message")
+	for _, abstract := range [][2]string{{"", "d"}, {"t", ""}} {
+		content, err := types.NewBridgeProposal(abstract[0], abstract[1], register)
+		require.NoError(t, err)
+		require.ErrorIs(t, handler(s.ctx, content), govtypes.ErrInvalidProposalContent, "title %q description %q", abstract[0], abstract[1])
+	}
+
+	send := &banktypes.MsgSend{FromAddress: authority, ToAddress: authority, Amount: sdk.NewCoins(sdk.NewInt64Coin("upax", 1))}
+	_, err := types.NewBridgeProposal("t", "d", register, send)
+	require.ErrorIs(t, err, govtypes.ErrInvalidProposalContent, "a message of another module")
+	packedSend, err := cdctypes.NewAnyWithValue(send)
+	require.NoError(t, err)
+	require.ErrorIs(t, handler(s.ctx, &types.BridgeProposal{Title: "t", Description: "d", Messages: []*cdctypes.Any{packedSend}}),
+		govtypes.ErrInvalidProposalContent, "a message of another module")
+
+	encodedPause, err := (&types.MsgPause{Authority: authority}).Marshal()
+	require.NoError(t, err)
+	unresolved := &cdctypes.Any{TypeUrl: sdk.MsgTypeURL(&types.MsgPause{}), Value: encodedPause}
+	require.ErrorIs(t, handler(s.ctx, &types.BridgeProposal{Title: "t", Description: "d", Messages: []*cdctypes.Any{unresolved}}),
+		govtypes.ErrInvalidProposalContent, "a message never unpacked through the registry")
+	require.ErrorIs(t, handler(s.ctx, &types.BridgeProposal{Title: "t", Description: "d", Messages: []*cdctypes.Any{nil}}),
+		govtypes.ErrInvalidProposalContent, "an empty message")
+
+	_, content := s.submitted(&types.MsgRegisterChain{Authority: authority, Chain: types.Chain{ChainID: chainID, FinalityDepth: 64}})
+	require.ErrorIs(t, handler(s.ctx, content), types.ErrInvalidChain, "a message its own ValidateBasic refuses")
+
+	// A proposal executes whole or not at all: the cap of an unregistered
+	// chain fails after the registration ran, and the registration is undone.
+	_, content = s.submitted(register, &types.MsgSetCap{Authority: authority, ChainID: chainID + 1, Asset: asset,
+		MaxInFlight: sdk.NewInt(1500), MaxPerTx: sdk.NewInt(1000)})
+	require.NoError(t, content.ValidateBasic())
+	require.ErrorIs(t, handler(s.ctx, content), types.ErrUnknownChain)
+	_, found := s.k.GetChain(s.ctx, chainID)
+	require.False(t, found, "a failed proposal left its first message applied")
+	require.Empty(t, s.events(types.EventChainRegistered))
+	require.Equal(t, *types.DefaultGenesis(), s.k.ExportGenesis(s.ctx), "a refused proposal changed the state")
 }

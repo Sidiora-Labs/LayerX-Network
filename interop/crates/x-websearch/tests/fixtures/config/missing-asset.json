@@ -1,0 +1,50 @@
+{
+  "listen": "127.0.0.1:8480",
+  "data_dir": "/var/lib/x-websearch",
+  "seeds": [
+    "https://paxeer.app/",
+    "https://github.com/Sidiora-Labs/Paxeer-X-Network"
+  ],
+  "crawl": {
+    "pages_per_cycle": 1000,
+    "pages_per_host": 100,
+    "max_depth": 3,
+    "politeness_delay_ms": 1000
+  },
+  "fetch": {
+    "connect_timeout_ms": 3000,
+    "total_timeout_ms": 10000,
+    "max_body_bytes": 2097152,
+    "max_redirects": 3,
+    "allow_loopback": false
+  },
+  "assets": {
+    "SID": {
+      "asset_id": "5c1d0a93e4b7f2682c9e1f0473ad5b6e8f1027c3d49a5b6e7f80912a3b4c5d6e",
+      "price": "3114"
+    },
+    "PAX": {
+      "asset_id": "6d2e1ba4f5c80379ad0f2e1584be6c7f90213d4e5ab6c7d8e9f0a1b2c3d4e5f6",
+      "price": "1000000000000000"
+    },
+    "USDC": {
+      "asset_id": "7e3f2cb506d9148abe1f3f2695cf7d80a1324e5f6bc7d8e9fa0b1c2d3e4f5061",
+      "price": "1000"
+    }
+  },
+  "gateway": {
+    "endpoint": "http://127.0.0.1:8547/rpc",
+    "sequencer_id": "2a7d1c5e9b3f4a6d8c0e2f4a6b8d0c2e4f6a8b0d2c4e6f8a0b2d4c6e8f0a2b4d",
+    "sequencer_public_key": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+  },
+  "evm": {
+    "endpoint": "http://127.0.0.1:8545",
+    "chain_id": 1337,
+    "confirmations": 12
+  },
+  "kernel_network_id": 1,
+  "peers": [
+    "http://127.0.0.1:8481",
+    "http://127.0.0.1:8482"
+  ]
+}

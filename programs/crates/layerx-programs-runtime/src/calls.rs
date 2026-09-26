@@ -896,7 +896,10 @@ pub(crate) fn execute_nested_call_response(
 }
 
 const fn uses_response_context(revision: AbiRevision) -> bool {
-    matches!(revision, AbiRevision::V2 | AbiRevision::V3)
+    matches!(
+        revision,
+        AbiRevision::V2 | AbiRevision::V3 | AbiRevision::V4
+    )
 }
 
 #[allow(clippy::too_many_lines)]
@@ -958,6 +961,7 @@ fn execute_nested(
         receipts,
         balances,
         committed_oracle,
+        committed_web,
         access_declaration,
         callee_frame,
         emitted_event_count,
@@ -976,6 +980,7 @@ fn execute_nested(
             abi.verified_receipts(),
             abi.verified_balances(),
             abi.committed_oracle(),
+            abi.committed_web(),
             abi.access_declaration().clone(),
             callee_frame,
             abi.emitted_event_count(),
@@ -1004,6 +1009,7 @@ fn execute_nested(
             AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION,
             AbiRevision::V2 => crate::abi::manifest::ABI_V2_VERSION,
             AbiRevision::V3 => crate::abi::manifest::ABI_V3_VERSION,
+            AbiRevision::V4 => crate::abi::manifest::ABI_V4_VERSION,
         },
         callee,
         authorization,
@@ -1013,6 +1019,7 @@ fn execute_nested(
     )?;
     child_abi.inherit_emitted_event_count(emitted_event_count)?;
     child_abi.set_committed_oracle(committed_oracle);
+    child_abi.set_committed_web(committed_web);
     child_abi.set_access_declaration(access_declaration);
     let child_graph = state
         .composition()

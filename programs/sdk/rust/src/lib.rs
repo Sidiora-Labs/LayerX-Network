@@ -55,6 +55,7 @@ pub mod payments;
 pub mod receipt;
 pub mod storage;
 pub mod transfer;
+pub mod web;
 
 #[cfg(target_arch = "wasm32")]
 pub mod entry;
@@ -100,6 +101,7 @@ pub use oracle::{Observation, OBSERVATION_BYTES};
 pub use receipt::Receipt;
 pub use storage::{StorageKey, StorageValue};
 pub use transfer::{Payment, ProgramAccountPayment, ProgramAccountSeed, ProgramDeposit};
+pub use web::{Answer, ANSWER_HEADER_BYTES, MAX_RESPONSE_BYTES, RECORD_BYTES};
 
 /// Returns the repository path of the escrow reference program shipped with
 /// this SDK.

@@ -1,0 +1,8 @@
+{
+  "genesis_hash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  "program_id": "A7SZbByPYuHpunZ9pyMDMrhMYvK44ANT1AVqb8U1FpM9",
+  "deployment_signature": "4NuJ9kxDk3rVZkTVcFHpu9dKzjzEdeD2uFkRGr6XbLbdnDWGEjwSs4LDQsNcvAxxYSEQpbmyuWgjB8K5ey2PnB5Q",
+  "deployment_slot": 312000017,
+  "rooted_slot": 312000418,
+  "program_so": "paxeer_x_bridge_solana_program.so"
+}

@@ -1,0 +1,171 @@
+name: Paxeer X / xweb Test
+
+on:
+  pull_request:
+    paths:
+      - 'interop/crates/x-websearch/**'
+      - 'interop/deploy/x-websearch/**'
+      - 'modules/xweb/**'
+      - 'precompiles/xweb/**'
+      - 'contracts/src/precompiles/IXWeb.sol'
+      - 'contracts/src/xweb/**'
+      - 'contracts/test/XWebConsumer.t.sol'
+      - 'include/layerx/lx_web.h'
+      - 'src/modules/web/**'
+      - 'src/network/lx_web_adapter.c'
+      - 'src/sequencer/lx_web_root.c'
+      - 'programs/crates/layerx-programs-runtime/**'
+      - 'agent/sdk/typescript/src/web-search.ts'
+      - 'agent/sdk/python/layerx_sdk/web_search.py'
+      - 'agent/crates/layerx-mcp/**'
+      - 'tools/ci/xweb-forge-libs.sh'
+      - '.github/workflows/xweb-test.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'interop/crates/x-websearch/**'
+      - 'interop/deploy/x-websearch/**'
+      - 'modules/xweb/**'
+      - 'precompiles/xweb/**'
+      - 'contracts/src/precompiles/IXWeb.sol'
+      - 'contracts/src/xweb/**'
+      - 'contracts/test/XWebConsumer.t.sol'
+      - 'include/layerx/lx_web.h'
+      - 'src/modules/web/**'
+      - 'src/network/lx_web_adapter.c'
+      - 'src/sequencer/lx_web_root.c'
+      - 'programs/crates/layerx-programs-runtime/**'
+      - 'agent/sdk/typescript/src/web-search.ts'
+      - 'agent/sdk/python/layerx_sdk/web_search.py'
+      - 'agent/crates/layerx-mcp/**'
+      - 'tools/ci/xweb-forge-libs.sh'
+      - '.github/workflows/xweb-test.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xweb-test-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LC_ALL: C
+  TZ: UTC
+
+defaults:
+  run:
+    working-directory: .
+
+jobs:
+  sidecar-crate:
+    name: cargo test for the x-websearch crate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install native dependencies
+        run: sudo apt-get update && sudo apt-get install --yes pkg-config libssl-dev
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install 1.91.1 --profile minimal --no-self-update
+
+      - name: Run cargo test for the x-websearch crate
+        run: cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch
+
+  module-precompile:
+    name: go test for modules/xweb and precompiles/xweb
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Go toolchain
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25.6'
+
+      - name: Run go test for modules/xweb and precompiles/xweb
+        run: go test -count=1 ./modules/xweb/... ./precompiles/xweb/...
+
+  consumer-contract:
+    name: forge test for contracts/test/XWebConsumer.t.sol
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with:
+          version: v1.8.1
+
+      - name: Run the pinned Solidity library clone into contracts/lib
+        run: bash tools/ci/xweb-forge-libs.sh
+
+      - name: Run forge test for contracts/test/XWebConsumer.t.sol
+        run: FOUNDRY_CONFIG=foundry.paxeer.toml forge test --evm-version=prague --match-path contracts/test/XWebConsumer.t.sol
+
+  kernel-web:
+    name: make for the kernel web targets and cargo test for the runtime web_read test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install native dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          build-essential clang libssl-dev libsqlite3-dev ripgrep
+
+      - name: Install the pinned Rust toolchain with the wasm target
+        run: rustup toolchain install 1.91.1 --profile minimal --no-self-update --target wasm32-unknown-unknown
+
+      - name: Run make for the kernel web activity and web_read targets
+        run: make test-web-intake test-web-root test-web-adapter test-programs-web-read test-web-program-path
+
+      - name: Run cargo test for the layerx-programs-runtime web_read test
+        run: cargo test --locked --manifest-path programs/Cargo.toml -p layerx-programs-runtime --test web_read
+
+  agent-clients:
+    name: cargo test, npm and pytest for the MCP, TypeScript and Python web clients
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install 1.91.1 --profile minimal --no-self-update
+
+      - name: Install Node.js for the TypeScript SDK
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: 22
+
+      - name: Install pytest for the Python SDK
+        run: sudo apt-get update && sudo apt-get install --yes python3-pytest
+
+      - name: Run cargo test for the layerx-mcp web tool
+        run: cargo test --locked --manifest-path agent/Cargo.toml -p layerx-mcp --test web
+
+      - name: Run npm for the TypeScript web search client test
+        run: (cd agent/sdk/typescript && npm ci && npm run build && node dist/test/web-search.test.js)
+
+      - name: Run pytest for the Python web search client test
+        run: (cd agent/sdk/python && python3 -m pytest -q tests/test_web_search.py)

@@ -6,7 +6,11 @@
 //! instead of signing a second transaction for the same bridge event.
 //!
 //! Items are keyed by `in:{chain}:{txHash}:{logIndex}` for Ethereum deposits
-//! and `out:{chain}:{paxeerTxHash}:{nonce}` for Paxeer burns.
+//! and `out:{chain}:{paxeerTxHash}:{nonce}` for Paxeer burns, Solana ones
+//! included. A Solana release is journaled with its exact signed wire bytes
+//! and the last block height its blockhash is valid for, and a burn whose
+//! recipient handle has no recipient PDA yet is journaled as pending until the
+//! PDA appears.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -220,6 +224,13 @@ pub enum Completion {
     /// The destination already consumed the event's nullifier, through this
     /// or another relayer's transaction.
     AlreadyBridged,
+    /// This relayer's Solana release reached the configured commitment
+    /// without error.
+    Released {
+        #[serde(with = "hex::fixed_serde")]
+        signature: [u8; 64],
+        slot: u64,
+    },
 }
 
 /// One journal line.
@@ -268,6 +279,39 @@ pub enum Entry {
     },
     /// The event can never be bridged as observed; it is not signed.
     Refused { item: String, reason: String },
+    /// The Solana recipient handle has no recipient PDA yet: nothing is
+    /// signed or broadcast until it appears.
+    RecipientPending { item: String },
+    /// The 32-byte key the recipient PDA holds for the burn's handle.
+    RecipientResolved {
+        item: String,
+        #[serde(with = "hex::fixed_serde")]
+        key: [u8; 32],
+    },
+    /// A signed Solana release, journaled before its first broadcast.
+    ReleaseSubmitted {
+        item: String,
+        #[serde(with = "hex::fixed_serde")]
+        fee_payer: [u8; 32],
+        #[serde(with = "hex::fixed_serde")]
+        signature: [u8; 64],
+        last_valid_block_height: u64,
+        #[serde(with = "hex::bytes_serde")]
+        raw: Vec<u8>,
+    },
+    /// The release's blockhash expired without inclusion; the same journaled
+    /// attestation is resubmitted in a new transaction.
+    ReleaseExpired {
+        item: String,
+        #[serde(with = "hex::fixed_serde")]
+        signature: [u8; 64],
+    },
+    /// The release executed and failed without consuming the nullifier.
+    ReleaseFailed {
+        item: String,
+        #[serde(with = "hex::fixed_serde")]
+        signature: [u8; 64],
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -286,6 +330,25 @@ pub struct Submission {
     pub status: SubmissionStatus,
 }
 
+/// A signed Solana release transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleaseSubmission {
+    pub fee_payer: [u8; 32],
+    pub signature: [u8; 64],
+    pub last_valid_block_height: u64,
+    pub raw: Vec<u8>,
+    pub status: SubmissionStatus,
+}
+
+/// Where the lookup of a Solana recipient handle stands.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Recipient {
+    /// The recipient PDA does not exist yet.
+    Pending,
+    /// The 32-byte key the handle stands for.
+    Resolved([u8; 32]),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Item {
     pub observation: Observation,
@@ -293,9 +356,23 @@ pub struct Item {
     pub submissions: Vec<Submission>,
     pub completion: Option<Completion>,
     pub refusal: Option<String>,
+    pub recipient: Option<Recipient>,
+    pub releases: Vec<ReleaseSubmission>,
 }
 
 impl Item {
+    const fn observed(observation: Observation) -> Self {
+        Self {
+            observation,
+            signature: None,
+            submissions: Vec::new(),
+            completion: None,
+            refusal: None,
+            recipient: None,
+            releases: Vec::new(),
+        }
+    }
+
     /// Whether the relayer still has work to do for this item.
     #[must_use]
     pub const fn is_open(&self) -> bool {
@@ -308,6 +385,20 @@ impl Item {
         self.submissions
             .iter()
             .find(|submission| submission.status == SubmissionStatus::Pending)
+    }
+
+    /// The Solana release still awaiting an outcome, if any.
+    #[must_use]
+    pub fn pending_release(&self) -> Option<&ReleaseSubmission> {
+        self.releases
+            .iter()
+            .find(|release| release.status == SubmissionStatus::Pending)
+    }
+
+    /// Every transaction this item has consumed, on any destination.
+    #[must_use]
+    pub fn transactions(&self) -> usize {
+        self.submissions.len() + self.releases.len()
     }
 }
 
@@ -349,16 +440,8 @@ impl State {
                         )));
                     }
                 } else {
-                    self.items.insert(
-                        item.clone(),
-                        Item {
-                            observation: *observation,
-                            signature: None,
-                            submissions: Vec::new(),
-                            completion: None,
-                            refusal: None,
-                        },
-                    );
+                    self.items
+                        .insert(item.clone(), Item::observed(*observation));
                 }
             }
             Entry::Signed { item, signature } => {
@@ -421,8 +504,104 @@ impl State {
             Entry::Refused { item, reason } => {
                 self.item_mut(item)?.refusal = Some(reason.clone());
             }
+            Entry::RecipientPending { .. }
+            | Entry::RecipientResolved { .. }
+            | Entry::ReleaseSubmitted { .. }
+            | Entry::ReleaseExpired { .. }
+            | Entry::ReleaseFailed { .. } => self.apply_release(entry)?,
         }
         Ok(())
+    }
+
+    /// Applies the entries only a Solana release writes.
+    fn apply_release(&mut self, entry: &Entry) -> Result<(), JournalError> {
+        match entry {
+            Entry::RecipientPending { item } => {
+                let record = self.outbound_mut(item)?;
+                if record.recipient.is_some() {
+                    return Err(JournalError::Conflict(format!(
+                        "{item} recipient is already recorded"
+                    )));
+                }
+                record.recipient = Some(Recipient::Pending);
+            }
+            Entry::RecipientResolved { item, key } => {
+                let record = self.outbound_mut(item)?;
+                if let Some(Recipient::Resolved(existing)) = record.recipient {
+                    if existing != *key {
+                        return Err(JournalError::Conflict(format!(
+                            "{item} recipient resolved to two keys"
+                        )));
+                    }
+                }
+                record.recipient = Some(Recipient::Resolved(*key));
+            }
+            Entry::ReleaseSubmitted {
+                item,
+                fee_payer,
+                signature,
+                last_valid_block_height,
+                raw,
+            } => {
+                let record = self.outbound_mut(item)?;
+                if record.pending().is_some() || record.pending_release().is_some() {
+                    return Err(JournalError::Conflict(format!(
+                        "{item} already has a pending transaction"
+                    )));
+                }
+                if !matches!(record.recipient, Some(Recipient::Resolved(_))) {
+                    return Err(JournalError::Conflict(format!(
+                        "{item} is released before its recipient is resolved"
+                    )));
+                }
+                record.releases.push(ReleaseSubmission {
+                    fee_payer: *fee_payer,
+                    signature: *signature,
+                    last_valid_block_height: *last_valid_block_height,
+                    raw: raw.clone(),
+                    status: SubmissionStatus::Pending,
+                });
+            }
+            Entry::ReleaseExpired { item, signature }
+            | Entry::ReleaseFailed { item, signature } => {
+                let status = if matches!(entry, Entry::ReleaseFailed { .. }) {
+                    SubmissionStatus::Reverted
+                } else {
+                    SubmissionStatus::Dropped
+                };
+                let record = self.item_mut(item)?;
+                let release = record
+                    .releases
+                    .iter_mut()
+                    .find(|release| {
+                        release.signature == *signature
+                            && release.status == SubmissionStatus::Pending
+                    })
+                    .ok_or_else(|| {
+                        JournalError::Conflict(format!("{item} has no pending release"))
+                    })?;
+                release.status = status;
+            }
+            Entry::Cursor { .. }
+            | Entry::Observed { .. }
+            | Entry::Signed { .. }
+            | Entry::Submitted { .. }
+            | Entry::Reverted { .. }
+            | Entry::Dropped { .. }
+            | Entry::Completed { .. }
+            | Entry::Refused { .. } => {}
+        }
+        Ok(())
+    }
+
+    fn outbound_mut(&mut self, item: &str) -> Result<&mut Item, JournalError> {
+        let record = self.item_mut(item)?;
+        if !matches!(record.observation, Observation::Outbound { .. }) {
+            return Err(JournalError::Conflict(format!(
+                "{item} is not a burn to release"
+            )));
+        }
+        Ok(record)
     }
 }
 
@@ -563,6 +742,13 @@ mod tests {
             .unwrap_or_else(|error| panic!("append: {error}"));
     }
 
+    fn refused(journal: &mut Journal, entry: &Entry) {
+        assert!(matches!(
+            journal.append(entry),
+            Err(JournalError::Conflict(_))
+        ));
+    }
+
     #[test]
     fn a_reopened_journal_replays_to_the_same_state() {
         let path = directory("replay").join("journal.jsonl");
@@ -668,6 +854,120 @@ mod tests {
             .lines()
             .count();
         assert_eq!(lines, 3, "refused entries are never written");
+    }
+
+    #[test]
+    fn a_solana_release_replays_through_pending_recipient_expiry_and_release() {
+        let path = directory("release").join("journal.jsonl");
+        let burn = Observation::outbound(
+            &OutboundAttestation {
+                chain_id: 91_600_046_870_081,
+                vault: [0x33; 20],
+                paxeer_tx_hash: [0x6f; 32],
+                paxeer_nonce: 11,
+                recipient: [0xfb; 20],
+                asset: [0x21; 20],
+                amount: [0x01; 32],
+            },
+            Position {
+                block_number: 28,
+                block_hash: [0x1c; 32],
+            },
+        );
+        let key = burn.key();
+        let submitted = |signature: u8, height: u64| Entry::ReleaseSubmitted {
+            item: key.clone(),
+            fee_payer: [0xfe; 32],
+            signature: [signature; 64],
+            last_valid_block_height: height,
+            raw: vec![1, signature],
+        };
+        let before = {
+            let mut journal = open(&path);
+            append(
+                &mut journal,
+                &Entry::Observed {
+                    item: key.clone(),
+                    observation: burn,
+                },
+            );
+            refused(&mut journal, &submitted(0x51, 2000));
+            append(&mut journal, &Entry::RecipientPending { item: key.clone() });
+            refused(&mut journal, &Entry::RecipientPending { item: key.clone() });
+            assert_eq!(
+                journal.state().items[&key].recipient,
+                Some(Recipient::Pending)
+            );
+            append(
+                &mut journal,
+                &Entry::RecipientResolved {
+                    item: key.clone(),
+                    key: [0x59; 32],
+                },
+            );
+            refused(
+                &mut journal,
+                &Entry::RecipientResolved {
+                    item: key.clone(),
+                    key: [0x5a; 32],
+                },
+            );
+            append(
+                &mut journal,
+                &Entry::Signed {
+                    item: key.clone(),
+                    signature: [0x1b; 65],
+                },
+            );
+            append(&mut journal, &submitted(0x51, 2000));
+            refused(&mut journal, &submitted(0x52, 2400));
+            append(
+                &mut journal,
+                &Entry::ReleaseExpired {
+                    item: key.clone(),
+                    signature: [0x51; 64],
+                },
+            );
+            append(&mut journal, &submitted(0x52, 2400));
+            append(
+                &mut journal,
+                &Entry::Completed {
+                    item: key.clone(),
+                    completion: Completion::Released {
+                        signature: [0x52; 64],
+                        slot: 1300,
+                    },
+                },
+            );
+            journal.state().clone()
+        };
+        let reopened = open(&path);
+        assert_eq!(reopened.state(), &before);
+        let item = &reopened.state().items[&key];
+        assert_eq!(item.recipient, Some(Recipient::Resolved([0x59; 32])));
+        assert_eq!(item.transactions(), 2);
+        assert_eq!(item.releases[0].status, SubmissionStatus::Dropped);
+        assert_eq!(item.releases[1].raw, vec![1, 0x52]);
+        assert_eq!(item.pending_release(), None);
+        assert!(!item.is_open());
+    }
+
+    #[test]
+    fn release_entries_are_refused_for_an_inbound_item() {
+        let mut inbound = open(&directory("release-inbound").join("journal.jsonl"));
+        append(
+            &mut inbound,
+            &Entry::Observed {
+                item: observation().key(),
+                observation: observation(),
+            },
+        );
+        refused(
+            &mut inbound,
+            &Entry::RecipientPending {
+                item: observation().key(),
+            },
+        );
     }
 
     #[test]

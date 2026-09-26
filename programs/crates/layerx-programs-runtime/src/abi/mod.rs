@@ -363,6 +363,115 @@ impl CommittedOracle for UnavailableCommittedOracle {
     }
 }
 
+/// Fixed bytes preceding the response in one committed web answer record:
+/// content digest, full response length and returned response length.
+pub const WEB_ANSWER_HEADER_BYTES: usize = 40;
+/// Largest response a committed web answer carries.
+pub const WEB_MAX_RESPONSE_BYTES: usize = 4096;
+
+/// One web answer already committed for a request its program owns.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WebAnswer {
+    pub content_digest: [u8; 32],
+    pub full_length: u32,
+    pub response: Vec<u8>,
+}
+
+impl WebAnswer {
+    /// Returns the guest record: digest, full length and response length as
+    /// little-endian integers, followed by the response bytes.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a response longer than [`WEB_MAX_RESPONSE_BYTES`].
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, AbiError> {
+        if self.response.len() > WEB_MAX_RESPONSE_BYTES {
+            return Err(AbiError::InvalidEncoding);
+        }
+        let response_length =
+            u32::try_from(self.response.len()).map_err(|_| AbiError::InvalidEncoding)?;
+        let mut bytes = Vec::with_capacity(WEB_ANSWER_HEADER_BYTES + self.response.len());
+        bytes.extend_from_slice(&self.content_digest);
+        bytes.extend_from_slice(&self.full_length.to_le_bytes());
+        bytes.extend_from_slice(&response_length.to_le_bytes());
+        bytes.extend_from_slice(&self.response);
+        Ok(bytes)
+    }
+}
+
+/// Core-owned boundary supplying web answers from committed module storage.
+pub trait CommittedWeb: fmt::Debug {
+    /// Returns the answer committed for `request_id` of `program`, or `None`
+    /// when nothing is committed for that pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal when the committed record is malformed.
+    fn committed_answer(
+        &self,
+        program: ProgramId,
+        request_id: u64,
+    ) -> Result<Option<WebAnswer>, AbiError>;
+}
+
+/// Web boundary for executions with no committed web store: every request is absent.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UnavailableCommittedWeb;
+
+impl CommittedWeb for UnavailableCommittedWeb {
+    fn committed_answer(&self, _: ProgramId, _: u64) -> Result<Option<WebAnswer>, AbiError> {
+        Ok(None)
+    }
+}
+
+/// Immutable set of committed web answers keyed by owning program and request.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CommittedWebAnswers {
+    answers: BTreeMap<([u8; 32], u64), WebAnswer>,
+}
+
+impl CommittedWebAnswers {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            answers: BTreeMap::new(),
+        }
+    }
+
+    /// Records the answer committed for one request of one program.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an oversized response or a second answer for the same request.
+    pub fn commit(
+        &mut self,
+        program: ProgramId,
+        request_id: u64,
+        answer: WebAnswer,
+    ) -> Result<(), AbiError> {
+        let length = u32::try_from(answer.response.len()).map_err(|_| AbiError::InvalidEncoding)?;
+        if answer.response.len() > WEB_MAX_RESPONSE_BYTES || length > answer.full_length {
+            return Err(AbiError::InvalidEncoding);
+        }
+        let key = (program.bytes(), request_id);
+        if self.answers.contains_key(&key) {
+            return Err(AbiError::InvalidEncoding);
+        }
+        self.answers.insert(key, answer);
+        Ok(())
+    }
+}
+
+impl CommittedWeb for CommittedWebAnswers {
+    fn committed_answer(
+        &self,
+        program: ProgramId,
+        request_id: u64,
+    ) -> Result<Option<WebAnswer>, AbiError> {
+        Ok(self.answers.get(&(program.bytes(), request_id)).cloned())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProgramEvent {
     pub program: ProgramId,
@@ -586,6 +695,7 @@ pub struct Abi {
     receipts: BTreeMap<[u8; 32], ReceiptView>,
     balances: BTreeMap<([u8; 32], [u8; 32]), Result<BalanceView, AbiError>>,
     oracle: Arc<dyn CommittedOracle + Send + Sync>,
+    web: Arc<dyn CommittedWeb + Send + Sync>,
     effects: AbiEffects,
     event_count_base: usize,
     access_declaration: crate::AccessDeclaration,
@@ -654,6 +764,7 @@ impl Abi {
             receipts: verified,
             balances,
             oracle: Arc::new(UnavailableCommittedOracle),
+            web: Arc::new(UnavailableCommittedWeb),
             effects: AbiEffects::default(),
             event_count_base: 0,
             access_declaration: crate::AccessDeclaration::absent(),
@@ -699,6 +810,7 @@ impl Abi {
             receipts,
             balances,
             oracle: Arc::new(UnavailableCommittedOracle),
+            web: Arc::new(UnavailableCommittedWeb),
             effects: AbiEffects::default(),
             event_count_base: 0,
             access_declaration: crate::AccessDeclaration::absent(),
@@ -777,6 +889,21 @@ impl Abi {
 
     pub(crate) fn committed_oracle(&self) -> Arc<dyn CommittedOracle + Send + Sync> {
         Arc::clone(&self.oracle)
+    }
+
+    /// Attaches the boundary serving web answers already committed in module storage.
+    #[must_use]
+    pub fn with_committed_web(mut self, web: Arc<dyn CommittedWeb + Send + Sync>) -> Self {
+        self.web = web;
+        self
+    }
+
+    pub(crate) fn set_committed_web(&mut self, web: Arc<dyn CommittedWeb + Send + Sync>) {
+        self.web = web;
+    }
+
+    pub(crate) fn committed_web(&self) -> Arc<dyn CommittedWeb + Send + Sync> {
+        Arc::clone(&self.web)
     }
 
     pub(crate) fn v2_host_state_commitment(&self) -> Result<HostStateCommitment, AbiError> {
@@ -1167,6 +1294,17 @@ impl Abi {
         } else {
             Err(AbiError::OracleUnknownMarket)
         }
+    }
+
+    /// Reads the committed answer for one request owned by the executing
+    /// program. Requests of any other program are never visible and read as
+    /// absent, exactly like a request with nothing committed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal when the committed record is malformed.
+    pub fn web_read(&self, request_id: u64) -> Result<Option<WebAnswer>, AbiError> {
+        self.web.committed_answer(self.program, request_id)
     }
 
     /// Atomically commits storage and returns effects for the kernel. Dropping

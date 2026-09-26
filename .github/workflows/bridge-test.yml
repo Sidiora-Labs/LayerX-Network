@@ -1,0 +1,118 @@
+name: Paxeer X / Bridge Test
+
+on:
+  pull_request:
+    paths:
+      - 'bridge/**'
+      - 'interop/crates/layerx-bridge-relayer/**'
+      - '.github/workflows/bridge-test.yml'
+  merge_group:
+  push:
+    branches:
+      - main
+      - release/**
+    paths:
+      - 'bridge/**'
+      - 'interop/crates/layerx-bridge-relayer/**'
+      - '.github/workflows/bridge-test.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-test-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: .
+
+jobs:
+  evm-vault:
+    name: forge test for the bridge/evm vault
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with:
+          version: v1.8.1
+
+      - name: Clone the pinned Solidity libraries into bridge/evm/lib
+        run: |
+          git clone --depth 1 --branch v1.9.6 https://github.com/foundry-rs/forge-std bridge/evm/lib/forge-std
+          git clone --depth 1 --branch v5.3.0 https://github.com/OpenZeppelin/openzeppelin-contracts bridge/evm/lib/openzeppelin-contracts
+
+      - name: Run forge test for the bridge/evm vault
+        run: forge test --root bridge/evm -vvv
+
+  solana-program:
+    name: cargo test and cargo build-sbf for the bridge/solana program
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install 1.91.1 --profile minimal --no-self-update
+
+      - name: Install the pinned Solana toolchain that carries cargo-build-sbf
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSfL https://release.anza.xyz/v3.0.10/install -o "$RUNNER_TEMP/solana-install"
+          sh "$RUNNER_TEMP/solana-install"
+          printf '%s\n' "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Run cargo test for the bridge/solana program
+        run: cargo test --locked --manifest-path bridge/solana/Cargo.toml
+
+      - name: Run cargo build-sbf for the bridge/solana program
+        run: cargo build-sbf --tools-version v1.56 --manifest-path bridge/solana/Cargo.toml
+
+  relayer-crate:
+    name: cargo test for the layerx-bridge-relayer crate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install 1.91.1 --profile minimal --no-self-update
+
+      - name: Run cargo test for the layerx-bridge-relayer crate
+        run: cargo test --locked --manifest-path interop/Cargo.toml -p layerx-bridge-relayer
+
+  deploy-tooling:
+    name: go test and the offline check scripts for bridge/deploy and bridge/vectors
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Go toolchain
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25.6'
+
+      - name: Run go test for bridge/vectors and bridge/deploy
+        run: go test -count=1 ./bridge/vectors/... ./bridge/deploy/...
+
+      - name: Run the offline bridge/deploy check scripts
+        run: |
+          bash bridge/deploy/tests/workflow-check.sh
+          bash bridge/deploy/tests/deploy-scripts-check.sh
+          bash bridge/deploy/tests/checklist-check.sh
+          bash bridge/deploy/tests/docs-check.sh

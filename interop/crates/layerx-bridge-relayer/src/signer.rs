@@ -1,6 +1,6 @@
 //! Keys the relayer uses, all held by the remote signer of
 //! `interop/deploy/mirror/signer-protocol.md`: the attestor key and one
-//! transaction-fee key per destination chain. The relayer holds opaque
+//! transaction-fee key per destination chain, the Solana one an ed25519 key. The relayer holds opaque
 //! handles and independently configured public keys only; chain private keys
 //! never enter this process. Every request names a policy domain so the
 //! signer can bind each handle to exactly the digests it may sign.
@@ -19,6 +19,9 @@ pub const ATTEST_OUTBOUND_DOMAIN: &[u8] = b"LayerX/bridge/attest-outbound/v1";
 pub const PAXEER_TRANSACTION_DOMAIN: &[u8] = b"LayerX/bridge/paxeer-eip1559/v1";
 /// Policy domain of EIP-1559 `release` transactions on Ethereum chains.
 pub const ETHEREUM_TRANSACTION_DOMAIN: &[u8] = b"LayerX/bridge/ethereum-eip1559/v1";
+/// Policy domain of Solana release transaction messages signed by the fee
+/// payer.
+pub const SOLANA_TRANSACTION_DOMAIN: &[u8] = b"LayerX/bridge/solana-tx/v1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KeyError {
@@ -158,5 +161,107 @@ impl Submitter {
     }
 }
 
-/// The algorithm every relayer key uses.
+/// The Solana fee payer: an ed25519 key the remote signer holds, the only
+/// signer of every release transaction. It signs the exact message bytes under
+/// [`SOLANA_TRANSACTION_DOMAIN`] and never an attestation.
+pub struct FeePayer {
+    signer: RemoteChainSigner,
+    public_key: [u8; 32],
+}
+
+impl FeePayer {
+    /// # Errors
+    ///
+    /// Refuses a signer that is not configured for ed25519: a secp256k1
+    /// signer is the only kind with an Ethereum address.
+    pub fn new(signer: RemoteChainSigner) -> Result<Self, SignerError> {
+        if signer.ethereum_address().is_ok() {
+            return Err(SignerError::Configuration);
+        }
+        let public_key = signer
+            .public_key()
+            .try_into()
+            .map_err(|_| SignerError::Configuration)?;
+        Ok(Self { signer, public_key })
+    }
+
+    /// The fee payer's Solana account key.
+    #[must_use]
+    pub const fn public_key(&self) -> [u8; 32] {
+        self.public_key
+    }
+
+    /// Signs a Solana transaction message, returning the 64-byte signature the
+    /// remote signer's answer was verified against.
+    ///
+    /// # Errors
+    ///
+    /// Returns the signer's refusal or a signature that fails verification.
+    pub fn sign_message(&self, message: &[u8]) -> Result<[u8; 64], KeyError> {
+        match self
+            .signer
+            .sign_message(SOLANA_TRANSACTION_DOMAIN, message)?
+        {
+            ChainSignature::Ed25519(signature) => Ok(signature),
+            ChainSignature::Secp256k1(_) => Err(KeyError::Signer(SignerError::InvalidSignature)),
+        }
+    }
+}
+
+/// The algorithm every relayer key but the Solana fee payer uses.
 pub const ALGORITHM: SigningAlgorithm = SigningAlgorithm::Secp256k1Recoverable;
+
+/// The algorithm of the Solana fee payer.
+pub const FEE_PAYER_ALGORITHM: SigningAlgorithm = SigningAlgorithm::Ed25519;
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use layerx_mirror::signer::{RemoteSignerConfig, SignerEndpoint};
+
+    use super::*;
+
+    fn remote(algorithm: SigningAlgorithm, public_key: Vec<u8>) -> RemoteChainSigner {
+        RemoteChainSigner::new(RemoteSignerConfig {
+            endpoint: SignerEndpoint::Uds {
+                socket: PathBuf::from("signer.sock"),
+            },
+            algorithm,
+            key_handle: "bridge-solana-fees".to_owned(),
+            public_key,
+            timeout: Duration::from_secs(1),
+        })
+        .unwrap_or_else(|error| panic!("remote signer: {error:?}"))
+    }
+
+    #[test]
+    fn the_fee_payer_is_an_ed25519_key_under_its_own_domain() {
+        let ed25519 = ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key();
+        let payer = FeePayer::new(remote(FEE_PAYER_ALGORITHM, ed25519.to_bytes().to_vec()))
+            .unwrap_or_else(|error| panic!("fee payer: {error:?}"));
+        assert_eq!(payer.public_key(), ed25519.to_bytes());
+        let secp256k1 = k256::ecdsa::SigningKey::from_slice(&[7; 32])
+            .unwrap_or_else(|error| panic!("{error}"))
+            .verifying_key()
+            .to_encoded_point(true)
+            .as_bytes()
+            .to_vec();
+        assert!(matches!(
+            FeePayer::new(remote(ALGORITHM, secp256k1.clone())),
+            Err(SignerError::Configuration)
+        ));
+        assert!(Attestor::new(remote(ALGORITHM, secp256k1)).is_ok());
+        assert!(Attestor::new(remote(FEE_PAYER_ALGORITHM, ed25519.to_bytes().to_vec())).is_err());
+        assert_eq!(SOLANA_TRANSACTION_DOMAIN, b"LayerX/bridge/solana-tx/v1");
+        for domain in [
+            ATTEST_INBOUND_DOMAIN,
+            ATTEST_OUTBOUND_DOMAIN,
+            PAXEER_TRANSACTION_DOMAIN,
+            ETHEREUM_TRANSACTION_DOMAIN,
+        ] {
+            assert_ne!(domain, SOLANA_TRANSACTION_DOMAIN);
+        }
+    }
+}

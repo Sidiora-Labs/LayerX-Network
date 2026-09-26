@@ -26,8 +26,247 @@
 # Task-level verify_cmd runs are NOT recorded here: a task records its result
 # through cg spec done. This ledger carries the four legs of the wave 3 gate and
 # the observations any task makes along the way, including the stale references
-# the halt on chain changes leaves in modules/layerxbridge after task 1.1 moves
+# the chain freeze leaves in modules/layerxbridge after task 1.1 moves
 # the Ethereum custody project to bridge/evm.
 #
 # No record carries a hostname, an IP address, an internal URL, a credential or
 # the name of an agent or a working branch.
+# Note: a [gate.*] record also carries exit_code, the exit status the command
+#   returned; evidence is the repository-relative log path that run wrote. An [observation.*] entry
+#   carries only the workflow.kvx shape keys listed above.
+
+[observation.1.4.1]
+task = "1.4"
+file = "bridge/deploy/chainconfig/config.go"
+symbol = "SolanaHandle"
+observed = "The Solana identity handle - the last twenty bytes of the keccak256 of a thirty-two byte key - is derived inside chainconfig because bridge/vectors does not exist at this revision, so the same derivation now lives in two packages once task 1.3 lands."
+assumption = "Task 1.3 owns the derivation and its vectors; the copy here is asserted against the committed wrapped SOL handle and should import that package once it exists rather than be re-derived a second time."
+severity = "assumption"
+
+[observation.1.4.2]
+task = "1.4"
+file = "bridge/deploy/deploy-solana-program.sh"
+symbol = "PAXEER_BRIDGE_SOLANA_ADMIN_CLI"
+observed = "Initialising the deployed program with its owner, attestor set and threshold and registering each asset needs a client that encodes those instructions, and no task in this feature creates one, so the script requires it through PAXEER_BRIDGE_SOLANA_ADMIN_CLI and refuses to deploy without an executable."
+assumption = "The bridge/solana program's own client is delivered elsewhere; until it exists the Solana deployment cannot be completed past the program upload, and the refusal names the variable rather than defaulting to anything."
+severity = "blocker"
+
+[observation.1.4.3]
+task = "1.4"
+file = "bridge/deploy/tests/deploy-scripts-check.sh"
+symbol = "deploy-scripts-check"
+observed = "The pinned Solana toolchain and the bridge/evm and bridge/solana sources are not present at this revision, so the offline check drives the Solana run only as far as the toolchain refusal and the two EVM scripts check the sources where they are used instead of at preflight."
+assumption = "A real build and deployment is the Solana dry run's ground, not this check's; the toolchain refusal proves every configuration and environment check before it passed."
+severity = "assumption"
+
+[observation.1.1.1]
+task = "1.1"
+file = "modules/layerxbridge/ATTESTATION.md"
+symbol = "modules/layerxbridge/types/attestation.go"
+observed = "Both files name interop/contracts/ethereum-bridge for the Solidity attestation source and its document, which this task moved to bridge/evm with git mv, so the two references now point at a path that no longer exists."
+assumption = "The chain freeze forbids editing anything under modules/, so both files are left exactly as written and the references stay stale until the first authorised chain change corrects them."
+severity = "note"
+
+[observation.1.1.2]
+task = "1.1"
+file = "spec/paxeer-x-bridge/qualification.kvx"
+symbol = "[gate.<task>.<n>] versus req.15 ac_2 and ac_3"
+observed = "This header names a gate record's result and log keys outcome and evidence, while req.15 ac_2 and ac_3 and task 3.1 do_2 require the same record to carry the exit code and the log path, so the two spellings of one gate record disagree before any gate is written."
+assumption = "Both spellings are left as written here, and which key names a gate record's exit code and log path remains unresolved in this ledger."
+severity = "note"
+
+[observation.1.5.1]
+task = "1.5"
+file = "bridge/deploy/proposals/proposals.go"
+symbol = "ChainConfig"
+observed = "Task 1.4 owns bridge/deploy/chainconfig and the nine committed configurations, which do not exist on this branch, so the generator declares the minimal schema it reads from [design.chains] p2 plus the two fields no governance body can be built without: governance_authority, the bech32 account the keeper executes these messages for, and vault, the deployed vault address or Solana vault handle."
+assumption = "The wave merge reconciles the two declarations - the canonical chainconfig package keeps ownership of the schema and gains these two fields, and the Solana slot finality depth is the single finality_depth field this generator reads - because both read the same file."
+severity = "assumption"
+
+[observation.1.5.2]
+task = "1.5"
+file = "modules/layerxbridge/keeper/sidiora.go"
+symbol = "EnsureSidioraDenom"
+observed = "No production path calls EnsureSidioraDenom at this revision, and MsgSetCap creates Denom(chain, asset) for an asset that is not registered yet, so submitting Solana's Sidiora cap before something registers (chain, 0x21f7b20a555199fa73A238B1a91FD0f549068fEe, usid) binds that cap to an lxb denom instead of the module's usid denom."
+assumption = "The Sidiora cap must be submitted after the asset is registered against usid; the chain is frozen, so the ordering belongs in the operator runbook and the checklist read-back rather than in a chain change."
+severity = "suspect"
+
+[observation.1.2.1]
+task = "1.2"
+file = "bridge/solana/Cargo.lock"
+symbol = "cargo build-sbf"
+observed = "cargo build-sbf cannot resolve the dependency graph: the cargo shipped in platform-tools rejects the 35 transitive manifests that declare edition 2024, failing first on zeroize_derive with 'feature edition2024 is required'."
+assumption = "Pre-existing and environment-level, not introduced here: interop/contracts/solana-mirror pins the identical 35 manifests and fails the same way, so the SBF leg of the wave 3 gate needs a newer platform-tools on the gate runner rather than a change to this crate."
+severity = "blocker"
+
+[observation.1.6.1]
+task = "1.6"
+file = "spec/paxeer-x-bridge/spec.kvx"
+symbol = "req.14.ac_1"
+observed = "Requirement 14.1 says the workflow SHALL carry no path filter other than bridge/** and interop/crates/layerx-bridge-relayer/**, and 14.4 says every path filter SHALL name a directory that exists, while task 1.6 do_1 requires the workflow file itself as a third filter; a workflow that changes its own legs without rerunning them would be the alternative, so the task followed do_1 and carries three filters, the third naming a file."
+assumption = "do_1 is the narrower and later instruction and the merge group carries no filter at all because GitHub applies none there, so bridge/deploy/tests/workflow-check.sh asserts the two directory globs as directories and the third filter as the workflow file by name rather than relaxing either check."
+severity = "note"
+
+[observation.2.5.1]
+task = "2.5"
+file = "bridge/deploy/deploy-solana-program.sh"
+symbol = "VAULT_AUTHORITY_SEED"
+observed = "The deploy script derives the vault-authority address and the vault_handle it records from the seed 'vault', while bridge/solana/src/state.rs VAULT_SEED and bridge/ATTESTATION-SOLANA.md use 'vault-authority', so the recorded handle is not the program's custody PDA."
+assumption = "Out of scope for a documentation task; the Solana page tells the operator to derive the handle from the program's seed, and the script needs its seed corrected by the task that owns it."
+severity = "blocker"
+closed = "Task 2.10 derives the vault authority and its handle from the program's seed vault-authority and stops a first deployment before the initialise step while solana.program_id is a placeholder, naming the field; the verify_cmd passed at revision 308683b4e5bb4abde8df42993137d91fee7e6b42."
+
+[observation.2.5.2]
+task = "2.5"
+file = "modules/layerxbridge/module.go"
+symbol = "RegisterServices"
+observed = "The bridge module registers no Msg service, route or transaction command, so the MsgRegisterChain, MsgSetAttestors and MsgSetCap bodies the proposals generator writes have no in-tree path that executes them."
+assumption = "The runbook states that the holder of the bridge authority submits the bodies through the path that authority executes with, and does not name a command the tree lacks."
+severity = "suspect"
+closed = "Task 2.9 generated the Msg service from api/layerxbridge/tx.proto, registered it in RegisterInterfaces and RegisterServices and writes every body under its type URL; the verify_cmd passed at revision 1310ba291ac3007b786278dc1116f31f56bda6f4, and the governance proposal path is observation 2.9.1."
+
+[observation.2.2.1]
+task = "2.2"
+file = "interop/crates/layerx-bridge-relayer/src/abi.rs"
+symbol = "cargo clippy -D warnings"
+observed = "cargo clippy --locked --manifest-path interop/Cargo.toml -p layerx-bridge-relayer --all-targets -- -D warnings exits 101 on five lints in code this task did not change (abi.rs:313 type_complexity, attestation.rs:1 doc_markdown, relayer.rs scan_inbound and scan_outbound single_match_else, rpc.rs:132 map_unwrap_or); the build passes and log .logs/build.log names them."
+assumption = "Pre-existing under the clippy 0.1.91 toolchain rather than introduced here, so they are left for the wave gate instead of being edited from this task."
+
+[observation.2.1.1]
+task = "2.1"
+file = "bridge/solana/Cargo.toml"
+symbol = "libsecp256k1"
+observed = "The release tests must produce real secp256k1 signatures, and the crate's only reachable signer is solana_sdk::secp256k1_instruction, which is deprecated and would need an allow(deprecated) to pass clippy -D warnings, so bridge/solana/tests/release.rs signs with libsecp256k1 =0.6.0, already in Cargo.lock, which Cargo.toml does not yet list as a dev-dependency."
+assumption = "Cargo.toml and Cargo.lock belong to task 2.8 in this wave, so the dev-dependency libsecp256k1 = { version = \"=0.6.0\", default-features = false, features = [\"std\", \"static-context\", \"hmac\"] } is added by that file's owner before task 2.1 is qualified."
+severity = "blocker"
+
+[observation.2.1.2]
+task = "2.1"
+file = "bridge/solana/src/identity.rs"
+symbol = "register_recipient"
+observed = "Task 1.2 already delivered the permissionless register-recipient instruction in src/identity.rs, dispatched from src/lib.rs and tested in tests/core.rs, so moving it into src/recipient.rs as task 2.1 do_6 describes would edit two files outside task 2.1's touches."
+assumption = "The instruction stays in src/identity.rs; src/recipient.rs carries the release's recipient binding, and tests/release.rs covers the registration, its read-back and each refusal against the instruction as it stands."
+severity = "note"
+
+[observation.2.4.1]
+task = "2.4"
+file = "bridge/deploy/proposals/proposals_test.go"
+symbol = "LoadChainConfig"
+observed = "do_6 asks for the private schema to be replaced by bridge/deploy/chainconfig while every existing proposals test stays unchanged, but those tests and bridge/deploy/proposals/testdata pin the private field names (governance_authority, vault, assets[i].max_per_tx) and its placeholder convention, so removing the loader would break them."
+assumption = "The private loader is kept for those tests only; the generator reads the chainconfig schema through FromChainConfig when given -authority and -vault, and the handle derivation now lives only in bridge/vectors."
+severity = "note"
+
+[observation.2.4.3]
+task = "2.4"
+file = "bridge/deploy/checklist.sh"
+symbol = "PAXEER_BRIDGE_PAXEER_RPC_URL"
+observed = "No chain configuration names the Paxeer endpoint the precompile views are read through."
+assumption = "The checklist reads it from PAXEER_BRIDGE_PAXEER_RPC_URL, following the PAXEER_BRIDGE_<CHAIN>_RPC_URL convention, until the configuration schema carries it."
+severity = "note"
+
+[wave.1]
+revision = "4f2b24deb"
+command = "timeout 20m each: bash bridge/evm/bootstrap-libs.sh && forge test --root bridge/evm -vvv; cargo test --locked --manifest-path bridge/solana/Cargo.toml; go test -count=1 ./bridge/vectors/...; go test -count=1 ./bridge/deploy/chainconfig/... && bash bridge/deploy/tests/deploy-scripts-check.sh; go test -count=1 ./bridge/deploy/proposals/...; bash bridge/deploy/tests/workflow-check.sh"
+exit_codes = "lint 0; legs 1.1 0, 1.2 0, 1.3 0, 1.4 0, 1.5 0, 1.6 0"
+evidence = ".logs/wave1-union.log"
+observed = "All six wave-one verify legs and the spec lint (0 errors, 34 warnings for wave-two paths not yet created) pass on the merged feature revision; the public-text scan of the diff against main found three wording hits in spec/paxeer-x-bridge (spec.kvx lines 50 and 54, qualification.kvx line 67)."
+assumption = "The lint warnings name files wave-two tasks create and the three scan hits are spec wording left unedited here, so neither blocks the wave."
+
+[observation.2.8.1]
+task = "2.8"
+file = "bridge/deploy/deploy-solana-program.sh"
+symbol = "VAULT_AUTHORITY_SEED"
+observed = "The script derives the vault-authority PDA from the seed vault while the program and the admin client derive it from vault-authority, so the deployment record's vault authority and handle are not the program's; and the client refuses the placeholder solana.program_id the script's first-deployment path still carries."
+assumption = "The script belongs to task 1.4 and is left as written; the client prints the program's own vault authority and handle, and the operator fills solana.program_id from the program keypair before the initialise step."
+severity = "blocker"
+closed = "Task 2.10 derives the vault authority and its handle from the program's seed vault-authority and stops a first deployment before the initialise step while solana.program_id is a placeholder, naming the field; the verify_cmd passed at revision 308683b4e5bb4abde8df42993137d91fee7e6b42."
+
+[observation.2.8.2]
+task = "2.8"
+file = "bridge/solana/admin/src/main.rs"
+symbol = "OWNER_KEY_VARIABLE"
+observed = "The chain configuration names only the deploy key variable, while set-attestors, register-asset, set-cap and pause need the owner's signature, so the client reads the owner keypair file through the fixed PAXEER_BRIDGE_SOLANA_OWNER_KEYPAIR_FILE and refuses a key that is not the configured owner."
+assumption = "An owner-key variable in the configuration schema would belong to bridge/deploy/chainconfig and the committed configuration, which this task does not own; this resolves observation 1.4.2 for the admin client itself."
+severity = "note"
+
+[observation.2.10.1]
+task = "2.10"
+file = "bridge/deploy/deploy-solana-program.sh"
+symbol = "PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE"
+observed = "A first deployment with no PAXEER_BRIDGE_SOLANA_PROGRAM_KEYPAIR_FILE deploys under the program keypair the build leaves in the run's temporary directory, which is removed on exit, while the rerun with a filled solana.program_id requires that keypair."
+assumption = "Out of this task's scope; the operator supplies a program keypair on the first deployment, and keeping or requiring it belongs to the script's owner."
+severity = "note"
+
+[observation.2.9.1]
+task = "2.9"
+file = "node/app.go"
+symbol = "govRouter"
+observed = "The chain's governance module executes only proposal content routed through govRouter, which has no layerxbridge route, so a body whose authority is the gov module account is routed by the Msg service but no submit-proposal can carry it; a body signed by an account set as the bridge authority executes today."
+assumption = "Carrying the bodies through submit-proposal needs a governance route for the module in node/app.go, which this task does not own; the bodies already carry the type URLs such a route would read."
+severity = "blocker"
+closed = "Task 2.11 added BridgeProposal from api/layerxbridge/proposal.proto as governance content, NewProposalHandler executing each carried message through the Msg service for the governance module account, the layerxbridge route in govRouter and the generator's -proposals output; the verify_cmd passed at revision 6ef8021e3643e91e8909ffcb60ca964ed50bf9cc."
+
+[observation.2.6.1]
+task = "2.6"
+file = "bridge/deploy/deploy-evm-chain.sh"
+symbol = "forge script"
+observed = "The deploy script hands forge script the relative path script/DeployPaxeerXVault.s.sol beside --root, and the pinned forge resolves it against the working directory, so the script deploys only when run from bridge/evm and otherwise stops with 'No such file or directory'."
+assumption = "The script belongs to task 1.4 and is left as written; the dry run invokes it from bridge/evm, and an operator must do the same until the path is made absolute."
+severity = "note"
+
+[observation.2.6.2]
+task = "2.6"
+file = "bridge/deploy/tests/evm-dry-run-check.sh"
+symbol = "TestPaxeerSide"
+observed = "No local Paxeer X node exists for a dry run, so the checklist's precompile views are answered by the real layerxbridge keeper and precompile executor in process, after they execute the governance bodies generated for the run's deployment."
+assumption = "A local Paxeer node running the same governance bodies through a proposal is the stronger ground and belongs to a later bring-up; the keeper, the message handlers and the precompile executor answering here are the chain's own code."
+severity = "note"
+
+[observation.2.7.1]
+task = "2.7"
+file = "bridge/deploy/tests/solana-dry-run-check.sh"
+symbol = "cargo-build-sbf"
+observed = "The dry run built the admin client, started solana-test-validator on the loopback interface with the run's Sidiora mint and stopped at deploy-solana-program.sh, whose cargo-build-sbf (platform tools cargo 1.84.0) failed on zeroize_derive 1.5.0 with 'feature edition2024 is required', so no program was deployed and no fixture was recorded."
+assumption = "The environment-level blocker of observation 1.2.1; the dry run names it and stops, and bridge/deploy/tests/fixtures/solana_dry_run.json is written by the first --record run on platform tools whose cargo accepts edition 2024."
+severity = "blocker"
+
+[observation.2.11.1]
+task = "2.11"
+file = "bridge/README.md"
+symbol = "-proposals"
+observed = "Section 6 of the runbook still says the module registers no message service and no command carries the bodies, and does not name the generator's -proposals output, whose 04-proposal-open-chain.json and, for Solana, 05-proposal-sidiora-cap.json are the content a submit-proposal transaction carries."
+assumption = "The runbook belongs to the documentation task; the proposals are written apart from the bodies because checklist.sh counts every JSON file in the bodies directory, and Sidiora's cap travels in its own proposal so it is submitted only after the usid pair reads back."
+
+[observation.2.3.1]
+task = "2.3"
+file = "interop/crates/layerx-bridge-relayer/src/config.rs"
+symbol = "release_mints"
+observed = "BridgeOut carries only the 20-byte asset id and nothing on either chain maps it to a mint, so the relayer needs the configured mints (solana.release_mints) to find the asset PDA, and its fee payer is built from the remote signer in config.rs; ed25519-dalek joins the crate's Cargo.toml and interop/Cargo.lock for the off-curve PDA check."
+assumption = "These three files sit outside the task's touches but are the only way to configure and derive a release, so they change with their own tests; the relayer releases only to the recipient's associated token account and waits while it does not exist, and one legacy transaction holds about four attestor signatures."
+severity = "note"
+closed = "Task 2.13 rewrote sections 5 and 6 of the runbook to name the -proposals output, 04-proposal-open-chain.json and 05-proposal-sidiora-cap.json, and the governance proposal route that executes them, and docs-check.sh asserts it; the node's missing submit path is observation 2.13.1."
+
+[observation.2.13.1]
+task = "2.13"
+file = "sdk/x/gov/client/cli/tx.go"
+symbol = "NewCmdSubmitProposal"
+observed = "paxd tx gov submit-proposal builds only Text content from its flags or --proposal file, and no proposal subcommand the node mounts through getGovProposalHandlers in node/app.go carries the layerxbridge BridgeProposal, so no command the node exposes submits 04-proposal-open-chain.json or 05-proposal-sidiora-cap.json as content."
+assumption = "The runbook says so in one sentence and names no invented command; a submit-proposal subcommand for the bridge proposal belongs to a chain change under node/ or modules/, which the freeze and this task's touches exclude."
+severity = "blocker"
+closed = "Task 2.14 mounted BridgeProposalHandler under paxd tx gov submit-proposal as layerxbridge-proposal, which decodes 04-proposal-open-chain.json or 05-proposal-sidiora-cap.json through the application codec into the BridgeProposal content, and section 6 of the runbook shows it; the verify_cmd passed at revision 3a9dda2bcae645e1f9a070cc21495dd834395036."
+
+[observation.2.7.2]
+task = "2.7"
+file = "bridge/deploy/deploy-solana-program.sh"
+symbol = "initialise"
+observed = "With platform tools v1.56 the program builds and deploys on solana-test-validator 3.0.10, and one run initialised and registered both assets, but a later run had the admin client's initialise refused with 'Unsupported program id' right after the deploy was rooted, so no fixture was recorded."
+assumption = "The program is not yet usable by the slot the initialise lands in, which is intermittent; waiting for the deployed program to become executable before the initialise step belongs to the deploy script and was not changed within this run's repair cycles."
+severity = "blocker"
+
+[observation.2.7.3]
+task = "2.6"
+file = "bridge/deploy/tests/evm-dry-run-check.sh"
+symbol = "TestPaxeerSide"
+observed = "The Solana dry run's Paxeer side refused 01-register-chain.json with 'unknown field \"@type\"' because the generator now writes each body under its type URL, and it now reads the bodies through proposals.DecodeBody; the EVM dry run's Paxeer side still decodes them with a plain JSON decoder that disallows unknown fields."
+assumption = "Not run here; the EVM dry run is expected to stop the same way until it reads the bodies through proposals.DecodeBody."
+severity = "suspect"

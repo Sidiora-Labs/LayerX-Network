@@ -73,7 +73,10 @@ fn market() -> PerpsMarket {
 
 fn perps_cases() -> Vec<(&'static str, PerpsPayload)> {
     vec![
-        ("perps_market_create", PerpsPayload::MarketCreate(market())),
+        (
+            "perps_market_create",
+            PerpsPayload::MarketCreate(Box::new(market())),
+        ),
         (
             "perps_market_halt",
             PerpsPayload::MarketHalt {
@@ -300,13 +303,13 @@ fn perps_payload_decoder_refuses_what_the_kernel_refuses() {
     );
     let mut bounded = market_with_initial_margin(500);
     assert_eq!(
-        PerpsPayload::MarketCreate(bounded.clone()).encode(),
+        PerpsPayload::MarketCreate(Box::new(bounded.clone())).encode(),
         Err(TradingPayloadError::ParameterBounds)
     );
     bounded.initial_margin_ratio_bps = 1000;
     bounded.permitted_oracle_keys.reverse();
     assert_eq!(
-        PerpsPayload::MarketCreate(bounded).encode(),
+        PerpsPayload::MarketCreate(Box::new(bounded)).encode(),
         Err(TradingPayloadError::ParameterBounds)
     );
     assert_eq!(

@@ -1,0 +1,249 @@
+# qualification.kvx - Paxeer X web search and xweb executed-evidence ledger.
+#
+# Two record shapes live here. Both are append-only. No record is edited or
+# removed once written; a rerun appends a new record beside the old one.
+#
+# [observation.<task>.<n>]  - the shape every feature uses (workflow.kvx
+#   [qualification_log]): an assumption, an unrelated or pre-existing failure,
+#   a cross-task contradiction, a missing external interface, or a repair that
+#   would require weakening a check. Written once, never re-investigated and
+#   never re-run. Keys: task, file, symbol, observed, assumption, severity
+#   (blocker | suspect | assumption | note). At most six lines per entry.
+#
+# [gate.<task>.<n>]  - an EXECUTED gate. Written only after running the named
+#   command, from that run's own output; never written for a command that did
+#   not run and never written to record an expectation. Keys:
+#     task        = "3.1"                       task that ran the gate
+#     reqs        = ["16.3","16.4"]             acceptance criteria it qualifies
+#     revision    = "<40-hex commit>"           commit the command ran against
+#     command     = "go test -count=1 ./modules/xweb/..."
+#     environment = "<os/arch/toolchain identity>"
+#     started_at  = "<UTC timestamp>"
+#     outcome     = "pass"                      pass | fail | blocked
+#     evidence    = "<log path the gate printed>"
+#     note        = "free text; for blocked, the owner action required"
+#
+# Task-level verify_cmd runs are NOT recorded here: a task records its result
+# through cg spec done. This ledger carries the legs of the wave 3 gate and
+# the observations any task makes along the way.
+#
+# No record carries a hostname, an IP address, an internal URL, a credential or
+# the name of an agent or a working branch.
+
+[observation.1.11.1]
+task = "1.11"
+file = ".github/workflows/xweb-test.yml"
+symbol = "task.1.11.do_1"
+observed = "The do_1 path filters omit trees whose changes the legs exercise - Makefile, tests/modules, tests/sequencer, tests/network, tests/test_programs_web_read.c, tests/test_web_program_path.c, tests/fixtures/web, src/modules/programs/call.c, include/layerx/programs.h, programs/sdk/rust, agent/sdk/typescript/test, agent/sdk/python/tests and modules/layerxbridge - so a change confined to them does not start the workflow."
+assumption = "The workflow carries exactly the do_1 list and tools/ci/xweb-workflow-check.sh asserts that list; widening it is a spec change for the feature owner, not this task."
+severity = "suspect"
+
+[observation.1.7.1]
+task = "1.7"
+file = "src/sequencer/lx_web_root.c"
+symbol = "lx_web_root"
+observed = "The web root is computed from committed observations, but include/layerx/lx_batch.h is outside the task touches, so no batch header field carries it and the new activity ids are not yet routed by kernel dispatch."
+assumption = "Binding the web root into the batch header and routing LX_WEB_OBSERVATION_ACTIVITY and LX_WEB_ATTESTOR_SET_ACTIVITY is a later integration change owned by the feature."
+severity = "suspect"
+
+[observation.1.6.1]
+task = "1.6"
+file = "contracts/test/CW1155ERC1155PointerTest.t.sol"
+symbol = "MockAddr"
+observed = "forge compiles the whole contracts tree despite --match-path, and MockAddr in CW1155ERC1155PointerTest.t.sol and CW721ERC721PointerTest.t.sol does not implement the LayerX binding methods of IAddr, so compilation fails (Error 3656) before XWebConsumer.t.sol runs; the Go legs and xweb-forge-libs.sh passed."
+assumption = "The stale mocks predate this task and sit outside its touches; updating them belongs to the addr precompile owner, after which the verify_cmd reruns unchanged."
+severity = "blocker"
+closed = "Task 1.12 brought both MockAddr doubles up to IAddr; the verify_cmd passed unchanged at revision 4f95b1f5355f608647c6149bc56d06d53e596950."
+
+[observation.1.6.2]
+task = "1.6"
+file = "precompiles/utils/expected_keepers.go"
+symbol = "XWebKeepers"
+observed = "XWebK is declared on a separate XWebKeepers interface with an EmptyKeepers method, not on utils.Keepers, because node.PrecompileKeepers is outside this task and would stop compiling."
+assumption = "The precompile type-asserts XWebKeepers and refuses every call with a reason until the application's keepers implement XWebK."
+severity = "assumption"
+
+[observation.1.6.3]
+task = "1.6"
+file = "precompiles/setup.go"
+symbol = "GetCustomPrecompiles"
+observed = "Registering beside feetoken puts 0x0000000000000000000000000000000000001019 into the latest custom precompiles and the vm maps of any binary built from this tree, not only after the v6.8 upgrade."
+assumption = "It refuses every call until the keeper is wired; gating it on the upgrade is outside this task."
+severity = "suspect"
+
+[observation.1.6.4]
+task = "1.6"
+file = "contracts/test/XWebConsumer.t.sol"
+symbol = "test_InterfaceMatchesThePrecompileABI"
+observed = "Foundry's default fs_permissions do not let the suite read precompiles/xweb/abi.json and the precompile does not exist under Foundry, so selectors are checked against literal signatures and request is answered with vm.mockCall."
+assumption = "precompiles/xweb/xweb_test.go pins every abi.json method and event signature to those literals and XWeb.sol to IXWeb.sol byte for byte."
+
+[observation.1.4.1]
+task = "1.4"
+file = "interop/crates/x-websearch/src/payment.rs"
+symbol = "metered_payload"
+observed = "spec/402lxp/protocol.md has the metered buyer send a receive payload whose ordinal-6 draw the receiver signs, which a buyer cannot author; the task has the receiver key sign the draw."
+assumption = "The metered PAYMENT-SIGNATURE payload carries the payer-signed canonical grant and the draw's idempotencyKey, and the sidecar signs and submits the draw."
+severity = "suspect"
+
+[observation.1.4.2]
+task = "1.4"
+file = "interop/crates/layerx-x402/src/seller.rs"
+symbol = "Seller::settled"
+observed = "The protocol asks a grant settlement to repeat purposeHash in extensions.layerx of PAYMENT-RESPONSE; the Seller does not, and seller.rs is outside this task's touches."
+assumption = "The purpose is carried in the metered offer's extra.layerx.purposeHash only."
+severity = "note"
+closed = "Task 1.15 has the Seller repeat the challenge purposeHash in extensions.layerx of a grant settlement and tests/seller.rs pins it byte for byte; its seller test passed in the verify_cmd at revision b98bc3e24f0c970f47f36b250dc95ebb52338d3e."
+
+[observation.1.4.3]
+task = "1.4"
+file = "interop/crates/x-websearch/src/payment.rs"
+symbol = "PaymentGate::new"
+observed = "The configuration has no field naming the payer, the draw fee limit or the adapter conformance suite, and src/main.rs is outside this task's touches."
+assumption = "The payer names itself in the LAYERX-PAYER-DID header, every asset including PAX settles to its per-asset account, the draw fee limit is a fixed constant, and the binary wires PaymentGate with its pinned suite in a later task."
+severity = "assumption"
+
+[observation.1.4.4]
+task = "1.4"
+file = "interop/crates/x-websearch/src/payment.rs"
+symbol = "PaymentGate::settle"
+observed = "The server's status table has no 202, so a pending payment answers 503 payment_pending with Retry-After 1."
+assumption = "Clients retry the same PAYMENT-SIGNATURE on 503 payment_pending."
+severity = "note"
+
+[observation.1.3.1]
+task = "1.3"
+file = "interop/crates/x-websearch/src/crawl.rs"
+symbol = "Crawler::page_links"
+observed = "Fetcher::fetch returns only the canonical text, so the crawler reads an HTML page's links with a second GET of the admitted final URL under the same destination check, limits and politeness delay; src/main.rs does not yet start the crawler or register /search, and /search is registered through the content module's PaymentHook because PaymentGate is not on the feature branch."
+assumption = "Exposing the fetched body from fetch.rs, wiring the crawl loop and routes into main.rs and binding /search to PaymentGate are integration changes owned by the feature, outside this task's touches."
+severity = "note"
+closed = "Task 1.13 returns the raw body from Fetcher::fetch, reads links from it, starts the crawler and installs /search and /fetch behind PaymentGate in src/main.rs."
+
+[observation.1.13.1]
+task = "1.13"
+file = "interop/crates/x-websearch/src/main.rs"
+symbol = "CRAWL_INTERVAL"
+observed = "The configuration has no crawl interval and no signal handling is reachable without a new crate (unsafe_code is denied and Cargo.toml is outside the touches), so cycles start every 900 seconds from a constant and SIGTERM ends the process by its default action."
+assumption = "The index commits per cycle and the content and payment stores write by rename, so termination leaves the data directory reopenable, which tests/binary.rs asserts; a configured interval and a graceful stop are feature-owned changes."
+severity = "note"
+
+[observation.1.8.1]
+task = "1.8"
+file = "include/layerx/programs.h"
+symbol = "LX_PROGRAMS_SANDBOX_ABI_VERSION"
+observed = "Raising LX_PROGRAMS_SANDBOX_ABI_VERSION to 4 collides with LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION = 4, so guest ABI 4 is LX_PROGRAMS_GUEST_ABI_V4_VERSION and tests/programs/test_registration.c, which expects transition_validate(0, SANDBOX + 1) to be unsupported, now disagrees with deploy admission."
+assumption = "The test stays unedited as instructed; whether that assertion moves to the new constant is a decision for the feature owner."
+severity = "blocker"
+closed = "Task 1.14 moved the unsupported-version probe to LX_PROGRAMS_GUEST_ABI_V4_VERSION + 1U and added the guest ABI 4 transition probes; the verify_cmd passed at revision 4b2d4fade89e09b9e3882635e96fe1c259f79f02."
+
+[observation.1.8.2]
+task = "1.8"
+file = "src/modules/web/lx_web_intake.c"
+symbol = "lx_web_committed_put"
+observed = "The web module id cannot be registered with the kernel, so committed answers live in the storage of the module context that runs intake and lx_web_committed_read reads that same context's module storage."
+assumption = "Task 2.2 routes intake through the programs module context so the call bridge reads the answers it committed."
+severity = "suspect"
+
+[observation.1.8.3]
+task = "1.8"
+file = "programs/sdk/rust/src/naming.rs"
+symbol = "clippy::byte_char_slices"
+observed = "Clippy with -D warnings on the Rust program SDK refuses the unchanged naming.rs line 183 byte-char slice, so the SDK lint gate fails before this task's SDK modules are linted."
+assumption = "The naming.rs lint is outside this task's touches and is left for its owner."
+severity = "suspect"
+
+[observation.1.9.1]
+task = "1.9"
+file = "interop/crates/x-websearch/tests/fixtures/client-exchange.json"
+symbol = "walletAccount"
+observed = "The recorded PAX offers pay to agent:<did>:asset:<PAX id> and the PAX grant draws from the per-asset payer account, while the SDK's walletAccount and _wallet_account derive agent:<did>:main for the kernel's native asset, so both clients refuse every PAX offer with offer-account-mismatch."
+assumption = "Neither side is adapted; the sidecar or the SDK derivation must be changed by the owner before a PAX payment can succeed."
+severity = "blocker"
+closed = "Task 1.15 pays PAX into and draws it from agent:<did>:main in the sidecar and re-recorded the fixtures, so both clients accept and settle a PAX offer; the TypeScript and Python tests passed in the verify_cmd at revision b98bc3e24f0c970f47f36b250dc95ebb52338d3e."
+
+[observation.1.9.2]
+task = "1.9"
+file = "interop/crates/x-websearch/tests/fixtures/client-exchange.json"
+symbol = "WebSearchClient"
+observed = "The recording holds paid successes only for SID metered and USDC exact, its resource bodies are {path, results} placeholders, and its SID settlement lacks purposeHash (observation 1.4.2), so the clients refuse it with settlement-purpose-mismatch and no paid success in PAX, USDL or metered SID can be replayed."
+assumption = "Tests replay the USDC success with a route-shaped fetch body from content-vectors.json and prove every other asset's offer and payment up to the unrecorded paid reply."
+severity = "blocker"
+closed = "Task 1.15 re-recorded a paid success for SID, PAX, USDC and USDL exact and SID metered with route-shaped bodies and purposeHash, and both clients replay each of them; the TypeScript and Python tests passed in the verify_cmd at revision b98bc3e24f0c970f47f36b250dc95ebb52338d3e."
+
+[observation.1.9.3]
+task = "1.9"
+file = "agent/sdk/python/layerx_sdk/x402.py"
+symbol = "verify_payment_receipt"
+observed = "verify_payment_receipt verifies only protocol version 2 and the recorded receipts are version 3, and the Python SDK configures no type checker."
+assumption = "web_search.py calls verify_receipt with the configured protocol_version, and the Python build check is py_compile."
+severity = "note"
+
+[observation.1.10.1]
+task = "1.10"
+file = "agent/crates/layerx-mcp/Cargo.toml"
+symbol = "layerx-mcp dependencies"
+observed = "The buyer path, receipt verification and content digest need layerx-x402, layerx-interop-gateway, layerx-proof, base64, serde and sha3, and Cargo.toml and agent/Cargo.lock are outside this task's touches."
+assumption = "The manifest gains those dependencies and the lock gains only the two interop crates and the layerx-mcp dependency list."
+severity = "assumption"
+
+[observation.1.10.2]
+task = "1.10"
+file = "agent/crates/layerx-mcp/src/server.rs"
+symbol = "TOOL_CATALOGUE"
+observed = "The web tools are described, validated and listed through catalogue::WEB_TOOLS and web_surface, but server.rs, which routes tools/list and tools/call for a bound server, is outside this task's touches."
+assumption = "A later task adds the web tools to the bound server's routing with a configured sidecar endpoint and payer."
+severity = "assumption"
+closed = "Task 1.16 lists catalogue::WEB_TOOLS for a bound server and routes their tools/call through Server::route_web, which pays over tools/web.rs behind the approval registry with every result marked layerx/output untrusted; tests/web.rs drives it through tools/list and tools/call at revision 4b2d4fade89e09b9e3882635e96fe1c259f79f02."
+
+[observation.1.10.3]
+task = "1.10"
+file = "interop/crates/x-websearch/tests/fixtures/client-exchange.json"
+symbol = "exchange"
+observed = "The recorded paid bodies are placeholders, the recorded fetch url is the bare word paxeer and no /content exchange is recorded."
+assumption = "The test replays every recorded payment header exactly, serves fetch and content bodies built from content-vectors.json, and answers /content with the recorded exact USDC exchange."
+severity = "note"
+closed = "Task 1.15 re-recorded route-shaped paid bodies, fetch targets from content-vectors.json and a GET /content/<digest> exchange; the MCP test replays them at revision b98bc3e24f0c970f47f36b250dc95ebb52338d3e, with the open contradictions in observations 1.15.1 to 1.15.3."
+
+[observation.1.10.4]
+task = "1.10"
+file = "agent/crates/layerx-types/src/payload.rs"
+symbol = "PerpsPayload"
+observed = "cargo clippy -p layerx-mcp --all-targets -- -D warnings also lints the path dependency and fails on a pre-existing large_enum_variant in layerx-types (.logs/build.log); with --no-deps the crate is clean (.logs/clippy.log, exit 0)."
+assumption = "The dependency lint belongs to layerx-types and is left unchanged."
+severity = "note"
+
+[observation.1.15.1]
+task = "1.15"
+file = "agent/crates/layerx-mcp/src/tools/web.rs"
+symbol = "offer_facts"
+observed = "The web tool accepts a receiver account only with the :asset:<id> suffix and draws the payer from asset_account, so it refuses the sidecar's PAX offers, which now pay agent:<did>:main, with OfferMismatch(account); src/tools/web.rs is outside this task's touches."
+assumption = "The MCP tests replay the recorded SID, USDC and USDL paid successes, and the PAX main-account derivation in the web tool is left to the owner."
+severity = "blocker"
+closed = "Task 1.17 has the web tool take the receiver account agent:<did>:main for PAX offers and draw the payer from it, keeping agent:<did>:asset:<id> for SID, USDC and USDL; the recorded PAX exact fetch settled in the task 1.15 verify_cmd at revision 454fc82ebc08c9c4d625b85d488937d76c5816cd."
+
+[observation.1.15.2]
+task = "1.15"
+file = "agent/crates/layerx-mcp/src/tools/web.rs"
+symbol = "web_tool"
+observed = "The sidecar serves GET /content/<digest> unpaid with 200, as the recording shows, while web.content requires a 402 challenge and pays for it, so it would answer Status(200) against the sidecar."
+assumption = "The MCP tests keep answering /content with the recorded exact USDC exchange; the unpaid content path in the web tool is left to the owner."
+severity = "blocker"
+closed = "Task 1.17 has the web tool read GET /content/<digest> unpaid, release only a body whose digest is the one asked for and treat a 402 there as a protocol mismatch; the recorded content exchange replayed in the task 1.15 verify_cmd at revision 454fc82ebc08c9c4d625b85d488937d76c5816cd."
+
+[observation.1.15.3]
+task = "1.15"
+file = "interop/crates/layerx-x402/src/buyer.rs"
+symbol = "LayerXEvidence"
+observed = "Buyer::capture_settlement decodes extensions.layerx into LayerXEvidence with deny_unknown_fields and no purposeHash field, so the purposeHash the protocol has the Seller repeat makes the MCP web tool refuse the recorded SID metered settlement with SettlementMismatch; five layerx-mcp web tests fail (.logs/verify.log, exit 101) and buyer.rs is outside this task's touches."
+assumption = "Neither the Seller nor the MCP tests are relaxed; the buyer evidence type must accept purposeHash, checked against the offer, before the MCP metered search can settle."
+severity = "blocker"
+closed = "Task 1.17 lets LayerXEvidence carry purposeHash and has Buyer::capture_settlement require the offer's purposeHash on a grant settlement and refuse one on an exact settlement; the MCP metered SID search settled in the task 1.15 verify_cmd at revision 454fc82ebc08c9c4d625b85d488937d76c5816cd."
+
+[observation.1.18.1]
+task = "1.18"
+file = "agent/crates/layerx-proof/src/program.rs"
+symbol = "verify_program_execution_receipt"
+observed = "With PerpsPayload::MarketCreate boxed the large_enum_variant lint is gone and every layerx-types test passes, but clippy on layerx-mcp now reaches the path dependency layerx-proof and fails on too_many_arguments (8/7) in verify_program_execution_receipt (.logs/verify.log, exit 101); program.rs is outside this task's touches."
+assumption = "No allow attribute is added; the layerx-proof signature is left to its owner, after which the task 1.18 and 1.17 verify_cmds rerun unchanged."
+severity = "blocker"

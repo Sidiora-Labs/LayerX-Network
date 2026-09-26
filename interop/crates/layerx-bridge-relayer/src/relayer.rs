@@ -9,6 +9,22 @@
 //! the Paxeer head minus its finality depth, sign the outbound digest, and
 //! submit `PaxeerXVault.release` on the burn's Ethereum chain.
 //!
+//! Inbound (Solana -> Paxeer), when a Solana entry is configured: follow the
+//! custody program's deposits up to the head at the configured commitment
+//! minus the slot finality depth (see [`crate::solana::observe`]) and submit
+//! each through the same `bridgeIn` path under the stream `in:<solana id>`.
+//!
+//! Outbound (Paxeer -> Solana), when Solana releases are configured: the same
+//! `BridgeOut` scan also watches burns to Solana's chain id. Each burn's
+//! recipient handle is looked up in the custody program's recipient PDA (the
+//! burn is held as pending until it exists), and the release is paid out by a
+//! transaction whose native secp256k1 instruction carries the attestor
+//! signatures and whose only signer is the ed25519 fee payer (see
+//! [`crate::solana::release`]). The signed bytes are journaled before the
+//! first broadcast, confirmed with `getSignatureStatuses`, rebroadcast while
+//! their blockhash is valid and rebuilt over the same journaled attestation
+//! once it expires; an existing nullifier PDA completes the burn.
+//!
 //! Idempotency across relayer instances: every submission is preceded by a
 //! read of the destination nullifier (`isNullified` on the precompile,
 //! `nullified` on the vault), and a transaction that reverts is classified by
@@ -32,12 +48,26 @@ use crate::abi::{
     decode_get_attestors, decode_get_chain, decode_threshold, encode_bridge_in, encode_get_chain,
     encode_is_nullified, encode_nullified, encode_release, AbiError, LAYERX_BRIDGE_PRECOMPILE,
 };
-use crate::attestation::{assemble_signatures, SignatureError};
+use crate::attestation::{
+    assemble_signatures, recover_signer, OutboundAttestation, SignatureError,
+};
 use crate::cosign::CosignDirectory;
 use crate::hex;
-use crate::journal::{Completion, Entry, Journal, JournalError, Observation, Position, Submission};
+use crate::journal::{
+    Completion, Entry, Journal, JournalError, Observation, Position, Recipient, ReleaseSubmission,
+    Submission,
+};
 use crate::rpc::{JsonRpc, RpcFault};
-use crate::signer::{Attestor, KeyError, Submitter};
+use crate::signer::{Attestor, FeePayer, KeyError, Submitter};
+use crate::solana::observe::{observe_deposits, AssetRecord, Finding, SolanaSettings};
+use crate::solana::release::{
+    asset_address, associated_token_address, build_release_transaction, config_address,
+    is_token_account, nullifier_address, recipient_address, token_amount, vault_authority,
+    wire_transaction, ConfigRecord, RecipientRecord, Release, ReleaseAccounts, ReleaseError,
+    MAX_PROCESSING_AGE, TOKEN_PROGRAM,
+};
+use crate::solana::rpc::{AccountData, Commitment, SolanaRpc};
+use crate::solana::{handle, SOLANA_CHAIN_ID};
 use crate::tx::{self, SignedTransaction};
 
 const MAX_BLOCK_RANGE: u64 = 10_000;
@@ -60,6 +90,8 @@ pub enum RelayerError {
         estimated: u64,
         limit: u64,
     },
+    /// A Solana release that cannot be built as a transaction.
+    Release(ReleaseError),
 }
 
 impl fmt::Display for RelayerError {
@@ -85,6 +117,7 @@ impl fmt::Display for RelayerError {
                     "estimated gas {estimated} exceeds the limit {limit}"
                 )
             }
+            Self::Release(error) => write!(formatter, "solana release: {error}"),
         }
     }
 }
@@ -112,6 +145,12 @@ impl From<KeyError> for RelayerError {
 impl From<JournalError> for RelayerError {
     fn from(value: JournalError) -> Self {
         Self::Journal(value)
+    }
+}
+
+impl From<ReleaseError> for RelayerError {
+    fn from(value: ReleaseError) -> Self {
+        Self::Release(value)
     }
 }
 
@@ -166,6 +205,57 @@ pub struct RelayerParts {
     /// Transactions one item may consume before it is refused for operator
     /// attention.
     pub max_submissions: u32,
+}
+
+/// The Solana custody program whose deposits are relayed to Paxeer.
+pub struct SolanaLink {
+    pub settings: SolanaSettings,
+    pub rpc: SolanaRpc,
+}
+
+/// Everything a relayer is built from: the Ethereum and Paxeer parts and, when
+/// configured, the Solana custody program.
+pub struct RelayerAssembly {
+    pub parts: RelayerParts,
+    pub solana: Option<SolanaLink>,
+}
+
+impl From<RelayerParts> for RelayerAssembly {
+    fn from(parts: RelayerParts) -> Self {
+        Self {
+            parts,
+            solana: None,
+        }
+    }
+}
+
+/// Releases of Paxeer burns addressed to Solana: the ed25519 fee payer that
+/// signs every release transaction and the mints this relayer pays out, each
+/// matched to a burn's asset id through the mint's asset PDA.
+pub struct SolanaRelease {
+    pub fee_payer: FeePayer,
+    pub mints: Vec<[u8; 32]>,
+}
+
+/// A relayer's assembly and, when configured, its Solana releases.
+pub struct RelayerSetup {
+    pub assembly: RelayerAssembly,
+    pub release: Option<SolanaRelease>,
+}
+
+impl From<RelayerAssembly> for RelayerSetup {
+    fn from(assembly: RelayerAssembly) -> Self {
+        Self {
+            assembly,
+            release: None,
+        }
+    }
+}
+
+impl From<RelayerParts> for RelayerSetup {
+    fn from(parts: RelayerParts) -> Self {
+        RelayerAssembly::from(parts).into()
+    }
 }
 
 /// What one pass did.
@@ -290,17 +380,56 @@ pub struct Relayer {
     journal: Journal,
     cosign: Option<CosignDirectory>,
     max_submissions: u32,
+    solana: Option<SolanaLink>,
+    release: Option<SolanaRelease>,
+}
+
+fn malformed() -> RelayerError {
+    RelayerError::Rpc(RpcFault::Malformed)
+}
+
+fn no_address() -> RelayerError {
+    RelayerError::Configuration("a program address has no off-curve bump".to_owned())
+}
+
+/// A release asset: its asset PDA and the mint it registers.
+type AssetMint = ([u8; 32], [u8; 32]);
+
+/// Refuses Solana releases without the custody program or with a missing,
+/// repeated or zero mint.
+fn validate_release(
+    release: Option<&SolanaRelease>,
+    solana: Option<&SolanaLink>,
+) -> Result<(), RelayerError> {
+    if let Some(release) = release {
+        let mints: BTreeSet<[u8; 32]> = release.mints.iter().copied().collect();
+        if solana.is_none()
+            || mints.is_empty()
+            || mints.len() != release.mints.len()
+            || mints.contains(&[0; 32])
+        {
+            return Err(RelayerError::Configuration(
+                "solana releases need the custody program and distinct non-zero mints".to_owned(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 impl Relayer {
     /// Validates the configuration against the live chains: every chain id
     /// answers as configured and every Ethereum chain is registered on Paxeer
-    /// with the configured vault and a finality depth no deeper than ours.
+    /// with the configured vault and a finality depth no deeper than ours; a
+    /// configured Solana custody program is registered the same way under
+    /// [`SOLANA_CHAIN_ID`]. Solana releases need that program and at least
+    /// one mint, all distinct.
     ///
     /// # Errors
     ///
     /// Refuses inconsistent configuration and unreachable or mismatched chains.
-    pub fn new(parts: RelayerParts) -> Result<Self, RelayerError> {
+    pub fn new(setup: impl Into<RelayerSetup>) -> Result<Self, RelayerError> {
+        let RelayerSetup { assembly, release } = setup.into();
+        let RelayerAssembly { parts, solana } = assembly;
         let RelayerParts {
             attestor,
             paxeer,
@@ -358,6 +487,35 @@ impl Relayer {
                 )));
             }
         }
+        if let Some(link) = &solana {
+            let settings = link.settings;
+            if settings.chain_id != SOLANA_CHAIN_ID || identifiers.contains(&settings.chain_id) {
+                return Err(RelayerError::Configuration(
+                    "solana must use its reserved chain id and no ethereum chain may".to_owned(),
+                ));
+            }
+            validate_range(settings.start_slot, settings.max_slot_range, "solana")?;
+            if settings.vault == [0; 20] || settings.program_id == [0; 32] {
+                return Err(RelayerError::Configuration(
+                    "solana has no vault or custody program".to_owned(),
+                ));
+            }
+            let registration = decode_get_chain(&eth_call(
+                paxeer.rpc.as_ref(),
+                &LAYERX_BRIDGE_PRECOMPILE,
+                &encode_get_chain(settings.chain_id),
+            )?)?;
+            if !registration.registered
+                || registration.vault != settings.vault
+                || registration.finality_depth > settings.finality_depth
+            {
+                return Err(RelayerError::Configuration(
+                    "solana is not registered on paxeer with this vault and finality depth"
+                        .to_owned(),
+                ));
+            }
+        }
+        validate_release(release.as_ref(), solana.as_ref())?;
         Ok(Self {
             attestor,
             paxeer,
@@ -365,6 +523,8 @@ impl Relayer {
             journal,
             cosign,
             max_submissions,
+            solana,
+            release,
         })
     }
 
@@ -373,12 +533,16 @@ impl Relayer {
         &self.journal
     }
 
-    /// One pass of every loop: inbound for each chain, then outbound.
+    /// One pass of every loop: inbound for each chain, inbound from Solana
+    /// when configured, then outbound.
     pub fn tick(&mut self) -> Vec<(String, Result<StepReport, RelayerError>)> {
-        let mut results = Vec::with_capacity(self.chains.len() + 1);
+        let mut results = Vec::with_capacity(self.chains.len() + 2);
         for index in 0..self.chains.len() {
             let stream = inbound_stream(self.chains[index].settings.chain_id);
             results.push((stream, self.inbound_step(index)));
+        }
+        if self.solana.is_some() {
+            results.push((inbound_stream(SOLANA_CHAIN_ID), self.solana_step()));
         }
         results.push((OUTBOUND_STREAM.to_owned(), self.outbound_step()));
         results
@@ -411,7 +575,83 @@ impl Relayer {
         Ok(report)
     }
 
-    /// Scans Paxeer for final burns and advances every open outbound item.
+    /// Scans the Solana custody program for deposits at the configured depth,
+    /// journals every deposit whose logged record and receipt disagree as
+    /// refused, and advances every open Solana inbound item through the same
+    /// `bridgeIn` path the Ethereum chains use.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a relayer without a Solana entry, and returns the first RPC,
+    /// decoding, signing or journal failure; the pass is retried from the
+    /// journal on the next call.
+    pub fn solana_step(&mut self) -> Result<StepReport, RelayerError> {
+        let settings = self
+            .solana
+            .as_ref()
+            .ok_or_else(|| RelayerError::Configuration("solana is not configured".to_owned()))?
+            .settings;
+        let mut report = self.scan_solana()?;
+        let keys = self.open_items(|observation| {
+            matches!(observation, Observation::Inbound { chain_id, .. } if *chain_id == settings.chain_id)
+        });
+        for key in keys {
+            let progress = self.advance(&key)?;
+            report.count(&progress);
+        }
+        Ok(report)
+    }
+
+    fn scan_solana(&mut self) -> Result<StepReport, RelayerError> {
+        let mut report = StepReport::default();
+        let Some(link) = &self.solana else {
+            return Ok(report);
+        };
+        let settings = link.settings;
+        let stream = inbound_stream(settings.chain_id);
+        let head = link.rpc.get_slot(settings.commitment)?;
+        let Some(safe) = head.checked_sub(settings.finality_depth) else {
+            return Ok(report);
+        };
+        let Some((from, to)) =
+            self.scan_range(&stream, settings.start_slot, settings.max_slot_range, safe)
+        else {
+            return Ok(report);
+        };
+        let findings = observe_deposits(&link.rpc, &settings, from, to)?;
+        for finding in findings {
+            match finding {
+                Finding::Deposit(observation) => {
+                    if self.observe(observation)? {
+                        report.observed += 1;
+                    }
+                }
+                Finding::Refused {
+                    observation,
+                    reason,
+                } => {
+                    if self.observe(observation)? {
+                        report.observed += 1;
+                        self.journal.append(&Entry::Refused {
+                            item: observation.key(),
+                            reason,
+                        })?;
+                        report.refused += 1;
+                    }
+                }
+            }
+        }
+        self.journal.append(&Entry::Cursor {
+            stream,
+            next_block: to + 1,
+        })?;
+        Ok(report)
+    }
+
+    /// Scans Paxeer for final burns and advances every open outbound item:
+    /// burns to Ethereum chains through `release` on their vault and, when
+    /// Solana releases are configured, burns to Solana through the custody
+    /// program's release.
     ///
     /// # Errors
     ///
@@ -422,11 +662,21 @@ impl Relayer {
             observed: self.scan_outbound()?,
             ..StepReport::default()
         };
-        let keys =
-            self.open_items(|observation| matches!(observation, Observation::Outbound { .. }));
+        let keys = self.open_items(|observation| {
+            matches!(observation, Observation::Outbound { chain_id, .. } if *chain_id != SOLANA_CHAIN_ID)
+        });
         for key in keys {
             let progress = self.advance(&key)?;
             report.count(&progress);
+        }
+        if self.release.is_some() {
+            let keys = self.open_items(|observation| {
+                matches!(observation, Observation::Outbound { chain_id, .. } if *chain_id == SOLANA_CHAIN_ID)
+            });
+            for key in keys {
+                let progress = self.release(&key)?;
+                report.count(&progress);
+            }
         }
         Ok(report)
     }
@@ -557,11 +807,14 @@ impl Relayer {
         ) else {
             return Ok(0);
         };
-        let vaults: BTreeMap<u64, [u8; 20]> = self
+        let mut vaults: BTreeMap<u64, [u8; 20]> = self
             .chains
             .iter()
             .map(|link| (link.settings.chain_id, link.settings.vault))
             .collect();
+        if let (Some(link), Some(_)) = (&self.solana, &self.release) {
+            vaults.insert(link.settings.chain_id, link.settings.vault);
+        }
         let chain_topics: Vec<String> = vaults
             .keys()
             .map(|chain| hex::prefixed(&crate::attestation::uint256_from_u64(*chain)))
@@ -987,6 +1240,374 @@ impl Relayer {
                 Ok(Progress::Waiting)
             }
             _ => Err(RelayerError::Rpc(RpcFault::Malformed)),
+        }
+    }
+
+    fn solana_link(&self) -> Result<&SolanaLink, RelayerError> {
+        self.solana
+            .as_ref()
+            .ok_or_else(|| RelayerError::Configuration("solana is not configured".to_owned()))
+    }
+
+    fn solana_release(&self) -> Result<&SolanaRelease, RelayerError> {
+        self.release.as_ref().ok_or_else(|| {
+            RelayerError::Configuration("solana releases are not configured".to_owned())
+        })
+    }
+
+    /// The account at `address` when it exists and the custody program owns
+    /// it.
+    fn program_account(&self, address: &[u8; 32]) -> Result<Option<AccountData>, RelayerError> {
+        let link = self.solana_link()?;
+        Ok(link
+            .rpc
+            .get_account_info(address, link.settings.commitment)?
+            .filter(|account| account.owner == link.settings.program_id))
+    }
+
+    /// Whether the custody program created the burn's nullifier PDA.
+    fn release_consumed(&self, attestation: &OutboundAttestation) -> Result<bool, RelayerError> {
+        let program = self.solana_link()?.settings.program_id;
+        let address =
+            nullifier_address(&program, &attestation.nullifier()).ok_or_else(no_address)?;
+        Ok(self.program_account(&address)?.is_some())
+    }
+
+    /// The 32-byte key the recipient PDA holds for `recipient`, or `None`
+    /// while no recipient PDA exists for it.
+    fn recipient_key(&self, recipient: &[u8; 20]) -> Result<Option<[u8; 32]>, RelayerError> {
+        let program = self.solana_link()?.settings.program_id;
+        let address = recipient_address(&program, recipient).ok_or_else(no_address)?;
+        let Some(account) = self.program_account(&address)? else {
+            return Ok(None);
+        };
+        let record = RecipientRecord::decode(&account.data).ok_or_else(malformed)?;
+        if record.handle != *recipient || handle(&record.key) != *recipient {
+            return Err(malformed());
+        }
+        Ok(Some(record.key))
+    }
+
+    fn custody_config(&self) -> Result<([u8; 32], ConfigRecord), RelayerError> {
+        let program = self.solana_link()?.settings.program_id;
+        let address = config_address(&program).ok_or_else(no_address)?;
+        let account = self.program_account(&address)?.ok_or_else(|| {
+            RelayerError::Configuration("the custody program has no config".to_owned())
+        })?;
+        let record = ConfigRecord::decode(&account.data).ok_or_else(malformed)?;
+        Ok((address, record))
+    }
+
+    /// The asset PDA and mint of the configured mint registered under
+    /// `asset_id`, if any.
+    fn release_asset(&self, asset_id: &[u8; 20]) -> Result<Option<AssetMint>, RelayerError> {
+        let program = self.solana_link()?.settings.program_id;
+        for mint in &self.solana_release()?.mints {
+            let address = asset_address(&program, mint).ok_or_else(no_address)?;
+            let Some(account) = self.program_account(&address)? else {
+                continue;
+            };
+            let record = AssetRecord::decode(&account.data).ok_or_else(malformed)?;
+            if record.mint == *mint && record.asset_id == *asset_id {
+                return Ok(Some((address, *mint)));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Whether `address` is an initialised token account of `mint` owned by
+    /// `owner`.
+    fn token_account_ready(
+        &self,
+        address: &[u8; 32],
+        mint: &[u8; 32],
+        owner: &[u8; 32],
+    ) -> Result<bool, RelayerError> {
+        let link = self.solana_link()?;
+        Ok(link
+            .rpc
+            .get_account_info(address, link.settings.commitment)?
+            .is_some_and(|account| {
+                account.owner == TOKEN_PROGRAM && is_token_account(&account.data, mint, owner)
+            }))
+    }
+
+    fn already_bridged(&mut self, key: &str) -> Result<Progress, RelayerError> {
+        self.journal.append(&Entry::Completed {
+            item: key.to_owned(),
+            completion: Completion::AlreadyBridged,
+        })?;
+        Ok(Progress::Completed)
+    }
+
+    /// Advances one burn to Solana: resolves a journaled release, completes a
+    /// burn whose nullifier PDA exists, holds a burn whose recipient PDA does
+    /// not exist yet without signing anything, and otherwise signs (or reuses
+    /// the journaled attestor signature), builds the release, has the fee
+    /// payer sign it, journals the signed bytes and broadcasts them.
+    fn release(&mut self, key: &str) -> Result<Progress, RelayerError> {
+        let Some(item) = self.journal.state().items.get(key).cloned() else {
+            return Ok(Progress::Waiting);
+        };
+        if !item.is_open() {
+            return Ok(Progress::Completed);
+        }
+        let attestation = item
+            .observation
+            .outbound_attestation()
+            .ok_or_else(malformed)?;
+        if let Some(pending) = item.pending_release() {
+            return self.resolve_release(key, &attestation, pending);
+        }
+        let refusal = Self::refusal(&item.observation).or_else(|| {
+            token_amount(&attestation.amount)
+                .is_none()
+                .then_some("amount is not a Solana token amount")
+        });
+        if let Some(reason) = refusal {
+            self.journal.append(&Entry::Refused {
+                item: key.to_owned(),
+                reason: reason.to_owned(),
+            })?;
+            return Ok(Progress::Refused);
+        }
+        let program = self.solana_link()?.settings.program_id;
+        let nullifier =
+            nullifier_address(&program, &attestation.nullifier()).ok_or_else(no_address)?;
+        if self.program_account(&nullifier)?.is_some() {
+            return self.already_bridged(key);
+        }
+        if item.transactions() >= usize::try_from(self.max_submissions).unwrap_or(usize::MAX) {
+            self.journal.append(&Entry::Refused {
+                item: key.to_owned(),
+                reason: format!(
+                    "{} transactions failed to bridge the event",
+                    item.transactions()
+                ),
+            })?;
+            return Ok(Progress::Refused);
+        }
+        let recipient = match item.recipient {
+            Some(Recipient::Resolved(recipient)) => recipient,
+            recorded => {
+                let Some(recipient) = self.recipient_key(&attestation.recipient)? else {
+                    if recorded.is_none() {
+                        self.journal.append(&Entry::RecipientPending {
+                            item: key.to_owned(),
+                        })?;
+                    }
+                    return Ok(Progress::Waiting);
+                };
+                self.journal.append(&Entry::RecipientResolved {
+                    item: key.to_owned(),
+                    key: recipient,
+                })?;
+                recipient
+            }
+        };
+        let Some((accounts, config)) =
+            self.release_accounts(&attestation, &recipient, nullifier)?
+        else {
+            return Ok(Progress::Waiting);
+        };
+        self.submit_release(
+            key,
+            item.signature,
+            &attestation,
+            recipient,
+            &accounts,
+            &config,
+        )
+    }
+
+    /// The accounts a release of `attestation` to `recipient` names and the
+    /// custody config it is verified against, or `None` while the program is
+    /// paused, no configured mint carries the burn's asset id or either token
+    /// account is not an initialised account of the mint.
+    fn release_accounts(
+        &self,
+        attestation: &OutboundAttestation,
+        recipient: &[u8; 32],
+        nullifier: [u8; 32],
+    ) -> Result<Option<(ReleaseAccounts, ConfigRecord)>, RelayerError> {
+        let settings = self.solana_link()?.settings;
+        let program = settings.program_id;
+        let (config_account, config) = self.custody_config()?;
+        if config.paused {
+            return Ok(None);
+        }
+        if !config.attestors.contains(&self.attestor.address()) {
+            return Err(RelayerError::NotAttestor);
+        }
+        let Some((asset, mint)) = self.release_asset(&attestation.asset)? else {
+            return Ok(None);
+        };
+        let vault = vault_authority(&program, config.vault_bump).ok_or_else(no_address)?;
+        if handle(&vault) != settings.vault {
+            return Err(RelayerError::Configuration(
+                "the custody program's vault authority is not the registered vault".to_owned(),
+            ));
+        }
+        let vault_token = associated_token_address(&vault, &mint).ok_or_else(no_address)?;
+        let recipient_token = associated_token_address(recipient, &mint).ok_or_else(no_address)?;
+        if !self.token_account_ready(&vault_token, &mint, &vault)?
+            || !self.token_account_ready(&recipient_token, &mint, recipient)?
+        {
+            return Ok(None);
+        }
+        let accounts = ReleaseAccounts {
+            program_id: program,
+            fee_payer: self.solana_release()?.fee_payer.public_key(),
+            config: config_account,
+            asset,
+            mint,
+            vault_authority: vault,
+            vault_token,
+            recipient_token,
+            nullifier,
+        };
+        Ok(Some((accounts, config)))
+    }
+
+    /// Signs the attestation (or reuses the journaled signature), assembles
+    /// threshold signatures, builds the release against a fresh blockhash,
+    /// has the fee payer sign it, journals the signed bytes and broadcasts
+    /// them.
+    fn submit_release(
+        &mut self,
+        key: &str,
+        journaled: Option<[u8; 65]>,
+        attestation: &OutboundAttestation,
+        recipient: [u8; 32],
+        accounts: &ReleaseAccounts,
+        config: &ConfigRecord,
+    ) -> Result<Progress, RelayerError> {
+        let digest = attestation.digest();
+        let signature = if let Some(signature) = journaled {
+            signature
+        } else {
+            let signature = self.attestor.sign_outbound(attestation)?;
+            self.journal.append(&Entry::Signed {
+                item: key.to_owned(),
+                signature,
+            })?;
+            signature
+        };
+        let mut candidates = vec![signature];
+        if let Some(cosign) = &self.cosign {
+            cosign.publish(&digest, &self.attestor.address(), &signature)?;
+            candidates.extend(cosign.collect(&digest));
+        }
+        let threshold = usize::from(config.threshold);
+        let signatures =
+            match assemble_signatures(&digest, candidates, &config.attestors, threshold) {
+                Ok(signatures) => signatures,
+                Err(SignatureError::BelowThreshold { .. }) => return Ok(Progress::Waiting),
+                Err(error) => return Err(RelayerError::Key(KeyError::Signature(error))),
+            };
+        let signatures = signatures
+            .into_iter()
+            .map(|signature| recover_signer(&digest, &signature).map(|signer| (signer, signature)))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| RelayerError::Key(KeyError::Signature(error)))?;
+        let fee_payer = accounts.fee_payer;
+        let release = Release {
+            attestation: *attestation,
+            recipient,
+            signatures,
+            accounts: *accounts,
+        };
+        let blockhash = self
+            .solana_link()?
+            .rpc
+            .get_latest_blockhash(Commitment::Confirmed)?;
+        let message = build_release_transaction(&release, &blockhash.blockhash)?;
+        let fee_signature = self.solana_release()?.fee_payer.sign_message(&message)?;
+        let raw = wire_transaction(&fee_signature, &message);
+        self.journal.append(&Entry::ReleaseSubmitted {
+            item: key.to_owned(),
+            fee_payer,
+            signature: fee_signature,
+            last_valid_block_height: blockhash.last_valid_block_height,
+            raw: raw.clone(),
+        })?;
+        // The journaled bytes are authoritative from here on: whatever this
+        // broadcast returns, the next pass resolves the same transaction.
+        let _ = self
+            .solana_link()?
+            .rpc
+            .send_transaction(&raw, &fee_signature);
+        Ok(Progress::Submitted)
+    }
+
+    /// Classifies a journaled release without ever signing a replacement
+    /// while its blockhash is valid: a status at the configured commitment
+    /// completes it or, failed, frees the burn for a new transaction unless
+    /// the nullifier PDA exists; an unknown release is rebroadcast byte for
+    /// byte until its blockhash expires, and then the same journaled
+    /// attestation is submitted again in a new transaction.
+    fn resolve_release(
+        &mut self,
+        key: &str,
+        attestation: &OutboundAttestation,
+        pending: &ReleaseSubmission,
+    ) -> Result<Progress, RelayerError> {
+        let link = self.solana_link()?;
+        let commitment = link.settings.commitment;
+        let status = link
+            .rpc
+            .get_signature_statuses(&[pending.signature])?
+            .into_iter()
+            .next()
+            .flatten();
+        match status {
+            Some(status) if !status.confirmation.reaches(commitment) => Ok(Progress::Waiting),
+            Some(status) if status.failed => {
+                if self.release_consumed(attestation)? {
+                    return self.already_bridged(key);
+                }
+                self.journal.append(&Entry::ReleaseFailed {
+                    item: key.to_owned(),
+                    signature: pending.signature,
+                })?;
+                Ok(Progress::Waiting)
+            }
+            Some(status) => {
+                self.journal.append(&Entry::Completed {
+                    item: key.to_owned(),
+                    completion: Completion::Released {
+                        signature: pending.signature,
+                        slot: status.slot,
+                    },
+                })?;
+                Ok(Progress::Completed)
+            }
+            None => {
+                let latest = link.rpc.get_latest_blockhash(Commitment::Finalized)?;
+                let height = latest
+                    .last_valid_block_height
+                    .saturating_sub(MAX_PROCESSING_AGE);
+                if height > pending.last_valid_block_height {
+                    if self.release_consumed(attestation)? {
+                        return self.already_bridged(key);
+                    }
+                    self.journal.append(&Entry::ReleaseExpired {
+                        item: key.to_owned(),
+                        signature: pending.signature,
+                    })?;
+                    return self.release(key);
+                }
+                match link.rpc.send_transaction(&pending.raw, &pending.signature) {
+                    Ok(_) => Ok(Progress::Waiting),
+                    Err(RpcFault::Rejected { .. }) => {
+                        if self.release_consumed(attestation)? {
+                            return self.already_bridged(key);
+                        }
+                        Ok(Progress::Waiting)
+                    }
+                    Err(error) => Err(RelayerError::Rpc(error)),
+                }
+            }
         }
     }
 }

@@ -157,6 +157,7 @@ import (
 	layerxanchorkeeper "github.com/sidiora-labs/paxeer-network/modules/layerxanchor/keeper"
 	layerxanchortypes "github.com/sidiora-labs/paxeer-network/modules/layerxanchor/types"
 	layerxbridgemodule "github.com/sidiora-labs/paxeer-network/modules/layerxbridge"
+	layerxbridgeclient "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/client/cli"
 	layerxbridgekeeper "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/keeper"
 	layerxbridgetypes "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
 	layerxcustodymodule "github.com/sidiora-labs/paxeer-network/modules/layerxcustody"
@@ -208,6 +209,7 @@ func getGovProposalHandlers() []govclient.ProposalHandler {
 		ibcclientclient.UpdateClientProposalHandler,
 		ibcclientclient.UpgradeProposalHandler,
 		mintclient.UpdateMinterHandler,
+		layerxbridgeclient.BridgeProposalHandler,
 		// this line is used by starport scaffolding # stargate/app/govProposalHandler
 	)
 
@@ -886,7 +888,8 @@ func New(
 		AddRoute(ibcclienttypes.RouterKey, ibcclient.NewClientProposalHandler(app.IBCKeeper.ClientKeeper)).
 		AddRoute(minttypes.RouterKey, mint.NewProposalHandler(app.MintKeeper)).
 		AddRoute(tokenfactorytypes.RouterKey, tokenfactorymodule.NewProposalHandler(app.TokenFactoryKeeper)).
-		AddRoute(evmtypes.RouterKey, evm.NewProposalHandler(app.EvmKeeper))
+		AddRoute(evmtypes.RouterKey, evm.NewProposalHandler(app.EvmKeeper)).
+		AddRoute(layerxbridgetypes.RouterKey, layerxbridgemodule.NewProposalHandler(app.LayerXBridgeKeeper))
 	if len(enabledProposals) != 0 {
 		govRouter.AddRoute(wasm.RouterKey, wasm.NewWasmProposalHandler(app.WasmKeeper, enabledProposals))
 	}

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Answers solana-keygen pubkey for bridge/deploy/tests/deploy-scripts-check.sh by
+# reading the public half of the keypair file, as the Solana CLI does.
+set -euo pipefail
+
+KEYS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/solana_keys.py"
+if [ $# -ne 2 ] || [ "$1" != pubkey ]; then
+    printf 'replayed solana-keygen: no recorded answer for: %s\n' "$*" >&2
+    exit 64
+fi
+python3 "$KEYS" pubkey "$2"

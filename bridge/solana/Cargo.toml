@@ -1,0 +1,32 @@
+[package]
+name = "paxeer-x-bridge-solana-program"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[workspace]
+members = ["admin"]
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+solana-program = "=2.3.0"
+solana-system-interface = { version = "=1.0.0", features = ["bincode"] }
+solana-sdk-ids = "=2.2.1"
+spl-token = { version = "=7.0.0", default-features = false, features = ["no-entrypoint"] }
+
+[dev-dependencies]
+libsecp256k1 = { version = "=0.6.0", default-features = false, features = ["std", "static-context", "hmac"] }
+solana-loader-v3-interface = { version = "=5.0.0", features = ["serde"] }
+solana-program-test = "=2.3.13"
+solana-sdk = "=2.3.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints.rust]
+unsafe_code = "deny"
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(target_os, values("solana"))'] }

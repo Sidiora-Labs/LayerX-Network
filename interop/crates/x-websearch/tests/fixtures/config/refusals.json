@@ -1,0 +1,528 @@
+[
+  {
+    "pointer": "/listen",
+    "value": "REPLACE_WITH_LISTEN_ADDRESS",
+    "field": "listen",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/listen",
+    "value": "127.0.0.1:0",
+    "field": "listen",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/listen",
+    "value": "localhost",
+    "field": "listen",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/listen",
+    "value": 8480,
+    "field": "listen",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/data_dir",
+    "value": "relative/x-websearch",
+    "field": "data_dir",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/data_dir",
+    "value": "/var/lib/../x-websearch",
+    "field": "data_dir",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/data_dir",
+    "value": "/",
+    "field": "data_dir",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/data_dir",
+    "value": "/path/to/x-websearch",
+    "field": "data_dir",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/data_dir",
+    "value": "",
+    "field": "data_dir",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/seeds",
+    "value": [],
+    "field": "seeds",
+    "refusal": "missing"
+  },
+  {
+    "pointer": "/seeds",
+    "value": "https://paxeer.app/",
+    "field": "seeds",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/seeds",
+    "value": [
+      "ftp://paxeer.app/"
+    ],
+    "field": "seeds",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/seeds",
+    "value": [
+      "https://www.example.com/"
+    ],
+    "field": "seeds",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/seeds",
+    "value": [
+      "https://docs.test/"
+    ],
+    "field": "seeds",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/seeds",
+    "value": [
+      "http://127.0.0.1/"
+    ],
+    "field": "seeds",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/seeds",
+    "value": [
+      "http://localhost/"
+    ],
+    "field": "seeds",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/seeds",
+    "value": [
+      "http://[::1]/"
+    ],
+    "field": "seeds",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/seeds",
+    "value": [
+      "https://user@paxeer.app/"
+    ],
+    "field": "seeds",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/seeds",
+    "value": [
+      "https://paxeer.app/#top"
+    ],
+    "field": "seeds",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/seeds",
+    "value": [
+      "https://Paxeer.app/"
+    ],
+    "field": "seeds",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/seeds",
+    "value": [
+      "https://paxeer.app:0/"
+    ],
+    "field": "seeds",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/seeds",
+    "value": [
+      "https://paxeer.app/",
+      "https://paxeer.app/"
+    ],
+    "field": "seeds",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/seeds",
+    "value": [
+      7
+    ],
+    "field": "seeds",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/crawl",
+    "value": "all",
+    "field": "crawl",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/crawl/pages_per_cycle",
+    "value": 0,
+    "field": "crawl.pages_per_cycle",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/crawl/pages_per_cycle",
+    "value": 1000001,
+    "field": "crawl.pages_per_cycle",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/crawl/pages_per_host",
+    "value": 0,
+    "field": "crawl.pages_per_host",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/crawl/pages_per_host",
+    "value": 1001,
+    "field": "crawl.pages_per_host",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/crawl/max_depth",
+    "value": 33,
+    "field": "crawl.max_depth",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/crawl/max_depth",
+    "value": -1,
+    "field": "crawl.max_depth",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/crawl/politeness_delay_ms",
+    "value": 0,
+    "field": "crawl.politeness_delay_ms",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/crawl/politeness_delay_ms",
+    "value": 3600001,
+    "field": "crawl.politeness_delay_ms",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/crawl/politeness_delay_ms",
+    "value": 1.5,
+    "field": "crawl.politeness_delay_ms",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/crawl/extra",
+    "value": 1,
+    "field": "crawl.extra",
+    "refusal": "unknown"
+  },
+  {
+    "pointer": "/fetch/connect_timeout_ms",
+    "value": 0,
+    "field": "fetch.connect_timeout_ms",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/fetch/connect_timeout_ms",
+    "value": 3001,
+    "field": "fetch.connect_timeout_ms",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/fetch/total_timeout_ms",
+    "value": 10001,
+    "field": "fetch.total_timeout_ms",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/fetch/total_timeout_ms",
+    "value": 2000,
+    "field": "fetch.total_timeout_ms",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/fetch/max_body_bytes",
+    "value": 0,
+    "field": "fetch.max_body_bytes",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/fetch/max_body_bytes",
+    "value": 2097153,
+    "field": "fetch.max_body_bytes",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/fetch/max_redirects",
+    "value": 4,
+    "field": "fetch.max_redirects",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/fetch/allow_loopback",
+    "value": "yes",
+    "field": "fetch.allow_loopback",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/assets",
+    "value": "SID",
+    "field": "assets",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/assets/SID/asset_id",
+    "value": "0000000000000000000000000000000000000000000000000000000000000000",
+    "field": "assets.SID.asset_id",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/assets/SID/asset_id",
+    "value": "REPLACE_WITH_SID_ASSET_ID",
+    "field": "assets.SID.asset_id",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/assets/SID/asset_id",
+    "value": "5c1d",
+    "field": "assets.SID.asset_id",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/assets/SID/asset_id",
+    "value": 1,
+    "field": "assets.SID.asset_id",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/assets/PAX/asset_id",
+    "value": "5c1d0a93e4b7f2682c9e1f0473ad5b6e8f1027c3d49a5b6e7f80912a3b4c5d6e",
+    "field": "assets.PAX.asset_id",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/assets/USDL/asset_id",
+    "value": "0x6d2e1ba4f5c80379ad0f2e1584be6c7f90213d4e5ab6c7d8e9f0a1b2c3d4e5f6",
+    "field": "assets.USDL.asset_id",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/assets/USDC/price",
+    "value": "0",
+    "field": "assets.USDC.price",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/assets/USDC/price",
+    "value": "REPLACE_WITH_USDC_PRICE",
+    "field": "assets.USDC.price",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/assets/USDC/price",
+    "value": "01",
+    "field": "assets.USDC.price",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/assets/USDC/price",
+    "value": "1.5",
+    "field": "assets.USDC.price",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/assets/USDC/price",
+    "value": "-1",
+    "field": "assets.USDC.price",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/assets/USDC/price",
+    "value": "340282366920938463463374607431768211456",
+    "field": "assets.USDC.price",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/assets/USDC/price",
+    "value": 1000,
+    "field": "assets.USDC.price",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/assets/USDC/decimals",
+    "value": 6,
+    "field": "assets.USDC.decimals",
+    "refusal": "unknown"
+  },
+  {
+    "pointer": "/gateway/endpoint",
+    "value": "https://gateway.example",
+    "field": "gateway.endpoint",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/gateway/endpoint",
+    "value": "http://gateway.paxeer.app/rpc",
+    "field": "gateway.endpoint",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/gateway/endpoint",
+    "value": "https://paxeer.app/rpc?route=1",
+    "field": "gateway.endpoint",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/gateway/endpoint",
+    "value": "paxeer.app",
+    "field": "gateway.endpoint",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/gateway/sequencer_id",
+    "value": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "field": "gateway.sequencer_id",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/gateway/sequencer_id",
+    "value": "REPLACE_WITH_SEQUENCER_ID",
+    "field": "gateway.sequencer_id",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/gateway/sequencer_public_key",
+    "value": "0000000000000000000000000000000000000000000000000000000000000000",
+    "field": "gateway.sequencer_public_key",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/gateway/sequencer_public_key",
+    "value": "0100000000000000000000000000000000000000000000000000000000000000",
+    "field": "gateway.sequencer_public_key",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/evm/endpoint",
+    "value": "https://evm.example",
+    "field": "evm.endpoint",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/evm/chain_id",
+    "value": 0,
+    "field": "evm.chain_id",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/evm/chain_id",
+    "value": "1337",
+    "field": "evm.chain_id",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/evm/confirmations",
+    "value": 0,
+    "field": "evm.confirmations",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/evm/confirmations",
+    "value": 1025,
+    "field": "evm.confirmations",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/kernel_network_id",
+    "value": 0,
+    "field": "kernel_network_id",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/kernel_network_id",
+    "value": 4294967296,
+    "field": "kernel_network_id",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/peers",
+    "value": "http://127.0.0.1:8481",
+    "field": "peers",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/peers",
+    "value": [
+      "https://sidecar.example.com"
+    ],
+    "field": "peers",
+    "refusal": "placeholder"
+  },
+  {
+    "pointer": "/peers",
+    "value": [
+      "http://peer.paxeer.app"
+    ],
+    "field": "peers",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/peers",
+    "value": [
+      "http://127.0.0.1:8481",
+      "http://127.0.0.1:8481"
+    ],
+    "field": "peers",
+    "refusal": "invalid"
+  },
+  {
+    "pointer": "/receiver_key",
+    "value": "present-in-file",
+    "field": "receiver_key",
+    "refusal": "key_material"
+  },
+  {
+    "pointer": "/attestor_key_file",
+    "value": "/etc/x-websearch/attestor.key",
+    "field": "attestor_key_file",
+    "refusal": "key_material"
+  },
+  {
+    "pointer": "/evm/submitter_mnemonic",
+    "value": "present-in-file",
+    "field": "evm.submitter_mnemonic",
+    "refusal": "key_material"
+  },
+  {
+    "pointer": "/gateway/sequencer_secret",
+    "value": "present-in-file",
+    "field": "gateway.sequencer_secret",
+    "refusal": "key_material"
+  },
+  {
+    "pointer": "/gateway/endpoint",
+    "value": "abababababababababababababababababababababababababababababababab",
+    "field": "gateway.endpoint",
+    "refusal": "key_material"
+  },
+  {
+    "pointer": "/peers",
+    "value": [
+      "abababababababababababababababababababababababababababababababab"
+    ],
+    "field": "peers",
+    "refusal": "key_material"
+  }
+]

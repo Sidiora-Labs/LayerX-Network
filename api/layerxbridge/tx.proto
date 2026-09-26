@@ -1,0 +1,119 @@
+syntax = "proto3";
+package paxprotocol.paxchain.layerxbridge;
+
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types";
+
+// Msg defines the layerxbridge module's gRPC message service. Every message
+// is executed only for the module's governance authority; bridgeIn and
+// bridgeOut are deliberately absent, because they enter only through the
+// layerxBridge precompile.
+service Msg {
+  rpc RegisterChain(MsgRegisterChain) returns (MsgRegisterChainResponse);
+  rpc SetAttestors(MsgSetAttestors) returns (MsgSetAttestorsResponse);
+  rpc SetCap(MsgSetCap) returns (MsgSetCapResponse);
+  rpc Pause(MsgPause) returns (MsgPauseResponse);
+  rpc Unpause(MsgUnpause) returns (MsgUnpauseResponse);
+}
+
+// Chain is one remote chain the bridge accepts events from. Its Go type is
+// the module's state type, so a registered chain is stored exactly as it was
+// proposed.
+message Chain {
+  option (gogoproto.typedecl) = false;
+  option (gogoproto.goproto_getters) = false;
+  option (gogoproto.goproto_stringer) = false;
+
+  uint64 chain_id = 1 [(gogoproto.customname) = "ChainID"];
+  bytes vault = 2 [(gogoproto.customtype) = "Address20", (gogoproto.nullable) = false];
+  uint64 finality_depth = 3;
+  bool enabled = 4;
+}
+
+// Attestor is one signer of attestations: the EVM address its secp256k1
+// signatures recover to and the bond it has declared.
+message Attestor {
+  option (gogoproto.typedecl) = false;
+  option (gogoproto.goproto_getters) = false;
+  option (gogoproto.goproto_stringer) = false;
+
+  bytes signer = 1 [(gogoproto.customtype) = "Address20", (gogoproto.nullable) = false];
+  string bond = 2 [
+    (gogoproto.customtype) = "github.com/sidiora-labs/paxeer-network/sdk/types.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// AttestorSet is the signer set and the number of distinct members whose
+// signatures an attestation needs.
+message AttestorSet {
+  option (gogoproto.typedecl) = false;
+  option (gogoproto.goproto_getters) = false;
+  option (gogoproto.goproto_stringer) = false;
+
+  repeated Attestor attestors = 1 [(gogoproto.nullable) = false];
+  uint32 threshold = 2;
+}
+
+// MsgRegisterChain adds or replaces a remote chain. Authority only.
+message MsgRegisterChain {
+  option (gogoproto.goproto_stringer) = false;
+
+  string authority = 1;
+  Chain chain = 2 [(gogoproto.nullable) = false];
+}
+
+// MsgRegisterChainResponse is the MsgRegisterChain response.
+message MsgRegisterChainResponse {}
+
+// MsgSetAttestors replaces the attestor set and its threshold. Authority only.
+message MsgSetAttestors {
+  option (gogoproto.goproto_stringer) = false;
+
+  string authority = 1;
+  AttestorSet set = 2 [(gogoproto.nullable) = false];
+}
+
+// MsgSetAttestorsResponse is the MsgSetAttestors response.
+message MsgSetAttestorsResponse {}
+
+// MsgSetCap sets the caps of one asset of a registered chain. Authority only.
+message MsgSetCap {
+  option (gogoproto.goproto_stringer) = false;
+
+  string authority = 1;
+  uint64 chain_id = 2 [(gogoproto.customname) = "ChainID"];
+  bytes asset = 3 [(gogoproto.customtype) = "Address20", (gogoproto.nullable) = false];
+  string max_in_flight = 4 [
+    (gogoproto.customtype) = "github.com/sidiora-labs/paxeer-network/sdk/types.Int",
+    (gogoproto.nullable) = false
+  ];
+  string max_per_tx = 5 [
+    (gogoproto.customtype) = "github.com/sidiora-labs/paxeer-network/sdk/types.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// MsgSetCapResponse is the MsgSetCap response.
+message MsgSetCapResponse {}
+
+// MsgPause stops every bridgeIn and bridgeOut. Authority only.
+message MsgPause {
+  option (gogoproto.goproto_stringer) = false;
+
+  string authority = 1;
+}
+
+// MsgPauseResponse is the MsgPause response.
+message MsgPauseResponse {}
+
+// MsgUnpause resumes bridgeIn and bridgeOut. Authority only.
+message MsgUnpause {
+  option (gogoproto.goproto_stringer) = false;
+
+  string authority = 1;
+}
+
+// MsgUnpauseResponse is the MsgUnpause response.
+message MsgUnpauseResponse {}

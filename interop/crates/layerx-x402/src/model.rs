@@ -179,7 +179,7 @@ impl PaymentRequirements {
         if self.is_layerx_network() {
             self.layerx_terms()?;
         } else {
-            layerx_profile(self.extra.as_ref())?;
+            layerx_profile(self.extra.as_ref(), None)?;
         }
         Ok(())
     }
@@ -194,16 +194,21 @@ impl PaymentRequirements {
 
     /// The quote terms a `LayerX` payer needs to reach the human API:
     /// `extra.layerx.account` is the `agent:<did>:main` account reference that
-    /// `move.quote` takes as its destination and `extra.layerx.currency` is
-    /// the `CurrencyCode` its money carries. `payTo` must be the account id
-    /// derived from that reference, so the advertised terms can never redirect
-    /// a payment away from the payee this offer commits to.
+    /// `move.quote` takes as its destination, or the `agent:<did>:asset:<asset>`
+    /// per-asset account when `<asset>` is the lowercase hex of this offer's
+    /// asset, and `extra.layerx.currency` is the `CurrencyCode` its money
+    /// carries. `payTo` must be the account id derived from that reference, so
+    /// the advertised terms can never redirect a payment away from the payee
+    /// this offer commits to.
     ///
     /// # Errors
-    /// Returns an error when the profile block is missing or malformed, and
-    /// when `payTo` is not an account id derived from `account`.
+    /// Returns an error when the profile block is missing or malformed, when a
+    /// per-asset reference names another asset, and when `payTo` is not an
+    /// account id derived from `account`.
     pub fn layerx_terms(&self) -> Result<LayerXTerms, X402Error> {
-        let profile = layerx_profile(self.extra.as_ref())?.ok_or(X402Error::ProfileMissing)?;
+        let offer_asset = parse_hex32(&self.asset).ok();
+        let profile = layerx_profile(self.extra.as_ref(), offer_asset.as_ref())?
+            .ok_or(X402Error::ProfileMissing)?;
         let (Some(account), Some(currency)) = (profile.account, profile.currency) else {
             return Err(X402Error::ProfileMissing);
         };
@@ -231,7 +236,8 @@ pub struct LayerXTerms {
     pub currency: String,
 }
 
-/// Both account identifiers an `agent:<did>:main` reference can carry: the
+/// Both account identifiers an `agent:<did>:main` or `agent:<did>:asset:<asset>`
+/// reference can carry: the
 /// protocol 2 derivation `SHA256("LXP/v1/account-id\0" || name)` and the
 /// protocol 3 derivation `SHA256("LX:ACCOUNT:v1" || u32be(len) || name)`. A
 /// deployment runs one of them, so an offer binds under either.
@@ -255,12 +261,15 @@ struct LayerXProfile {
     currency: Option<String>,
 }
 
-fn layerx_profile(extra: Option<&Value>) -> Result<Option<LayerXProfile>, X402Error> {
+fn layerx_profile(
+    extra: Option<&Value>,
+    offer_asset: Option<&[u8; 32]>,
+) -> Result<Option<LayerXProfile>, X402Error> {
     let Some(terms) = layerx_block(extra)? else {
         return Ok(None);
     };
     Ok(Some(LayerXProfile {
-        account: account_reference(terms.get("account"))?,
+        account: account_reference(terms.get("account"), offer_asset)?,
         currency: currency_code(terms.get("currency"))?,
     }))
 }
@@ -276,7 +285,10 @@ fn layerx_block(extra: Option<&Value>) -> Result<Option<&Map<String, Value>>, X4
     }
 }
 
-fn account_reference(value: Option<&Value>) -> Result<Option<String>, X402Error> {
+fn account_reference(
+    value: Option<&Value>,
+    offer_asset: Option<&[u8; 32]>,
+) -> Result<Option<String>, X402Error> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -284,10 +296,13 @@ fn account_reference(value: Option<&Value>) -> Result<Option<String>, X402Error>
     if account.len() > MAX_ACCOUNT_REFERENCE_BYTES {
         return Err(X402Error::ProfileMismatch);
     }
-    let identifier = account
+    let rest = account
         .strip_prefix("agent:")
-        .and_then(|rest| rest.strip_suffix(":main"))
         .ok_or(X402Error::ProfileMismatch)?;
+    let identifier = match rest.strip_suffix(":main") {
+        Some(identifier) => identifier,
+        None => asset_account_identifier(rest, offer_asset)?,
+    };
     if identifier.is_empty()
         || identifier.len() > MAX_ACCOUNT_DID_BYTES
         || identifier.starts_with(':')
@@ -301,6 +316,27 @@ fn account_reference(value: Option<&Value>) -> Result<Option<String>, X402Error>
         return Err(X402Error::ProfileMismatch);
     }
     Ok(Some(account.to_owned()))
+}
+
+/// The `<did>` of an `<did>:asset:<asset>` reference body, accepted only when
+/// `<asset>` is exactly the lowercase hex of the offer's asset.
+fn asset_account_identifier<'a>(
+    rest: &'a str,
+    offer_asset: Option<&[u8; 32]>,
+) -> Result<&'a str, X402Error> {
+    let offer_asset = offer_asset.ok_or(X402Error::ProfileMismatch)?;
+    let (identifier, asset) = rest
+        .rsplit_once(":asset:")
+        .ok_or(X402Error::ProfileMismatch)?;
+    if asset.len() != 64
+        || !asset
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        || parse_hex32(asset).ok().as_ref() != Some(offer_asset)
+    {
+        return Err(X402Error::ProfileMismatch);
+    }
+    Ok(identifier)
 }
 
 fn currency_code(value: Option<&Value>) -> Result<Option<String>, X402Error> {

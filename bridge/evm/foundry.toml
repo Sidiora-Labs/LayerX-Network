@@ -1,0 +1,18 @@
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+libs = ["lib"]
+out = "build/artifacts"
+cache_path = "build/cache"
+solc_version = "0.8.30"
+optimizer = true
+optimizer_runs = 100000
+via_ir = true
+bytecode_hash = "none"
+cbor_metadata = false
+offline = true
+remappings = ["@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/"]
+
+[fuzz]
+runs = 512

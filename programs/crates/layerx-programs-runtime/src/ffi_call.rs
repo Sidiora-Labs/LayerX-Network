@@ -10,13 +10,13 @@ use crate::{
     AbiError, AccessSet, ActivityBudgetBinding, AtomicTransferSet, AuthorizationContext,
     BalanceView, BudgetMeterRefusal, BudgetResourceKind, BudgetedAuthorizedExecutionRequest,
     BudgetedV1FailureCause, CandidateAuthorizedExecutionRecord, CapabilitySet, CommittedOracle,
-    CompiledModule, CompositionContext, CompositionRefusal, CompositionRules, DeclaredBudget,
-    EntrypointRefusal, ExecutionFault, Executor, KernelTransferEvidence, KernelTransferPrimitive,
-    MeterRefusal, MeteredUsage, ModuleCacheKey, OracleObservation,
+    CommittedWeb, CompiledModule, CompositionContext, CompositionRefusal, CompositionRules,
+    DeclaredBudget, EntrypointRefusal, ExecutionFault, Executor, KernelTransferEvidence,
+    KernelTransferPrimitive, MeterRefusal, MeteredUsage, ModuleCacheKey, OracleObservation,
     PreparedAuthorizedActivityOutcome, PrincipalId, ProgramEvent, ProgramId, ProgramResolver,
     ReceiptOracle, ReceiptView, ResourceKind, ResponseRefusal, RuntimeArtifactOwnerRefusal,
     Storage, StorageNamespace, TransferCapability, TransferLawError, TransferSource,
-    V2ActivityOutcome,
+    V2ActivityOutcome, WebAnswer,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -395,6 +395,7 @@ const FATAL_INVARIANT: i32 = -1001;
 const ABI_V1_VERSION: u16 = 1;
 const ABI_V2_VERSION: u16 = 2;
 const ABI_V3_VERSION: u16 = 3;
+const ABI_V4_VERSION: u16 = 4;
 const PROTOCOL_LEGACY: u16 = 1;
 const PROTOCOL_OCCUPANCY: u16 = 2;
 const PROTOCOL_STATE_COMMITMENT: u16 = 3;
@@ -552,7 +553,9 @@ const fn protocol_uses_occupancy(protocol_version: u16) -> bool {
 const fn protocol_admits_abi(protocol_version: u16, abi_version: u16) -> bool {
     match abi_version {
         ABI_V1_VERSION => protocol_supported(protocol_version),
-        ABI_V2_VERSION | ABI_V3_VERSION => protocol_uses_occupancy(protocol_version),
+        ABI_V2_VERSION | ABI_V3_VERSION | ABI_V4_VERSION => {
+            protocol_uses_occupancy(protocol_version)
+        }
         _ => false,
     }
 }
@@ -562,6 +565,7 @@ const fn revision_tag(value: AbiRevision) -> u8 {
         AbiRevision::V1 => 1,
         AbiRevision::V2 => 2,
         AbiRevision::V3 => 3,
+        AbiRevision::V4 => 4,
     }
 }
 const fn meter_kind(value: ResourceKind) -> u8 {
@@ -940,6 +944,15 @@ unsafe extern "C" {
         m3: u64,
     ) -> i32;
     fn layerx_programs_call_oracle_view_byte(token: u64, section: u16, offset: u32) -> i32;
+    fn layerx_programs_call_web_view_begin(
+        token: u64,
+        p0: u64,
+        p1: u64,
+        p2: u64,
+        p3: u64,
+        request_id: u64,
+    ) -> i32;
+    fn layerx_programs_call_web_view_byte(token: u64, section: u16, offset: u32) -> i32;
     fn layerx_programs_call_catalog_storage_cell_count(
         token: u64,
         index: u32,
@@ -1548,6 +1561,71 @@ fn export_catalog_storage(
         c_ok(unsafe { layerx_programs_call_catalog_storage_final_apply(token, index, selector) })?;
     }
     Ok(())
+}
+
+#[derive(Debug)]
+struct CCommittedWeb {
+    token: u64,
+}
+
+impl CommittedWeb for CCommittedWeb {
+    fn committed_answer(
+        &self,
+        program: ProgramId,
+        request_id: u64,
+    ) -> Result<Option<WebAnswer>, AbiError> {
+        let program_bytes = program.bytes();
+        let program_words = words(program_bytes);
+        let status = unsafe {
+            layerx_programs_call_web_view_begin(
+                self.token,
+                program_words[0],
+                program_words[1],
+                program_words[2],
+                program_words[3],
+                request_id,
+            )
+        };
+        if status == UNKNOWN_FIELD {
+            return Ok(None);
+        }
+        c_ok(status).map_err(|_| AbiError::InvalidEncoding)?;
+        let read = |section, length| {
+            scalar_bytes(length, |offset| unsafe {
+                layerx_programs_call_web_view_byte(self.token, section, offset)
+            })
+            .map_err(|_| AbiError::InvalidEncoding)
+        };
+        let returned = <[u8; 32]>::try_from(read(0, 32)?).map_err(|_| AbiError::InvalidEncoding)?;
+        if returned != program_bytes {
+            return Err(AbiError::InvalidEncoding);
+        }
+        let header = <[u8; crate::WEB_ANSWER_HEADER_BYTES]>::try_from(read(
+            1,
+            crate::WEB_ANSWER_HEADER_BYTES,
+        )?)
+        .map_err(|_| AbiError::InvalidEncoding)?;
+        let content_digest =
+            <[u8; 32]>::try_from(&header[..32]).map_err(|_| AbiError::InvalidEncoding)?;
+        let full_length = u32::from_be_bytes(
+            <[u8; 4]>::try_from(&header[32..36]).map_err(|_| AbiError::InvalidEncoding)?,
+        );
+        let response_length = usize::try_from(u32::from_be_bytes(
+            <[u8; 4]>::try_from(&header[36..]).map_err(|_| AbiError::InvalidEncoding)?,
+        ))
+        .map_err(|_| AbiError::InvalidEncoding)?;
+        if response_length > crate::WEB_MAX_RESPONSE_BYTES
+            || u32::try_from(response_length).map_err(|_| AbiError::InvalidEncoding)? > full_length
+        {
+            return Err(AbiError::InvalidEncoding);
+        }
+        let response = read(2, response_length)?;
+        Ok(Some(WebAnswer {
+            content_digest,
+            full_length,
+            response,
+        }))
+    }
 }
 
 #[derive(Debug)]
@@ -2602,7 +2680,10 @@ pub extern "C" fn layerx_programs_call_begin(
         }
         if unsafe { layerx_programs_call_sandbox_context(token) } == OK
             && (!protocol_uses_occupancy(protocol_version)
-                || !matches!(abi_version, ABI_V2_VERSION | ABI_V3_VERSION))
+                || !matches!(
+                    abi_version,
+                    ABI_V2_VERSION | ABI_V3_VERSION | ABI_V4_VERSION
+                ))
         {
             return Err(NON_CANONICAL);
         }
@@ -2836,7 +2917,7 @@ pub extern "C" fn layerx_programs_call_begin(
         let root_module = root_module.ok_or(FATAL_INVARIANT)?;
         let grants = match root_module.validated().abi_revision() {
             AbiRevision::V1 => CapabilitySet::decode_canonical(&encoded_capabilities),
-            AbiRevision::V2 | AbiRevision::V3 => {
+            AbiRevision::V2 | AbiRevision::V3 | AbiRevision::V4 => {
                 CapabilitySet::decode_v2_canonical(&encoded_capabilities)
             }
         }
@@ -2879,7 +2960,7 @@ pub extern "C" fn layerx_programs_call_begin(
             .with_payment_account(payment_account);
         let v2_transfer = if matches!(
             root_module.validated().abi_revision(),
-            AbiRevision::V2 | AbiRevision::V3
+            AbiRevision::V2 | AbiRevision::V3 | AbiRevision::V4
         ) {
             Some(
                 TransferCapability::from_root_authorization(
@@ -2920,7 +3001,7 @@ pub extern "C" fn layerx_programs_call_begin(
             .map_err(|_| LENGTH_LIMIT)?;
         if matches!(
             root_module.validated().abi_revision(),
-            AbiRevision::V2 | AbiRevision::V3
+            AbiRevision::V2 | AbiRevision::V3 | AbiRevision::V4
         ) {
             let execution_context = crate::abi::context::ExecutionContext::authenticated(
                 activity_sequence,
@@ -2937,6 +3018,7 @@ pub extern "C" fn layerx_programs_call_begin(
                     BudgetedAuthorizedExecutionRequest::new(request, admitted, payer, binding)
                         .with_access_declaration(access_declaration.clone())
                         .with_committed_oracle(Arc::new(CCommittedOracle { token }))
+                        .with_committed_web(Arc::new(CCommittedWeb { token }))
                         .with_authenticated_execution_context(execution_context),
                 )
                 .map_err(|_| NON_CANONICAL)?;

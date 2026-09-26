@@ -3,7 +3,7 @@ use layerx_programs_runtime::test_support::{
 };
 use layerx_programs_runtime::{
     HostFunction, ValidationRefusal, WasmEngine, ABI_MODULE, ABI_V2_HOST_FUNCTIONS, ABI_V2_MODULE,
-    ABI_V3_HOST_FUNCTIONS, ABI_V3_MODULE, HOST_FUNCTIONS,
+    ABI_V3_HOST_FUNCTIONS, ABI_V3_MODULE, ABI_V4_HOST_FUNCTIONS, ABI_V4_MODULE, HOST_FUNCTIONS,
 };
 
 fn value_types(signature: &str) -> (Vec<u8>, Vec<u8>) {
@@ -61,6 +61,11 @@ fn every_frozen_import_instantiates_against_its_revision_linker() {
             .unwrap_or_else(|error| panic!("v3 inherited {} validation: {error}", function.name))
             .instantiate_for_qualification()
             .unwrap_or_else(|error| panic!("v3 inherited {} linking: {error}", function.name));
+        engine
+            .validate_v4(&wasm)
+            .unwrap_or_else(|error| panic!("v4 inherited {} validation: {error}", function.name))
+            .instantiate_for_qualification()
+            .unwrap_or_else(|error| panic!("v4 inherited {} linking: {error}", function.name));
     }
     for function in ABI_V2_HOST_FUNCTIONS {
         let wasm = importing(ABI_V2_MODULE, function);
@@ -78,6 +83,11 @@ fn every_frozen_import_instantiates_against_its_revision_linker() {
             .unwrap_or_else(|error| panic!("v3 inherited {} validation: {error}", function.name))
             .instantiate_for_qualification()
             .unwrap_or_else(|error| panic!("v3 inherited {} linking: {error}", function.name));
+        engine
+            .validate_v4(&wasm)
+            .unwrap_or_else(|error| panic!("v4 inherited {} validation: {error}", function.name))
+            .instantiate_for_qualification()
+            .unwrap_or_else(|error| panic!("v4 inherited {} linking: {error}", function.name));
     }
     for function in ABI_V3_HOST_FUNCTIONS {
         let wasm = importing(ABI_V3_MODULE, function);
@@ -94,6 +104,31 @@ fn every_frozen_import_instantiates_against_its_revision_linker() {
             .unwrap_or_else(|error| panic!("v3 {} validation: {error}", function.name))
             .instantiate_for_qualification()
             .unwrap_or_else(|error| panic!("v3 {} linking: {error}", function.name));
+        engine
+            .validate_v4(&wasm)
+            .unwrap_or_else(|error| panic!("v4 inherited {} validation: {error}", function.name))
+            .instantiate_for_qualification()
+            .unwrap_or_else(|error| panic!("v4 inherited {} linking: {error}", function.name));
+    }
+    for function in ABI_V4_HOST_FUNCTIONS {
+        let wasm = importing(ABI_V4_MODULE, function);
+        assert!(matches!(
+            engine.validate(&wasm),
+            Err(ValidationRefusal::ForbiddenImport { .. })
+        ));
+        assert!(matches!(
+            engine.validate_v2(&wasm),
+            Err(ValidationRefusal::ForbiddenImport { .. })
+        ));
+        assert!(matches!(
+            engine.validate_v3(&wasm),
+            Err(ValidationRefusal::ForbiddenImport { .. })
+        ));
+        engine
+            .validate_v4(&wasm)
+            .unwrap_or_else(|error| panic!("v4 {} validation: {error}", function.name))
+            .instantiate_for_qualification()
+            .unwrap_or_else(|error| panic!("v4 {} linking: {error}", function.name));
     }
 }
 

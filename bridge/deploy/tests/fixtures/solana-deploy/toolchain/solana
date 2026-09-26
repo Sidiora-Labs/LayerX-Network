@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Replays the Solana CLI for bridge/deploy/tests/deploy-scripts-check.sh from the
+# cluster recorded in ../cluster.json. It answers only the invocations
+# bridge/deploy/deploy-solana-program.sh makes, only for an endpoint on the
+# reserved .invalid domain, and refuses anything else with exit 64, so a change
+# in how the script drives the CLI surfaces as a refusal. Public keys and
+# program-derived addresses are computed by ../solana_keys.py, never recorded.
+set -euo pipefail
+
+FIXTURES=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+CLUSTER="$FIXTURES/cluster.json"
+KEYS="$FIXTURES/solana_keys.py"
+LOADER=BPFLoaderUpgradeab1e11111111111111111111111
+
+refuse() {
+    printf 'replayed solana: %s\n' "$*" >&2
+    exit 64
+}
+
+state=${DEPLOY_CHECK_REPLAY_STATE:-}
+if [ -z "$state" ] || [ ! -d "$state" ]; then
+    refuse "DEPLOY_CHECK_REPLAY_STATE must name this run's replay directory"
+fi
+
+endpoint() {
+    case $1 in
+    https://*.invalid | https://*.invalid/*) ;;
+    *) refuse "$1 is not an endpoint on the reserved .invalid domain" ;;
+    esac
+}
+
+recorded() { jq -r --arg field "$1" '.[$field]' "$CLUSTER"; }
+
+pubkey_of() { python3 "$KEYS" pubkey "$1" || refuse "$1 is not a keypair file"; }
+
+deployed() {
+    [ -r "$state/$1.so" ] || refuse "program $1 was not deployed in this run"
+}
+
+case ${1:-}/${2:-} in
+genesis-hash/--url)
+    [ $# -eq 3 ] || refuse "no recorded answer for: $*"
+    endpoint "$3"
+    recorded genesis_hash
+    ;;
+program/deploy)
+    { [ $# -eq 11 ] || [ $# -eq 13 ]; } || refuse "no recorded answer for: $*"
+    if [ "$4" != --url ] || [ "$6" != --keypair ] || [ "$8" != --upgrade-authority ] \
+        || [ "${10}" != --output ] || [ "${11}" != json ]; then
+        refuse "no recorded answer for: $*"
+    fi
+    endpoint "$5"
+    [ -r "$3" ] || refuse "$3 is not a readable program"
+    publisher=$(pubkey_of "$7")
+    authority=$(pubkey_of "$9")
+    [ "$publisher" = "$authority" ] || refuse "the upgrade authority $authority is not the fee payer $publisher"
+    if [ $# -eq 13 ]; then
+        [ "${12}" = --program-id ] || refuse "no recorded answer for: $*"
+        program=$(pubkey_of "${13}")
+    else
+        program=$(recorded program_id)
+    fi
+    cp "$3" "$state/$program.so"
+    printf '%s\n' "$authority" > "$state/$program.authority"
+    jq -n --arg program "$program" --arg signature "$(recorded deployment_signature)" \
+        '{programId: $program, signature: $signature}'
+    ;;
+program/show)
+    if [ $# -ne 7 ] || [ "$4" != --url ] || [ "$6" != --output ] || [ "$7" != json ]; then
+        refuse "no recorded answer for: $*"
+    fi
+    endpoint "$5"
+    deployed "$3"
+    read -r program_data _ < <(python3 "$KEYS" pda "$LOADER" "pubkey:$3")
+    jq -n --arg program "$3" --arg loader "$LOADER" --arg program_data "$program_data" \
+        --arg authority "$(cat "$state/$3.authority")" \
+        --argjson slot "$(recorded deployment_slot)" \
+        --argjson length "$(wc -c < "$state/$3.so" | tr -d ' ')" \
+        '{programId: $program, owner: $loader, programdataAddress: $program_data,
+          authority: $authority, lastDeploySlot: $slot, dataLen: $length}'
+    ;;
+program/dump)
+    if [ $# -ne 6 ] || [ "$5" != --url ]; then
+        refuse "no recorded answer for: $*"
+    fi
+    endpoint "$6"
+    deployed "$3"
+    # The program data account is larger than the ELF it holds; the tail is zero.
+    { cat "$state/$3.so" && head -c 1024 /dev/zero; } > "$4"
+    printf 'Wrote program to %s\n' "$4"
+    ;;
+slot/--url)
+    if [ $# -ne 5 ] || [ "$4" != --commitment ] || [ "$5" != finalized ]; then
+        refuse "no recorded answer for: $*"
+    fi
+    endpoint "$3"
+    recorded rooted_slot
+    ;;
+find-program-derived-address/*)
+    [ $# -ge 3 ] || refuse "no recorded answer for: $*"
+    read -r address _ < <(python3 "$KEYS" pda "${@:2}") || refuse "no address derives from: $*"
+    printf '%s\n' "$address"
+    ;;
+*)
+    refuse "no recorded answer for: $*"
+    ;;
+esac

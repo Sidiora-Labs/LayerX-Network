@@ -1,0 +1,39 @@
+{
+  "chain": "hyperevm",
+  "kind": "evm",
+  "chain_id": 999,
+  "native": {
+    "symbol": "HYPE",
+    "decimals": 18
+  },
+  "environment": {
+    "rpc_url": "PAXEER_BRIDGE_HYPEREVM_RPC_URL",
+    "deploy_key": "PAXEER_BRIDGE_HYPEREVM_DEPLOY_KEY",
+    "explorer_key": "PAXEER_BRIDGE_HYPEREVM_EXPLORER_KEY"
+  },
+  "owner": "PLACEHOLDER:owner",
+  "attestors": [
+    "PLACEHOLDER:attestor-1",
+    "PLACEHOLDER:attestor-2",
+    "PLACEHOLDER:attestor-3",
+    "PLACEHOLDER:attestor-4",
+    "PLACEHOLDER:attestor-5"
+  ],
+  "threshold": 3,
+  "finality_depth": 60,
+  "big_blocks": {
+    "required": true,
+    "acknowledged": false,
+    "requirement": "The deploying account must be switched to big blocks before the vault deployment will fit: a contract deployment does not fit in a small block on this chain. Set acknowledged to true once the deploying account is switched."
+  },
+  "assets": [
+    {
+      "symbol": "HYPE",
+      "address": "0x0000000000000000000000000000000000000000",
+      "asset_id": "0x0000000000000000000000000000000000000000",
+      "decimals": 18,
+      "per_tx_cap": "20000000000000000000000",
+      "total_cap": "400000000000000000000000"
+    }
+  ]
+}
