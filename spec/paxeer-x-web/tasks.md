@@ -136,6 +136,8 @@
     - Wire the xweb keeper, module and store key into node/app.go in the shape the layerxbridge keeper uses, implement the XWebK accessor in node/precompiles.go, and regenerate precompiles/xweb/setup.go with go generate so it names v6.8, asserting the regeneration produces no diff.
     - Make every xweb state change reachable only at or after the upgrade height, so a node replaying blocks below it produces exactly the state it produces without this feature; apply nothing to a running chain; this includes the precompile's presence in precompiles/setup.go GetCustomPrecompiles, which task 1.6 registered for every binary (observation 1.6.3), so a binary below the upgrade height carries no 0x0000000000000000000000000000000000001019 entry.
     - Add node/upgrades_xweb_test.go asserting the handler is registered under the name in node/tags, the store is added, the defaults are set, the module is paused, the custom precompile set below the upgrade height holds no xweb entry, and the precompile answers only after the upgrade.
+    - Move the latest-tag and LatestUpgrade assertions of node/upgrades_test.go from v6.7 to v6.8 while every assertion about the v6.7 handler itself stays as written, and add XWebStoreKey = \"xweb\" to storage/common/keys/store_keys.go and to MemIAVLStoreKeys so the store the application mounts is named there (observation 2.4.1).
+    - Run scripts/bump_version for v6.8 exactly as the go generate directive runs it and keep everything it writes, including the legacy copies its archive phase produces, so a second run produces no diff; never edit an archived legacy folder by hand.
     - _Requirements: 13.1, 13.2, 13.3, 13.4_
   - [x] 2.5 Write the xweb documentation page
     - Write docs/site/docs/protocol/xweb.md in the shape of docs/site/docs/protocol/sidiora.md: what x-websearch is, the four assets and the price rule, the three paid routes and GET /content/<digest>, the canonical content digest, the contract path with the address 0x0000000000000000000000000000000000001019, request, fulfil, refund and the callback, the attestor majority, the kernel path with web_read, and that the chain change reaches a running chain through the v6.8 upgrade and a governance proposal.
@@ -161,6 +163,7 @@
     - In agent/crates/layerx-agentd/src/tenant.rs add the write:web:* scopes to the scopes Operation::Submit authorises, so a web session no longer needs the class scope write; change no other operation's scopes.
     - In agent/crates/layerx-mcp/src/boundary.rs add a BoundaryRefusal variant for a held spend carrying the hold id, and report it in its own words instead of the malformed-response text.
     - Extend agent/crates/layerx-mcp/tests/daemon_bound.rs and tests/web.rs: a session opened through open_session serves search, fetch and content over the recorded exchange with only the web scopes, a session without the sidecar configuration is refused, and a held spend is reported as held; add the matching layerx-agentd test for the scope table.
+    - Qualify the layerx-agentd half with the library tests of the tenant module this task changes; the crate's remaining library tests need the boundary and native binaries the Makefile's agent-test target builds for them and run under task 2.16 (observation 2.9.1).
     - _Requirements: 9.1, 9.2_
   - [x] 2.10 Settle the metered draw signer and the sidecar's payment configuration
     - Amend spec/402lxp/protocol.md so the metered flow reads as the code and the recorded exchanges already work: the buyer authorises a purpose-bound grant with a fee limit, and the receiver draws against it per request, signing each draw with its receiver key and repeating the challenge's purposeHash in the settlement; remove the sentence that has the buyer author a receive payload the receiver signs (observation 1.4.1), and keep every vector and conformance answer the suite pins unchanged.
@@ -191,6 +194,11 @@
     - Extend docs/site/docs/protocol/xweb.md with a section showing a contract calling an API through XWebApi in a dozen lines, the envelope rule, the selector rule and the two attestation levels, under the page's link and naming rules.
     - Tests: agent/sdk/typescript/test/xweb-api.test.ts and agent/sdk/python/tests/test_xweb_api.py pin the payload bytes and the envelope vectors, and the page builds under mkdocs --strict.
     - _Requirements: 17.5, 17.6_
+  - [ ] 2.16 Run the agent workspace tests with the binaries the workflow builds for them
+    - Build the prerequisites the Makefile declares for agent-test (public-tls-test-prerequisites for the boundary and clock binaries, agent-test-native-prerequisites for the native daemon binaries) and run make agent-test once, exactly as the workflow's test step does.
+    - For every test that fails outside this feature's crates, fix its real cause in code or fixtures, starting with the native terminal evidence test in agent/crates/layerx-agentd/src/protocol_evidence_native_tests.rs, which fails to decode tests/fixtures/custody/daemon-credit-receipt with Decode(MalformedPayload): determine which side drifted from the receipt format the platform writes and correct that side, regenerating the fixture through the tool that produced it when the fixture is stale; never ignore, delete, relax or skip a test.
+    - Close observation 2.9.1 naming the revision at which make agent-test passes.
+    - _Requirements: 9.1_
 
 ## Wave 3 - One Run, Recorded
 
@@ -208,7 +216,7 @@
 {
   "waves": [
     { "id": 1,  "tasks": ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17", "1.18"] },
-    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15"] },
+    { "id": 2,  "tasks": ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11", "2.12", "2.13", "2.14", "2.15", "2.16"] },
     { "id": 3,  "tasks": ["3.1"] }
   ]
 }
