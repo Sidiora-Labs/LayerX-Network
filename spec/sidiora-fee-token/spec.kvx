@@ -472,7 +472,7 @@ verify_cmd = "timeout 20m sh -c 'go test -count=1 ./node/antedecorators/... && g
 symbols = ["GaslessDecorator","NewAnteHandler","PriorityDecorator","ConvertFeeToDenom"]
 touches = ["node/ante.go","node/ante_test.go","node/antedecorators/feedenom.go","node/antedecorators/feedenom_test.go","spec/sidiora-fee-token/spec.kvx","spec/sidiora-fee-token/qualification.kvx"]
 reqs = ["11.1","11.2","11.3","11.4","11.5"]
-revision = "75bd53ffa06943edda86287c74060d4a71818a82"
+revision = "b8f9e1f9f92a13416988108fc5265c770e34d3ce"
 command = "timeout 20m sh -c 'go test -count=1 ./node/antedecorators/... && go test -count=1 -run FeeDenom ./node/'"
 exit_code = 0
 log_path = "/root/lx-lanes/sid-t2-7b/.logs/verify.log"

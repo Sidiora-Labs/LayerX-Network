@@ -406,3 +406,9 @@ command = "timeout 20m sh -c 'go test -count=1 ./modules/evm/ante/...'"; exit_co
 observed = "Req 9.2 forbids an account being locked into a denom that stops being allowed, but under the governed rate a denom absent from the allowed list is the same state as an unavailable rate, so the refusal req 10.2 orders also refuses the precompile call that clears the preference."
 assumption = "Falling through to the base denom for a withdrawn denom was tried and made TestFeeTokenAnte/missing_rate fail on the charge the network coin must refuse, so the refusal stays and only an owner decision - a fee-check exemption for the clearing call or reconciled requirement text - resolves the lockout."
 severity = "blocker"
+
+[observation.2.6.5]
+task = "2.6"; file = "modules/evm/keeper/abci.go"; symbol = "EndBlock"
+observed = "Supplement to observation.2.6.2: task 2.8 routes the fee tokens the fee collector already holds, so the per-transaction coinbase sweep that carries only the base denom and wei still leaves a fee-token reward at that address and nothing downstream collects it."
+assumption = "Extending the sweep is a consensus change outside this task's touches and belongs with the activation work; the routing step and the sweep both stay exactly as written."
+severity = "blocker"
