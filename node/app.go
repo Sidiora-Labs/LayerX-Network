@@ -176,6 +176,9 @@ import (
 	tokenfactorymodule "github.com/sidiora-labs/paxeer-network/modules/tokenfactory"
 	tokenfactorykeeper "github.com/sidiora-labs/paxeer-network/modules/tokenfactory/keeper"
 	tokenfactorytypes "github.com/sidiora-labs/paxeer-network/modules/tokenfactory/types"
+	xwebmodule "github.com/sidiora-labs/paxeer-network/modules/xweb"
+	xwebkeeper "github.com/sidiora-labs/paxeer-network/modules/xweb/keeper"
+	xwebtypes "github.com/sidiora-labs/paxeer-network/modules/xweb/types"
 	"github.com/sidiora-labs/paxeer-network/utils"
 	utilmetrics "github.com/sidiora-labs/paxeer-network/utils/metrics"
 	"github.com/sidiora-labs/paxeer-network/wasmbinding"
@@ -260,6 +263,7 @@ var (
 		layerxexchangemodule.AppModuleBasic{},
 		layerxbridgemodule.AppModuleBasic{},
 		launchpadmodule.AppModuleBasic{},
+		xwebmodule.AppModuleBasic{},
 		// this line is used by starport scaffolding # stargate/app/moduleBasic
 	)
 
@@ -309,6 +313,7 @@ var (
 		layerxexchangetypes.StoreKey,
 		layerxbridgetypes.StoreKey,
 		launchpadtypes.StoreKey,
+		xwebtypes.StoreKey,
 		// this line is used by starport scaffolding # stargate/app/storeKey
 	}
 
@@ -461,6 +466,12 @@ type App struct {
 	LayerXExchangeKeeper *layerxexchangekeeper.Keeper
 	LayerXBridgeKeeper   layerxbridgekeeper.Keeper
 	LaunchpadKeeper      *launchpadkeeper.Keeper
+	XWebKeeper           xwebkeeper.Keeper
+
+	// customPrecompiles is the full custom precompile set of LatestUpgrade;
+	// the EVM keeper serves it without the xweb entry until the xweb module
+	// is live in state.
+	customPrecompiles map[common.Address]putils.VersionedPrecompiles
 
 	BeginBlockKeepers legacyabci.BeginBlockKeepers
 	EndBlockKeepers   legacyabci.EndBlockKeepers
@@ -768,6 +779,7 @@ func New(
 		&app.EvmKeeper, app.TokenFactoryKeeper)
 	app.LaunchpadKeeper = launchpadkeeper.NewKeeper(keys[launchpadtypes.StoreKey], app.BankKeeper,
 		tokenfactorykeeper.NewMsgServerImpl(app.TokenFactoryKeeper), &app.EvmKeeper)
+	app.XWebKeeper = xwebkeeper.NewKeeper(keys[xwebtypes.StoreKey], app.BankKeeper, &app.EvmKeeper)
 
 	bApp.SetPreCommitHandler(app.HandlePreCommit)
 	bApp.SetCloseHandler(app.HandleClose)
@@ -909,8 +921,8 @@ func New(
 	app.IBCKeeper.SetRouter(ibcRouter)
 
 	if enableCustomEVMPrecompiles {
-		customPrecompiles := precompiles.GetCustomPrecompiles(LatestUpgrade, app.GetPrecompileKeepers())
-		app.EvmKeeper.SetCustomPrecompiles(customPrecompiles, LatestUpgrade)
+		app.customPrecompiles = precompiles.GetCustomPrecompiles(LatestUpgrade, app.GetPrecompileKeepers())
+		app.setXWebPrecompile(false)
 	}
 
 	// NOTE: Any module instantiated in the module manager that is later modified
@@ -947,6 +959,7 @@ func New(
 		layerxexchangemodule.NewAppModule(app.LayerXExchangeKeeper),
 		layerxbridgemodule.NewAppModule(app.LayerXBridgeKeeper),
 		launchpadmodule.NewAppModule(app.LaunchpadKeeper),
+		xwebmodule.NewAppModule(app.XWebKeeper),
 		// this line is used by starport scaffolding # stargate/app/appModule
 	)
 
@@ -1024,6 +1037,7 @@ func New(
 		layerxexchangetypes.ModuleName,
 		layerxbridgetypes.ModuleName,
 		launchpadtypes.ModuleName,
+		xwebtypes.ModuleName,
 		// this line is used by starport scaffolding # stargate/app/initGenesis
 	)
 
@@ -1132,6 +1146,7 @@ func New(
 		if err := app.WasmKeeper.InitializePinnedCodes(ctx); err != nil {
 			tmos.Exit(fmt.Sprintf("failed initialize pinned codes %s", err))
 		}
+		app.refreshXWebPrecompile(ctx)
 		return nil
 	}
 
@@ -1292,6 +1307,8 @@ func layerxStoreUpgrades(name string) (storetypes.StoreUpgrades, bool) {
 		return v65StoreUpgrades(), true
 	case "v6.6":
 		return v66StoreUpgrades(), true
+	case xwebUpgrade:
+		return v68StoreUpgrades(), true
 	}
 	return storetypes.StoreUpgrades{}, false
 }
@@ -1338,7 +1355,9 @@ func (app *App) InitChainer(ctx sdk.Context, req abci.RequestInitChain) abci.Res
 		}
 	}
 	app.UpgradeKeeper.SetModuleVersionMap(ctx, app.mm.GetVersionMap())
-	return app.mm.InitGenesis(ctx, app.appCodec, genesisState, app.genesisImportConfig)
+	res := app.mm.InitGenesis(ctx, app.appCodec, genesisState, app.genesisImportConfig)
+	app.refreshXWebPrecompile(ctx)
+	return res
 }
 
 func (app *App) GetOptimisticProcessingInfo() OptimisticProcessingInfo {

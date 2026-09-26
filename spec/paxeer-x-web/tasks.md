@@ -131,7 +131,7 @@
     - Add an x-websearch service to docker/docker-compose.yml beside the node services, and add a build stage to the root Dockerfile that builds x-websearch and copies it into the node image.
     - Write interop/deploy/x-websearch/tests/packaging-check.sh asserting the pinned bases, the non-root user, the unit's user, environment and sandbox directives, the compose entry, the node image's copy of the binary, and that the built loader refuses the configuration example.
     - _Requirements: 12.1, 12.2, 12.3_
-  - [ ] 2.4 Write the v6.8 upgrade plan that wires xweb into the application
+  - [ ] 2.4 Write the v6.8 upgrade plan that wires xweb into the application — **Implemented - qualification pending**
     - Append v6.8 to node/tags in the order the file's parser requires and register its handler in node/upgrades.go beside the v6.7 handler, adding the xweb store key through the upgrade's store loader and initialising the parameters to their documented defaults with an empty attestor set and the module paused.
     - Wire the xweb keeper, module and store key into node/app.go in the shape the layerxbridge keeper uses, implement the XWebK accessor in node/precompiles.go, and regenerate precompiles/xweb/setup.go with go generate so it names v6.8, asserting the regeneration produces no diff.
     - Make every xweb state change reachable only at or after the upgrade height, so a node replaying blocks below it produces exactly the state it produces without this feature; apply nothing to a running chain; this includes the precompile's presence in precompiles/setup.go GetCustomPrecompiles, which task 1.6 registered for every binary (observation 1.6.3), so a binary below the upgrade height carries no 0x0000000000000000000000000000000000001019 entry.

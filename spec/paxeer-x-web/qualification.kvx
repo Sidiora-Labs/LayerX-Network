@@ -271,3 +271,11 @@ symbol = "private_ca_checks_the_actual_server_identity"
 observed = "The layerx-agentd lib half of the verify_cmd fails on three tests outside this task's touches (two TLS tests that need the platform TLS boundary built first, and the native terminal evidence test with Decode(MalformedPayload)), so the layerx-mcp half never runs (.logs/verify.log, exit 101); run on its own it passes 32 of 32 (.logs/verify-mcp.log, exit 0), the new scope-table test passes, and the clippy step stops on pre-existing pedantic lints in layerx-agentd files outside the touches (.logs/build.log)."
 assumption = "Nothing is relaxed; the verify_cmd reruns unchanged once the TLS boundary is built and the native terminal evidence decodes."
 severity = "blocker"
+
+[observation.2.4.1]
+task = "2.4"
+file = "node/upgrades_test.go"
+symbol = "TestSidioraFeeTokenUpgradeIsRegisteredAndRunsTheFeeTokenMigration"
+observed = "With v6.8 appended to node/tags that test still requires v6.7 to be the last tag and LatestUpgrade and fails (.logs/verify.log, exit 1), so go test -run Upgrade ./node/ stops before ./precompiles/xweb/... runs; storage/common/keys/store_keys.go also lacks the xweb store key the application now mounts, which TestKVStoreKeyNamesMatchMemIAVLStoreKeys and the memiavl composite store require, and the archive phase of scripts/bump_version for v6.8 would write legacy copies outside this task."
+assumption = "Neither assertion is changed here; the owner of node/upgrades_test.go moves its latest-tag checks to v6.8 and storage/common/keys/store_keys.go gains XWebStoreKey = \"xweb\" in MemIAVLStoreKeys, after which the verify_cmd reruns unchanged."
+severity = "blocker"
