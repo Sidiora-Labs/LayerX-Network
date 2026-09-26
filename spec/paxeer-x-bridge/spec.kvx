@@ -451,7 +451,11 @@ reqs = ["3.8","11.1","11.2","11.3","11.4","11.5"]
 
 [task.2.5]
 title = "Write the operator runbook and the per-chain pages"
-status = "pending"
+status = "done"
+revision = "d3d370a2cc2a69d309fb85ec3f21adcce3e7c26a"
+command = "timeout 20m sh -c 'bash bridge/deploy/tests/docs-check.sh'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["1.1","1.4"]
 do_1 = "Write bridge/README.md as the operator runbook: what the bridge is in two sentences, then the order of operations - bootstrap the libraries, deploy the chain, verify the source, deploy and initialise the Solana program, generate the proposals, submit them, run the checklist - with the environment variables each step needs by name and what the checklist must report before the bridge is opened."

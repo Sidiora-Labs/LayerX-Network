@@ -107,6 +107,22 @@ observed = "Requirement 14.1 says the workflow SHALL carry no path filter other 
 assumption = "do_1 is the narrower and later instruction and the merge group carries no filter at all because GitHub applies none there, so bridge/deploy/tests/workflow-check.sh asserts the two directory globs as directories and the third filter as the workflow file by name rather than relaxing either check."
 severity = "note"
 
+[observation.2.5.1]
+task = "2.5"
+file = "bridge/deploy/deploy-solana-program.sh"
+symbol = "VAULT_AUTHORITY_SEED"
+observed = "The deploy script derives the vault-authority address and the vault_handle it records from the seed 'vault', while bridge/solana/src/state.rs VAULT_SEED and bridge/ATTESTATION-SOLANA.md use 'vault-authority', so the recorded handle is not the program's custody PDA."
+assumption = "Out of scope for a documentation task; the Solana page tells the operator to derive the handle from the program's seed, and the script needs its seed corrected by the task that owns it."
+severity = "blocker"
+
+[observation.2.5.2]
+task = "2.5"
+file = "modules/layerxbridge/module.go"
+symbol = "RegisterServices"
+observed = "The bridge module registers no Msg service, route or transaction command, so the MsgRegisterChain, MsgSetAttestors and MsgSetCap bodies the proposals generator writes have no in-tree path that executes them."
+assumption = "The runbook states that the holder of the bridge authority submits the bodies through the path that authority executes with, and does not name a command the tree lacks."
+severity = "suspect"
+
 [wave.1]
 revision = "4f2b24deb"
 command = "timeout 20m each: bash bridge/evm/bootstrap-libs.sh && forge test --root bridge/evm -vvv; cargo test --locked --manifest-path bridge/solana/Cargo.toml; go test -count=1 ./bridge/vectors/...; go test -count=1 ./bridge/deploy/chainconfig/... && bash bridge/deploy/tests/deploy-scripts-check.sh; go test -count=1 ./bridge/deploy/proposals/...; bash bridge/deploy/tests/workflow-check.sh"
