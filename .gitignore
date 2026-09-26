@@ -8,6 +8,9 @@
 # and build holds its artifacts and cache. Neither is committed.
 /bridge/evm/lib/
 /bridge/evm/build/
+# The bridge Solana program's cargo build directory. The /target/ rule below is
+# anchored to the repository root and does not reach it.
+/bridge/solana/target/
 *.o
 *.a
 *.so

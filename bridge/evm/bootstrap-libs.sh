@@ -2,7 +2,8 @@
 # Fetches the two pinned Solidity libraries the PaxeerXVault build needs into
 # bridge/evm/lib. Neither library is committed: this script and the bridge
 # workflow are the only ways lib is populated, and both clone the same tags.
-# Running it again with both libraries already at their pinned tag does nothing.
+# Running it again with both libraries already at their pinned tag and unmodified
+# does nothing; a checkout whose contents were edited is replaced.
 set -euo pipefail
 
 FORGE_STD_TAG='v1.9.6'
@@ -20,17 +21,27 @@ checked_out_tag() {
     git -C "$dir" describe --tags --exact-match 2>/dev/null || true
 }
 
+# Succeeds when the checkout at $1 carries the tag's own contents: no modified
+# file, no deleted file and no extra file. A checkout that is at the pinned tag
+# but was edited afterwards is not the pinned dependency, so it is not reused.
+checkout_is_pristine() {
+    local dir="$1"
+    [ -z "$(git -C "$dir" status --porcelain 2>/dev/null)" ]
+}
+
 fetch_library() {
     local name="$1" url="$2" tag="$3" current
     local dest="$lib_dir/$name"
 
     current="$(checked_out_tag "$dest")"
-    if [ "$current" = "$tag" ]; then
+    if [ "$current" = "$tag" ] && checkout_is_pristine "$dest"; then
         printf 'bootstrap-libs: %s already at %s\n' "$name" "$tag"
         return 0
     fi
     if [ -e "$dest" ]; then
-        if [ -n "$current" ]; then
+        if [ "$current" = "$tag" ]; then
+            printf 'bootstrap-libs: %s is at %s but its contents are modified, replacing it\n' "$name" "$tag" >&2
+        elif [ -n "$current" ]; then
             printf 'bootstrap-libs: %s is at %s, replacing it with %s\n' "$name" "$current" "$tag" >&2
         else
             printf 'bootstrap-libs: %s is present but not a checkout of %s, replacing it\n' "$name" "$tag" >&2
