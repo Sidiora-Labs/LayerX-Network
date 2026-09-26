@@ -664,7 +664,11 @@ reqs = ["9.1","9.2"]
 
 [task.2.7]
 title = "Widen the xweb workflow's path filters to every tree its legs exercise"
-status = "pending"
+status = "done"
+revision = "a9171bc99760fe8d1709ace1bba34d3db5cf9db6"
+command = "timeout 20m sh -c 'bash tools/ci/xweb-workflow-check.sh'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["1.11","1.13","1.14","1.15","1.16"]
 do_1 = "Extend the path filters in .github/workflows/xweb-test.yml with every tree observation 1.11.1 names and every path tasks 1.12 to 1.15 and 2.1 to 2.6 touch that one of the workflow's legs exercises, so a change to any of them runs the legs; add no leg and change no command."

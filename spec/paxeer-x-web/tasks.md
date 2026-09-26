@@ -146,7 +146,7 @@
     - Fetch the same page through the three sidecars, assert the digests are identical and the signatures are valid and ascending over the origin-1 preimage, assert the submitter's fulfil calldata decodes against precompiles/xweb/abi.json, and deliver the consumer's callback on anvil from the impersonated precompile address with the attested response and the bounded gas, asserting the consumer's stored result.
     - Record the exchange as interop/deploy/x-websearch/tests/fixtures/dry-run.json, replayable without the nodes, carrying no key material, no endpoint but the loopback ones the run started and no date or hostname; stop with a message naming a missing tool rather than skipping a step.
     - _Requirements: 15.1, 15.2, 15.3_
-  - [ ] 2.7 Widen the xweb workflow's path filters to every tree its legs exercise
+  - [x] 2.7 Widen the xweb workflow's path filters to every tree its legs exercise
     - Extend the path filters in .github/workflows/xweb-test.yml with every tree observation 1.11.1 names and every path tasks 1.12 to 1.15 and 2.1 to 2.6 touch that one of the workflow's legs exercises, so a change to any of them runs the legs; add no leg and change no command.
     - Extend tools/ci/xweb-workflow-check.sh to assert the widened list, keeping the rule that every filter names a path that exists or a path a task of this feature adds.
     - _Requirements: 16.1, 16.2_

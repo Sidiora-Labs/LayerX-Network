@@ -37,6 +37,7 @@ symbol = "task.1.11.do_1"
 observed = "The do_1 path filters omit trees whose changes the legs exercise - Makefile, tests/modules, tests/sequencer, tests/network, tests/test_programs_web_read.c, tests/test_web_program_path.c, tests/fixtures/web, src/modules/programs/call.c, include/layerx/programs.h, programs/sdk/rust, agent/sdk/typescript/test, agent/sdk/python/tests and modules/layerxbridge - so a change confined to them does not start the workflow."
 assumption = "The workflow carries exactly the do_1 list and tools/ci/xweb-workflow-check.sh asserts that list; widening it is a spec change for the feature owner, not this task."
 severity = "suspect"
+closed = "Task 2.7 at a9171bc99760fe8d1709ace1bba34d3db5cf9db6 added every named tree to both path filter lists and made tools/ci/xweb-workflow-check.sh assert the widened list, which passes."
 
 [observation.1.7.1]
 task = "1.7"

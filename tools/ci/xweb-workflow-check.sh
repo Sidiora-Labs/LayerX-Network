@@ -2,8 +2,8 @@
 # Offline check of .github/workflows/xweb-test.yml: the workflow triggers on
 # pull requests and pushes to main; it carries one concurrency group per ref with
 # cancel-in-progress; its path filters are exactly the trees the paxeer-x-web
-# feature touches, each naming a path this repository holds or a path a task of
-# spec/paxeer-x-web/spec.kvx adds; its five jobs are the five legs, each named
+# feature touches and the trees its legs exercise, each naming a path this
+# repository holds or a path a task of spec/paxeer-x-web/spec.kvx adds; its five jobs are the five legs, each named
 # for the tools it runs, and together they run exactly the commands of the
 # feature's gate task verify_cmd, each from the repository root with a tool the
 # same job installs first at a version this repository already pins; every
@@ -54,19 +54,38 @@ GATE_TASK = ("3", "1")
 FILTERS = [
     "interop/crates/x-websearch/**",
     "interop/deploy/x-websearch/**",
+    "interop/crates/layerx-x402/src/**",
+    "interop/Cargo.toml",
+    "interop/Cargo.lock",
     "modules/xweb/**",
+    "modules/layerxbridge/**",
     "precompiles/xweb/**",
     "contracts/src/precompiles/IXWeb.sol",
     "contracts/src/xweb/**",
     "contracts/test/XWebConsumer.t.sol",
+    "contracts/test/CW1155ERC1155PointerTest.t.sol",
+    "contracts/test/CW721ERC721PointerTest.t.sol",
+    "Makefile",
     "include/layerx/lx_web.h",
+    "include/layerx/lx_batch.h",
+    "include/layerx/programs.h",
     "src/modules/web/**",
+    "src/modules/programs/call.c",
     "src/network/lx_web_adapter.c",
     "src/sequencer/lx_web_root.c",
+    "tests/modules/**",
+    "tests/sequencer/**",
+    "tests/network/**",
+    "tests/fixtures/web/**",
+    "tests/test_programs_web_read.c",
+    "tests/test_web_program_path.c",
     "programs/crates/layerx-programs-runtime/**",
+    "programs/sdk/rust/**",
     "agent/sdk/typescript/src/web-search.ts",
+    "agent/sdk/typescript/test/**",
     "agent/sdk/python/layerx_sdk/web_search.py",
-    "agent/crates/layerx-mcp/**",
+    "agent/sdk/python/tests/**",
+    "agent/crates/**",
     "tools/ci/xweb-forge-libs.sh",
     WORKFLOW_PATH,
 ]
@@ -886,6 +905,21 @@ MUTATIONS = {
         "      - 'modules/xweb-absent/**'\n",
         2,
     ),
+    "narrowed-crates": (
+        "      - 'agent/crates/**'\n",
+        "      - 'agent/crates/layerx-mcp/**'\n",
+        2,
+    ),
+    "dropped-kernel-tree": (
+        "      - 'tests/sequencer/**'\n",
+        "",
+        2,
+    ),
+    "undeclared-file": (
+        "      - 'tests/test_web_program_path.c'\n",
+        "      - 'tests/test_web_program_absent.c'\n",
+        2,
+    ),
     "dropped-command": (
         "\n      - name: Run go test for modules/xweb and precompiles/xweb\n"
         "        run: go test -count=1 ./modules/xweb/... ./precompiles/xweb/...\n",
@@ -972,6 +1006,9 @@ for entry in \
     "shared-group|one group per ref" \
     "extra-filter|docs/**" \
     "missing-directory|modules/xweb-absent/**" \
+    "narrowed-crates|agent/crates/layerx-mcp/**" \
+    "dropped-kernel-tree|path filters are" \
+    "undeclared-file|tests/test_web_program_absent.c names no file" \
     "dropped-command|go test" \
     "unpinned-action|actions/checkout@v4" \
     "renamed-job|module-precompile" \
