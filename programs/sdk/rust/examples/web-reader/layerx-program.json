@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "abi_version": 4,
+  "language": "rust",
+  "name": "reference-web-reader",
+  "sdk": "../..",
+  "build": {
+    "command": "cargo",
+    "args": ["build", "--release", "--target", "wasm32-unknown-unknown", "--locked"],
+    "artifact": "target/wasm32-unknown-unknown/release/layerx_reference_web_reader.wasm"
+  },
+  "entry": {"call": "layerx_call", "reserve": "layerx_reserve", "interface": "interface.kvx"},
+  "capabilities": ["emit_event", "transfer_402", "web_read"]
+}

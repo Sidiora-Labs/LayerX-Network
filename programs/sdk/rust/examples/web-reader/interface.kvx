@@ -1,0 +1,21 @@
+[interface]
+schema = 1
+name = "layerx.reference.web-reader"
+version = 1
+abi = 4
+calldata = "version:u8 || operation:u8 || operation_payload"
+response = "CallResult"
+
+[entry.request]
+discriminator = 1
+payload = "request_id:u64be || kind:u8 || fee_asset:bytes32 || fee_account:bytes32 || fee:u128be || request_payload"
+law = "the invoking principal pays the fee into the web fee account for the asset through ordinary 402LXP and the program emits the request record under PAXEERX_WEB_REQUEST_V1; the kernel records the request pending only when both happen in the same call"
+
+[entry.read]
+discriminator = 2
+payload = "request_id:u64be || content_digest:bytes32 || full_length:u32be || response"
+law = "web_read returns the answer attestation intake committed for this program's request; the call refuses unless it is present and equal to the expected digest, full length and response"
+
+[event.request]
+topic = "PAXEERX_WEB_REQUEST_V1"
+data = "request_id:u64be || kind:u8 || payload_length:u32be || request_payload"

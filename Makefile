@@ -3451,6 +3451,19 @@ $(BUILD_DIR)/tests/test_programs_web_read: tests/test_programs_web_read.c \
 .PHONY: test-programs-web-read
 test-programs-web-read: $(BUILD_DIR)/tests/test_programs_web_read
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_programs_web_read
+
+$(BUILD_DIR)/tests/test_web_program_path: tests/test_web_program_path.c \
+		tests/programs/test_call_activity.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-web-program-path
+test-web-program-path: $(BUILD_DIR)/tests/test_web_program_path programs-reference-web-reader
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_web_program_path \
+		$(abspath $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),programs/sdk/rust/examples/web-reader/target)/wasm32-unknown-unknown/release/layerx_reference_web_reader.wasm)
 	sh tools/lx_oracle_adapter_isolation.sh
 
 .PHONY: programs-native-lifecycle-fixtures programs-check-native-lifecycle-fixtures
@@ -3597,6 +3610,10 @@ programs-sdk-c:
 .PHONY: programs-reference-escrow
 programs-reference-escrow:
 	sh programs/sdk/rust/examples/escrow/build.sh
+
+.PHONY: programs-reference-web-reader
+programs-reference-web-reader:
+	sh programs/sdk/rust/examples/web-reader/build.sh
 
 programs-sdk-rust:
 	npm --prefix programs/sdk/rust ci --ignore-scripts --no-audit --no-fund

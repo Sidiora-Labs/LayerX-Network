@@ -2,6 +2,7 @@
 #define LAYERX_LX_BATCH_H
 
 #include "layerx/lx_oracle.h"
+#include "layerx/lx_web.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -22,6 +23,7 @@ typedef struct lx_batch_header {
     uint8_t event_merkle_root[32];
     uint8_t data_availability_root[32];
     uint8_t oracle_root[32];
+    uint8_t web_root[32];
     uint64_t timestamp;
     uint8_t sequencer_id[32];
 } lx_batch_header;
@@ -39,6 +41,9 @@ lxp_result lx_oracle_root_compute(const lx_oracle_store *store,
 lxp_result lx_batch_header_set_oracle_root(lx_batch_header *header,
                                            const lx_oracle_store *store,
                                            lxp_arena *arena);
+lxp_result lx_batch_header_set_web_root(lx_batch_header *header,
+                                        const lx_web_store *store,
+                                        lxp_arena *arena);
 lxp_result lx_oracle_availability_bundle_build(
     const lx_oracle_store *store, lx_oracle_availability_bundle *bundle);
 lxp_result lx_oracle_root_from_availability(

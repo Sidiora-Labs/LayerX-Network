@@ -1,0 +1,45 @@
+{
+  "endpoints": {
+    "gateway": {
+      "*": [
+        {
+          "method": "lx_getProgramEvents",
+          "params": [
+            {
+              "topic": "504158454552585f5745425f524551554553545f5631",
+              "from_sequence": 0,
+              "limit": 256
+            }
+          ],
+          "result": {
+            "events": [
+              {
+                "sequence": 3,
+                "program_id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+                "topic": "504158454552585f5745425f524551554553545f5631",
+                "data": "0102030405060708020000000e706178656572206e6574776f726b"
+              }
+            ],
+            "next_sequence": 4
+          }
+        },
+        {
+          "method": "lx_getSequence",
+          "params": [
+            "did:key:web-attestor-one",
+            "identity"
+          ],
+          "result": {
+            "next_sequence": "7"
+          }
+        },
+        {
+          "method": "lx_sendActivity",
+          "result": {
+            "state": "executed"
+          }
+        }
+      ]
+    }
+  }
+}

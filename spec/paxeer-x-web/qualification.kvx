@@ -297,3 +297,51 @@ symbol = "ContentKind"
 observed = "ContentKind knows only fetch and search and ContentStore::put refuses any other kind byte, so an api answer's kind 3 canonical bytes are computed and signed in api.rs but not stored, and GET /content/<digest> cannot serve an api answer."
 assumption = "Api answers stay out of the content store until canonical.rs, outside this task's touches, learns kind 3."
 severity = "note"
+
+[observation.2.2.1]
+task = "2.2"
+file = "interop/crates/x-websearch/tests/kernel.rs"
+symbol = "the_observation_activity_equals_the_kernel_adapter_fixture"
+observed = "make test-web-program-path passes, but in the kernel test the signers recovered from the fixture's C signatures are not the addresses of the three test attestor keys, so the registered-signer assertion fails (.logs/verify.log, exit 101) after the two repair cycles were spent."
+assumption = "The test's attestor key derivation is aligned with the keys that signed the C intake fixture and the verify_cmd reruns unchanged."
+severity = "blocker"
+
+[observation.2.2.2]
+task = "2.2"
+file = "src/protocol/lxp_module_ctx.c"
+symbol = "lxp_ctx_account_stage_module_value"
+observed = "Module value staging requires an open journal, but lxp_kernel_prepare_activity runs a program call on a snapshot without opening one, so the web fee account cannot be created by the first paying call and tests/test_web_program_path.c provisions it at genesis."
+assumption = "The fee account is provisioned at genesis until the prepare pass supports module value staging."
+severity = "suspect"
+
+[observation.2.2.3]
+task = "2.2"
+file = "src/protocol/lxp_kernel.c"
+symbol = "lxp_kernel_dispatch"
+observed = "Kernel dispatch accepts module ids up to 10 while the web module is 11, so the web observation and attestor-set activities cannot be routed through dispatch beside the oracle's from inside this task's touches."
+assumption = "The dispatch bound is raised by the kernel's owner, after which the web activities route through it."
+severity = "blocker"
+
+[observation.2.2.4]
+task = "2.2"
+file = "interop/crates/x-websearch/src/kernel.rs"
+symbol = "KernelWatcher::poll"
+observed = "The gateway has no program-event method, so the watcher calls lx_getProgramEvents with a topic, a start sequence and a limit and expects events with sequence, program_id, topic and data."
+assumption = "The gateway gains that method in this shape; the recorded exchanges under tests/fixtures/kernel pin it."
+severity = "suspect"
+
+[observation.2.2.5]
+task = "2.2"
+file = "interop/crates/x-websearch/src/main.rs"
+symbol = "KernelRelay"
+observed = "KernelRelay is not wired into main.rs or server.rs, which are outside the touches, and SignatureExchange keys requests by the u64 request id alone, so ids from different programs share a slot."
+assumption = "The binary wiring and a program-scoped exchange key are a follow-up owned by the sidecar."
+severity = "suspect"
+
+[observation.2.2.6]
+task = "2.2"
+file = "programs/sdk/rust/lint/src/lib.rs"
+symbol = "layerx-program-lint"
+observed = "The program lint does not know ABI v4, which web_read needs, so the web-reader build cannot pass through the lint step the escrow reference uses."
+assumption = "The lint gains ABI v4 from its owner, after which the web-reader build adds the lint step."
+severity = "suspect"
