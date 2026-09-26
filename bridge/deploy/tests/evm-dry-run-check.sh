@@ -25,8 +25,11 @@
 #   by byte from bridge/evm/ATTESTATION.md and asserted equal to the vault's own
 #   digest; a second release of the same Paxeer burn is refused;
 #   opens the chain on a Paxeer side made of the real layerxbridge keeper and
-#   precompile, which executes the governance bodies bridge/deploy/proposals
-#   generates for the deployment and answers the precompile's views; and runs
+#   precompile, which reads every governance body bridge/deploy/proposals
+#   generates for the deployment through that package's DecodeBody under its
+#   type URL, executes it and answers the precompile's views, after proving the
+#   decoder refuses a body under a wrong type URL and a body with an unknown
+#   field, each by name; and runs
 #   bridge/deploy/checklist.sh against both, asserting every check passes with
 #   the native coin checked first.
 #
@@ -559,7 +562,6 @@ cat > "$GO_PACKAGE/paxeerside_test.go" << 'GO'
 package paxeerside
 
 import (
-	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -575,23 +577,90 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/sidiora-labs/paxeer-network/bridge/deploy/proposals"
 	bridgetestutil "github.com/sidiora-labs/paxeer-network/modules/layerxbridge/testutil"
 	"github.com/sidiora-labs/paxeer-network/modules/layerxbridge/types"
 	app "github.com/sidiora-labs/paxeer-network/node"
 	"github.com/sidiora-labs/paxeer-network/precompiles/layerxbridge"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 )
 
-func decode(t *testing.T, path string, into interface{}) {
+// decode reads one generated body through the generator's own decoder, which
+// resolves its type URL and refuses a field the message does not define.
+func decode[M any](t *testing.T, path string) M {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("%s: %v", path, err)
 	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(into); err != nil {
+	msg, err := proposals.DecodeBody(raw)
+	if err != nil {
 		t.Fatalf("%s: %v", path, err)
 	}
+	typed, ok := any(msg).(*M)
+	if !ok {
+		t.Fatalf("%s decoded into %T, want %T", path, msg, (*M)(nil))
+	}
+	return *typed
+}
+
+// refused asserts the generator's decoder refuses a body and that its refusal
+// names what is wrong with it.
+func refused(t *testing.T, label string, body []byte, name string) {
+	t.Helper()
+	_, err := proposals.DecodeBody(body)
+	if err == nil {
+		t.Fatalf("%s was decoded\n%s", label, body)
+	}
+	if !strings.Contains(err.Error(), name) {
+		t.Fatalf("%s was refused without naming %s: %v", label, name, err)
+	}
+	fmt.Printf("paxeer side: refused %s by name: %v\n", label, err)
+}
+
+// assertRefusals takes the generated registration body and proves the decoder
+// refuses it under a type URL the module does not define and with a field the
+// message does not define, each refusal naming the offending value.
+func assertRefusals(t *testing.T, path string, register *types.MsgRegisterChain) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%s: %v", path, err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("%s: %v", path, err)
+	}
+	var typeURL string
+	if err := json.Unmarshal(fields["@type"], &typeURL); err != nil {
+		t.Fatalf("%s carries no type URL: %v", path, err)
+	}
+	if want := sdk.MsgTypeURL(register); typeURL != want {
+		t.Fatalf("%s carries the type URL %q, want %q", path, typeURL, want)
+	}
+	reencode := func(fields map[string]json.RawMessage) []byte {
+		body, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+
+	wrongURL := typeURL + "Unregistered"
+	wrong := make(map[string]json.RawMessage, len(fields))
+	for key, value := range fields {
+		wrong[key] = value
+	}
+	wrong["@type"], _ = json.Marshal(wrongURL)
+	refused(t, "a body under a wrong type URL", reencode(wrong), wrongURL)
+
+	const unknownField = "paxeer_side_unknown_field"
+	unknown := make(map[string]json.RawMessage, len(fields)+1)
+	for key, value := range fields {
+		unknown[key] = value
+	}
+	unknown[unknownField] = json.RawMessage(`"1"`)
+	refused(t, "a body with an unknown field", reencode(unknown), unknownField)
 }
 
 func TestPaxeerSide(t *testing.T) {
@@ -603,13 +672,13 @@ func TestPaxeerSide(t *testing.T) {
 	k, ctx := bridgetestutil.NewKeeper(testApp, testApp.GetContextForDeliverTx([]byte{}))
 	k.InitGenesis(ctx, *types.DefaultGenesis())
 
-	var register types.MsgRegisterChain
-	decode(t, filepath.Join(bodies, "01-register-chain.json"), &register)
+	registerPath := filepath.Join(bodies, "01-register-chain.json")
+	register := decode[types.MsgRegisterChain](t, registerPath)
+	assertRefusals(t, registerPath, &register)
 	if err := k.RegisterChain(ctx, register); err != nil {
 		t.Fatalf("01-register-chain.json: %v", err)
 	}
-	var attestors types.MsgSetAttestors
-	decode(t, filepath.Join(bodies, "02-set-attestors.json"), &attestors)
+	attestors := decode[types.MsgSetAttestors](t, filepath.Join(bodies, "02-set-attestors.json"))
 	if err := k.SetAttestors(ctx, attestors); err != nil {
 		t.Fatalf("02-set-attestors.json: %v", err)
 	}
@@ -619,8 +688,7 @@ func TestPaxeerSide(t *testing.T) {
 	}
 	sort.Strings(caps)
 	for _, path := range caps {
-		var capBody types.MsgSetCap
-		decode(t, path, &capBody)
+		capBody := decode[types.MsgSetCap](t, path)
 		if err := k.SetCap(ctx, capBody); err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}
@@ -713,6 +781,13 @@ PAXEER_PID=$!
 PIDS+=("$PAXEER_PID")
 wait_for_file "$WORK/paxeer.port" "$PAXEER_PID" "the Paxeer side" "$WORK/paxeer.log"
 PAXEER_URL="http://127.0.0.1:$(cat "$WORK/paxeer.port")"
+for refusal in 'a body under a wrong type URL' 'a body with an unknown field'; do
+    grep -qF "paxeer side: refused $refusal by name: " "$WORK/paxeer.log" || {
+        sed -e 's/^/    /' "$WORK/paxeer.log" >&2
+        fail "the Paxeer side did not refuse $refusal by name"
+    }
+    printf 'evm-dry-run-check: the proposal decoder refuses %s by name\n' "$refusal"
+done
 
 # Every read from here on passes through the recording proxy.
 jq -n --arg chain "$CHAIN" --arg anvil "$ANVIL_URL" --arg paxeer "$PAXEER_URL" \

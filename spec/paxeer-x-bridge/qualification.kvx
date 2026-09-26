@@ -270,6 +270,7 @@ symbol = "TestPaxeerSide"
 observed = "The Solana dry run's Paxeer side refused 01-register-chain.json with 'unknown field \"@type\"' because the generator now writes each body under its type URL, and it now reads the bodies through proposals.DecodeBody; the EVM dry run's Paxeer side still decodes them with a plain JSON decoder that disallows unknown fields."
 assumption = "Not run here; the EVM dry run is expected to stop the same way until it reads the bodies through proposals.DecodeBody."
 severity = "suspect"
+closed = "Task 2.15 on c165961b77317cc89a9c5b3025fddb6d8ada372a makes the EVM dry run read every generated body through proposals.DecodeBody, asserts a wrong type URL and an unknown field are refused by name, and re-records its fixture; the record run and the replay both pass."
 
 [observation.2.17.1]
 task = "2.17"

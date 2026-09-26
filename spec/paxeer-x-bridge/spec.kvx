@@ -654,7 +654,11 @@ reqs = ["9.1","12.1","12.5"]
 
 [task.2.15]
 title = "Read the generated bodies through DecodeBody in the EVM dry run"
-status = "pending"
+status = "done"
+revision = "c165961b77317cc89a9c5b3025fddb6d8ada372a"
+command = "timeout 20m sh -c 'bash bridge/deploy/tests/evm-dry-run-check.sh --record && bash bridge/deploy/tests/evm-dry-run-check.sh'"
+exit_code = 0
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.6","2.9"]
 do_1 = "Make the Paxeer side of bridge/deploy/tests/evm-dry-run-check.sh read every generated body through bridge/deploy/proposals DecodeBody, as the Solana dry run does, so bodies written under their type URL apply to the real keeper (observation 2.7.3), and assert one body with a wrong type URL and one with an unknown field are refused by name."

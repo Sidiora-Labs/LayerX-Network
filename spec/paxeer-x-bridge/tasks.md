@@ -150,7 +150,7 @@
     - Test it: modules/layerxbridge/client/cli/tx_test.go parses the generator's committed testdata proposals into MsgSubmitProposal and asserts the content equals what proposals.go emits and that a malformed file, an unknown field and a missing deposit are refused; node/gov_bridge_test.go asserts the handler is mounted and that the message it builds executes through the stored route.
     - Update section 6 of bridge/README.md to show the command with the generated file as its argument, remove the sentence that no command submits the proposals, and make bridge/deploy/tests/docs-check.sh assert the command and its file argument and fail on the removed sentence.
     - _Requirements: 9.1, 12.1, 12.5_
-  - [ ] 2.15 Read the generated bodies through DecodeBody in the EVM dry run
+  - [x] 2.15 Read the generated bodies through DecodeBody in the EVM dry run
     - Make the Paxeer side of bridge/deploy/tests/evm-dry-run-check.sh read every generated body through bridge/deploy/proposals DecodeBody, as the Solana dry run does, so bodies written under their type URL apply to the real keeper (observation 2.7.3), and assert one body with a wrong type URL and one with an unknown field are refused by name.
     - Re-record bridge/deploy/tests/fixtures/evm_dry_run.json once through --record on this revision and keep the replay passing without a node.
     - _Requirements: 13.1, 13.5_
