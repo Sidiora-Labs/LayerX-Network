@@ -872,11 +872,86 @@ symbols = ["ContentKind::Api"]
 touches = ["interop/crates/x-websearch/src/canonical.rs","interop/crates/x-websearch/src/content.rs","interop/crates/x-websearch/src/api.rs","interop/crates/x-websearch/src/attest.rs","interop/crates/x-websearch/tests/api.rs","interop/crates/x-websearch/tests/attest.rs","interop/crates/x-websearch/tests/canonical.rs","interop/crates/x-websearch/tests/content.rs"]
 reqs = ["17.2","17.3","17.6"]
 
+[task.2.18]
+title = "Register the web module with the kernel and route its activities through dispatch"
+status = "pending"
+wave = 2
+requires = ["2.2"]
+do_1 = "In include/layerx/lxp_module.h add LXP_MODULE_WEB = 11 and raise LXP_MODULE_RESERVED_COUNT to 11, and follow every bound and ordered table that uses it in src/protocol/lxp_genesis.c and src/protocol/lxp_handover.c, so a genesis manifest, a handover and a registration may name module 11 while module 12 stays refused."
+do_2 = "Register the web module's lxp_module_registration, carrying LX_WEB_OBSERVATION_ACTIVITY and LX_WEB_ATTESTOR_SET_ACTIVITY, where the kernel's module registrations are assembled beside the programs module's, so lxp_kernel_module_for_activity resolves both and lxp_kernel_dispatch runs the observation intake of src/modules/web/lx_web_intake.c and the attestor-set handler through the module context, with the web root of the committed observations bound into the batch header."
+do_3 = "Extend tests/protocol/lxp_test_dispatch.c so both web activities resolve and dispatch and an activity of module 12 is still unknown, extend tests/protocol/lxp_test_kernel.c for the raised bound in genesis and handover, and change tests/test_web_program_path.c to deliver the observation activity through kernel dispatch rather than by calling intake directly, keeping every existing assertion."
+do_4 = "Close observations 1.7.1 and 2.2.3 naming the revision."
+verify_cmd = "timeout 20m sh -c 'make test-dispatch test-kernel && make test-web-program-path'"
+symbols = ["LXP_MODULE_WEB"]
+touches = ["include/layerx/lxp_module.h","src/protocol/lxp_genesis.c","src/protocol/lxp_handover.c","src/protocol/lxp_kernel.c","src/modules/web","tests/protocol/lxp_test_dispatch.c","tests/protocol/lxp_test_kernel.c","tests/test_web_program_path.c","Makefile"]
+reqs = ["11.1","11.3"]
+
+[task.2.19]
+title = "Align the kernel test's attestor keys with the intake fixture's signers and qualify the program request path"
+status = "pending"
+wave = 2
+requires = ["2.2"]
+do_1 = "Make the three attestor keys interop/crates/x-websearch/tests/kernel.rs derives the keys that signed tests/fixtures/web/observation-activity.hex, deriving them from the same seeds tests/test_web_program_path.c uses for its attestors; the registered-signer assertion stays exactly as written and the C test and the fixture are not changed."
+do_2 = "Run task 2.2's verify_cmd once on the result; on exit 0 record task 2.2 done with that revision, command, exit code and log, and close observation 2.2.1 naming the revision."
+verify_cmd = "timeout 20m sh -c 'make test-web-program-path && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test kernel'"
+symbols = ["the_observation_activity_equals_the_kernel_adapter_fixture"]
+touches = ["interop/crates/x-websearch/tests/kernel.rs","interop/crates/x-websearch/tests/fixtures/kernel"]
+reqs = ["11.4"]
+
+[task.2.20]
+title = "Wire the kernel relay into the sidecar binary and scope the signature exchange by program"
+status = "pending"
+wave = 2
+requires = ["2.19"]
+do_1 = "In interop/crates/x-websearch/src/config.rs add the kernel relay settings, the gateway endpoint, the poll interval and the program topics to watch, validated the way the existing fields are; in src/main.rs start KernelRelay beside the attest loop when they are set and stop it on the same shutdown signal; in src/server.rs expose the relay's peer signature exchange beside the existing peer endpoint."
+do_2 = "Key SignatureExchange by program id and request id together so two programs' request ids never share a slot, carrying the program id through the exchange messages; re-record tests/fixtures/kernel through the crate's own recorder only if the wire shape changes."
+do_3 = "Extend tests/kernel.rs for the scoped exchange, two programs with the same request id both answered, tests/config.rs for the new fields and tests/binary.rs for the relay starting and stopping with the binary under a configuration that names it; close observation 2.2.5 naming the revision."
+verify_cmd = "timeout 20m sh -c 'cargo clippy --locked --manifest-path interop/Cargo.toml -p x-websearch --all-targets --no-deps -- -D warnings && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test kernel --test binary --test config'"
+symbols = ["KernelRelay"]
+touches = ["interop/crates/x-websearch/src/config.rs","interop/crates/x-websearch/src/main.rs","interop/crates/x-websearch/src/server.rs","interop/crates/x-websearch/src/kernel.rs","interop/crates/x-websearch/tests/kernel.rs","interop/crates/x-websearch/tests/binary.rs","interop/crates/x-websearch/tests/config.rs","interop/crates/x-websearch/tests/fixtures/kernel"]
+reqs = ["11.3"]
+
+[task.2.21]
+title = "Serve program events through the gateway for the sidecar's kernel watcher"
+status = "pending"
+wave = 2
+requires = ["2.2"]
+do_1 = "In platform/hosted/gateway/src/rpc.rs add the method lx_getProgramEvents taking a topic, a start sequence and a limit and answering events that carry sequence, program_id, topic and data, exactly the shape interop/crates/x-websearch/tests/fixtures/kernel/watch.json pins, backed by the program event store of src/modules/programs/event.c through the upstream read the gateway proxies; where the upstream surface has no topic-filtered, sequence-cursored program event read, add one beside the existing /v1/programs reads in the same service with its own test."
+do_2 = "Cover the method in the gateway crate's tests against a recorded upstream exchange, asserting the request and response shapes of the sidecar fixture, the cursor advancing and the limit honoured, and extend platform/hosted/gateway/tests/local/events.rs so the local qualification run emits events from a deployed program and reads them back through the method; close observation 2.2.4 naming the revision."
+verify_cmd = "timeout 20m sh -c 'cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway'"
+symbols = ["lx_getProgramEvents"]
+touches = ["platform/hosted/gateway/src/rpc.rs","platform/hosted/gateway/src/public_reads.rs","platform/hosted/gateway/tests/fixtures","platform/hosted/gateway/tests/local/events.rs"]
+reqs = ["11.3"]
+
+[task.2.22]
+title = "Teach the program lint ABI v4 and lint the web-reader build"
+status = "pending"
+wave = 2
+requires = ["2.2"]
+do_1 = "In programs/sdk/rust/lint/src/lib.rs make lint_artifact_for_abi and lint_project_for_abi accept layerx_programs_runtime::ABI_V3_VERSION and ABI_V4_VERSION with the host function set each version exports, refusing an import outside that set exactly as the v2 path does, and keep the unsupported-version refusal for anything above v4."
+do_2 = "Add the lint step to programs/sdk/rust/examples/web-reader/build.sh in the shape of the escrow example's build.sh, and cover the v3 and v4 paths in the lint crate's tests with the web-reader artifact and a v4 artifact importing a host function outside the set; close observation 2.2.6 naming the revision."
+verify_cmd = "timeout 20m sh -c 'cd programs && cargo test --locked -p layerx-program-lint && cd .. && make programs-reference-web-reader'"
+symbols = ["lint_artifact_for_abi"]
+touches = ["programs/sdk/rust/lint/src/lib.rs","programs/sdk/rust/lint/src/main.rs","programs/sdk/rust/lint/tests","programs/sdk/rust/examples/web-reader/build.sh"]
+reqs = ["11.2"]
+
+[task.2.23]
+title = "Let the prepare pass stage module values so a program's first paying call creates the web fee account"
+status = "pending"
+wave = 2
+requires = ["2.18"]
+do_1 = "In src/protocol/lxp_kernel.c make lxp_kernel_prepare_activity open a journal over its snapshot for the duration of a program call, so lxp_ctx_account_stage_module_value in src/protocol/lxp_module_ctx.c stages the way it does on the commit path, and discard that journal with the snapshot; the prepare pass changes no committed state."
+do_2 = "Extend tests/protocol/lxp_test_module_ctx.c and tests/protocol/lxp_test_kernel.c for staging under prepare and its discard, and extend tests/test_web_program_path.c with a run whose genesis carries no web fee account and whose first paying call creates it, keeping the genesis-provisioned run as it is; close observation 2.2.2 naming the revision."
+verify_cmd = "timeout 20m sh -c 'make test-module-ctx test-kernel && make test-web-program-path'"
+symbols = ["lxp_kernel_prepare_activity"]
+touches = ["src/protocol/lxp_kernel.c","src/protocol/lxp_module_ctx.c","tests/protocol/lxp_test_kernel.c","tests/protocol/lxp_test_module_ctx.c","tests/test_web_program_path.c"]
+reqs = ["11.1"]
+
 [task.3.1]
 title = "Run the xweb workflow's legs once on the merged revision and record the evidence"
 status = "pending"
 wave = 3
-requires = ["1.1","1.2","1.3","1.4","1.5","1.6","1.7","1.8","1.9","1.10","1.11","1.12","1.13","1.14","1.15","1.16","1.17","1.18","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12","2.13","2.14","2.15","2.16","2.17"]
+requires = ["1.1","1.2","1.3","1.4","1.5","1.6","1.7","1.8","1.9","1.10","1.11","1.12","1.13","1.14","1.15","1.16","1.17","1.18","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","2.10","2.11","2.12","2.13","2.14","2.15","2.16","2.17","2.18","2.19","2.20","2.21","2.22","2.23"]
 do_1 = "On the revision that merges waves 1 and 2, run the workflow's legs once, in order - the x-websearch crate, modules/xweb with precompiles/xweb, the Foundry consumer tests, the kernel web make targets with the runtime web_read test, and the SDK and MCP tests - writing each leg's output to its own log under build/xweb-gates/."
 do_2 = "Append one gate record per leg to spec/paxeer-x-web/qualification.kvx carrying the task, the requirements the leg qualifies, the revision, the exact command, the exit code and the log path, written only from a command that actually ran."
 do_3 = "Append one observation per failure the run exposes that belongs to no task in this feature; do not investigate it further and do not rerun it. Rerun nothing that already passed at this revision and write no gate record for a command that did not run."
