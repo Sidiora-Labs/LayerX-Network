@@ -239,3 +239,11 @@ observed = "Buyer::capture_settlement decodes extensions.layerx into LayerXEvide
 assumption = "Neither the Seller nor the MCP tests are relaxed; the buyer evidence type must accept purposeHash, checked against the offer, before the MCP metered search can settle."
 severity = "blocker"
 closed = "Task 1.17 lets LayerXEvidence carry purposeHash and has Buyer::capture_settlement require the offer's purposeHash on a grant settlement and refuse one on an exact settlement; the MCP metered SID search settled in the task 1.15 verify_cmd at revision 454fc82ebc08c9c4d625b85d488937d76c5816cd."
+
+[observation.1.18.1]
+task = "1.18"
+file = "agent/crates/layerx-proof/src/program.rs"
+symbol = "verify_program_execution_receipt"
+observed = "With PerpsPayload::MarketCreate boxed the large_enum_variant lint is gone and every layerx-types test passes, but clippy on layerx-mcp now reaches the path dependency layerx-proof and fails on too_many_arguments (8/7) in verify_program_execution_receipt (.logs/verify.log, exit 101); program.rs is outside this task's touches."
+assumption = "No allow attribute is added; the layerx-proof signature is left to its owner, after which the task 1.18 and 1.17 verify_cmds rerun unchanged."
+severity = "blocker"

@@ -103,7 +103,7 @@
     - Extend agent/crates/layerx-mcp/tests/web.rs so the recording task 1.15 made replays through the web tool end to end: the PAX exact success to the main account, the SID metered success whose settlement repeats purposeHash, the USDC and USDL exact successes and the unpaid content fetch, plus a refusal for a content body whose digest differs.
     - With these in place, run task 1.15's verify_cmd once on this revision and set task 1.15 to done with its four evidence fields when it passes, leaving it implemented with the run's fields otherwise.
     - _Requirements: 4.1, 4.2, 9.1, 9.4_
-  - [ ] 1.18 Box the perps market payload variant so the agent workspace passes clippy
+  - [ ] 1.18 Box the perps market payload variant so the agent workspace passes clippy — **Implemented - qualification pending**
     - In agent/crates/layerx-types/src/payload.rs box the PerpsMarket carried by PerpsPayload::MarketCreate, the variant clippy's large_enum_variant names (observation 1.10.4), keeping every other variant and the hand-written encoder and decoder as they are so the kernel payload layout does not move; add no allow attribute anywhere.
     - Adjust agent/crates/layerx-types/tests/trading_payload.rs to the boxed variant and keep every vector under tests/fixtures/trading-payloads asserting byte for byte, so the change is proven to leave the encoding untouched.
     - With the lint gone, run task 1.17's verify_cmd once on this revision and set task 1.17 to done with its four evidence fields when it passes, leaving it implemented with the run's fields otherwise.

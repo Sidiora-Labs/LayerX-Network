@@ -504,7 +504,11 @@ reqs = ["4.1","4.2","9.1","9.4"]
 
 [task.1.18]
 title = "Box the perps market payload variant so the agent workspace passes clippy"
-status = "pending"
+status = "implemented"
+revision = "fd693d7634638951bedf01290753d49470879fd4"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path agent/Cargo.toml -p layerx-types && cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-types -p layerx-mcp --all-targets -- -D warnings'"
+exit_code = 101
+log_path = ".logs/verify.log"
 wave = 1
 requires = ["1.17"]
 do_1 = "In agent/crates/layerx-types/src/payload.rs box the PerpsMarket carried by PerpsPayload::MarketCreate, the variant clippy's large_enum_variant names (observation 1.10.4), keeping every other variant and the hand-written encoder and decoder as they are so the kernel payload layout does not move; add no allow attribute anywhere."
