@@ -1,0 +1,34 @@
+{
+  "chain": "bnb",
+  "kind": "evm",
+  "chain_id": 56,
+  "native": {
+    "symbol": "BNB",
+    "decimals": 18
+  },
+  "environment": {
+    "rpc_url": "PAXEER_BRIDGE_BNB_RPC_URL",
+    "deploy_key": "PAXEER_BRIDGE_BNB_DEPLOY_KEY",
+    "explorer_key": "PAXEER_BRIDGE_BNB_EXPLORER_KEY"
+  },
+  "owner": "PLACEHOLDER:owner",
+  "attestors": [
+    "PLACEHOLDER:attestor-1",
+    "PLACEHOLDER:attestor-2",
+    "PLACEHOLDER:attestor-3",
+    "PLACEHOLDER:attestor-4",
+    "PLACEHOLDER:attestor-5"
+  ],
+  "threshold": 3,
+  "finality_depth": 30,
+  "assets": [
+    {
+      "symbol": "BNB",
+      "address": "0x0000000000000000000000000000000000000000",
+      "asset_id": "0x0000000000000000000000000000000000000000",
+      "decimals": 18,
+      "per_tx_cap": "1000000000000000000000",
+      "total_cap": "20000000000000000000000"
+    }
+  ]
+}
