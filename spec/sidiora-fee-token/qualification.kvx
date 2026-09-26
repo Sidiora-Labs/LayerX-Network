@@ -457,3 +457,15 @@ symbol = "main"
 observed = "The station executable checks initialization and explicitly reports that no service was started; a quote and sponsored-submission HTTP service is not supplied by that executable."
 assumption = "The web adapter requires separately supplied quote and submission services matching its request and response contracts; no submission was attempted."
 severity = "blocker"
+
+[observation.2.10.1]
+task = "2.10"; file = "tests/chain/sidiora_fee_test.go"; symbol = "TestSidioraFeePaid"
+observed = "In the processblock harness the EVM ante router, EVMFeeCheckDecorator and GetFeeTokenCharge are never invoked for block transactions, so a Sidiora-preferring payer pays gas in the network coin and the short-balance and stale-rate refusals succeed."
+assumption = "Keeper state is correct (switch on, preference set, rate fresh, GetFeeTokenCharge returns a charge when called directly); the cause lies in the block execution path, outside this task's files, and the assertions stay intact."
+severity = "blocker"
+
+[observation.2.10.2]
+task = "2.10"; file = "tests/chain/sidiora_fee_test.go"; symbol = "TestSidioraFeeRefused"
+observed = "Requirement 13.5 names a block in which the oracle reports no rate, but the oracle pair was retired in favour of a governed rate with a maximum age."
+assumption = "The missing-rate case is proven as a governed rate older than max_fee_token_rate_age, which is the only way the current chain reports no usable rate."
+severity = "note"

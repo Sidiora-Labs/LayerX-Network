@@ -522,7 +522,11 @@ reqs = ["13.1","13.2","13.3","13.6"]
 
 [task.2.10]
 title = "Prove the whole path over real blocks"
-status = "pending"
+status = "implemented"
+revision = "d215b7185417b10b9050b5dc5dcabe60ed4aadbd"
+command = "timeout 20m sh -c 'go test -count=1 -run SidioraFee ./tests/chain/'"
+exit_code = 1
+log_path = ".logs/verify.log"
 wave = 2
 requires = ["2.9"]
 do_1 = "Add testutil/processblock/msgs/feetoken.go building the messages this proof needs in the shape testutil/processblock/msgs/bank.go builds its own: an attested Sidiora bridge in, a fee-preference set through the precompile, and a transaction sent by an account whose preference is Sidiora."

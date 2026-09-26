@@ -129,7 +129,7 @@
     - Add modules/evm/migrations/migrate_fee_token_params_test.go asserting the defaults on a store without them, every existing parameter left untouched, and a second run changing nothing; add an upgrade test beside node/upgrades_test.go asserting the handler is registered under the name in node/tags and that the migration runs through it.
     - Apply nothing to a running chain: this task writes the handler and the migration and leaves them to a governance proposal.
     - _Requirements: 13.1, 13.2, 13.3, 13.6_
-  - [ ] 2.10 Prove the whole path over real blocks
+  - [ ] 2.10 Prove the whole path over real blocks — **Implemented - qualification pending**
     - Add testutil/processblock/msgs/feetoken.go building the messages this proof needs in the shape testutil/processblock/msgs/bank.go builds its own: an attested Sidiora bridge in, a fee-preference set through the precompile, and a transaction sent by an account whose preference is Sidiora.
     - Add testutil/processblock/verify/feetoken.go asserting balances across a block in the shape testutil/processblock/verify/bank.go and verify/distribution.go assert theirs: the sender's Sidiora balance, the collector or holding account's balance, the sender's Paxeer balance and the validator rewards.
     - Add tests/chain/sidiora_fee_test.go, with test names carrying a SidioraFee prefix, driving real blocks through processblock: bridge Sidiora in, set the preference, send a transaction paid in Sidiora, and assert the sender's Sidiora balance fell by the converted fee, the collector or holding account received it, the sender's Paxeer balance did not move, and a second account paying in Paxeer is charged exactly as before.
