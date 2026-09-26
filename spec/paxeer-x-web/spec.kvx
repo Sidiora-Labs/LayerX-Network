@@ -613,11 +613,11 @@ reqs = ["8.1"]
 
 [task.1.15]
 title = "Pay PAX to the main account and record a paid success for every asset"
-status = "implemented"
-revision = "b98bc3e24f0c970f47f36b250dc95ebb52338d3e"
-command = "cargo test --locked --manifest-path agent/Cargo.toml -p layerx-mcp --test web"
-exit_code = 101
-log_path = ".logs/verify.log"
+status = "done"
+revision = "454fc82ebc08c9c4d625b85d488937d76c5816cd"
+command = "timeout 20m sh -c 'cargo test --locked --manifest-path interop/Cargo.toml -p layerx-x402 --test seller && cargo test --locked --manifest-path interop/Cargo.toml -p x-websearch --test payment --test binary && cd agent/sdk/typescript && npm ci && npm run build && node dist/test/web-search.test.js && cd ../python && python3 -m pytest -q tests/test_web_search.py && cd ../../.. && cargo test --locked --manifest-path agent/Cargo.toml -p layerx-mcp --test web'"
+exit_code = 0
+log_path = ".logs/verify-1.15.log"
 wave = 1
 requires = ["1.4","1.9","1.13","1.16"]
 do_1 = "In interop/crates/x-websearch/src/payment.rs make the payee and the payer account for the kernel's native coin PAX the main account agent:<did>:main, the form agent/sdk/typescript/src/rpc.ts walletAccount and the Python _wallet_account derive for the native asset, and keep the per-asset form agent:<did>:asset:<id> for SID, USDC and USDL (observation 1.9.1); adapt neither SDK derivation."

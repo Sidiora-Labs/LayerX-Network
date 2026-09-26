@@ -220,6 +220,7 @@ symbol = "offer_facts"
 observed = "The web tool accepts a receiver account only with the :asset:<id> suffix and draws the payer from asset_account, so it refuses the sidecar's PAX offers, which now pay agent:<did>:main, with OfferMismatch(account); src/tools/web.rs is outside this task's touches."
 assumption = "The MCP tests replay the recorded SID, USDC and USDL paid successes, and the PAX main-account derivation in the web tool is left to the owner."
 severity = "blocker"
+closed = "Task 1.17 has the web tool take the receiver account agent:<did>:main for PAX offers and draw the payer from it, keeping agent:<did>:asset:<id> for SID, USDC and USDL; the recorded PAX exact fetch settled in the task 1.15 verify_cmd at revision 454fc82ebc08c9c4d625b85d488937d76c5816cd."
 
 [observation.1.15.2]
 task = "1.15"
@@ -228,6 +229,7 @@ symbol = "web_tool"
 observed = "The sidecar serves GET /content/<digest> unpaid with 200, as the recording shows, while web.content requires a 402 challenge and pays for it, so it would answer Status(200) against the sidecar."
 assumption = "The MCP tests keep answering /content with the recorded exact USDC exchange; the unpaid content path in the web tool is left to the owner."
 severity = "blocker"
+closed = "Task 1.17 has the web tool read GET /content/<digest> unpaid, release only a body whose digest is the one asked for and treat a 402 there as a protocol mismatch; the recorded content exchange replayed in the task 1.15 verify_cmd at revision 454fc82ebc08c9c4d625b85d488937d76c5816cd."
 
 [observation.1.15.3]
 task = "1.15"
@@ -236,3 +238,4 @@ symbol = "LayerXEvidence"
 observed = "Buyer::capture_settlement decodes extensions.layerx into LayerXEvidence with deny_unknown_fields and no purposeHash field, so the purposeHash the protocol has the Seller repeat makes the MCP web tool refuse the recorded SID metered settlement with SettlementMismatch; five layerx-mcp web tests fail (.logs/verify.log, exit 101) and buyer.rs is outside this task's touches."
 assumption = "Neither the Seller nor the MCP tests are relaxed; the buyer evidence type must accept purposeHash, checked against the offer, before the MCP metered search can settle."
 severity = "blocker"
+closed = "Task 1.17 lets LayerXEvidence carry purposeHash and has Buyer::capture_settlement require the offer's purposeHash on a grant settlement and refuse one on an exact settlement; the MCP metered SID search settled in the task 1.15 verify_cmd at revision 454fc82ebc08c9c4d625b85d488937d76c5816cd."
